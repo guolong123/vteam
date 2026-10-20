@@ -24,14 +24,14 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | ② | 事件回流 | Worker → Server | 主动 POST（实时推送） | 会话状态、流式增量、任务完成等事件 |
 | ③ | 资源拉取 | Worker → Server | Worker 反向 GET（收到 reload 信号后） | 技能 / 工具 / MCP / Agent 策略注入 |
 | ④ | 执行端点 | Server → Worker | Server 主动 POST/GET（`execPort`，默认 4198） | 下发执行任务、文件拉取、计划/OmO 配置 |
-| ⑤ | serve 代理 | Server → Worker | Server 主动 POST/GET（`capabilities.baseUrl:port`） | opencode serve 会话 API 透传 |
+| ⑤ | serve 代理 | Server → Worker | Server 主动 POST/GET（`capabilities.baseUrl:port`） | opencode serve 会话 API 透传（**v2 形态：全部 `/api` 前缀 + 恒开鉴权**；计划 D3 / T18 落地后本通道取消，改为调执行端点④的会话/模型代理） |
 
 ```
  Worker ──①register/heartbeat(10s)──▶ Server     （心跳响应捎带 commands）
  Worker ──②POST /worker/events──────▶ Server     （事件实时回流，恒 202）
  Worker ──③GET /skills /tools ...───▶ Server     （收到 reload-config 后拉取）
  Server ──④POST /execute 等─────────▶ Worker:4198（执行端点，独立 node:http）
- Server ──⑤POST /session 等─────────▶ Worker:serve（opencode serve REST）
+ Server ──⑤POST /api/session 等─────▶ Worker:serve（opencode serve REST；D3/T18 后取消）
 ```
 
 **下行命令模型（①捎带）**：Server 端资源/配置变更时不直接推送，而是把命令入队
@@ -52,7 +52,7 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | 心跳二次校验 | bcrypt 比对注册时落库的 `tokenHash` | 同上（不匹配 → 401 `TOKEN_INVALID`） |
 | 资源拉取附加身份 | Worker 身份（Server 据此覆盖内置 MCP 地址） | `x-worker-id: <workerId>` |
 | Server → Worker：执行端点（④） | Worker Token | `X-Worker-Token: <WORKER_TOKEN>` |
-| Server → Worker：serve 代理（⑤） | Basic Auth（可选） | `Authorization: Basic base64(opencode:<SERVER_PASSWORD>)`；密码为空则不鉴权 |
+| Server → Worker：serve 代理（⑤） | ⚠️ **已取消**（D3/T18 落地：控制面不再直连 serve） | v2 线**不再有** Basic Auth 直连 serve 这条通道 ⇒ server 侧**不再需要** `SERVER_PASSWORD`；控制面与 worker 之间统一走执行端点④的 `X-Worker-Token` |
 | 管理端点（列表/详情/重启等） | 用户 JWT + 权限 | `Authorization: Bearer <accessToken>` + `workers.view` / `workers.edit` / `workers.delete` |
 
 常量：
@@ -173,7 +173,7 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | type | 触发场景 | Worker 执行动作 | 是否重启 serve |
 |------|---------|----------------|----------------|
 | `reload-config` | skills / tools / mcp-servers / 执行策略变更 | `ResourceInjector.injectAll()` 重拉注入 | ✅ |
-| `model-credentials` | 模型凭据保存、注册回放、凭据吊销 | 写 `auth.json` + 合并 `opencode.json` provider 段 | ✅ |
+| `model-credentials` | 模型凭据保存、注册回放、凭据吊销 | 写 `auth.json` + 合并 `opencode.json` 的 `providers` 段（v2 段名；**并把 key 写进 `providers.<id>.settings.apiKey`**——v2.0.28 实测不读 `auth.json` 取 provider key） | ✅ |
 | `git-credentials` | 仓库凭证保存/吊销 | 幂等写 `~/.keta-git-creds.json`（600 权限） | ❌（git 工具每次执行读文件） |
 | `restart` | 管理员 `POST /workers/:id/restart` | `RestartCoordinator` 重启 serve（无活跃会话立即，有则挂起） | ✅ |
 | `shutdown` | 管理员 `POST /workers/:id/shutdown` | 优雅退出（停心跳 + flush 事件 + stop serve + exit） | 进程退出 |
@@ -183,7 +183,7 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `providerKeys` | `{ providerID, key }[]` | 明文 API key（仅经下行命令传输，不落日志） |
-| `providerConfigs` | `Record<string, { baseUrl, models }>`? | `opencode.json` provider 段全量状态；`undefined`=不触碰，`{}`=清空 |
+| `providerConfigs` | `Record<string, { baseUrl, models }>`? | `opencode.json` 的 `providers` 段（v2 段名）全量状态；`undefined`=不触碰，`{}`=清空 |
 | `targetWorkerIds` | `string[]`? | 定向元数据（空=全量） |
 
 ### 3.4 `git-credentials` 负载（`GitCredentialsPayload`）
@@ -248,13 +248,13 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 |------|------|---------------------|
 | 技能列表 | `GET /api/v1/skills?enabled=true&page=&pageSize=` | — |
 | 技能正文 | `GET /api/v1/skills/:id/content` → `{ content }` | `<workDir>/.opencode/skills/<name>/SKILL.md` |
-| 工具列表 | `GET /api/v1/tools?enabled=true&page=&pageSize=` | `<workDir>/.opencode/tools/<action>.ts`（`execution=mcp` 跳过） |
-| MCP 服务器 | `GET /api/v1/mcp-servers?enabled=true&page=&pageSize=` | `<workDir>/opencode.json` 的 `mcp` 节 |
-| Agent 策略 | `GET /api/v1/agent-policies` → `{ agents: [...] }` | `<workDir>/opencode.json` 的 `agent` 节 |
+| 工具列表 | `GET /api/v1/tools?enabled=true&page=&pageSize=` | `<workDir>/.opencode/plugins/<action>.ts`（**v2 插件形态**；`execution=mcp` 跳过） |
+| MCP 服务器 | `GET /api/v1/mcp-servers?enabled=true&page=&pageSize=` | `<workDir>/opencode.json` 的 `mcp.servers` 节 |
+| Agent 策略 | `GET /api/v1/agent-policies` → `{ agents: [...] }` | `<workDir>/opencode.json` 的 `agents` 节 |
 
 **注入规则**：
 
-- 单写者：`opencode.json` 的 `mcp` + `plugin` + `agent` 三节在同一次 read-modify-write 合并
+- 单写者：`opencode.json` 的 `mcp` + `plugins` + `agents` 三节在同一次 read-modify-write 合并（**v2 原生段名**；v1 的 `mcp` 扁平形 / `plugin` / `agent` 已被 v2 标为 deprecated，归一化会迁移）
 - manifest 比对清理（`.opencode-worker-inject.json`）：上次注入本次停用的条目移除；用户手写条目保留
 - `agent-policies` 拉取失败 → 中性化（不阻断 skills/tools/mcp 注入）
 
@@ -329,10 +329,10 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | 方法 | 路径 | 请求体 | 落点 |
 |------|------|--------|------|
 | POST | `/config/skills` | `{skills:[{name,content}]}` | `<WORK_DIR>/.opencode/skills/<name>/SKILL.md` |
-| POST | `/config/tools` | `{tools:[{action,execution,name?,schema?}]}` | `<WORK_DIR>/.opencode/tools/<action>.ts` |
-| POST | `/config/mcp-servers` | `{mcpServers:[{name,type,url?\|command?}]}` | `<WORK_DIR>/opencode.json` 的 `mcp` 节 |
-| POST | `/config/agent-policies` | `{agents:[{name,description,mode,permission}]}` | `<WORK_DIR>/opencode.json` 的 `agent` 节 |
-| POST | `/config/model-credentials` | `{providerKeys:[{providerID,key}],providerConfigs?}` | `$HOME/.local/share/opencode/auth.json` + `$HOME/.config/opencode/opencode.json` provider 段 |
+| POST | `/config/tools` | `{tools:[{action,execution,name?,schema?}]}` | `<WORK_DIR>/.opencode/plugins/<action>.ts`（v2 插件形态，v1/v2 双形态模块） |
+| POST | `/config/mcp-servers` | `{mcpServers:[{name,type,url?\|command?}]}` | `<WORK_DIR>/opencode.json` 的 `mcp.servers` 节 |
+| POST | `/config/agent-policies` | `{agents:[{name,description,mode,permission}]}` | `<WORK_DIR>/opencode.json` 的 `agents` 节（**注入为 v2 形态**：`permissions[]` 数组 + `system`；`permission` 键名与 `bash`/`task` action 由 worker 翻译成 `shell`/`subagent`） |
+| POST | `/config/model-credentials` | `{providerKeys:[{providerID,key}],providerConfigs?}` | 隔离域的 `data/opencode/auth.json` + `config/opencode/opencode.json` 的 `providers` 段（**含 `settings.apiKey`**——v2 不从 `auth.json` 取 key，见 07 篇 §12.5） |
 | POST | `/config/git-credentials` | `{credentials:[{repoUrl,key,authType?,fingerprint?,permission?}]}` | `$HOME/.keta-git-creds.json`（600） |
 | POST | `/config/restart` | 无 | 触发 serve 重启（复用 RestartCoordinator，不打断活跃会话） |
 
@@ -355,21 +355,29 @@ curl -X POST -H 'X-Worker-Token: <token>' http://<worker>:4198/config/restart
 
 ## 7. 通道⑤：Server → Worker serve 代理（`capabilities.baseUrl:port`）
 
-opencode serve 原生 REST API 透传（Basic Auth 可选）。由 `WorkerClient.request()` 统一拼装。
+> ⚠️ **opencode v2 适配后的订正（2026-10-20）**：
+> ① **v2 只保留 `/api` 前缀**（v1 的 legacy 根路径面已移除），下表的 v1 端点在 v2 serve 上**已不存在**——而且**不是 404，而是 200 + web SPA 的 HTML**（⚠️ 只查状态码的自检会因错误的原因判"正常"）；
+> ② v2 **恒开鉴权**（`OPENCODE_SERVER_PASSWORD` 必填），Basic 头不再是"可选"；
+> ③ 健康检查必须用 **`GET /api/info`**（未鉴权 401 / 已鉴权 200），**不得**用 `GET /`（v2 的 `GET /` 未鉴权也返回 200 + SPA HTML）；
+> ④ **本通道在计划 D3 / T18 落地后被取消**——控制面的 5 处 opencode 直连收敛到**执行端点④**（worker 侧新增 `POST /sessions`、`POST /sessions/:id/prompt`、`POST /sessions/:id/abort`、`GET /sessions/:id/messages`、`GET /models`），控制面只调 worker、**不再持有任何 opencode 端点字面量**（见 07 篇 §11.5）。
+> ⚠️ **当前状态（2026-10-20）**：worker 侧已单轨收口（v1 driver 已删），**但控制面这 5 处直连尚未收敛**——`server/src/workers/worker.client.ts` 仍持有 v1 端点字面量，在 v2 serve 上会打到 web SPA（200 + HTML）。**这是代码与文档之间的已知缺口**，待 D3/T18 的控制面侧落地。
+>
+> 下表按 **v2 形态**列出（= 收敛前的最后形态）。
+
+opencode serve 原生 REST API 透传（**v2 恒开鉴权**：Basic，用户名固定 `opencode`）。由 `WorkerClient.request()` 统一拼装。
 
 | 方法 | 路径 | 用途 | 失败语义 |
 |------|------|------|---------|
-| GET | `/` | 健康检查（2xx=在线） | 返回 false，不抛 |
-| POST | `/session` | 创建会话 → `{ id: "ses_..." }`（拒收 model 字段） | 抛 `WorkerUnavailableException` |
-| POST | `/session/:id/prompt_async?directory=` | 下发提示（异步，204/200 即成功） | 抛 |
-| POST | `/session/:id/abort` | 中止会话 | 抛 |
-| GET | `/session/:id/message` | 拉取消息列表 | 抛 |
+| GET | `/api/info` | 健康检查（**v2 端点**；未鉴权 401 / 已鉴权 200） | 返回 false，不抛 |
+| POST | `/api/session` | 创建会话 → `{ id: "ses_..." }`（body 用 `location:{directory}`，取代 v1 的 `?directory=`） | 抛 `WorkerUnavailableException` |
+| POST | `/api/session/:id/prompt` | 下发提示（body `{id?, text(必填), files?, agents?, skills?, metadata?, delivery?, resume?}`；**无 `system`、无 `parts`**；返回 `200 {data: Session.Inbox.User}` = **入队项，不是最终答复**） | 抛 |
+| POST | `/api/session/:id/interrupt` | 中止会话（query `?resume=true\|false`；v1 是 `POST /session/:id/abort`） | 抛 |
+| GET | `/api/session/:id/message` | 拉取消息列表（v2 带**游标分页** `{data, cursor}`） | 抛 |
 | GET | `/api/model` | 动态模型列表（失败降级 `capabilities.models`） | 降级 |
-| GET | `/provider` | Provider 全量（Worker 内部 `listModels` 用） | 降级 `/api/model` |
-| GET | `/agent` | opencode agent 列表（Worker 内部 `listAgents` 用） | 抛 |
+| GET | `/api/provider` | Provider 全量（Worker 内部 `listModels` 用） | 降级 `/api/model` |
+| GET | `/api/agent` | opencode agent 列表（Worker 内部 `listAgents` 用；v2 需用 `location[directory]=` deepObject 写法，扁平写法 400） | 抛 |
 
-> **注**：`/session`、`/session/:id/*`、`/api/model` 是 **Server 直连 serve** 的路径；
-> `/agents`、`/todos`、`/plan-files` 等带目录语义的列表走的是**执行端点④**（路径同名但端口不同）。
+> **注**：上表是 **Server 直连 serve** 的路径（收敛前的最后形态）；`/agents`、`/todos`、`/plan-files` 等带目录语义的列表走的是**执行端点④**（路径同名但端口不同）。**v2 形态修正**：`/session`、`/session/:id/*` 在 v2 serve 上只命中 web SPA（200 + HTML），**必须改用 `/api/*` 前缀**。
 
 ---
 

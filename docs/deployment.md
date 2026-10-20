@@ -13,6 +13,10 @@ vteam 提供两套部署方式，按环境选择：
 
 两种方式的 env 语义完全对齐（DATABASE_URL / JWT / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / SILENT_SESSION_WAKE_MS / PLATFORM_MCP_URL 等），同一套镜像均可部署。
 
+> **从 OpenCode v1 线切到 v2 线**（改协议、改 CLI 版本、改数据存储形态的那次上线），
+> 请直接看 **§八「OpenCode v2 灰度与回滚」**：交付顺序、灰度闸门、观察项清单、回滚步骤
+> 与数据影响都在那里，**不需要**读 `.omo/plans/` 里的计划。
+
 ## 二、Docker Compose 部署
 
 ### 2.1 服务清单与端口
@@ -260,7 +264,7 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline.yaml --w
 - seed 默认把 keta-platform 注册为 `http://server:3000/api/v1/platform-mcp`（compose 服务名）——K8s 下不通。
 - 修复：seed 读 `process.env.PLATFORM_MCP_URL ?? 'http://server:3000/...'`；init Job 注入该 env，默认按 server Service 名拼 `http://vteam-server:3000/api/v1/platform-mcp`（`initJob.platformMcpUrl` 可显式覆盖）。
 - 存量部署修复（不重装）：`UPDATE mcp_servers SET url='http://vteam-server:3000/api/v1/platform-mcp' WHERE name='keta-platform';` 然后 `kubectl rollout restart sts/vteam-worker`（injectMcp 启动时执行）。
-- 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/vteam-worker && opencode mcp list --pure` 才能读到注入的 opencode.json。
+- 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/vteam-worker && opencode mcp list` 才能读到注入的 opencode.json。⚠️ **opencode v2 已移除 `--pure`**（传了会 `Unrecognized flag` 并 exit 1）——v2 下**不带 `--pure` 探测**；宿主的全局配置/插件隔离由 worker 的**隔离配置域**（`OPENCODE_ISOLATION_ROOT`）保证（见 07 篇 §12.1）。
 
 ### 4.5 内置插件 OmO（oh-my-openagent）
 
@@ -270,22 +274,27 @@ worker 镜像**内置** OmO 插件，用**官方安装器**在构建期完成安
 |----|----|
 | 上游 | https://github.com/code-yeongyu/oh-my-openagent（npm 包 `oh-my-opencode`，别名 `oh-my-openagent`） |
 | 安装方式 | `bunx oh-my-openagent@latest install --no-tui --platform=opencode --skip-auth`（Dockerfile 构建期） |
-| 插件声明 | `<WORK_DIR>/opencode.json` 的 `plugin` 节（worker 启动注入时写入，幂等） |
+| 插件声明 | `<WORK_DIR>/opencode.json` 的 **`plugins`** 节（v2 段名；v1 是 `plugin`）（worker 启动注入时写入，幂等） |
 | agent 模型配置 | `<WORK_DIR>/.omo/omo.jsonc`（**实际生效**；旧位置 `.opencode/oh-my-openagent.jsonc` 仅在其不存在时接管） |
-| 生效前提 | serve **不能**带 `--pure`（`--pure` = 不加载外部插件） |
+| 生效前提 | ⚠️ **opencode v2 已移除 `--pure`**（v1 里 `--pure` = 不加载外部插件）。v2 下的等价手段是**隔离配置域**（`OPENCODE_ISOLATION_ROOT`，见 07 篇 §12.1）；另注意 **v1 形态的插件实现不会在 v2 运行**（官方迁移指南明写）⇒ **v2 线按"OmO 关闭"上线**（详见 **§8.5**：镜像能力标记 `/opt/omo-bundled.json` 的 `v2` 字段 = `false` ⇒ 注入器不注册 OmO，并清掉历史遗留条目） |
 
 > ⚠️ **不要与 `oh-my-opencode-slim` 混淆**。后者（`alvinunreal/oh-my-opencode-slim`）是第三方
 > 精简 fork，agent 集（orchestrator/explorer/…）与 OmO 完全不同。早期 vteam 误装过 slim；
 > worker 的注入器现在会**自动清除**配置里的 slim 条目并写入 OmO，避免两者并存冲突。
 
-**`--pure` 与环境变量 `OPENCODE_PURE`**
+**`--pure` 与环境变量 `OPENCODE_PURE`（⚠️ opencode v2 已失效）**
 
-serve 默认**不带** `--pure`，以便加载 OmO。需要纯净基线（对照 token 开销）时设 `OPENCODE_PURE`：
+> ⚠️ **订正（2026-10-20，opencode v2 适配）**：**v2 没有 `--pure`**——`opencode serve --pure` 会打印 `Unrecognized flag` 并 **exit 1**，`opencode mcp list --pure` 同理。因此：
+> - **worker 不再拼 `--pure`**：`OPENCODE_PURE` / OmO 开关在 v2 上**降级为"只做告警"**（worker 启动日志里明确写出"该开关在 v2 已失效"），**不再有任何抑制效果**；
+> - v1 时代"用 `--pure` 抑制第三方插件 / `AGENTS.md` 注入"的语义，改由**隔离配置域**承接：serve 子进程的 `HOME` / `XDG_*` 全部指向 `OPENCODE_ISOLATION_ROOT`（缺省 `<HOME>/.opencode-iso`）⇒ 宿主的全局配置 / 全局插件 / 全局 `AGENTS.md` 不在作用域内。**这是唯一可靠手段**（`plugins: []` / `instructions: []` / `experimental` / `OPENCODE_CONFIG*` 全是 no-op；`plugins:["-*"]` 不可用；`plugins:["-<id>"]` 可精确禁用单个插件）——逐条实测见 07 篇 §12.1；
+> - 残留：受管目录（`/etc/opencode` 等）**不受 XDG 控制**（v2 仍会 watch 它），只有 `policies` 能压 ⇒ **不是 100% 等价于 `--pure`**。
 
-| 取值 | 行为 |
-|------|------|
-| 未设置（默认） | 非 pure，加载插件（OmO 生效） |
-| `true`/`1`/`yes`/`on`/`y` | `--pure`，不加载插件（input tokens 约 1900，非 pure 约 7601） |
+serve 默认**不带** `--pure`（v2 下也不可能带），以便加载 OmO。需要纯净基线（对照 token 开销）时：
+
+| 取值 | v1 行为 | **v2 行为（当前）** |
+|------|----------|--------------------|
+| 未设置（默认） | 非 pure，加载插件（OmO 生效） | 同左（但**隔离配置域**已保证宿主全局插件不进作用域） |
+| `true`/`1`/`yes`/`on`/`y` | `--pure`，不加载插件（input tokens 约 1900，非 pure 约 7601） | ⚠️ **开关失效**——worker 只打一条告警，**不拼 `--pure`**；要抑制全局插件请用 `OPENCODE_ISOLATION_ROOT` 隔离配置域 |
 
 > ⚠️ **`OPENCODE_PURE` 不能设为空串**：它同时是 opencode 自身解析的布尔环境变量，空串会让 serve
 > 直接启动失败（`SchemaError: Expected "true"|...|"false"..., got ""`）。因此 compose 里**不要**
@@ -298,14 +307,17 @@ serve 默认**不带** `--pure`，以便加载 OmO。需要纯净基线（对照
 # 1) serve 命令行不含 --pure
 docker compose exec worker sh -c 'tr "\0" " " < /proc/$(pgrep -f "opencode serve" | head -1)/cmdline'
 
-# 2) 看 GET /agent 是否出现 OmO 的 agent（出现 Sisyphus/Prometheus 即已加载）
+# 2) 看 GET /api/agent 是否出现 OmO 的 agent（出现 Sisyphus/Prometheus 即已加载）
+#    ⚠️ v2 端点是 /api/agent（v1 是 /agent）；v2 恒开鉴权，需带 Basic 头
 curl -s -H "Authorization: Bearer $TOKEN" http://<server>/api/v1/agents/opencode | jq '.agents[].name'
 #   期望可见：Sisyphus - ultraworker / Hephaestus - Deep Agent / Prometheus - Plan Builder 等
+#   ⚠️ 该判据只是"控制面代理的观测面"；插件是否真的被 v2 加载，权威判据是 serve 日志的
+#      `msg="loading plugin"` 行 + 工具是否出现在模型请求的 tools[]（GET /api/plugin 不可靠）
 ```
 
 **OmO agent 与 vteam 职责映射**
 
-OmO 注册的 primary agent（`GET /agent` 返回的**展示名**）：
+OmO 注册的 primary agent（**v2 端点是 `GET /api/agent`**（v1 是 `GET /agent`）返回的**展示名**）：
 
 | agent | 展示名 | vteam 职责 |
 |-------|--------|-----------|
@@ -325,8 +337,8 @@ OmO 是**与 worker 绑定**的能力（插件在镜像里、配置在 worker wo
 
 | 操作 | 效果 |
 |------|------|
-| 开关**关闭** | serve 以 `--pure` 启动，**不加载插件**（agent 列表只剩 opencode 原生）；模型配置**保留**，重开即恢复 |
-| 开关**开启** | 正常加载插件；此时可配置各 agent 模型 |
+| 开关**关闭** | ⚠️ **v2 下 `--pure` 已失效**——worker 只打告警，**不再以 `--pure` 启动**（v2 无此 flag，传入会 exit 1）。要抑制全局插件请用 `OPENCODE_ISOLATION_ROOT` 隔离配置域；模型配置**保留**。<br>✅ **开关现在直接决定配置**：注入器在写 `plugins` 节时读这个开关，关闭时**不注册** OmO 条目并清掉历史条目（此前它只影响一个早已失效的 flag，"看得见、不生效"） |
+| 开关**开启** | v1 线：正常加载插件，可配置各 agent 模型。**v2 线：无效**——镜像内置的是 **v1 形态**入口，v2 不会加载它（见 **§8.5**）；平台核心功能不受影响 |
 | 保存配置 | 写盘后**自动重启 serve** 生效（有会话进行中则排队，见下） |
 
 > ⚠️ **镜像未内置 OmO 时不显示该卡片，也无法开启**：worker 启动时读镜像内能力标记
@@ -408,26 +420,40 @@ OmO 按以下顺序找配置，**先命中者胜**：
 
 **格式**：新位置带平台分段 `{ "[opencode]": { "agents": {…} }, "_migrations": […] }`，
 旧位置是扁平 `{ "agents": {…} }`。worker 读写时**保持该文件原有形状**，不动其他键。
-### 4.6 opencode CLI 版本策略（不锁版本）
+### 4.6 opencode CLI 版本策略（已改为**锁版本**）
 
-worker 镜像**不锁** opencode CLI 版本：`npm i -g opencode-ai`（Dockerfile ARG `OPENCODE_CLI_SPEC`），
-每次构建取 registry 最新版。
+> ⚠️ **订正（2026-10-20，opencode v2 适配）**：本节原文写的是"**不锁版本**，每次构建取 registry 最新版（`npm i -g opencode-ai`）"。**该策略已废止**——v2 的契约已冻结到可锁版本的程度，平台改为**锁版**：`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32`（**不是** `opencode-ai`，那是冻结在 1.19.3 的 v1 线）。配套地：worker **启动期做版本闸门**（`opencode --version` 解析出主版本，**major < 2 → fail-fast**），上报值规范化为 semver 串，与控制面的版本过滤对齐。依据：07 篇 §6 / §12.3、`.omo/plans/opencode-v2-adaptation.md` 的 D2 / T1。
 
-**为什么可以浮动**：worker 运行时用 `opencode --version` 探测真实版本并随注册上报
-（`opencode_version` 列），vteam 侧不硬编码版本号、不按版本分支——升级不需要改代码。
+worker 镜像**锁** opencode CLI 版本：`npm i -g @opencode/cli@2.0.32`（Dockerfile ARG `OPENCODE_CLI_SPEC`）。
+
+**为什么锁版本**：v2 是正式发版且契约已冻结（不再是 beta），"浮动"只会引入不可控的契约漂移；锁版**即锁契约基线**——用锁定版二进制重跑一次契约基线快照（`docs/agent-platform/opencode-v2-contract-baseline/`），实现一律以快照为准。
+
+**版本闸门**：worker 启动时解析 `opencode --version`（v2 形如 `opencode v2.0.28`；兼容 v1 形 `opencode 1.19.0`），**主版本 < 2 直接 fail-fast** 并给出可操作错误（"需要 opencode ≥ 2，当前 1.x，镜像未换 OPENCODE_CLI_SPEC"）；版本字符串**认不出**时**不判死**，只告警并上报 `unknown`（解析器不对未来格式过拟合）。
 
 **构建产物如何追溯版本**：构建日志打印 `opencode CLI installed: <版本>`；运行期 `docker compose logs worker`
-的启动横幅也打印 `opencodeVersion = <版本>`，worker 详情页可见。
+的启动横幅也打印 `opencodeVersion = <规范 semver>`，worker 详情页可见。
 
-**如需复现某次构建**（临时锁回指定版本）：
+**如需复现某次构建 / 换 CLI 版本**：
 
 ```bash
-docker compose build --build-arg OPENCODE_CLI_SPEC=opencode-ai@1.18.30 worker
+# 换 CLI 版本（只影响"镜像里装哪版 opencode"，不改变 worker 代码）
+docker compose build --build-arg OPENCODE_CLI_SPEC=@opencode/cli@2.0.32 worker
 ```
 
-> 注意：`AssignmentRequirement.opencodeVersion` 是**精确字符串匹配**（`workers.service.ts` 的
-> `assignWorker`）。当前分派链路不传该字段，故不受版本浮动影响；但若未来有调用方显式指定版本，
-> 多 worker 版本不一致会导致匹配失败——此时应改为语义化版本范围匹配而非浮版本。
+> ⚠️ **换 CLI 版本 ≠ 回滚到 v1**：worker 代码已单轨 v2，版本闸门要求 opencode **主版本 ≥ 2**
+> ⇒ 把 `OPENCODE_CLI_SPEC` 改成 `opencode-ai@1.19.3` 只会让 worker **启动即 fail-fast**
+> （"需要 opencode ≥ 2，当前 1.x"）。真正的回滚必须**连代码一起回**（`v1.0.4` tag），
+> 步骤见 **§8.6**。
+
+> 注意：`AssignmentRequirement.opencodeVersion` 的比较**两侧都先归一成 semver** 再比
+> （`server/src/workers/worker-version.ts` 的 `isSameOpencodeVersion`）⇒ 需求写成
+> `opencode v2.0.28` 或 `2.0.28` **都能匹配** worker 上报的 `2.0.32`。
+> ⚠️ **但当前没有任何生产调用方设置该字段**（也没有 env/values 开关可以设置）⇒ 这个版本
+> 过滤**今天是失效的**，混跑期不会自动挡住跨版本派发 ⇒ 切换时必须先下线 v1 worker。
+> 详见 **§8.4**。
+> 另注：**回滚不是"换个开关"**——v1 驱动已删除，`OPENCODE_V2_ENABLED=false` 会让 worker
+> 启动即抛错；回滚 = **回滚镜像/代码到 `v1.0.4` + 恢复数据卷**，完整步骤见 **§8.6**，
+> 数据影响见 **§8.7**。
 
 #### 4.4.1 集群外 worker 配置（WORKER_MCP_URL + 可达地址三件套）
 
@@ -486,7 +512,7 @@ OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 监听非回
 | 1 | server CrashLoopBackOff，日志 `Authentication failed against database server` | helm upgrade 未带完整 values，ConfigMap `DATABASE_URL` 密码被随机化，与 MySQL 实际密码失配 | 比对 `kubectl get configmap vteam-config -o yaml` 的 DATABASE_URL 与 `kubectl get secret vteam-secret -o jsonpath='{.data.DB_PASSWORD}'`（base64 解码）；`helm rollback` 或按 4.1 完整基线 upgrade，最后 `kubectl rollout restart deploy/vteam-server` |
 | 1b | server/web/init pod `ImagePullBackOff` | 镜像 tag 回退 `latest` 或 tag 写错（如 sed 误改多个 tag） | 检查 `helm get values` 中 image tag，用正确基线重推镜像并 upgrade |
 | 2 | 发消息只有 ACK（"收到，正在处理…"）无实际回复；server 日志 `WorkerDispatcher ... 不可用：fetch failed` | worker `baseUrl` 上报共享 ClusterIP 名，exec 端口 4198 未暴露 | 确认 `GET /api/v1/workers` 的 baseUrl 为 `http://vteam-worker-N.vteam-worker-headless...:4000`（headless DNS）；非则按 4.3 修正 WORKER_ADVERTISE_HOST 并 upgrade |
-| 3 | 内置 MCP `mcpStatus` 非 connected | seed 注册的 URL 是 compose 的 `server:3000` | 按 4.4 UPDATE mcp_servers + `kubectl rollout restart sts/vteam-worker`；容器内 `cd /data/vteam-worker && opencode mcp list --pure` 确认 |
+| 3 | 内置 MCP `mcpStatus` 非 connected | seed 注册的 URL 是 compose 的 `server:3000` | 按 4.4 UPDATE mcp_servers + `kubectl rollout restart sts/vteam-worker`；容器内 `cd /data/vteam-worker && opencode mcp list` 确认（⚠️ v2 已移除 `--pure`，带上会 exit 1） |
 | 4 | worker 多副本后 `database disk image is malformed` | 共享 home PVC 并发写 SQLite opencode.db | 迁移 StatefulSet 每副本独立 PVC；损坏时降副本、删除损坏 db 重建（运行时会话/缓存，丢失影响有限） |
 | 5 | 任务创建 500，`value too long for column description` | description 列 VARCHAR(191) 容量不足 | 已改 TEXT 列（迁移 `20260814150000_text_columns`）；新部署随 init Job 自动应用，存量需重跑迁移 |
 | 6 | worker opencode 进程无响应/被杀 | 内存不足（OOMKilled）或模型偶发卡死 | `kubectl top pod` 查看资源，worker limits 提到 8Gi；模型无响应为偶发，重发消息恢复 |
@@ -519,7 +545,7 @@ kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e
 kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e "SHOW COLUMNS FROM tasks LIKE 'description';"
 
 # worker 内核对（注意先 cd 到工作目录）
-kubectl exec sts/vteam-worker -n vteam -- sh -c "cd /data/vteam-worker && opencode mcp list --pure"
+kubectl exec sts/vteam-worker -n vteam -- sh -c "cd /data/vteam-worker && opencode mcp list"   # ⚠️ v2 无 --pure
 
 # 健康检查
 curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
@@ -584,3 +610,387 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
 | `main-fix-and-worker-tune.txt` | GitHub main 推送、worker 副本 1 + 内存 8Gi 调优 |
 | `fix-text-columns.txt` | TEXT 列迁移（任务创建 500 修复）与 K8s 部署验证 |
 | `helm-chart.txt` | chart 结构、模板渲染抽查、设计要点与风险 |
+
+## 八、OpenCode v2 灰度与回滚（v2 切换专用）
+
+> **适用范围**：从 OpenCode **v1 线（`v1.0.4` tag）**切到 **v2 线**的那一次上线。
+> 本节是**可执行的操作手册**：照着做即可，不需要读 `.omo/plans/` 里的计划。
+
+### 8.0 先读这五条硬事实
+
+1. **没有代码级开关能退回 v1**。`OPENCODE_V2_ENABLED=false` 在 worker 的 `loadConfig`
+   阶段**直接抛错**（v1 驱动已随 v2 切换删除，`worker/src/config.ts` 的
+   `parseDriverModeSwitch`）。⇒ **回退 = 回滚镜像/代码到 `v1.0.4`**，不是"改个 env"。
+   该 env 保留下来只为**响亮失败**并指向真正的回退手段。
+2. **server 与 worker 必须一起换**。v2 把控制面↔opencode 的通道从"控制面直连 serve"
+   换成了"控制面调 worker 的执行端点"：`POST /sessions`、`POST /sessions/:id/prompt`、
+   `GET /sessions/:id/messages`、`POST /sessions/:id/abort`、`GET /models`（鉴权
+   `X-Worker-Token`）。**v1 worker 没有这些端点**（v1 的执行端点只有 `/execute`、
+   `/file`、`/agents`、`/todos` …），**v1 server 则直连 serve 的 v1 路由**（`/session`、
+   `/session/:id/prompt_async` …，v2 上已移除）。⇒
+   **v1 server + v2 worker 与 v2 server + v1 worker 都不能互通**（不是"能跑但降级"，
+   是会话链路直接断）。
+3. **数据卷要一起回滚**（详见 §8.6/§8.7）。v2 把会话存储换成了 SQLite `opencode.db`，
+   worker 的 serve 跑在**隔离配置域**里（`XDG_DATA_HOME=<HOME>/.opencode-iso/data`）⇒
+   **v1 的二进制读不到 v2 形态的会话库**，v2 期间产生的会话在回滚后对 v1 不可见。
+   ⇒ **数据卷快照是安全灰度的前置条件**，不是可选项。
+   （若部署时**没有**启用隔离域——把 `XDG_DATA_HOME` 指回 v1 的数据目录——则 v2 的迁移是
+   **就地**发生的，v1 连卷都读不了 ⇒ 恢复卷从"建议"升级为"硬性要求"。两种情况下
+   **回滚步骤完全一样**，所以按 §8.6 做即可。）
+4. **没有"混跑保护网"**。调度器确实有 opencode 版本过滤，但**当前没有任何生产调用方**
+   设置 `AssignmentRequirement.opencodeVersion` ⇒ 该过滤**今天是失效的**
+   （详见 §8.4）。⇒ **切换前必须把 v1 worker 全部下线**，不能指望调度器帮你挡住。
+5. ⚠️ **MCP 状态是五态 ⇒ server 必须先于 worker 上线**（**线契约顺序是硬约束**）。
+   v2 的 `GET /api/mcp` 有五个状态：`connected` / `pending`（还在连）/ `disabled`
+   （配了但关着）/ `failed` / `needs_auth`。worker 心跳把状态**原样**上报，server 侧
+   `McpStatusEntryDto.status` 用 `@IsIn` **逐字校验**。⇒ **server 必须先接受这五个值**，
+   否则新 worker 一旦上报 `pending` 或 `disabled`，**整条心跳被 400 拒绝**
+   （`mcpStatus` 是 `@ValidateNested({each:true})` ⇒ **数组里混进一个非法值 ⇒ 整包校验失败**）
+   ⇒ worker 心跳全部丢失 ⇒ **30s 内被判离线**（3 个心跳周期）。
+   ⇒ **滚动更新 worker 只有在 server 已经是新版之后才安全**：先起新 worker 正是这个故障模式。
+
+### 8.1 交付顺序（制品）与每一步的理由
+
+| 序 | 制品 | 内容 | 为什么必须在这个位置 |
+|----|------|------|---------------------|
+| 0 | **数据卷快照** | worker 的 **home 卷**（opencode 会话库/凭据）与 **work 卷**（注入配置/任务文件）各一份 | 必须在**第一个 v2 worker 启动之前**完成（启动即写新形态数据，事后无法还原） |
+| 1 | **v2 线的 server 镜像** | 控制面改调 worker 执行端点 | 与 worker 同批换（事实 2）；**并且必须先于 worker 就位**——server 侧的 MCP 状态校验必须**先**接受 v2 的五态（事实 5）：否则新 worker 上报 `pending`/`disabled` ⇒ 整条心跳 400 ⇒ worker 判离线 |
+| 2 | **v2 线的 worker 镜像** | 内含 opencode CLI，**钉死** `@opencode/cli@2.0.32`（Dockerfile `ARG OPENCODE_CLI_SPEC`）；同一镜像还带平台自己的工具插件（`.opencode/plugins/*.ts`，v1/v2 双形态） | 与 server 同批换（事实 2）；**必须在 server 之后**（事实 5）；**回滚镜像也会把 CLI 一起回滚**（v1 线钉的是 `opencode-ai` = 1.19.3） |
+| 3 | **注入配置**（`<WORK_DIR>/opencode.json`） | 由 worker 的注入器在启动时重写：v1 段名 → v2 段名（`agent:`→`agents:`、`prompt`→`system`、`permission{}`→`permissions[]`、`mcp:`→`mcp.servers:`、`plugin:`→`plugins:`） | 配置在**持久卷**上（镜像不是）⇒ 旧段名会一直留在文件里。v2 遇到 v1 段会**静默归一化**（角色提示可能整段丢失且**零告警**）⇒ 注入器每次写盘前都做幂等迁移 |
+| 4 | **OmO 插件条目** | v2 线的 worker **不注册** OmO（镜像内置的是 v1 形态入口，v2 不加载） | 见 §8.5 |
+
+> **注入配置是"静默降级"的头号来源**：`<WORK_DIR>/opencode.json` 的形态不对时，平台**不
+> 报错**，只是角色提示/权限规则悄悄不生效。所以 §8.3 把"归一化诊断计数 = 0"列为**硬闸门**。
+
+> ⚠️ **顺序 1 → 2 是线契约约束，不只是"顺手先上 server"**（对应事实 5）：
+> v2 的 MCP 状态是**五态**，server 的 `McpStatusEntryDto.status` 用 `@IsIn` **逐字校验**，
+> 而心跳里的 `mcpStatus` 是 `@ValidateNested({each:true})` ⇒ **数组里混进一个 server 不认识的
+> 状态值 ⇒ 整条心跳 400** ⇒ worker 的心跳全丢 ⇒ **30s 内被判离线**。
+> ⇒ **server 必须先接受五态，worker 才能开始上报五态**；**滚动更新 worker 只有在 server
+> 已是新版之后才安全**——"先起新 worker、后升 server" 正是这个故障模式（worker 刚起来就
+> 报 `pending`/`disabled`，server 不认 ⇒ 400 ⇒ 判离线 ⇒ 看起来像"worker 起不来"）。
+
+### 8.2 灰度步骤与闸门
+
+**阶段 0 —— 前置（不可跳过）**
+
+```bash
+# 0.1 导出 values 基线（灰度前！）——§4.1 的纪律，缺了它回滚也回滚不干净
+helm get values vteam -n vteam -o yaml > /tmp/opencode/vteam-baseline-v1.yaml
+
+# 0.2 记录灰度前基线（会话成功率 / 首字延迟），作为后续对比的对照组
+kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e \
+  "SELECT status, COUNT(*) FROM sessions WHERE created_at >= NOW() - INTERVAL 7 DAY GROUP BY status;"
+
+# 0.3 快照数据卷（见 §8.6.3 的具体命令），并**验证快照可恢复**
+# 0.4 构建并推送 v2 线的三个镜像（server / web / worker）
+```
+
+**闸门 G0**（全部满足才允许动 worker）：
+
+- [ ] home 卷 + work 卷快照**已创建**，且**做过一次恢复演练**（"创建了快照" ≠ "能恢复"）
+- [ ] v1 线的三个镜像仍在 registry 里（回滚要用；`v1.0.4` 树构建）
+- [ ] `vteam-baseline-v1.yaml` 已导出并**确认含 v1 的 image tag**
+- [ ] 灰度前基线（会话成功率、首字延迟）已记录
+- [ ] `OPENCODE_SERVER_PASSWORD` 已就位（v2 恒开鉴权，缺失 → worker 起不来）
+- [ ] `WORKER_TOKEN`（server 侧）== `X_WORKER_TOKEN`（worker 侧）——**同一个 Secret key**
+- [ ] **（事实 5）server 侧 MCP 状态校验已接受 v2 五态**（`connected` / `pending` /
+      `disabled` / `failed` / `needs_auth`）——**必须在任何新 worker 起来之前**；
+      校验未放宽就放 worker ⇒ 心跳 400 ⇒ worker 判离线
+
+**阶段 1 —— 硬切（server 先、worker 后；worker 只留 1 个）**
+
+> ⚠️ **不要用 `worker.updateStrategy.partition` 做这次切换**。partition 会让 ordinal 0
+> 保留 v1 镜像、其余升 v2 ⇒ **v2 server 会把任务派给 v1 worker**（版本过滤是失效的，
+> 见 §8.4）⇒ 必炸。正确做法是**先把 v1 worker 全部下线，再按新镜像起 1 个**。
+
+> ⚠️ **server 必须先就位、worker 才能起来**（事实 5 的直接后果）：新 worker 一上报
+> `pending`/`disabled`，**旧 server 的 `@IsIn` 拒收 ⇒ 整条心跳 400 ⇒ worker 判离线**。
+> ⇒ 顺序固定为「**先升 server（并确认它已接受五态）→ 再起新 worker**」；
+> **滚动更新 worker 只有在 server 已是新版之后才安全**。
+
+```bash
+# 1.1 v1 worker 全部下线（事实 4：没有混跑保护网）
+kubectl scale sts/vteam-worker -n vteam --replicas=0
+
+# 1.2a 先把 server（+ web）升到 v2 线并等它就绪——它必须先接受 MCP 五态（事实 5）
+helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml \
+  --set server.image.tag=<v2-tag> \
+  --set web.image.tag=<v2-tag> \
+  --wait --timeout 300s
+kubectl rollout status deploy/vteam-server -n vteam --timeout=300s
+
+# 1.2b server 就绪后再升 worker 镜像（此时 worker 只起 1 个）
+helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml \
+  --set server.image.tag=<v2-tag> \
+  --set web.image.tag=<v2-tag> \
+  --set worker.image.tag=<v2-tag> \
+  --set replicaCount.worker=1 \
+  --wait --timeout 300s
+
+# 1.3 验证 worker 注册与版本上报
+kubectl get pod -n vteam -l app.kubernetes.io/component=worker
+curl -s -H "Authorization: Bearer $JWT" http://<server>/api/v1/workers | jq '.[] | {id,status,opencodeVersion}'
+#    期望：status=online，opencodeVersion="2.0.32"（规范 semver）
+#    若 status 变 offline 且日志有 400 ⇒ server 还没接受五态（事实 5）⇒ 立刻停手、升 server
+```
+
+**闸门 G1**（≥30 分钟 **且** ≥20 个真实会话后逐条核对，判据见 §8.3）：
+
+- [ ] **401 计数 = 0**
+- [ ] **配置归一化诊断计数 = 0**
+- [ ] **重复终态计数 = 0**
+- [ ] 会话成功率 ≥ 灰度前基线（不下降）
+- [ ] 首字延迟 P95 ≤ 15s（目标 ≤5s）
+- [ ] MCP 探针：`vteam` + `keta-platform` 均 `connected`（不是"全部未连接"）；
+      **若看到 `pending`/`disabled` 属正常**（v2 五态：还在连 / 配了但关着，
+      **都不是 failed**）——web 徽章已按五态渲染（`连接中` / `已停用`）
+- [ ] **心跳无 400**（server 侧 `POST /workers/:id/heartbeat` 无 400 计数）——
+      有 400 ⇒ server 还没接受五态（事实 5）
+- [ ] 一条真实 @ 触发走完：ACK → 首字 → 终态 → 产出物落库（`uploads` 有文件、DB 有 artifact 行）
+- [ ] worker 日志无插件加载失败（OmO 在 v2 **不加载**，这是预期，见 §8.5）
+
+**阶段 2 —— 10%**：目标 worker 规模 N ⇒ `replicas = max(1, round(0.1N))`，
+观察 ≥1 个工作日 ⇒ **闸门 G2 = G1 的全部条目**。
+**阶段 3 —— 50%**：`replicas = max(1, round(0.5N))` ⇒ **闸门 G3 = G1**。
+**阶段 4 —— 100%**：`replicas = N` ⇒ **闸门 G4 = G1**；**数据卷快照至少保留 7 天**再清理。
+
+> **升档规则**：G1..G4 任一条不达标 ⇒ **停在当前档位**，不要升档。
+> 若不达标项属于 §8.3 的"必须为 0"类（401 / 归一化诊断 / 重复终态）且**当场修不掉**
+> ⇒ 直接走 §8.6 的**回滚**。
+
+### 8.3 灰度观察项（每一项都给取数方式与越界处置）
+
+> ⚠️ **两类"静默失败"不会触发任何告警**：它们只会**悄悄变坏**，必须主动 grep：
+> **401 计数**（密码/Token 下发问题）与**配置归一化诊断计数**（配置形态问题）。
+
+| 观察项 | 判据 | 取数（K8s） | 越界怎么办 |
+|--------|------|-------------|-----------|
+| **401 计数** | **必须为 0** | worker→serve：`kubectl logs sts/vteam-worker -n vteam --since=30m \| grep -cE "HTTP 401"`（v2 驱动报 `[v2-driver] <path> HTTP 401`）<br>server→worker：`... \| grep -c "X-Worker-Token 无效"` | serve 侧 401 ⇒ `OPENCODE_SERVER_PASSWORD` 与 serve 实际口令不一致（v2 会自动生成随机密码 → worker 不解析就全线 401）；exec 侧 401 ⇒ `WORKER_TOKEN`（server）与 `X_WORKER_TOKEN`（worker）不是同一个 Secret key |
+| **配置归一化诊断计数** | **必须为 0** | serve 日志（两处等价）：<br>① 容器内文件：`kubectl exec sts/vteam-worker -n vteam -- sh -c "grep -c 'configuration normalization diagnostic' /root/.opencode-iso/data/opencode/log/opencode.log"`<br>② worker stdout（serve 以 `--print-logs` 同时写 stderr）：`kubectl logs sts/vteam-worker -n vteam --since=30m \| grep -c "configuration normalization diagnostic"` | >0 ⇒ 注入的配置**还是 v1 形态**。诊断行里的 `path=` 点名被丢的键（如 `$.provider.x.models.y.reasoning`）；对照 §8.1 第 3 行的段名/键名改名表修正注入器（不是改 opencode.json——它每次启动都会被覆盖） |
+| **重复终态计数** | **必须为 0** | `kubectl logs sts/vteam-worker -n vteam --since=30m \| grep -c "补发 task.completed"`（同一轮既失败又按终态证据补发 = 事件路与轮询路打架） | >0 ⇒ 终态证据来源不一致；查 worker 日志的 `terminalEvidence=event\|polling`，事件路与轮询路给出的结论必须一致（`prompt-await` 的"先问后记"不变式） |
+| **会话成功率** | ≥ 灰度前基线（**不下降**） | `kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e "SELECT status, COUNT(*) FROM sessions WHERE created_at >= NOW() - INTERVAL 1 DAY GROUP BY status;"`（`idle`=成功终态、`failed`=判死终态） | 下降 ⇒ 停在当前档位；先比对是"卡在 running"（无终态）还是"直接 failed"（首字超时/模型错误） |
+| **首字延迟** | **≤15s 通过线、5s 目标线**（P95 口径） | 平台**没有**现成的首字延迟指标（worker 不打首字耗时日志）⇒ 用 DB 近似：<br>`SELECT TIMESTAMPDIFF(SECOND, t.created_at, MIN(m.created_at)) FROM tasks t JOIN messages m ON m.task_id=t.id AND m.sender_type='agent' WHERE t.created_at >= NOW() - INTERVAL 1 HOUR GROUP BY t.id;` | 超线 ⇒ 先查模型侧（凭据/限流/首字超时 `WORKER_FIRST_TOKEN_TIMEOUT_MS`），再看 serve 日志有无 provider 错误 |
+| **完成判定准确率** | "有文本无终态"不再被误判完成 | worker 日志 `[exec] 执行完成` 的条数 vs server 侧 `sessions` 转 `idle` 的条数（同一时间窗） | 两者对不上 ⇒ 查终态判定（`step-finish` part 是否存在；v2 由驱动合成） |
+| **MCP 状态上报** | 不再出现"全部未连接" | `GET /api/v1/workers` 的 `mcpStatus`（每服务器**五态** `connected`/`pending`/`disabled`/`failed`/`needs_auth`） | 全 failed ⇒ 查 `WORKER_MCP_URL` / seed 的 MCP URL（集群内是服务名 `vteam-server`）；探针失败会以 `probe_failed` 显式上报，不会静默。**`pending`（还在连）与 `disabled`（配了但关着）都不是 failed，属正常态**；**心跳 400** ⇒ server 还没接受五态（见 §8.0 事实 5） |
+| **`durable.seq` 幂等** | 重放下重复落库 = 0 | server 日志 `[dedup] 跳过重复事件`（debug 级，需开 debug 日志才可见） | 重复落库 ⇒ 幂等键口径漂移（worker 重启后 `evw_<bootId>_<seq>` 会变，靠上游 `durable.aggregateID+seq` 兜底） |
+| **插件加载** | 无 `plugin load failed` | worker 的 serve 日志：`msg="loading plugin"`（`GET /api/plugin` 不可靠，历史上返回过 total=0） | v2 下**不应**有 OmO 加载失败——若出现，说明注入器仍注册了 v1 形态的 OmO（见 §8.5） |
+
+### 8.4 版本闸门与"混跑窗口"（当前是失效的，必须知道）
+
+- worker 向 server 上报的 `opencodeVersion` 是**规范化 semver**（如 `2.0.32`）；
+  调度器 `assignWorker` 的过滤把**两侧都归一**后再比
+  （`server/src/workers/worker-version.ts` 的 `isSameOpencodeVersion`）⇒
+  需求写成原始 CLI 串 `opencode v2.0.28` 或裸 semver `2.0.28` **都能匹配**。
+- ⚠️ **但这个过滤今天是失效的**：`AssignmentRequirement.opencodeVersion` **没有任何生产
+  调用方设置**（全仓只有类型定义与过滤本身），也没有 env / values 开关可以设置它。
+  ⇒ **混跑期没有自动保护**：v2 server 会把任务派给任何在线 worker，包括 v1 worker。
+- ⇒ **操作要求**：切换时**必须**先把 v1 worker 下线（§8.2 阶段 1 第 1 步），
+  不要指望版本过滤挡住。
+- ⇒ 如果将来有调用方要"在灰度期钉住某个版本"：把需求写成**镜像里钉的那个精确 semver**
+  （当前 = `2.0.32`）。**写错的后果是静默的总停摆**——不匹配 ⇒ worker 不可调度 ⇒
+  什么都不派发、**且不报错**。两侧都会归一，所以 `opencode v2.0.28` / `2.0.28` 等价，
+  但 `2.0.28` ≠ `2.0.32`。
+- ⚠️ **与"混跑窗口"无关、但同样会咬人的另一条顺序约束**：**滚动更新 worker 只有在
+  server 已经是新版之后才安全**（§8.0 事实 5）——新 worker 会上报 v2 的 MCP 五态，
+  而**旧 server 的 `@IsIn` 只认三态** ⇒ 整条心跳 400 ⇒ worker 判离线。⇒ **先升 server、
+  再滚 worker**；反过来做会表现成"worker 刚起来就离线"，很容易被误判成镜像/配置问题。
+
+### 8.5 OmO（oh-my-openagent）在 v2 的状态：**有界降级（不加载）**
+
+**结论：OmO 不是 vteam 核心功能的依赖，v2 线按"OmO 关闭"上线。**
+
+- **平台核心**（skills / tools / MCP 注入、角色 agent 与权限、会话与流式链路、平台 MCP、
+  产出物归档）全部由**平台自己**写进项目 `opencode.json` 与 `.opencode/`，
+  **不依赖 OmO**。OmO 提供的是**额外的** agent（Sisyphus / Prometheus / Atlas …）与它们
+  的模型配置页。
+- **为什么在 v2 加载不了**：v2 的三个破坏性变更之一就是**插件 API**——v1 插件导出
+  `{server}`，v2 插件导出 `{id, setup}` ⇒ **v1 形态的插件实现在 v2 不会运行**。而镜像里
+  内置的 OmO 由 `bunx oh-my-openagent@latest install --platform=opencode` 装出，**是 v1 形态**。
+- **配置怎么表达"关闭"**：worker 镜像的能力标记 `/opt/omo-bundled.json` 带一个 `v2` 字段
+  （`true` = 内置 OmO 有 v2 形态入口；`false` = 只有 v1 形态）。当前镜像写的是
+  `"v2": false` ⇒ **注入器不把 OmO 写进 `plugins` 节**，并会**清掉**持久卷上历史遗留的
+  OmO 条目（升级路径必须清，否则老条目会一直留在配置里）。
+  另外，用户的 OmO 开关（`<WORK_DIR>/.omo/omo-enabled.json`）现在**直接决定配置**——
+  此前它只影响一个早已失效的 `--pure` flag，"看得见、不生效"。
+- **降级的后果（明说）**：
+  - OmO 的 14 个 agent（Sisyphus / Prometheus / Hephaestus / Atlas …）在 v2 下**不存在**；
+  - worker 详情页的「OmO 编排插件」卡片里的 **agent→模型映射不再生效**
+    （配置文件仍可写，但没人加载它）；
+  - **平台的角色不受影响**：计划/执行职责判定用的是 `plan`（原生）/ `prometheus`（OmO 约定）/
+    `vteam-plan`（平台）三选一，缺 OmO 时 `plan` 与 `vteam-plan` 仍在；
+  - 平台的**角色 agent 与权限**来自控制面注入的 `agents` 节，**与 OmO 无关**。
+- **要恢复 OmO 需要什么**：一个 **v2 形态入口**（`export default { id, setup(ctx) }`）的 OmO
+  包，且镜像能力标记的 `v2` 字段改成 `true`。**不要**依赖仓库外的路径。
+
+### 8.6 回滚步骤（可执行）
+
+> **前置条件（回滚前必须成立，否则"回滚"会变成"带伤上线"）**：
+> 1. **迁移前的数据卷快照存在且可恢复**（home 卷 + work 卷；见 §8.6.3）。
+> 2. **v1 线的镜像可用**（`v1.0.4` 树构建的 server / web / worker，已推 registry）。
+> 3. `vteam-baseline-v1.yaml`（灰度前导出的 values 基线，含 v1 image tag）在手。
+
+#### 8.6.1 冻结（先止血，避免回滚过程中继续写卷）
+
+```bash
+# 停 worker（不再写 opencode 会话库/注入配置）
+kubectl scale sts/vteam-worker -n vteam --replicas=0
+
+# 停 server（不再派发、不再落任务/消息）
+kubectl scale deploy/vteam-server -n vteam --replicas=0
+```
+
+#### 8.6.2 回滚代码/镜像
+
+```bash
+# 方式 A（推荐）：helm 回滚到灰度前的那次 revision
+helm history vteam -n vteam                 # 找到灰度前的最后一个 SUCCESS revision
+helm rollback vteam <REV> -n vteam --wait --timeout 300s
+
+# 方式 B：显式用 v1 的 image tag 升级（不依赖 helm 的 revision 历史）
+helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml \
+  --set server.image.tag=<v1-tag> \
+  --set web.image.tag=<v1-tag> \
+  --set worker.image.tag=<v1-tag> \
+  --wait --timeout 300s
+```
+
+> ⚠️ `helm rollback` / `helm upgrade` 只回滚 **values**，**不回滚数据卷** ⇒ §8.6.3 是
+> 必做项，不是可选项。
+
+#### 8.6.3 恢复迁移前的数据卷
+
+```bash
+# 3.0 确保 worker 仍是 0 副本（helm rollback / upgrade 可能把它调回去了）
+#     —— 必须为 0，否则 StatefulSet 控制器会立刻重建一个空 PVC
+kubectl scale sts/vteam-worker -n vteam --replicas=0
+kubectl get sts/vteam-worker -n vteam   # 期望 REPLICAS 0
+
+# 3.1 列出 worker 的 PVC（每副本独立 RWO；PVC 由 StatefulSet 的 volumeClaimTemplates
+#     创建，**不带 app 标签**，按名字筛）
+kubectl get pvc -n vteam | grep -E 'worker-(home|work)-'
+#   期望：worker-home-vteam-worker-0、worker-work-vteam-worker-0（每副本一对）
+
+# 3.2 从快照恢复（CSI 快照能力可用时）：删掉旧 PVC → 用快照新建**同名** PVC
+#     ⚠️ 顺序很重要：STS 的 replicas 必须已经是 0（否则控制器会立刻重建一个空 PVC）
+#     ⚠️ 新 PVC 的 accessModes / storageClass / size 必须与 volumeClaimTemplates 一致，
+#        StatefulSet 才会**接管**它（否则 Pod 挂不上）
+kubectl delete pvc worker-home-vteam-worker-0 -n vteam
+cat <<'EOF' | kubectl apply -n vteam -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: worker-home-vteam-worker-0
+  namespace: vteam
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: <与原 PVC 相同>
+  resources:
+    requests:
+      storage: 5Gi
+  dataSource:
+    name: <快照名>
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+EOF
+#   恢复完把副本数调回去（helm upgrade --set replicaCount.worker=N）
+
+# 3.3 没有 CSI 快照时：用临时 Pod 把快照内容拷回原卷（通用做法）
+kubectl apply -n vteam -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: restore-worker-home-0
+spec:
+  restartPolicy: Never
+  containers:
+    - name: restore
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      volumeMounts:
+        - { name: target, mountPath: /target }
+  volumes:
+    - name: target
+      persistentVolumeClaim:
+        claimName: worker-home-vteam-worker-0
+EOF
+#   把快照内容拷进 /target（rsync / tar 管道），完成后删掉这个 Pod：
+kubectl delete pod restore-worker-home-0 -n vteam
+```
+
+> **work 卷**（`<WORK_DIR>`：注入的 `opencode.json`、`.opencode/`、任务文件）同法恢复：
+> 它在 v2 线被改写成了 v2 形态的段名/键名，恢复后 v1 注入器写回的才是干净的 v1 形态。
+> **若不恢复**：v1 注入器会重写它自己管的三个段（`agent`/`mcp`/`plugin`），
+> 但 **v2 形态的残留键（`agents`/`plugins`）会留在文件里**——v1 大概率忽略未知键，
+> 属"能跑但脏"；要干净就恢复。
+
+#### 8.6.4 验证（逐条）
+
+```bash
+# ⓪ 把副本数调回去，server 也恢复
+helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml \
+  --set replicaCount.worker=<N> --wait --timeout 300s
+kubectl scale deploy/vteam-server -n vteam --replicas=1
+
+# ① worker 起来了，且 opencode 是 v1
+kubectl get pod -n vteam -l app.kubernetes.io/component=worker
+kubectl logs sts/vteam-worker -n vteam | grep -i "opencodeVersion"     # 期望 1.19.3
+kubectl exec sts/vteam-worker -n vteam -- opencode --version            # 期望 opencode 1.19.3
+
+# ② worker 重新注册为 online
+curl -s -H "Authorization: Bearer $JWT" http://<server>/api/v1/workers | jq '.[] | {id,status,opencodeVersion}'
+
+# ③ 端到端跑一条真实消息（ACK → 回复 → 产出物落库）
+
+# ④ 会话历史可见性（v1 侧）
+#   v1 会话库在 <HOME>/.local/share/opencode/（home 卷内）；v2 期间产生的会话在
+#   <HOME>/.opencode-iso/data/opencode/opencode.db（v2 形态，v1 读不到）
+kubectl exec sts/vteam-worker -n vteam -- ls -la /root/.local/share/opencode/ 2>/dev/null
+kubectl exec sts/vteam-worker -n vteam -- ls -la /root/.opencode-iso/data/opencode/ 2>/dev/null
+```
+
+#### 8.6.5 Docker Compose 部署的回滚
+
+```bash
+# ① 停服（保留卷）
+docker compose down
+
+# ② 恢复迁移前的 home 卷（compose 命名卷：worker_home → 实际名 vteam_worker_home；
+#    工作目录卷：vteam_worker_data）
+docker run --rm -v vteam_worker_home:/dst -v "$PWD/backup/worker_home":/src alpine \
+  sh -c "rm -rf /dst/* && cp -a /src/. /dst/"
+
+# ③ 回滚代码到 v1.0.4 并重建镜像（compose 的 build 上下文即工作区）
+#    用独立 worktree，**不动**当前工作区（当前工作区往往有未提交改动）
+git worktree add /tmp/vteam-v1-rollback v1.0.4
+cd /tmp/vteam-v1-rollback && docker compose up -d --build
+#    验证完清理：git worktree remove /tmp/vteam-v1-rollback
+
+# ④ 验证（同 8.6.4）
+```
+
+### 8.7 回滚时的数据影响：**哪些会丢、哪些不会**
+
+| 数据 | 落点 | 回滚（镜像 + 卷）后 | 只回滚镜像（不回滚卷） |
+|------|------|---------------------|----------------------|
+| **平台的任务 / 消息 / 产出物 / 成员 / 角色** | **MySQL**（`tasks` / `messages` / `artifacts` / …） | ✅ **完好**（零 DDL，回滚不碰库） | ✅ 完好 |
+| **平台模型凭据**（MySQL `model_credentials`）+ `auth.json` | MySQL + worker home 卷 | ✅ 完好（卷已恢复） | ✅ 完好 |
+| **注入配置**（角色 agent、权限、MCP、工具插件） | worker **work** 卷的 `<WORK_DIR>/opencode.json` | ✅ 回到 v1 形态（卷已恢复） | ⚠️ v1 注入器重写自己管的段，但 v2 形态残留键仍在文件里 |
+| **v1 线产生的 opencode 会话历史** | worker home 卷的 `<HOME>/.local/share/opencode/` | ✅ 完整恢复 | ✅ **仍在**（v2 的隔离域不碰它） |
+| **v2 线产生的 opencode 会话** | worker home 卷的 `<HOME>/.opencode-iso/data/opencode/opencode.db`（v2 形态 SQLite） | ❌ **丢失**（快照是迁移前的） | ❌ **v1 读不到**（数据还在卷上；切回 v2 仍可见） |
+| **平台侧会话记录**（`sessions` 表的 `instanceRef` 等） | MySQL | ✅ 保留（但指向的 opencode 会话可能已不可见） | ✅ 保留 |
+
+> **结论（必须让运维知道）**：
+> - **平台数据不会因为回滚而丢**——任务、消息、产出物、成员、凭据全在 MySQL，零 DDL。
+> - **丢的是 OpenCode 侧的会话历史**：v2 期间产生的会话在 v2 形态的 SQLite 库里，
+>   **v1 二进制读不了**（会话内容 = 模型上下文与产出物文本；产出物**文件**本身在
+>   `uploads` 卷 / MySQL 里，**不丢**）。
+> - **没做卷快照 ⇒ 没有"回到 v1 形态"的材料**：v1 线的老会话仍在卷上（隔离域设计使然，
+>   见 §8.0 事实 3），但 v2 期间的会话对 v1 不可见，且注入配置带 v2 形态残留。
+> - ⇒ **结论：数据卷快照是"安全灰度"的前置条件**，不是回滚的"锦上添花"。
+> - ⚠️ **口径差异提醒**（别把两句矛盾的话混用）：本表"只回滚镜像"一列描述的是
+>   **v2 worker 带隔离域上线**的现状（v1 的老库在 `<HOME>/.local/share/opencode/`，
+>   与 v2 的隔离域 `<HOME>/.opencode-iso/data/` **不是同一个目录**）。若部署时**未启用
+>   隔离域**，v2 的迁移就是**就地**的、v1 连卷都读不了 ⇒ 那一列全部按"丢失"计。
+>   **两种情况的回滚步骤相同（§8.6 都要求恢复卷）**，区别只在于"不回滚卷"的后果有多严重。
+

@@ -57,8 +57,9 @@ Agent: xxx（32KB 截断）
                                             └──────────────┘
 ```
 
-- **remote MCP**（opencode 1.18 原生支持）：worker `opencode.json` 配
+- **remote MCP**（opencode v1.18 起原生支持，v2 同样支持）：worker `opencode.json` 配
   `{ mcp: { "vteam": { type: "remote", url: "http://server:3000/api/v1/platform-mcp", headers: { "x-worker-token": "<token>" } } } }`
+  ⚠️ **v2 形态**：服务器收在 **`mcp.servers`** 下（`{ "mcp": { "servers": { "vteam": { … } } } }`），v1 的扁平形已被 v2 标为 deprecated（仍能解析并归一化）；平台注入器写的是 **v2 形态**。
 - worker 侧**零新增代码**——复用 `ResourceInjector.injectMcp()`（从 `GET /mcp-servers?enabled=true` 拉取注入）
 
 ## 3. 注册方式（复用现有注入链）
@@ -73,7 +74,7 @@ headers: { x-worker-token: "{env:X_WORKER_TOKEN}" }   ← 环境变量引用，w
 enabled: true
 ```
 
-`injector.injectMcp()` 自动拉取 → `buildMcpEntry(remote)` → 写 `opencode.json` 的 `mcp` 节 → serve 读取。
+`injector.injectMcp()` 自动拉取 → `buildMcpEntry(remote)` → 写 `opencode.json` 的 **`mcp.servers`** 节（**v2 形态**；v1 是扁平的 `mcp` 节）→ serve 读取。
 
 > **决策（已定）**：token 注入首选 opencode env 引用 `{env:X_WORKER_TOKEN}`（worker 侧 env 已有该变量，零改 worker）。
 > 实施时先用 `opencode mcp` 实测验证 1.18 的 env 引用支持；若不支持 → 回退方案：`buildMcpEntry` 对 `vteam` 特判附加 `x-worker-token`（worker 注入器小改，可单测）。

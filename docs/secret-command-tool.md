@@ -282,9 +282,10 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 
 ### 8.1 残余风险
 
-- **worker 镜像的 opencode CLI 未 pin。** `worker/Dockerfile` 默认 `ARG OPENCODE_CLI_SPEC=opencode-ai`，
-  每次构建取 npm 最新版；需要可复现构建时显式传
-  `--build-arg OPENCODE_CLI_SPEC=opencode-ai@<version>`，否则 CLI 行为随上游漂移。
+- **worker 镜像的 opencode CLI 已锁版。** `worker/Dockerfile` 默认 `ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32`
+  （opencode v2 适配后；原先的 `opencode-ai` 是冻结在 1.19.3 的 v1 线，**永远到不了 v2**）。需要可复现构建时显式传
+  `--build-arg OPENCODE_CLI_SPEC=@opencode/cli@<version>`，否则 CLI 行为随上游漂移。
+  ⚠️ 另：v2 启动时**就地迁移** v1 磁盘数据（`opencode.db`），**复用旧 v1 数据卷不可回滚到 v1**——回滚须连数据卷一起回滚（07 篇 §12.8）。
 - **MCP timeout 是注入时显式保证的。** worker 注入 vteam 远端 MCP 条目时硬编码
   `timeout >= 900000`（覆盖 855s 最坏总预算），不依赖 OpenCode 客户端默认值，也不需要 DB
   迁移（`mcp_servers` 无 timeout 列）。环境变量 `VTEAM_MCP_TIMEOUT_MS` 可覆盖，但一律

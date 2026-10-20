@@ -148,11 +148,11 @@ worker 侧落点（便于排障/验收）：
 | 下发项 | 通道 | worker 落点 |
 |--------|------|-------------|
 | skills | 拉取（`GET /skills`） | `<WORK_DIR>/.opencode/skills/<name>/SKILL.md` |
-| tools | 拉取（`GET /tools`） | `<WORK_DIR>/.opencode/tools/<action>.ts` |
-| mcp-servers | 拉取（`GET /mcp-servers`） | `<WORK_DIR>/opencode.json` 的 `mcp` 节 |
-| agent-policies | 拉取（`GET /agent-policies`） | `<WORK_DIR>/opencode.json` 的 `agent` 节 |
-| model-credentials（providerKeys） | 命令 | `$HOME/.local/share/opencode/auth.json` |
-| model-credentials（providerConfigs） | 命令 | `$HOME/.config/opencode/opencode.json` 的 `provider` 段 |
+| tools | 拉取（`GET /tools`） | `<WORK_DIR>/.opencode/plugins/<action>.ts`（v2 插件形态，v1/v2 双形态模块） |
+| mcp-servers | 拉取（`GET /mcp-servers`） | `<WORK_DIR>/opencode.json` 的 `mcp.servers` 节（**v2 形态**） |
+| agent-policies | 拉取（`GET /agent-policies`） | `<WORK_DIR>/opencode.json` 的 `agents` 节（**v2 形态**） |
+| model-credentials（providerKeys） | 命令 | 隔离域的 `data/opencode/auth.json` |
+| model-credentials（providerConfigs） | 命令 | 隔离域的 `config/opencode/opencode.json` 的 `providers` 段（**含 `settings.apiKey`**） |
 | git-credentials | 命令 | `$HOME/.keta-git-creds.json`（600） |
 
 注意：模型凭据/配置变更会触发 worker 重启 serve 生效；git 凭据写盘即生效（不重启）。
@@ -204,8 +204,15 @@ curl -X POST -H "$T" $W/config/restart
 | 鉴权 | 必须 `X-Worker-Token`；注册模式下这些路径返回 **404 + 引导** |
 | 安全 | 会写入明文凭据（auth.json / git-creds）；执行端点绑 `0.0.0.0`，须网络隔离或仅内网可达 |
 
-落点：`<WORK_DIR>/.opencode/skills|tools`、`<WORK_DIR>/opencode.json`（mcp/agent 节）、
-`$HOME/.local/share/opencode/auth.json`、`$HOME/.config/opencode/opencode.json`（provider 段）、`$HOME/.keta-git-creds.json`。
+落点：`<WORK_DIR>/.opencode/skills|plugins`、`<WORK_DIR>/opencode.json`（**v2 形态：`mcp.servers` / `agents` / `plugins` 三节**）、
+隔离配置域的 `data/opencode/auth.json`、隔离配置域的 `config/opencode/opencode.json`（`providers` 段）、`$HOME/.keta-git-creds.json`。
+
+> ⚠️ **opencode v2 适配后的落点订正（2026-10-20）**：
+> - **配置域已隔离**：worker 的 opencode 数据不再落在宿主的 `$HOME` 下，而是在**隔离配置域**（缺省 `<HOME>/.opencode-iso`，可用 `OPENCODE_ISOLATION_ROOT` 指定）下的 `config/` 与 `data/`。上面的绝对路径因此是**隔离域内的相对位置**，不是宿主的 `$HOME`。
+> - **工具产物路径**已从 `.opencode/tools/` 改为 `.opencode/plugins/`（v2 移除了 `.opencode/tools/*.ts` 的文件自动发现）。
+> - **段名**已 v2 化：`mcp.servers` / `agents` / `plugins` / `providers`。
+> - **凭据双写**：`auth.json` 照写，但 **v2.0.28 不会从 `auth.json` 取 provider 的 API key**（实测 legacy 导入迁移是 no-op）——真正生效的是 `providers.<id>.settings.apiKey`，worker 会双写。
+> - 依据：07 篇 §12.1 / §12.5 / §12.7、`.omo/plans/opencode-v2-adaptation.md` 的 T15 / T16b / T19。
 
 ## 6. 可选：独立 stub 控制面进程
 
