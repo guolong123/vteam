@@ -310,7 +310,18 @@ export const PLATFORM_MCP_TOOLS = [
   'skill_create',
   'memory_update',
   'git_repos_list',
+  'tool_schema',
 ] as const;
+
+/**
+ * 与岗位无关的**只读** MCP 工具（裸名）。
+ *
+ * 它们**不入** `VTEAM_MCP_TOOL_NAMES` / 能力点目录：不参与授权、不读写业务数据，
+ * 由 `PlatformToolPermissionService` 按此白名单**恒放行**（显式允许，不是「缺失键 ⇒
+ * default-allow」）。`tool_schema`（工具 schema 自省）是唯一成员——它的存在意义就是
+ * 让 agent 不必靠报错猜参数；若它本身可能被岗位矩阵拒绝，这个修法即失效。
+ */
+export const PLATFORM_MCP_READONLY_TOOLS = ['tool_schema'] as const;
 
 /** 平台 MCP server 标识（seed 阶段 2 的 mcp-servers 记录 name 对齐）。 */
 export const PLATFORM_MCP_SERVER_NAME = 'vteam';

@@ -302,6 +302,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
       vteam_issue_create: 'allow',
@@ -347,6 +348,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
       vteam_read_file: 'allow',
@@ -389,6 +391,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_read_file: 'allow',
       vteam_doclib: 'allow',
@@ -439,6 +442,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_issue_create: 'allow',
       vteam_issue_list: 'allow',
@@ -485,6 +489,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_task_context: 'allow',
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
@@ -535,6 +540,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_task_context: 'allow',
       vteam_read_file: 'allow',
       vteam_doclib: 'allow',
@@ -570,6 +576,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_chat_history: 'allow',
       vteam_task_context: 'allow',
       vteam_doclib: 'allow',

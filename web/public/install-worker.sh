@@ -15,10 +15,13 @@
 #
 # ⚠️ opencode v2 契约（本脚本只支持 v2；v1 时代的假设已全部作废）：
 #   ① CLI 包名：v1 的 npm 包 `opencode-ai` 已冻结在 1.19.3（永远到不了 v2）→ v2 换包名
-#      `@opencode/cli`。**本脚本缺省按 npm 的 `latest` 标签装（= 最新已发布的 v2）**，不钉死版本；
-#      需要可复现时用 `--opencode <具体版本>` 显式钉版（如 2.0.32）。
-#      ⚠️ **镜像路径是另一条路、单独锁版 2.0.32**（worker/Dockerfile 的 ARG OPENCODE_CLI_SPEC）——
-#      那是「镜像里装哪版」的可复现性要求，与本脚本的 latest 缺省互不影响。
+#      `@opencode/cli`。**本脚本缺省钉版 `@opencode/cli@2.0.32`**——与 `worker/Dockerfile` 的
+#      `ARG OPENCODE_CLI_SPEC` **同版**：镜像路径与裸机路径落在同一个 opencode 版本上
+#      ⇒ 控制面按 opencode 版本串**精确过滤** worker 时两条路径不会分叉（排障也只看一个版本号）。
+#      需要跟上游走时显式传 `--opencode latest`（= npm 的 `latest` 标签，**浮动**），
+#      但浮动版本与控制面的精确版本过滤是两套口径 ⇒ 仍建议用缺省钉版。
+#      ⚠️ **v1 的包要卸掉**：`npm uninstall -g opencode-ai`——两个包都往全局 bin 目录放 `opencode`
+#      这个可执行文件，留着 v1 会让 PATH 上 `opencode` 到底指向谁变得不确定。
 #   ② 恒开鉴权：v2 的 serve **总是**要求 Basic Auth（用户名固定 opencode），密码来自
 #      `OPENCODE_SERVER_PASSWORD`——该变量在 v2 下**必填**；为空时 opencode 自动生成随机密码
 #      并打到 stdout，worker 不解析它 → 启动即 fail-fast。故本脚本保证该变量一定写进 .env
@@ -38,16 +41,18 @@
 #                       （worker/src/config.ts，缺省 5），并随注册上报 capabilities.maxInstances，
 #                       控制面按容量分派。传值必须是正整数（非法值本脚本直接报错退出，不静默兜底）。
 #                       不传则不写该变量（保留 worker 自己的缺省 5）。
-#   --opencode <ver>    opencode CLI 版本（缺省 latest = npm 包 @opencode/cli 的 latest 标签，即最新已发布的 v2）：
-#                       可传 latest / 裸版本号（2.0.32 / v2.0.32）或完整 npm spec（@opencode/cli@2.0.32），
-#                       后两者用于**钉版**（可复现安装）；CLI 缺失时按此规格 npm 全局安装，
-#                       已安装则仅提示校验（不自动切换）。
+#   --opencode <ver>    opencode CLI 版本（缺省 **2.0.32** = 钉版 `@opencode/cli@2.0.32`，
+#                       与 worker/Dockerfile 的 ARG OPENCODE_CLI_SPEC **同版**）：
+#                       可传 latest / 裸版本号（2.0.32 / v2.0.32）或完整 npm spec（@opencode/cli@2.0.32）；
+#                       CLI 缺失时按此规格 npm 全局安装，机器上装的是 v1 时**自动升级**到 v2
+#                       （先卸 v1 再装 v2），已装 v2 但版本不符时仅提示校验（不自动切换）。
 #                       ⚠️ v2 worker 的启动期版本闸门要求 opencode 主版本 ≥ 2：传 1.x / v1 包
-#                       （opencode-ai）会被自动改用缺省的 @opencode/cli@latest（v1 线已冻结，永不到 v2）。
+#                       （opencode-ai）会被自动改用缺省的 @opencode/cli@2.0.32（v1 线已冻结在 1.19.3，
+#                       永远到不了 v2，也过不了这道闸门；v1 包应另行 npm uninstall -g opencode-ai）。
 #                       ⚠️ 装出来的 opencode 主版本 ≥ 3 时本脚本**硬失败**（worker 驱动只验证过 v2）——
 #                       请钉一个 v2 版本，如 --opencode 2.0.32。
-#                       ℹ️ 镜像路径单独锁版 2.0.32（worker/Dockerfile 的 ARG OPENCODE_CLI_SPEC），
-#                       与本脚本的 latest 缺省互不影响。
+#                       ℹ️ `latest` 是**浮动**标签（跟上游发布），与控制面「按 opencode 版本串精确过滤
+#                       worker」的口径不同 ⇒ 生产上建议用缺省钉版。
 #   --token <token>     X_WORKER_TOKEN（注册鉴权，需与 server 侧约定一致；缺省引导手动填写）
 #   --src-url <url>     worker 发布包下载地址（缺省 ${SERVER_URL%/}/worker-src.tar.gz）
 #   --dir <path>        安装目录（缺省 $HOME/vteam-worker）
@@ -69,6 +74,7 @@
 #                       <advertise-host>:4198），serve 只是 worker 自己的后端 ⇒ 绑回环
 #                       （127.0.0.1）完全可以，且更安全（不必把 serve 暴露到本机所有网卡）。
 #                       缺省仍写 0.0.0.0 仅为兼容既有安装（不改变已生成 .env 的暴露面）；
+#                       v2 下绑 0.0.0.0 **不必要但无害**（控制面根本不连它）；
 #                       想更收敛可显式传 --serve-hostname 127.0.0.1。
 #                       serve 带 Basic Auth（OPENCODE_SERVER_PASSWORD），仍建议在防火墙/安全组
 #                       限制来源 IP。
@@ -196,23 +202,23 @@ ensure_node() {
 }
 
 # ------------------------------ opencode CLI 规格解析（v2 包名 @opencode/cli） ------------------------------
-# 缺省 = npm 的 `latest` 标签（@opencode/cli@latest = 最新已发布的 v2）：裸机安装默认跟随上游发布，
-# 不把版本钉死在某个硬编码值上；需要可复现时用 `--opencode <具体版本>` 显式钉版（如 2.0.32）。
-# ⚠️ **镜像路径单独锁版 2.0.32**（worker/Dockerfile 的 ARG OPENCODE_CLI_SPEC）——那是「镜像里装哪版」
-# 的可复现性要求（控制面按 opencode 版本串精确过滤 worker），**不适用于本脚本**。
-# v1 的 npm 包 `opencode-ai` 冻结在 1.19.3（永不到 v2），v2 换包名 `@opencode/cli`。
-OPENCODE_CLI_DEFAULT_SPEC="@opencode/cli@latest"
+# 缺省 = **钉版 2.0.32**（@opencode/cli@2.0.32）：与 `worker/Dockerfile` 的 ARG OPENCODE_CLI_SPEC
+# **同版** ⇒ 镜像路径与裸机路径落在同一个 opencode 版本上（控制面按 opencode 版本串**精确过滤**
+# worker，两边版本分叉会让过滤与排障都变难）。要跟上游走就显式 `--opencode latest`。
+# ⚠️ **v1 的 npm 包 `opencode-ai` 冻结在 1.19.3**（永远到不了 v2）⇒ v2 换包名 `@opencode/cli`。
+OPENCODE_CLI_DEFAULT_SPEC="@opencode/cli@2.0.32"
 OPENCODE_CLI_SPEC=""
 OPENCODE_CLI_VERSION=""
 
 # 把 --opencode 的取值规范化成 npm spec（结果写入 OPENCODE_CLI_SPEC / OPENCODE_CLI_VERSION）：
-#   latest / vlatest        → @opencode/cli@latest（npm 标签 = 最新已发布的 v2，不是硬编码版本）
-#   2.0.32 / v2.0.32        → @opencode/cli@2.0.32（裸版本号 → v2 包）
-#   @opencode/cli@latest    → 原样
-#   @opencode/cli@2.0.32    → 原样
-#   @opencode/cli           → @opencode/cli@latest（补缺省版本）
-#   opencode-ai@1.19.3     → v1 包（已冻结）→ 改用缺省 v2 规格
-#   1.x / v1.18.15          → v1 版本 → 改用缺省 v2 规格（v2 worker 版本闸门要求 major ≥ 2）
+#   （空）                 → @opencode/cli@2.0.32（缺省钉版，与镜像同版）
+#   latest                → @opencode/cli@latest（npm 标签 = 最新已发布的 v2，**浮动**）
+#   2.0.32 / v2.0.32      → @opencode/cli@2.0.32（裸版本号 → v2 包）
+#   @opencode/cli@latest  → 原样
+#   @opencode/cli@2.0.32  → 原样
+#   @opencode/cli         → @opencode/cli@2.0.32（补缺省版本）
+#   opencode-ai@1.19.3   → v1 包（已冻结）→ 改用缺省 v2 规格
+#   1.x / v1.18.15        → v1 版本 → 改用缺省 v2 规格（v2 worker 版本闸门要求 major ≥ 2）
 resolve_opencode_spec() {
   local raw="${1:-}"
   local pkg="" ver="" major=""
@@ -241,6 +247,7 @@ resolve_opencode_spec() {
     if [ "$pkg" != "@opencode/cli" ]; then
       echo "[install-worker] ⚠️  请求的 opencode 包 ${pkg} 不是 v2 包（v1 的 opencode-ai 已冻结在 1.19.3，永不到 v2）" >&2
       echo "[install-worker] ⚠️  v2 worker 只支持 @opencode/cli → 改用缺省 ${OPENCODE_CLI_DEFAULT_SPEC}" >&2
+      echo "[install-worker] ⚠️  v1 包不会因为改用 v2 规格而消失，事后请自行卸载：npm uninstall -g opencode-ai" >&2
       OPENCODE_CLI_SPEC="${OPENCODE_CLI_DEFAULT_SPEC}"
       OPENCODE_CLI_VERSION="${OPENCODE_CLI_DEFAULT_SPEC##*@}"
       return 0
@@ -250,10 +257,18 @@ resolve_opencode_spec() {
     fi
   else
     ver="${ver#v}"
+    # v1 的**包名**（不带版本号）：`opencode-ai` ⇒ 同样是「要 v1」的请求 ⇒ 改用缺省 v2 规格。
+    # （不能让它掉到下面的「数字主版本」判定里：那会报「无法识别的 opencode 版本」并退出。）
+    if [ "$ver" = "opencode-ai" ]; then
+      echo "[install-worker] ⚠️  请求的 opencode 包 opencode-ai 是 v1 的包（已冻结在 1.19.3，永不到 v2）" >&2
+      echo "[install-worker] ⚠️  v2 worker 只支持 @opencode/cli → 改用缺省 ${OPENCODE_CLI_DEFAULT_SPEC}" >&2
+      echo "[install-worker] ⚠️  v1 包不会因为改用 v2 规格而消失，事后请自行卸载：npm uninstall -g opencode-ai" >&2
+      ver="${OPENCODE_CLI_DEFAULT_SPEC##*@}"
     # `latest` 是 npm 标签（不是数字版本）→ 走缺省规格。**必须先于下面的「数字主版本」判定**，
     # 否则 latest 会被当成「无法识别的版本」直接报错。
-    if [ "$ver" = "latest" ]; then
+    elif [ "$ver" = "latest" ]; then
       ver="latest"
+      echo "[install-worker] 提示：--opencode latest 是**浮动**标签（跟上游发布）——控制面按 opencode 版本串精确过滤 worker，生产上建议用缺省钉版 ${OPENCODE_CLI_DEFAULT_SPEC}"
     else
       major="${ver%%.*}"
       if ! printf '%s' "$major" | grep -qE '^[0-9]+$'; then
@@ -263,6 +278,7 @@ resolve_opencode_spec() {
       if [ "$major" -lt 2 ]; then
         echo "[install-worker] ⚠️  请求的 opencode 版本 ${raw} 是 v1（npm 包 opencode-ai 已冻结在 1.19.3，永不到 v2）" >&2
         echo "[install-worker] ⚠️  v2 worker 的版本闸门要求 opencode 主版本 ≥ 2 → 改用 ${OPENCODE_CLI_DEFAULT_SPEC}" >&2
+        echo "[install-worker] ⚠️  v1 包不会因为改用 v2 规格而消失，事后请自行卸载：npm uninstall -g opencode-ai" >&2
         ver="${OPENCODE_CLI_DEFAULT_SPEC##*@}"
       fi
     fi
@@ -272,27 +288,71 @@ resolve_opencode_spec() {
   OPENCODE_CLI_VERSION="${ver}"
 }
 
-ensure_opencode() {
-  resolve_opencode_spec "${OPENCODE_VERSION}"
-  if ! command -v opencode >/dev/null 2>&1; then
-    echo "[install-worker] 未找到 opencode CLI，执行 npm install -g ${OPENCODE_CLI_SPEC} ..."
-    if ! npm install -g "${OPENCODE_CLI_SPEC}"; then
-      echo "[install-worker] ERROR: opencode 自动安装失败；如为权限问题请加 sudo 重试" >&2
-      exit 1
-    fi
-  fi
-  # 版本校验：v2 的 `opencode --version` 形如 "opencode v2.0.32" / "2.0.32" → 归一化成 semver 再比
-  local raw_version actual_version actual_major
+# 读机器上已装 opencode 的版本（`opencode --version` 形如 "opencode v2.0.32" / "opencode 1.19.0"）
+# → 归一化成 semver 串；命令不存在或输出认不出时返回空串（调用方按「未知」处理，不据此判死）。
+detect_opencode_version() {
+  local raw_version actual_version
   raw_version="$(opencode --version 2>/dev/null || true)"
   actual_version="$(printf '%s' "$raw_version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
-  actual_major=""
-  if [ -n "$actual_version" ]; then
-    actual_major="${actual_version%%.*}"
+  printf '%s' "$actual_version"
+}
+
+# 全局安装/升级 opencode CLI（spec 形如 @opencode/cli@2.0.32）。失败即退出——装不出 v2 CLI 的
+# worker 起来也只是被版本闸门判死，不如在这里给出可操作的报错。
+install_opencode_cli() {
+  local spec="$1"
+  echo "[install-worker] 执行 npm install -g ${spec} ..."
+  if ! npm install -g "${spec}"; then
+    echo "[install-worker] ERROR: opencode 自动安装失败；如为权限问题请加 sudo 重试" >&2
+    exit 1
   fi
+}
+
+ensure_opencode() {
+  resolve_opencode_spec "${OPENCODE_VERSION}"
+
+  local installed_version="" installed_major=""
+  if command -v opencode >/dev/null 2>&1; then
+    installed_version="$(detect_opencode_version)"
+  fi
+  if [ -n "$installed_version" ]; then
+    installed_major="${installed_version%%.*}"
+  fi
+
+  # 升级路径：机器上装的是 **v1**（npm 包 opencode-ai，冻结在 1.19.3）⇒ 脚本代劳升级到 v2。
+  # 为什么代劳：v2 worker 的启动期版本闸门要求 opencode 主版本 ≥ 2，v1 永远过不了 ⇒ 只提示
+  # 不动作的话，运维必须手工再跑一次 npm，「一键装出可用的 v2 worker」这个承诺就断了。
+  # 为什么**先卸 v1 再装 v2**（不是反过来）：两个 npm 包都往全局 bin 目录放 `opencode` 这个
+  # 可执行文件，`npm uninstall -g opencode-ai` 会把那个软链一并删掉 ⇒ 先装 v2 再卸 v1 会把
+  # v2 的入口也删掉（顺序反了 ⇒ 装完 `opencode` 命令直接消失）。
+  if [[ "$installed_major" =~ ^[0-9]+$ ]] && [ "$installed_major" -lt 2 ]; then
+    echo "[install-worker] ⚠️  检测到机器上装的是 opencode v1（${installed_version}，npm 包 opencode-ai）"
+    echo "[install-worker] ⚠️  v1 的 npm 包 opencode-ai 冻结在 1.19.3，**永远到不了 v2**，也过不了 v2 worker 的「主版本 ≥ 2」闸门"
+    echo "[install-worker] → 先卸载 v1（npm uninstall -g opencode-ai），再安装 v2（${OPENCODE_CLI_SPEC}）"
+    if ! npm uninstall -g opencode-ai >/dev/null 2>&1; then
+      echo "[install-worker] ⚠️  npm uninstall -g opencode-ai 未成功（可能并非该包安装的 v1）；继续安装 v2" >&2
+    fi
+    install_opencode_cli "${OPENCODE_CLI_SPEC}"
+    installed_version="$(detect_opencode_version)"
+    installed_major=""
+    if [ -n "$installed_version" ]; then
+      installed_major="${installed_version%%.*}"
+    fi
+  elif [ -z "$installed_version" ] && ! command -v opencode >/dev/null 2>&1; then
+    echo "[install-worker] 未找到 opencode CLI"
+    install_opencode_cli "${OPENCODE_CLI_SPEC}"
+    installed_version="$(detect_opencode_version)"
+    installed_major=""
+    if [ -n "$installed_version" ]; then
+      installed_major="${installed_version%%.*}"
+    fi
+  fi
+
+  local actual_version="${installed_version}" actual_major="${installed_major}"
   if [[ "$actual_major" =~ ^[0-9]+$ ]] && [ "$actual_major" -lt 2 ]; then
-    echo "[install-worker] ERROR: 机器上已安装的 opencode 是 v1（${actual_version}），v2 worker 不支持 v1" >&2
+    echo "[install-worker] ERROR: 机器上已安装的 opencode 仍是 v1（${actual_version}），v2 worker 不支持 v1" >&2
     echo "  v1 的 npm 包 opencode-ai 已冻结在 1.19.3，永远到不了 v2——worker 启动即被版本闸门判死" >&2
-    echo "  请先升级到 v2 再重跑本脚本：npm install -g ${OPENCODE_CLI_SPEC}" >&2
+    echo "  请手动装好 v2 再重跑本脚本：npm install -g ${OPENCODE_CLI_SPEC}" >&2
     echo "  （旧的 v1 可一并卸载：npm uninstall -g opencode-ai）" >&2
     exit 1
   fi
@@ -315,6 +375,11 @@ ensure_opencode() {
     fi
   elif [ -n "$actual_version" ] && [ "$actual_version" != "${OPENCODE_CLI_VERSION}" ]; then
     echo "[install-worker] 提示：opencode 当前 ${actual_version}，与要求 ${OPENCODE_CLI_VERSION}（${OPENCODE_CLI_SPEC}）不一致（不自动切换，避免破坏已有环境）"
+    echo "  要对齐到钉版请手动执行：npm install -g ${OPENCODE_CLI_SPEC}"
+  elif [ -n "$actual_version" ]; then
+    echo "[install-worker] opencode 已安装：${actual_version}（符合要求 ${OPENCODE_CLI_SPEC}）"
+  else
+    echo "[install-worker] 提示：opencode 版本号解析不出（输出不可识别）——若 worker 启动被版本闸门判死，请手动装：npm install -g ${OPENCODE_CLI_SPEC}"
   fi
 }
 

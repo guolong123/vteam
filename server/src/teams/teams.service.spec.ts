@@ -1588,27 +1588,117 @@ describe('TeamsService', () => {
       expect(created.opencodeAgentName).toBeNull();
     });
 
-    it('removeMember 联动 updatedAt/version', async () => {
-      prisma.team.findUnique.mockResolvedValue(teamRow());
-      prisma.teamMember.findUnique = jest
-        .fn()
-        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({
-          teamMember: { delete: jest.fn().mockResolvedValue({}) },
-          team: { update: jest.fn().mockResolvedValue({}) },
-        }),
+    /**
+     * removeMember 事务替身：四张 RESTRICT 关联表 + 成员行删除。
+     * `deleteError` 模拟 `teamMember.delete` 仍撞 FK（未来新增 RESTRICT 关联表）的兜底路径。
+     */
+    type RemoveTxMock = {
+      team: { update: jest.Mock };
+      session: { updateMany: jest.Mock };
+      chatChannel: { updateMany: jest.Mock };
+      taskGroupInstance: { updateMany: jest.Mock };
+      teamMember: { delete: jest.Mock };
+    };
+    const mockRemoveTx = (
+      opts: { deleteError?: unknown } = {},
+    ): RemoveTxMock => {
+      const tx: RemoveTxMock = {
+        team: { update: jest.fn().mockResolvedValue({}) },
+        session: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        chatChannel: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskGroupInstance: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        teamMember: {
+          delete: opts.deleteError
+            ? jest.fn().mockRejectedValue(opts.deleteError)
+            : jest.fn().mockResolvedValue({}),
+        },
+      };
+      prisma.$transaction.mockImplementation(
+        async (fn: (client: RemoveTxMock) => Promise<unknown>) => fn(tx),
       );
+      return tx;
+    };
+
+    it('removeMember 有会话/私聊频道/任务组实例 → 三表解绑（不删）后删成员行', async () => {
       prisma.team.findUnique
         .mockResolvedValueOnce(teamRow())
         .mockResolvedValueOnce(teamRow({ members: [] }));
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      const tx = mockRemoveTx();
 
       await service.removeMember('tm_0000000001', 'tmm_0000000001');
+
+      expect(tx.session.updateMany).toHaveBeenCalledWith({
+        where: { teamMemberId: 'tmm_0000000001' },
+        data: { teamMemberId: null },
+      });
+      expect(tx.chatChannel.updateMany).toHaveBeenCalledWith({
+        where: { teamMemberId: 'tmm_0000000001' },
+        data: { teamMemberId: null },
+      });
+      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith({
+        where: { teamMemberId: 'tmm_0000000001' },
+        data: { teamMemberId: null },
+      });
+      expect(tx.teamMember.delete).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+      });
+      // 会话/频道/实例行一律 updateMany 解绑，绝不 delete/deleteMany
+      expect(tx.session).not.toHaveProperty('deleteMany');
+      expect(tx.chatChannel).not.toHaveProperty('deleteMany');
+    });
+
+    it('removeMember 双广播 TEAM_CHANGED(global) + TEAM_UPDATED(team)', async () => {
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [] }));
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      mockRemoveTx();
+
+      await service.removeMember('tm_0000000001', 'tmm_0000000001');
+
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.TEAM_CHANGED,
         expect.objectContaining({ action: 'member_remove' }),
         { type: 'global' },
       );
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.TEAM_UPDATED,
+        expect.objectContaining({ action: 'member_remove' }),
+        { type: 'team', id: 'tm_0000000001' },
+      );
+    });
+
+    it('removeMember 仍撞 FK（P2003）→ 409 MEMBER_HAS_HISTORY，不裸抛 Prisma', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      mockRemoveTx({
+        deleteError: Object.assign(
+          new Error(
+            'Foreign key constraint violated on the fields: (`team_member_id`)',
+          ),
+          { code: 'P2003' },
+        ),
+      });
+
+      const err: unknown = await service
+        .removeMember('tm_0000000001', 'tmm_0000000001')
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toEqual({
+        code: 'MEMBER_HAS_HISTORY',
+        message: '该成员仍有关联数据，无法移除',
+      });
+      expect(realtime.broadcast).not.toHaveBeenCalled();
     });
   });
 
@@ -2687,6 +2777,13 @@ describe('TeamsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) =>
         fn({
           teamMember: { delete: jest.fn().mockResolvedValue({}) },
+          session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+          chatChannel: {
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          },
+          taskGroupInstance: {
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          },
           team: {
             update: jest.fn().mockImplementation(({ data }: any) => {
               txData = data;
@@ -2718,6 +2815,13 @@ describe('TeamsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) =>
         fn({
           teamMember: { delete: jest.fn().mockResolvedValue({}) },
+          session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+          chatChannel: {
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          },
+          taskGroupInstance: {
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          },
           team: {
             update: jest.fn().mockImplementation(({ data }: any) => {
               txData = data;

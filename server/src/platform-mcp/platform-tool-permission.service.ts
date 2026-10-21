@@ -1,7 +1,15 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { capabilityKeyForTool } from '../common/constants/platform-capability.constants';
 import { PrismaService } from '../prisma/prisma.service';
-import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
+import {
+  PLATFORM_MCP_ERRORS,
+  PLATFORM_MCP_READONLY_TOOLS,
+} from './platform-mcp.constants';
+
+/** 只读白名单的真实暴露名（`vteam_<bare>`），门内 O(1) 判定。 */
+const READONLY_TOOL_KEYS: ReadonlySet<string> = new Set(
+  PLATFORM_MCP_READONLY_TOOLS.map((name) => `vteam_${name}`),
+);
 
 /**
  * 平台工具权限门（opencode-native-permissions-and-fixes todo 3；2026-09-21 role-owned
@@ -57,6 +65,11 @@ export class PlatformToolPermissionService {
       );
     }
     const role = member.role;
+    // 只读自省（`vteam_tool_schema`）：**显式白名单恒放行**——不查目录、不看岗位矩阵。
+    // 它是「agent 不必靠报错猜参数」的唯一通道，任何岗位都不能把它关掉。
+    if (READONLY_TOOL_KEYS.has(key)) {
+      return;
+    }
     const capabilityKey = capabilityKeyForTool(key);
     if (!capabilityKey) {
       // 未知/已下线工具：无能力点可映射 → 一律拒绝（unknown 面 fail-closed）。

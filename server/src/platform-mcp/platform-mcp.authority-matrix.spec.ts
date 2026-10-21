@@ -22,8 +22,12 @@ import { TasksService } from '../tasks/tasks.service';
 import {
   capabilityKeyForTool,
   isCapabilityGranted,
+  PLATFORM_CAPABILITY_KEYS,
 } from '../common/constants/platform-capability.constants';
-import { BUILTIN_ROLE_CAPABILITY_MAPS } from '../common/constants/agent-role.constants';
+import {
+  BUILTIN_ROLE_CAPABILITY_MAPS,
+  EXTERNAL_AGENT_ROLE_CAPABILITIES,
+} from '../common/constants/agent-role.constants';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
 import { PlatformToolPermissionService } from './platform-tool-permission.service';
@@ -281,7 +285,7 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
   };
 
   describe('① 服务端工具权限门矩阵：每一 role×tool 格的实际判定 === source-derived 期望', () => {
-    it('196 格逐格匹配；allow/deny 双非空；负格显式存在；空转守卫记录迭代数', async () => {
+    it('238 格逐格匹配；allow/deny 双非空；负格显式存在；空转守卫记录迭代数', async () => {
       const { gate } = buildRealPermissionGate();
       const cells = await evaluateMatrix(gate);
       assertDiscriminating(cells);
@@ -317,6 +321,65 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       });
       expect(allow).toBeGreaterThan(0);
       expect(deny).toBeGreaterThan(0);
+    });
+
+    it('introspection 对每个岗位都恒放行（内置 7 岗 + 外部 3 岗；只读白名单，不靠能力点）', async () => {
+      const { gate } = buildRealPermissionGate();
+      for (const agent of ROLES) {
+        // 不走「缺失键 ⇒ allow」：`vteam_tool_schema` 由只读白名单显式放行（白名单
+        // 见 PLATFORM_MCP_READONLY_TOOLS），岗位矩阵写 false 也拦不住它。
+        expect(
+          `${agent}/vteam_tool_schema=${
+            (await decideCell(gate, agent, 'vteam_tool_schema')).action
+          }`,
+        ).toBe(`${agent}/vteam_tool_schema=allow`);
+      }
+      // 反证：把整张岗位矩阵改成全 false，introspection 仍 allow（其它工具全 deny）。
+      const allDenied = Object.fromEntries(
+        ROLES.map((agent) => [
+          agent,
+          Object.fromEntries(
+            PLATFORM_CAPABILITY_KEYS.map((key) => [key, false]),
+          ),
+        ]),
+      );
+      const deniedGate = buildRealPermissionGate(allDenied);
+      expect(
+        (
+          await decideCell(
+            deniedGate.gate,
+            'vteam-developer',
+            'vteam_tool_schema',
+          )
+        ).action,
+      ).toBe('allow');
+      expect(
+        (await decideCell(deniedGate.gate, 'vteam-developer', 'vteam_doclib'))
+          .action,
+      ).toBe('deny');
+      // 外部 3 岗：真实门读岗位 capabilities 列（EXTERNAL_AGENT_ROLE_CAPABILITIES）。
+      const externalGate = new PlatformToolPermissionService({
+        teamMember: {
+          findUnique: jest.fn(async () => ({
+            role: {
+              id: 'ar_sisyphus',
+              key: 'sisyphus',
+              capabilities: { ...EXTERNAL_AGENT_ROLE_CAPABILITIES },
+            },
+          })),
+        },
+      } as never);
+      await expect(
+        externalGate.assertToolAllowed('tmm_external', 'tool_schema'),
+      ).resolves.toBeUndefined();
+      // 负对照：同一外部矩阵对门控工具仍 deny ⇒ 上面不是「门全开」的假绿。
+      await expect(
+        externalGate.assertToolAllowed('tmm_external', 'task_create'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
+        }),
+      });
     });
 
     it('负对照：任何角色都未列入的 MCP 工具 → deny + 稳定码（不可只靠 allow 格）', async () => {

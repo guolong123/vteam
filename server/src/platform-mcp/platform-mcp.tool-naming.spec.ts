@@ -1,4 +1,5 @@
 import { VTEAM_MCP_TOOL_NAMES } from '../common/constants/agent.constants';
+import { PLATFORM_MCP_READONLY_TOOLS } from './platform-mcp.constants';
 import {
   buildPlatformMcpTools,
   zodObjectToJsonSchema,
@@ -23,11 +24,16 @@ describe('platform-mcp tool naming contract', () => {
     const matrixBare = VTEAM_MCP_TOOL_NAMES.map((n) =>
       n.replace(/^vteam_/, ''),
     );
-    expect([...registered].sort()).toEqual([...matrixBare].sort());
+    // 只读自省工具不参与授权矩阵（见 PLATFORM_MCP_READONLY_TOOLS 注释）⇒ 从对应关系中
+    // 显式排除；其余注册工具必须与矩阵逐一对应。
+    const readonly = PLATFORM_MCP_READONLY_TOOLS as readonly string[];
+    const governed = registered.filter((name) => !readonly.includes(name));
+    expect([...governed].sort()).toEqual([...matrixBare].sort());
     expect(registered.every((n) => !n.startsWith('vteam_'))).toBe(true);
     expect(
-      registered.every((n) => VTEAM_MCP_TOOL_NAMES.includes(`vteam_${n}`)),
+      governed.every((n) => VTEAM_MCP_TOOL_NAMES.includes(`vteam_${n}`)),
     ).toBe(true);
+    expect(registered).toEqual(expect.arrayContaining([...readonly]));
     expect(new Set(VTEAM_MCP_TOOL_NAMES).size).toBe(
       VTEAM_MCP_TOOL_NAMES.length,
     );
@@ -190,6 +196,12 @@ describe('platform-mcp tool naming contract', () => {
         // is_0000000001 问题 1：归属改为团队维度，taskId 降级为可选归属标注。
         teamId: OPTIONAL,
         taskId: OPTIONAL,
+      },
+      // schema 自省：纯静态查询，不涉及身份/归属字段。
+      tool_schema: {
+        selfInstanceId: ABSENT,
+        teamId: ABSENT,
+        taskId: ABSENT,
       },
     };
 

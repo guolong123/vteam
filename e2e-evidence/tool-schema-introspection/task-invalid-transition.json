@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":8,"error":{"code":-32009,"message":"[409] TASK_INVALID_TRANSITION 任务状态迁移不合法 | current=pending_review from=pending to=in_progress allowedActions=[accept,reject] allowedTo={\"accept\":\"completed\",\"reject\":\"in_progress\"}"}}

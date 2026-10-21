@@ -166,26 +166,36 @@ export const BUILTIN_AGENT_ROLES: readonly BuiltinAgentRole[] = [
 ];
 
 /**
- * 外部引擎岗位（`defaultOpencodeAgentName` 非空、无内部 Agent）的最小能力集。
+ * 外部引擎岗位（历史名岗位）的最小能力集。
  *
- * 外部引擎 Agent（如 Sisyphus/Prometheus/Atlas）不是平台内受管 Agent：它们**不得**
- * 创建任务、加成员、流转任务、创建技能、确认提问，也不得驱动 wecom/外发通道。
- * 仅放行协作/取证/产出与敏感命令执行所需的 9 个 `vteam_*` 工具，其余能力点显式 `false`。
- * migration 在存量库按 key 写入本能力矩阵；seed 对已存在的 NULL 行补齐。
+ * 这三个岗位**不得**创建任务、加成员、流转任务、创建技能、确认提问，也不得驱动
+ * wecom/外发通道。仅放行协作/取证/产出与敏感命令执行所需的 9 个 `vteam_*` 工具，
+ * 其余能力点显式 `false`。migration 在存量库按 key 写入本能力矩阵；seed 对已存在的
+ * NULL 行补齐。
  */
 /**
  * 外部引擎岗位行定义（2026-09-22 起由 seed 预置到全新库；存量行 create-if-absent 不覆盖）。
  *
  * 展示名 `name` 与历史 live 行一致（成员默认别名 `${role.name}-${seq}`，如 `Sisyphus-1`）；
- * `defaultOpencodeAgentName` 为 opencode `GET /agent` 的真实 agent 名（含空格/大写，原样保存），
- * 与 `defaultAgentId` 互斥（外部槽位）；`sortOrder` 紧随内置 1..7（8..10，`ar_general`=100 不冲突）；
+ * `sortOrder` 紧随内置 1..7（8..10，`ar_general`=100 不冲突）；
  * `rolePrompt` 一行式，风格对齐 `agent-role-prompts.constants.ts` 的 `# 角色：` 身份行。
+ *
+ * 2026-10-21（opencode v2 适配）：默认 Agent 槽位由「**外部引擎名**」
+ * （`defaultOpencodeAgentName` = OmO 的 `Sisyphus - ultraworker` /
+ * `Prometheus - Plan Builder` / `Atlas - Plan Executor`）改为「**平台 Agent**」
+ * （`defaultAgentId` = `agents` 表的 `a_developer` / `a_plan`）：opencode v2 移除了
+ * v1 插件 API ⇒ 镜像内置的 OmO（v1 形态）在 v2 上不加载 ⇒ 那三个 agent 名在 v2 上
+ * **不存在**（实测 v2.0.32：设会话 agent 返回 204 静默接受，下一轮抛
+ * `Agent not found` ⇒ 无回复、无回退）⇒ 派发到这三个岗位的成员每一轮都失败。
+ * 平台注入的 `vteam-*` agent 在 v2 上存在 ⇒ 改绑平台 Agent 后重新可派发。
+ * 槽位互斥（至多一个非空；两槽位同为空 ⇒ 400 `ROLE_DEFAULT_AGENT_MISSING`）。
  */
 export interface ExternalAgentRole {
   id: string;
   key: string;
   name: string;
-  defaultOpencodeAgentName: string;
+  /** 平台默认 Agent（`agents.id`）；与 `defaultOpencodeAgentName` 互斥。 */
+  defaultAgentId: string;
   sortOrder: number;
   rolePrompt: string;
 }
@@ -196,28 +206,28 @@ export const EXTERNAL_AGENT_ROLES: readonly ExternalAgentRole[] = [
     id: 'ar_sisyphus',
     key: 'sisyphus',
     name: 'Sisyphus',
-    defaultOpencodeAgentName: 'Sisyphus - ultraworker',
+    defaultAgentId: 'a_developer',
     sortOrder: 8,
     rolePrompt:
-      '# 角色：Sisyphus——外部引擎执行者（Sisyphus - ultraworker）：受团队分工执行具体任务，只协作、取证与提交产出，不创建任务、不治理团队。',
+      '# 角色：Sisyphus——平台执行者（开发者 Agent）：受团队分工执行具体任务，只协作、取证与提交产出，不创建任务、不治理团队。',
   },
   {
     id: 'ar_prometheus',
     key: 'prometheus',
     name: 'Prometheus',
-    defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+    defaultAgentId: 'a_plan',
     sortOrder: 9,
     rolePrompt:
-      '# 角色：Prometheus——外部计划构建者（Prometheus - Plan Builder）：受派起草与修订实施计划，不执行变更、不治理团队。',
+      '# 角色：Prometheus——平台计划构建者（计划员 Agent）：受派起草与修订实施计划，不执行变更、不治理团队。',
   },
   {
     id: 'ar_atlas',
     key: 'atlas',
     name: 'Atlas',
-    defaultOpencodeAgentName: 'Atlas - Plan Executor',
+    defaultAgentId: 'a_developer',
     sortOrder: 10,
     rolePrompt:
-      '# 角色：Atlas——外部计划执行者（Atlas - Plan Executor）：受派按计划执行任务并回执进展，不制定计划、不治理团队。',
+      '# 角色：Atlas——平台计划执行者（开发者 Agent）：受派按计划执行任务并回执进展，不制定计划、不治理团队。',
   },
 ];
 
@@ -287,6 +297,9 @@ export const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
  *
  * 不写入 `AgentRole.defaultAgentId`：外部岗位的「外部槽位」语义由
  * `defaultOpencodeAgentName` 表达，且该列与 `defaultAgentId` 互斥（设置其一自动清空另一个）。
+ *
+ * 2026-10-21：seed 预置的三个外部岗位已改绑**平台 Agent**（内部槽位）⇒ 它们**不再**落到
+ * 本占位行；占位行仍为「运营者在 UI 上自建的外部绑定岗位」保留（那条路径仍走外部槽位）。
  */
 export const EXTERNAL_SYSTEM_AGENT_ID = 'a_external' as const;
 

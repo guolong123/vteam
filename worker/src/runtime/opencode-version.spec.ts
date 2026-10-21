@@ -98,6 +98,8 @@ describe('assertOpencodeVersionSupported（T1：启动期版本闸门）', () =>
     // v1 的 npm 包冻结在 1.19.3 ⇒ 必须点明"换包名"这条唯一出路
     expect(() => assertOpencodeVersionSupported(info)).toThrow(/opencode-ai/);
     expect(() => assertOpencodeVersionSupported(info)).toThrow(/@opencode\/cli/);
+    // 且必须点明"为什么 v1 一定过不了"——闸门是主版本 ≥ 2
+    expect(() => assertOpencodeVersionSupported(info)).toThrow(/主版本 ≥ 2/);
   });
 
   it('major >= 2 → 放行（不抛错、不告警）', () => {
