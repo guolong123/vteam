@@ -100,6 +100,22 @@ docker run -d --name vteam-worker-standalone \
 
 数据持久化建议挂载：`/data/vteam-worker`（工作区与注入）、`/root`（`opencode.db` 会话库、`auth.json` 模型凭据）。
 
+### 3.5 物理机安装（install-worker.sh，opencode 缺省跟 npm latest）
+
+不用容器时，可用控制面安装向导页（`/workers/install`）生成的 curl 命令在目标机器上跑
+`install-worker.sh`：脚本自动装 node / opencode CLI、下载 worker 发布包、写好 `.env`
+（`X_WORKER_TOKEN` / v2 恒开鉴权的 `OPENCODE_SERVER_PASSWORD` / `WORKER_EXEC_PORT=4198`），
+并注册 systemd 服务（`EnvironmentFile=<dir>/worker/.env`）。
+
+- **opencode 版本缺省 = npm 的 `latest` 标签**（`@opencode/cli@latest` = 最新已发布的 v2）：
+  裸机安装跟随上游发布；需要可复现时加 `--opencode 2.0.32` **钉版**。
+- ⚠️ **镜像路径（§3.1–§3.3）单独锁版 2.0.32**（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——
+  镜像里的 opencode 在构建期定死，与脚本的 `latest` 缺省互不影响 ⇒ 两条路径可能落在不同
+  opencode 版本上（但都满足 worker 的「主版本 ≥ 2」闸门）。
+- ⚠️ **脚本拒绝 v3+ 的 opencode**：装出来的 opencode 主版本 ≥ 3 时**硬失败退出**——worker 驱动
+  只对着 v2 验证过，而 worker 自身的版本闸门只拦 `< 2` ⇒ v3 会被放行、到运行期才以难排查的方式
+  失败（契约漂移）⇒ 请钉一个 v2 版本，如 `--opencode 2.0.32`。
+
 ## 4. 启动方式 A：SDK 服务模式（SDK 即控制面）
 
 ### 4.1 库内嵌

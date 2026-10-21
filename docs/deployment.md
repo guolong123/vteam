@@ -483,6 +483,9 @@ OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 自身对外
 - 一键安装：`bash install-worker.sh ... --mcp-url http://<控制面外部地址>/api/v1/platform-mcp
   --advertise-host http://<worker 局域网 IP> --serve-hostname 0.0.0.0`；未提供时脚本会醒目提示
   （不强制，本机/集群内 worker 忽略即可）。
+- 一键安装的 **opencode 版本缺省 = npm `latest`**（`@opencode/cli@latest` = 最新已发布的 v2）；
+  要可复现就加 `--opencode 2.0.32` 钉版。⚠️ 脚本**拒绝 v3+ 的 opencode**（主版本 ≥ 3 硬失败退出），
+  且**镜像路径仍单独锁版 2.0.32**（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——详见 **§8.1.1**。
 - worker 探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在日志输出 WORKER_MCP_URL
   引导提示；启动时未显式设置 `WORKER_ADVERTISE_HOST`（上报 baseUrl 为 `http://127.0.0.1`）时，
   worker 启动日志输出一次可达地址引导提示。
@@ -688,8 +691,16 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
 由运维手工控制 ⇒ "**先升 server、再升 worker**"这条硬约束**天然可执行**（先把 server 升完，
 再重启 worker）。四条要点：
 
-- **opencode CLI 必须是 v2**：`npm i -g @opencode/cli@2.0.32`（v2 **改了包名**；v1 的 npm 包
-  `opencode-ai` 永远停在 1.19.3，**到不了 v2**）。
+- **opencode CLI 必须是 v2**：物理机一键安装脚本（`install-worker.sh`）**缺省按 npm 的 `latest` 标签装**
+  （`@opencode/cli@latest` = 最新已发布的 v2）——裸机安装跟随上游发布；需要可复现时用
+  `--opencode 2.0.32` **钉版**（v2 **改了包名**；v1 的 npm 包 `opencode-ai` 永远停在 1.19.3，
+  **到不了 v2**）。
+  ⚠️ **脚本拒绝 v3+ 的 opencode**：装出来的 opencode 主版本 ≥ 3 时**硬失败退出**——worker 驱动只对着
+  v2 验证过，而 worker 自身的版本闸门只拦 `< 2` ⇒ v3 会被放行、到运行期才以难排查的方式失败
+  （契约漂移）⇒ 请钉一个 v2 版本，如 `--opencode 2.0.32`。
+  ⚠️ **镜像路径仍单独锁版 2.0.32**（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——与脚本的
+  `latest` 缺省互不影响 ⇒ 物理机与镜像两条路径可能落在不同 opencode 版本上（但都满足 worker 的
+  「主版本 ≥ 2」闸门）。
 - **`OPENCODE_SERVER_PASSWORD` 必须写进那份 `.env`**：v2 **恒开鉴权**，缺它 worker
   **启动即 fail-fast**（不是"先跑起来再报错"）。
 - **控制面只连 worker 的执行端点**（`WORKER_EXEC_PORT`，缺省 4198）：该端口必须对控制面

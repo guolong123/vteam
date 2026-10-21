@@ -20,7 +20,7 @@ vteam 的 worker 端：独立于 `server/`（NestJS）的 Node 进程，负责�
 | 依赖 | 版本要求 | 说明 |
 |------|---------|------|
 | Node.js | >= 18 | `node --version` 确认 |
-| opencode CLI | **v2（主版本 ≥ 2）**，锁版 `@opencode/cli@2.0.32` | `command -v opencode` 确认，需在 PATH 中。`opencode --version` 输出形如 `opencode v2.0.28`；**主版本 < 2 时 worker 启动 fail-fast**（`OPENCODE_V2_ENABLED=false` 的 v1 回退模式例外，它要求主版本恰为 1） |
+| opencode CLI | **v2（主版本 ≥ 2）**；**镜像锁版 `@opencode/cli@2.0.32`**，**物理机安装脚本缺省跟 npm `latest`** | `command -v opencode` 确认，需在 PATH 中。`opencode --version` 输出形如 `opencode v2.0.28`；**主版本 < 2 时 worker 启动 fail-fast**（**无 v1 例外**：v1 驱动已随 v2 切换删除，版本闸门无条件要求主版本 ≥ 2；`OPENCODE_V2_ENABLED=false` 不是回退手段，只会让 worker 在 `loadConfig` 阶段直接抛错）。⚠️ 主版本 **≥ 3** 时物理机安装脚本会**硬失败退出**（worker 驱动只验证过 v2） |
 
 ## 安装
 
@@ -28,6 +28,22 @@ vteam 的 worker 端：独立于 `server/`（NestJS）的 Node 进程，负责�
 cd worker
 npm install
 ```
+
+### 物理机 / 集群外安装（install-worker.sh 一键安装）
+
+控制面安装向导页（`/workers/install`）生成的 curl 命令会把 `web/public/install-worker.sh`
+拉到目标机器上执行：脚本自动装 node / opencode CLI、下载 worker 发布包、写好 `.env`
+（含 v2 恒开鉴权的 `OPENCODE_SERVER_PASSWORD`）并注册 systemd 服务。
+
+- **opencode 版本缺省 = npm 的 `latest` 标签**（`@opencode/cli@latest` = 最新已发布的 v2）：
+  裸机安装跟随上游发布，不把版本钉死在某个硬编码值上；命令里带 `--opencode <版本>` 可**钉版**
+  （可复现安装），例如 `--opencode 2.0.32`。
+- ⚠️ **worker 镜像那条路单独锁版 2.0.32**（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——
+  镜像里的 opencode 在**构建期**定死，与脚本的 `latest` 缺省互不影响 ⇒ 两条安装路径可能落在
+  不同 opencode 版本上（但都满足 worker 的「主版本 ≥ 2」闸门）。
+- ⚠️ **脚本拒绝 v3+ 的 opencode**：装出来的 opencode 主版本 ≥ 3 时脚本**硬失败退出**——worker
+  驱动只对着 v2 验证过，而 worker 自身的版本闸门只拦 `< 2` ⇒ v3 会被放行、到运行期才以难排查的
+  方式失败（契约漂移）⇒ 请钉一个 v2 版本，如 `--opencode 2.0.32`。
 
 ## 构建
 
@@ -72,7 +88,7 @@ npm run dev            # tsx src/index.ts
 | `OPENCODE_SERVE_PORT` | 否 | `0` | opencode serve 端口；`0` = OS 随机空闲端口（占用则 +1 重试） |
 | `OPENCODE_SERVER_PASSWORD` | **是**（OpenCode v2 恒开鉴权） | 无 | opencode serve 认证密码（Basic Auth username=opencode）。**为空则 worker 启动 fail-fast**（v2 会自动生成随机密码并打到 stdout，worker 不解析就会全线 401） |
 | `OPENCODE_ALLOW_GENERATED_PASSWORD` | 否 | `false` | 逃生开关：为 `1`/`true` 时允许在未配密码的情况下，从 serve stdout 捕获 opencode 自动生成的密码（明文不落日志）；不推荐 |
-| `OPENCODE_V2_ENABLED` | 否 | `true` | 驱动模式开关（**vteam 侧开关，不是 opencode 的 CLI flag**）：⚠️ **自 T18 起单轨 v2——显式设 `false` 会让 worker 在 `loadConfig` 阶段直接抛错**（v1 驱动已删除，没有第二个实现可选；错误文案直接指向真正的回退手段：回滚镜像/代码到 v1.0.x + 回滚 opencode 数据卷）。留一个"看起来能切、实际切不了"的开关只会让故障现场更难解释 |
+| `OPENCODE_V2_ENABLED` | 否 | `true` | 驱动模式开关（**vteam 侧开关，不是 opencode 的 CLI flag**）：⚠️ **自 T18 起单轨 v2——显式设 `false` 会让 worker 在 `loadConfig` 阶段直接抛错**（v1 驱动已删除，没有第二个实现可选；错误文案直接指向真正的回退手段：回滚镜像/代码到 v1.0.x + 回滚 opencode 数据卷）。**除显式 `false` 外的任何取值（含缺省未设、非法值告警后回落）都按启用处理**。留一个"看起来能切、实际切不了"的开关只会让故障现场更难解释 |
 | `OPENCODE_ISOLATION_ROOT` | 否 | `<HOME>/.opencode-iso` | opencode **隔离配置域**根目录：serve 子进程的 `HOME` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` / `XDG_CACHE_HOME` 全部指向它（其下 `home/ config/ data/ state/ cache/`）。作用 = **替代 v1 的 `--pure`**（v2 无 `--pure` 等价物，隔离是唯一可靠手段）：宿主的全局配置 / 全局插件 / 全局 `AGENTS.md` 不进作用域。⚠️ 受管目录（`/etc/opencode` 等）**不受 XDG 控制**，仍会被 watch |
 | `HEARTBEAT_INTERVAL_MS` | 否 | `10000` | 心跳间隔 ms（server 30s = 3 周期判 offline） |
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
@@ -119,6 +135,8 @@ WORKER_ADVERTISE_HOST=http://<worker 局域网 IP>              # 控制面可�
 `--serve-hostname` 仅为兼容既有安装保留（缺省仍写 `0.0.0.0`，v2 下不参与控制面拨号）。
 未提供 `--advertise-host` 时 worker 会自动探测本机非回环 IPv4 上报（探测失败才回退
 `http://127.0.0.1`），脚本仅提示不强制（本机/集群内 worker 忽略即可）。
+opencode 版本缺省按 npm `latest` 装（可复现安装用 `--opencode 2.0.32` 钉版）——详见上文
+「物理机 / 集群外安装」。
 
 探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在 worker 日志输出 WORKER_MCP_URL
 引导提示；启动时未显式设置 `WORKER_ADVERTISE_HOST` 时，worker 启动日志输出上报地址提示
