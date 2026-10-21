@@ -2,18 +2,18 @@
 Artifact 11 — 不需要任何 watcher 开关 —— v2 的 watcher 段只有 `ignore`，热重载默认开启
 ==============================================================================
 what      : 证明本次全部热重载都在「零 watcher 配置」下发生；并实测 v2 的 watcher 段只认 ignore（写 enabled 会被静默丢弃）
-when      : 2026-10-20T15:21:07.331Z
-binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
-serve     : http://127.0.0.1:61277  (pid 84513)
-isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
-scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+when      : 2026-10-21T04:52:20.398Z
+binary    : opencode v2.0.32  (/usr/local/bin/opencode)
+serve     : http://127.0.0.1:38677  (pid 23)
+isolation : HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg  XDG_CONFIG_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config  XDG_DATA_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/data
+scratch   : /tmp/opencode/hot-reload-20261021T045146Z
 commands  :
-  $ cat "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/opencode.json"          # 全文 —— 没有 watcher 键
-  $ cat "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/opencode.json"          # 全文 —— 没有 watcher 键
+  $ cat "/tmp/opencode/hot-reload-20261021T045146Z/proj/opencode.json"          # 全文 —— 没有 watcher 键
+  $ cat "/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/opencode.json"          # 全文 —— 没有 watcher 键
   $ # 实测 watcher 段只认 ignore：
-  $ node -e 'const f="/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.watcher={enabled:false};require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
-  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/config"   # 看归一化后的 watcher 段
-  $ grep 'watcher started' "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/serve.log"
+  $ node -e 'const f="/tmp/opencode/hot-reload-20261021T045146Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.watcher={enabled:false};require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:38677/api/config"   # 看归一化后的 watcher 段
+  $ grep 'watcher started' "/tmp/opencode/hot-reload-20261021T045146Z/serve.log"
 ------------------------------------------------------------------------------
 --- 事实 1：本次全部热重载发生时，配置里**没有** watcher 段 --------------------
 项目配置 <proj>/opencode.json（原文）：
@@ -32,7 +32,7 @@ commands  :
         "type": "local",
         "command": [
           "node",
-          "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/mcp-stdio-server.mjs"
+          "/tmp/opencode/hot-reload-20261021T045146Z/mcp-stdio-server.mjs"
         ],
         "environment": {}
       }
@@ -82,7 +82,7 @@ commands  :
 --- 事实 2：v2 的 watcher 段只认 `ignore`（没有 enabled 之类的开关）----------
 （a）**契约级**：官方发布的 config schema 里的 `watcher` 定义（本次实时抓取）：
       来源: https://opencode.ai/config.json
-      抓取时刻: 2026-10-20T15:21:05.329Z
+      抓取时刻: 2026-10-21T04:52:18.378Z
       ---- 8< ----
       {
         "type": "object",
@@ -101,7 +101,7 @@ commands  :
       ⇒ `watcher` 的 `additionalProperties: false`，且**只有 `ignore` 一个属性**。
 
 （b）**实机级**：在项目配置里写 `watcher: { "enabled": false }`，v2 归一化后它变成：
-      写入时刻: 2026-10-20T15:21:00.088Z
+      写入时刻: 2026-10-21T04:52:14.409Z
       ---- 8< ----
       {}
       ---- 8< ----
@@ -115,30 +115,30 @@ commands  :
 
 --- 事实 3：v2 的 watcher 是**默认开启**的 -----------------------------------
 serve 日志（watcher subscribe / started）：
-timestamp=2026-10-20T15:20:36.991Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode type=directory ignores=3 http.span=11 role=server
-timestamp=2026-10-20T15:20:36.993Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode type=directory ignores=3 http.span=13 role=server
-timestamp=2026-10-20T15:20:36.994Z level=INFO run=f8afcc2c message="watcher subscribe" path="/Library/Application Support" type=entries ignores=0 http.span=14 role=server
-timestamp=2026-10-20T15:20:36.994Z level=INFO run=f8afcc2c message="watcher started" path="/Library/Application Support" type=entries backend=node ignores=0 http.span=14 role=server
-timestamp=2026-10-20T15:20:36.994Z level=INFO run=f8afcc2c message="watcher subscribe" path=/ type=entries ignores=0 http.span=14 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/ type=entries backend=node ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private type=entries ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/private type=entries backend=node ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var type=entries ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/private/var type=entries backend=node ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders type=entries ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders type=entries backend=node ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y type=entries ignores=0 http.span=15 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y type=entries backend=node ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn type=entries ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn type=entries backend=node ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T type=entries ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T type=entries backend=node ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode type=entries ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode type=entries backend=node ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z type=entries ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z type=entries backend=node ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj type=entries ignores=0 http.span=16 role=server
-timestamp=2026-10-20T15:20:36.997Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj type=entries backend=node ignores=0 http.span=17 role=server
+timestamp=2026-10-21T04:51:48.570Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode type=directory ignores=3 http.span=131 role=server
+timestamp=2026-10-21T04:51:48.591Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode type=directory ignores=3 http.span=152 role=server
+timestamp=2026-10-21T04:51:48.593Z level=INFO run=0ac77ccd message="watcher subscribe" path=/etc type=entries ignores=0 http.span=154 role=server
+timestamp=2026-10-21T04:51:48.597Z level=INFO run=0ac77ccd message="watcher started" path=/etc type=entries backend=node ignores=0 http.span=158 role=server
+timestamp=2026-10-21T04:51:48.598Z level=INFO run=0ac77ccd message="watcher subscribe" path=/ type=entries ignores=0 http.span=159 role=server
+timestamp=2026-10-21T04:51:48.600Z level=INFO run=0ac77ccd message="watcher started" path=/ type=entries backend=node ignores=0 http.span=161 role=server
+timestamp=2026-10-21T04:51:48.601Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp type=entries ignores=0 http.span=162 role=server
+timestamp=2026-10-21T04:51:48.602Z level=INFO run=0ac77ccd message="watcher started" path=/tmp type=entries backend=node ignores=0 http.span=163 role=server
+timestamp=2026-10-21T04:51:48.602Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode type=entries ignores=0 http.span=163 role=server
+timestamp=2026-10-21T04:51:48.603Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode type=entries backend=node ignores=0 http.span=164 role=server
+timestamp=2026-10-21T04:51:48.604Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z type=entries ignores=0 http.span=165 role=server
+timestamp=2026-10-21T04:51:48.604Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z type=entries backend=node ignores=0 http.span=165 role=server
+timestamp=2026-10-21T04:51:48.605Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/proj type=entries ignores=0 http.span=166 role=server
+timestamp=2026-10-21T04:51:48.605Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/proj type=entries backend=node ignores=0 http.span=166 role=server
+timestamp=2026-10-21T04:51:48.605Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg type=entries ignores=0 http.span=166 role=server
+timestamp=2026-10-21T04:51:48.606Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg type=entries backend=node ignores=0 http.span=167 role=server
+timestamp=2026-10-21T04:51:48.721Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode type=directory backend=inotify ignores=3 http.span=282 role=server
+timestamp=2026-10-21T04:51:48.723Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode type=directory backend=inotify ignores=3 http.span=284 role=server
+timestamp=2026-10-21T04:51:49.280Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/AGENTS.md type=file ignores=0
+timestamp=2026-10-21T04:51:49.282Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/AGENTS.md type=file backend=node ignores=0 http.span=843 role=server
+timestamp=2026-10-21T04:51:49.282Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/AGENTS.md type=file ignores=0
+timestamp=2026-10-21T04:51:49.283Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/AGENTS.md type=file backend=node ignores=0 http.span=844 role=server
+timestamp=2026-10-21T04:51:49.346Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skill type=file ignores=0
+timestamp=2026-10-21T04:51:49.347Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skill type=file backend=node ignores=0 http.span=908 role=server
 
 ⇒ 每一条 `watcher started ... ignores=0` 都说明监听已建立、忽略列表为空。
 
@@ -159,7 +159,7 @@ HTTP 200
         "type": "local",
         "command": [
           "node",
-          "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/mcp-stdio-server.mjs"
+          "/tmp/opencode/hot-reload-20261021T045146Z/mcp-stdio-server.mjs"
         ],
         "environment": {}
       }

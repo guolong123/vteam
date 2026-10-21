@@ -2,54 +2,55 @@
 Artifact 07 — POST /api/location/reload —— 204 / serve PID 不变 / 会话存活 / 重建异步
 ==============================================================================
 what      : POST /api/location/reload，比对重载前后的 serve PID、重载后的会话可读性，并测重建滞后
-when      : 2026-10-20T15:20:41.934Z
-binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
-serve     : http://127.0.0.1:61277  (pid 84513)
-isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
-scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+when      : 2026-10-21T04:51:55.337Z
+binary    : opencode v2.0.32  (/usr/local/bin/opencode)
+serve     : http://127.0.0.1:38677  (pid 23)
+isolation : HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg  XDG_CONFIG_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config  XDG_DATA_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/data
+scratch   : /tmp/opencode/hot-reload-20261021T045146Z
 commands  :
-  $ pgrep -f "opencode serve --port 61277"   # 重载前 PID
-  $ curl -s -o /dev/null -w '%{http_code}\n' -u "opencode:$PW" -X POST "http://127.0.0.1:61277/api/location/reload"
-  $ pgrep -f "opencode serve --port 61277"   # 重载后 PID
-  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/session/ses_ea6198e91ffe6Tjft7WUa5Xn1f"
+  $ pgrep -f "opencode serve --port 38677"   # 重载前 PID
+  $ curl -s -o /dev/null -w '%{http_code}\n' -u "opencode:$PW" -X POST "http://127.0.0.1:38677/api/location/reload"
+  $ pgrep -f "opencode serve --port 38677"   # 重载后 PID
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:38677/api/session/ses_ea332e3ffffeHjmqRghxvmTCjg"
 ------------------------------------------------------------------------------
 --- 观察：POST /api/location/reload ---------------------------------------
   HTTP 状态               : 204（期望 204）
   响应体                   : ""
-  请求耗时                  : 2028 ms
-  serve PID（重载前）        : 84513
-  serve PID（重载后）        : 84513
+  请求耗时                  : 2216 ms
+  serve PID（重载前）        : 23
+  serve PID（重载后）        : 23
   PID 是否相同              : **是**（serve 进程没重启）
   会话是否仍可读               : **是**
 
 --- 重载前：GET /api/session/<sid> -----------------------------------------
 HTTP 200
-{"data":{"id":"ses_ea6198e91ffe6Tjft7WUa5Xn1f","projectID":"1f31fe540d0f35959aa85908f8dce26a3a47f1c5","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792509636977,"updated":1792509636977},"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"}}}
+{"data":{"id":"ses_ea332e3ffffeHjmqRghxvmTCjg","projectID":"75872db196db45149909c01d08c7f52e892f0a14","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792558308407,"updated":1792558308407},"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"}}}
 
 --- 重载后：GET /api/session/<sid> -----------------------------------------
 HTTP 200
-{"data":{"id":"ses_ea6198e91ffe6Tjft7WUa5Xn1f","projectID":"1f31fe540d0f35959aa85908f8dce26a3a47f1c5","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792509636977,"updated":1792509636977},"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"}}}
+{"data":{"id":"ses_ea332e3ffffeHjmqRghxvmTCjg","projectID":"75872db196db45149909c01d08c7f52e892f0a14","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792558308407,"updated":1792558308407},"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"}}}
 
 --- 重建滞后（204 之后，新 provider 何时可见）------------------------------
 做法：204 落地**之后**立刻往隔离全局配置加一个 provider，
       然后做**一次**读（single read），再以 10 ms 间隔轮询。
-  204 落地时刻              : 2026-10-20T15:20:41.786Z
+  204 落地时刻              : 2026-10-21T04:51:55.046Z
   单次读（single read）      : HTTP 200，新 provider 可见？ **否**（读到的是旧快照）
-  单次读时刻                 : 距 204 24 ms
-  新 provider 可见         : 204 之后 123 ms
+  单次读时刻                 : 距 204 62 ms
+  新 provider 可见         : 204 之后 223 ms
   轮询间隔                  : 10 ms
 
 --- 单次读的原始响应（注意：没有 hotreload-lag）---------------------------
 HTTP 200
-{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[]}
+{"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"},"data":[]}
 
 ⇒ 重建是**异步**的：204 之后还有一小段滞后才可见 ⇒
   单次读会读到旧快照 ⇒ 效果确认必须走**有界 settle 窗口**（不能只读一次）。
-  （本次实测滞后 ≈ 123 ms；实现的 settle 窗口按 ~100 ms 量级取值，留了余量。）
+  （本次实测滞后 ≈ 223 ms；实现的 settle 窗口按 ~100 ms 量级取值，留了余量。）
 
 --- 轮询时间线（provider id 集合里是否已含 hotreload-lag）-----------------
   t=+    0ms  hotreload-lag visible=false
-  t=+   12ms  hotreload-lag visible=false
-  t=+   69ms  hotreload-lag visible=false
-  t=+   93ms  hotreload-lag visible=false
-  t=+  116ms  hotreload-lag visible=true
+  t=+   13ms  hotreload-lag visible=false
+  t=+  144ms  hotreload-lag visible=false
+  t=+  158ms  hotreload-lag visible=false
+  t=+  174ms  hotreload-lag visible=false
+  t=+  187ms  hotreload-lag visible=true

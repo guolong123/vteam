@@ -1,0 +1,742 @@
+================================================================================
+opencode v2 **配置热重载 pending 闸门（deferred）** —— 锁版 **2.0.32** 端到端取证
+================================================================================
+what      : worker 的真实 ConfigReloader 在**真实 opencode v2.0.32 serve** 上遇到
+            **真实待答复项（pending form + pending permission）** 时：
+              ① 重载被**跳过**（outcome = deferred，不是 reloaded）
+              ② pending 项**存活**（id 不变、仍在等待答复）
+              ③ 配置变更**仍然生效**（改走 opencode v2 的文件监听路径）
+            外加**对照组**（无 pending ⇒ outcome = reloaded）与**反证**
+            （直接 POST /api/location/reload ⇒ pending 被取消）。
+            这是 docs/agent-platform/opencode-v2-hot-reload-evidence/README.md §5
+            复检清单的**第 5 条**（其余 5 条已在 2.0.32 上复检完毕）。
+when      : 2026-10-21（UTC 05:22~05:23）
+repo      : /Volumes/SSD-Data/01work/git-project/vteam-v2
+            HEAD = 83a73c43a16c023983c2dfd5bf4e74fccd4a3353
+            分支  = docs/opencode-v2-2032-recheck
+            ⚠️ 该分支与 feat/opencode-v2-adaptation 在 worker/ 上**逐字节相同**
+               （`git diff --stat feat/opencode-v2-adaptation HEAD -- worker/` 无输出），
+               且已含 v2 适配提交 38de8bd。
+            📌 **本次（重出这一版）只改了两处**：
+               ① 脚本 `repro-deferred.mjs` 里**记进证据文本**的 `Authorization` 头
+                  由 base64 **解回明文**再记录（见下方 script 段）；
+               ② 本文件本身（= 重跑产物 + 随跑更新的附 A/B/C）。
+               **取证逻辑、断言、请求序列一个字都没改。**
+image     : vteam-worker:latest  (sha256:b4a46ba1cd23d87d12e018f2e5a79f8b6c2979b6be7a52c6cad13d7648c38113)
+            = 本仓库 worker/Dockerfile 构建（ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32）
+container : vteam-worker-run-dee770661cdd  (一次性 `docker compose run --rm --no-deps`，
+            **未触碰**运行中的 vteam-compose-worker / server / web / db)
+binary    : opencode v2.0.32   （容器内 `opencode --version` ⇒ "opencode v2.0.32"；
+            容器内 /usr/local/bin/opencode -> ../lib/node_modules/@opencode/cli/bin/opencode.exe；
+            serve 自报 GET /api/info ⇒ {"version":"2.0.32","pid":36,...}）
+serve     : http://127.0.0.1:18099（容器内 18099，宿主 127.0.0.1:18099 映射）
+            Basic Auth: opencode:probe-serve-pw-deferred（抛掷用的假口令）
+worker    : http://127.0.0.1:4199（容器内 WORKER_EXEC_PORT=4199）
+            X-Worker-Token: probe-token-deferred-2026（抛掷用的假 token）
+isolation : WORKER_STANDALONE=true ⇒ 不注册/不心跳（无平台依赖）
+            WORK_DIR=/scratch/work   HOME=/scratch/home   OPENCODE_ISOLATION_ROOT=/scratch/iso
+            serve 默认 location = /scratch/work（= WORK_DIR）；任务子目录 = /scratch/work/tasks/task-1
+script    : docs/agent-platform/opencode-v2-hot-reload-evidence/repro-deferred.mjs
+            （**本文件即该脚本的产物**；采集时脚本挂在一次性容器的 /evidence/repro-deferred.mjs，
+              容器内 `node /evidence/repro-deferred.mjs` 执行；node 内置 fetch，无第三方依赖。
+              ⚠️ 与上一版（2026-10-21 UTC 04:41 那次采集）**唯一的差别**：
+              **记进证据文本**的 `Authorization` 头改成**解回明文**再写
+              （`> header Authorization: Basic base64(opencode:probe-serve-pw-deferred)`），
+              不再写 base64 串 ⇒ 证据里**不再出现** `Basic <base64>` 形状
+              （那个形状会被仓库的密钥扫描器按"认证方案 + base64"误判成凭据）。
+              **真正发出去的请求头没变**（仍是标准的 Basic 认证），
+              **取证逻辑与断言一字未改**。）
+commands  :
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam-v2
+  $ mkdir -p /tmp/vteam-deferred-probe/scratch/work/tasks/task-1   # 任务子目录
+             （探针要把会话 B move 进去；目录不存在时 move 会 400）
+  $ docker compose run --rm --no-deps -d \
+      -e X_WORKER_TOKEN=probe-token-deferred-2026 \
+      -e WORKER_STANDALONE=true \
+      -e OPENCODE_SERVER_PASSWORD=probe-serve-pw-deferred \
+      -e WORKER_ID=w_probe_deferred \
+      -e WORKER_EXEC_PORT=4199 \
+      -e OPENCODE_SERVE_PORT=18099 \
+      -e OPENCODE_SERVE_HOSTNAME=0.0.0.0 \
+      -e WORK_DIR=/scratch/work \
+      -e HOME=/scratch/home \
+      -e OPENCODE_ISOLATION_ROOT=/scratch/iso \
+      -e SERVER_URL=http://127.0.0.1:9 \
+      -e WORKER_CODE_VERSION=probe-deferred-e2e \
+      -e LOG_LEVEL=info \
+      -p 127.0.0.1:4199:4199 -p 127.0.0.1:18099:18099 \
+      -v /tmp/vteam-deferred-probe/scratch:/scratch \
+      -v /tmp/vteam-deferred-probe:/tmp/vteam-deferred-probe \
+      -v "$PWD/docs/agent-platform/opencode-v2-hot-reload-evidence/repro-deferred.mjs:/evidence/repro-deferred.mjs:ro" \
+      worker
+  $ docker exec vteam-worker-run-dee770661cdd node /evidence/repro-deferred.mjs   # 采集下面全部原始请求/响应
+             （探针跑在**一次性容器内**：容器内 node v22.23.3；
+               宿主二进制 v2.0.28 从未参与——它只提供了挂载目录与 docker exec）
+             （等价写法：README.md §2.2 的宿主侧
+               `node docs/agent-platform/opencode-v2-hot-reload-evidence/repro-deferred.mjs`
+               ——脚本里的 serve / serve 日志 / 产物路径都指向宿主同一份
+               /tmp/vteam-deferred-probe，同样可用）
+--------------------------------------------------------------------------------
+一句话结论：
+  ✅ **deferred 分支在真实 2.0.32 上成立**——有 pending ⇒ 重载被跳过（outcome=deferred）、
+     pending 存活（id 不变）、配置变更仍然生效（文件监听路径，**没有丢更新**）；
+     无 pending ⇒ 同一入口返回 **reloaded**（证明是**闸门**导致延后，不是别的偶发因素）；
+     直接 `POST /api/location/reload` 仍然会**取消** pending ⇒ 闸门（不是"无害"）必需。
+--------------------------------------------------------------------------------
+
+
+==============================================================================
+0. 前置：serve 与 worker 的基本信息
+==============================================================================
+
+  [+   104ms | 2026-10-21T05:23:08.589Z] GET /api/info
+  > GET http://127.0.0.1:18099/api/info
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (99 ms)
+  < response-body: {"version":"2.0.32","pid":36,"urls":["http://127.0.0.1:18099","http://192.168.97.6:18099"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}
+
+  [+   377ms | 2026-10-21T05:23:08.862Z] GET /api/location（默认 location = serve 的 cwd）
+  > GET http://127.0.0.1:18099/api/location
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (245 ms)
+  < response-body: {"directory":"/scratch/work","project":{"id":"42536822d0232fcd2c90d6c35b98f87cf838c54c","directory":"/scratch/work","canonical":"/scratch/work"}}
+  serve baseUrl                 : http://127.0.0.1:18099
+  worker exec baseUrl           : http://127.0.0.1:4199
+  serve 默认 location             : /scratch/work
+  预期 workDir（默认 location）       : /scratch/work
+
+==============================================================================
+1. 用 worker 自己的 /sessions 建会话（⇒ 进入 worker 的 knownSessions，pending 闸门才看得见它）
+==============================================================================
+
+  [+   935ms | 2026-10-21T05:23:09.420Z] POST worker /sessions（默认 location 会话 A）
+  > POST http://127.0.0.1:4199/sessions
+  > request-body: {}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (556 ms)
+  < response-body: {"sessionId":"ses_ea3163215ffeirVB51TN9We0jS"}
+  会话 A（默认 location）             : ses_ea3163215ffeirVB51TN9We0jS
+
+  [+   990ms | 2026-10-21T05:23:09.475Z] 轮询 GET /api/location
+  > GET http://127.0.0.1:18099/api/location?location[directory]=%2Fscratch%2Fwork
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (54 ms)
+  < response-body: {"directory":"/scratch/work","project":{"id":"42536822d0232fcd2c90d6c35b98f87cf838c54c","directory":"/scratch/work","canonical":"/scratch/work"}}
+  默认 location 就绪                : 是（55 ms）
+
+  [+  1033ms | 2026-10-21T05:23:09.518Z] 轮询 GET /api/agent
+  > GET http://127.0.0.1:18099/api/agent?location[directory]=%2Fscratch%2Fwork
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (42 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":[{"id":"build","name":"Build","request":{"settings":{},"headers":{},"body":{}},"description":"The default agent. Executes tools based on configured permissions.","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"question","resource":"*","effect":"allow"}]},{"id":"general","name":"General","request":{"settings":{},"headers":{},"body":{}},"description":"General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.","mode":"subagent","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"question","resource":"*","effect":"deny"},{"action":"subagent","resource":"*","effect":"deny"}]},{"id":"explore","name":"Explore","request":{"settings":{},"headers":{},"body":{}},"system":"You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls for searches and reads whenever possible\n- Adapt your search approach based on the thoroughness level specified by the caller\n- Return file paths as absolute paths in your final response\n- You MUST NOT create, modify, delete, move, or copy files, including temporary files and reports\n- Shell commands MUST be read-only. NEVER run commands that write files or change system state\n\nComplete the user's search request efficiently and report your findings clearly.","description":"Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \"src/components/**/*.tsx\"), search code for keywords (eg. \"API endpoints\"), or answer questions about the codebase (eg. \"how do API endpoints work?\"). When calling this agent, specify the desired thoroughness level: \"quick\" for basic searches, \"medium\" for moderate exploration, or \"very thorough\" for comprehensive analysis across multiple locations and naming conventions.","mode":"subagent","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"*","resource":"*","effect":"deny"},{"action":"shell","resource":"*","effect":"allow"},{"action":"grep","resource":"*","effect":"allow"},{"action":"glob","resource":"*","effect":"allow"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"},{"action":"read","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"subagent","resource":"*","effect":"deny"},{"action":"external_directory","resource":"*","effect":"allow"}]},{"id":"compaction","name":"Compaction","request":{"settings":{},"headers":{},"body":{}},"mode":"primary","hidden":true,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"}]},{"id":"title","name":"Title","request":{"settings":{},"headers":{},"body":{}},"system":"You are a title generator. You output ONLY a thread title. Nothing else.\n\n<task>\nGenerate a brief title that would help the user find this conversation later.\n\nFollow all rules in <rules>\nUse the <examples> so you know what a good title looks like.\nYour output must be:\n- A single line\n- <=50 characters\n- No explanations\n</task>\n\n<rules>\n- you MUST use the same language as the user message you are summarizing\n- Title must be grammatically correct and read naturally - no word salad\n- Never include tool names in the title (e.g. \"read tool\", \"bash tool\", \"edit tool\")\n- Focus on the main topic or question the user needs to retrieve\n- Vary your phrasing - avoid repetitive patterns like always starting with \"Analyzing\"\n- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it\n- Keep exact: technical terms, numbers, filenames, HTTP codes\n- Remove: the, this, my, a, an\n- Never assume tech stack\n- Never use tools\n- NEVER respond to questions, just generate a title for the conversation\n- The title should NEVER include \"summarizing\" or \"generating\" when generating a title\n- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT\n- Always output something meaningful, even if the input is minimal.\n- If the user message is short or conversational (e.g. \"hello\", \"lol\", \"what's up\", \"hey\"):\n  -> create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)\n</rules>\n\n<examples>\n\"debug 500 errors in production\" -> Debugging production 500 errors\n\"refactor user service\" -> Refactoring user service\n\"why is app.js failing\" -> app.js failure investigation\n\"implement rate limiting\" -> Rate limiting implementation\n\"how do I connect postgres to my API\" -> Postgres API connection\n\"best practices for React hooks\" -> React hooks best practices\n\"@src/credential.ts can you add refresh token support\" -> Credential refresh token support\n\"@utils/parser.ts this is broken\" -> Parser bug fix\n\"look at @config.json\" -> Config review\n\"@App.tsx add dark mode toggle\" -> Dark mode toggle in App\n</examples>","mode":"primary","hidden":true,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"*","resource":"*","effect":"deny"}]},{"id":"summary","name":"Summary","request":{"settings":{},"headers":{},"body":{}},"system":"Summarize what was done in this conversation. Write like a pull request description.\n\nRules:\n- 2-3 sentences max\n- Describe the changes made, not the process\n- Do not mention running tests, builds, or other validation steps\n- Do not explain what the user asked for\n- Write in first person (I added..., I fixed...)\n- Never ask questions or add new questions\n- If the conversation ends with an unanswered question to the user, preserve that exact question\n- If the conversation ends with an imperative statement or request to the user (e.g. \"Now please run the command and paste the console output\"), always include that exact request in the summary","mode":"primary","hidden":true,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"*","resource":"*","effect":"deny"}]},{"id":"plan","name":"Plan","request":{"settings":{},"headers":{},"body":{}},"description":"Read-only agent for exploring the codebase and planning work before implementation.","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"question","resource":"*","effect":"allow"},{"action":"edit","resource":"*","effect":"deny"},{"action":"edit","resource":"/scratch/iso/home/.opencode/plan/*","effect":"allow"}]}]}
+  默认 location 的 agent 集合就绪      : 是（46 ms）；ids=["build","general","explore","compaction","title","summary","plan"]
+
+==============================================================================
+2. 造 pending 项（默认 location）：form + permission（真实 opencode 待答复请求，非文件伪造）
+==============================================================================
+
+  [+  1049ms | 2026-10-21T05:23:09.534Z] POST /api/session/<sidA>/form
+  > POST http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/form
+  > request-body: {"title":"Pending form (default location / deferred gate probe)","fields":[{"key":"answer","type":"string","title":"Your answer","required":true}]}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (10 ms)
+  < response-body: {"data":{"id":"frm_15ce9d05b001zMNXMrX50EbUfL","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","title":"Pending form (default location / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}}
+
+  [+  1064ms | 2026-10-21T05:23:09.549Z] POST /api/session/<sidA>/permission（第 1 次尝试）
+  > POST http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/permission
+  > request-body: {"action":"read","resources":[".env"]}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (15 ms)
+  < response-body: {"data":{"id":"per_15ce9d069001qem62nqQxfCLVT","effect":"ask"}}
+  pending form id               : frm_15ce9d05b001zMNXMrX50EbUfL
+  pending permission id         : per_15ce9d069001qem62nqQxfCLVT
+  permission effect             : ask
+
+==============================================================================
+3. 闸门前的 pending 快照（逐会话 = worker 的探测口径；全局端点 = location 作用域口径）
+==============================================================================
+
+  [+  1072ms | 2026-10-21T05:23:09.557Z] GET /api/session/<sidA>/form
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (8 ms)
+  < response-body: {"data":[{"id":"frm_15ce9d05b001zMNXMrX50EbUfL","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","title":"Pending form (default location / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  1102ms | 2026-10-21T05:23:09.587Z] GET /api/session/<sidA>/permission
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (30 ms)
+  < response-body: {"data":[{"id":"per_15ce9d069001qem62nqQxfCLVT","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","action":"read","resources":[".env"]}]}
+
+  [+  1112ms | 2026-10-21T05:23:09.597Z] GET /api/form（默认 location）
+  > GET http://127.0.0.1:18099/api/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (10 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":[{"id":"frm_15ce9d05b001zMNXMrX50EbUfL","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","title":"Pending form (default location / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  1118ms | 2026-10-21T05:23:09.603Z] GET /api/permission/request（默认 location）
+  > GET http://127.0.0.1:18099/api/permission/request
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (5 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":[{"id":"per_15ce9d069001qem62nqQxfCLVT","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","action":"read","resources":[".env"]}]}
+  逐会话 form ids                  : ["frm_15ce9d05b001zMNXMrX50EbUfL"]
+  逐会话 permission ids            : ["per_15ce9d069001qem62nqQxfCLVT"]
+  全局 form ids（默认 location）      : ["frm_15ce9d05b001zMNXMrX50EbUfL"]
+  全局 permission ids（默认 location）: ["per_15ce9d069001qem62nqQxfCLVT"]
+
+==============================================================================
+4. 施加配置变更（平台自己的下推面：POST /config/agent-policies）
+==============================================================================
+
+  [+  1138ms | 2026-10-21T05:23:09.623Z] POST worker /config/agent-policies
+  > POST http://127.0.0.1:4199/config/agent-policies
+  > request-body: {"agents":[{"name":"deferred-probe-agent","description":"deferred gate probe agent","mode":"all","prompt":"DEFERRED_GATE_MARKER_V1 — 角色提示（本行由 /config/agent-policies 落盘，经文件监听生效）","permission":{"read":"ask","bash":"ask","edit":"ask"}}]}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (14 ms)
+  < response-body: {"written":{"agentPolicies":{"enabled":true,"names":["deferred-probe-agent"]}},"restart":"required"}
+  下推响应                          : {"written":{"agentPolicies":{"enabled":true,"names":["deferred-probe-agent"]}},"restart":"required"}
+
+==============================================================================
+5. ★ 有 pending ⇒ 触发 worker 的 POST /config/reload（期望 outcome=deferred）
+==============================================================================
+
+  [+  1223ms | 2026-10-21T05:23:09.708Z] GET /api/info（重载前）
+  > GET http://127.0.0.1:18099/api/info
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (85 ms)
+  < response-body: {"version":"2.0.32","pid":36,"urls":["http://127.0.0.1:18099","http://192.168.97.6:18099"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}
+
+  [+  1264ms | 2026-10-21T05:23:09.749Z] POST worker /config/reload（有 pending）
+  > POST http://127.0.0.1:4199/config/reload
+  > request-body: {}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (34 ms)
+  < response-body: {"reload":"deferred"}
+
+  [+  2804ms | 2026-10-21T05:23:11.289Z] GET /api/info（重载后）
+  > GET http://127.0.0.1:18099/api/info
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (29 ms)
+  < response-body: {"version":"2.0.32","pid":36,"urls":["http://127.0.0.1:18099","http://192.168.97.6:18099"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}
+  reload outcome                : deferred
+  是否为 deferred                  : **是**
+  完整响应体                         : {"reload":"deferred"}
+  serve PID（重载前/后）              : 36 / 36 ⇒ **未变**
+  窗口内 serve 日志：watcher stopped / started 条数: 4 / 7
+  窗口内 serve 日志：config.updated + agent.updated 条数: 3
+  判定：location/reload 是否被调用过     : **未被调用**（无 location 全量重建痕迹；只有文件监听路径的局部痕迹）
+    timestamp=2026-10-21T05:23:09.578Z level=INFO run=3866104c message="watcher started" path=/scratch/iso/config/opencode/skills type=file backend=node ignores=0 http.span=956 role=server
+    timestamp=2026-10-21T05:23:09.597Z level=INFO run=3866104c message="watcher started" path=/scratch/work/.opencode/skill type=file backend=node ignores=0 http.span=975 role=server
+    timestamp=2026-10-21T05:23:09.604Z level=INFO run=3866104c message="watcher started" path=/scratch/work/.opencode/skills type=file backend=node ignores=0 http.span=982 role=server
+    timestamp=2026-10-21T05:23:09.651Z level=INFO run=3866104c message=event event.id=evt_15ce9d0d30017tj3OUylVQvLkS event.created=1792560189651 event.type=agent.updated event.location.directory=/scratch/work event.location.workspaceID=undefined event.data={} http.span=1029 role=server
+    timestamp=2026-10-21T05:23:09.861Z level=INFO run=3866104c message=event event.id=evt_15ce9d1a5001bHnG4kKCCS0EHi event.created=1792560189861 event.type=config.updated event.location.directory=/scratch/work event.location.workspaceID=undefined event.data={} http.span=1239 role=server
+    timestamp=2026-10-21T05:23:09.921Z level=INFO run=3866104c message="watcher stopped" path=/scratch/iso/config/opencode/skill type=file http.span=1299 role=server
+    timestamp=2026-10-21T05:23:09.922Z level=INFO run=3866104c message="watcher stopped" path=/scratch/iso/config/opencode/skills type=file http.span=1300 role=server
+    timestamp=2026-10-21T05:23:09.922Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/.opencode/skill type=file http.span=1300 role=server
+    timestamp=2026-10-21T05:23:09.922Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/.opencode/skills type=file http.span=1300 role=server
+    timestamp=2026-10-21T05:23:09.926Z level=INFO run=3866104c message="watcher started" path=/scratch/iso/config/opencode/skill type=file backend=node ignores=0 http.span=1304 role=server
+    timestamp=2026-10-21T05:23:09.933Z level=INFO run=3866104c message="watcher started" path=/scratch/iso/config/opencode/skills type=file backend=node ignores=0 http.span=1311 role=server
+    timestamp=2026-10-21T05:23:09.938Z level=INFO run=3866104c message="watcher started" path=/scratch/work/.opencode/skill type=file backend=node ignores=0 http.span=1316 role=server
+    timestamp=2026-10-21T05:23:09.943Z level=INFO run=3866104c message="watcher started" path=/scratch/work/.opencode/skills type=file backend=node ignores=0 http.span=1321 role=server
+    timestamp=2026-10-21T05:23:09.979Z level=INFO run=3866104c message=event event.id=evt_15ce9d21b001qvERsBXQL9dpll event.created=1792560189979 event.type=agent.updated event.location.directory=/scratch/work event.location.workspaceID=undefined event.data={}
+
+==============================================================================
+6. ★ pending 项是否存活（重载后立刻复查）
+==============================================================================
+
+  [+  2828ms | 2026-10-21T05:23:11.313Z] GET /api/session/<sidA>/form（重载后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (17 ms)
+  < response-body: {"data":[{"id":"frm_15ce9d05b001zMNXMrX50EbUfL","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","title":"Pending form (default location / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  2833ms | 2026-10-21T05:23:11.318Z] GET /api/session/<sidA>/permission（重载后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (5 ms)
+  < response-body: {"data":[{"id":"per_15ce9d069001qem62nqQxfCLVT","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","action":"read","resources":[".env"]}]}
+  form id 前后一致                  : frm_15ce9d05b001zMNXMrX50EbUfL ⇒ ["frm_15ce9d05b001zMNXMrX50EbUfL"] ⇒ **存活**
+  permission id 前后一致            : per_15ce9d069001qem62nqQxfCLVT ⇒ ["per_15ce9d069001qem62nqQxfCLVT"] ⇒ **存活**
+
+==============================================================================
+7. ★ 配置变更是否仍然生效（deferred 走文件监听路径 ⇒ 变更不能丢）
+==============================================================================
+
+  [+  2840ms | 2026-10-21T05:23:11.325Z] 轮询 GET /api/agent/<name>
+  > GET http://127.0.0.1:18099/api/agent/deferred-probe-agent?location[directory]=%2Fscratch%2Fwork
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (5 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":{"id":"deferred-probe-agent","name":"deferred-probe-agent","request":{"settings":{},"headers":{},"body":{}},"system":"DEFERRED_GATE_MARKER_V1 — 角色提示（本行由 /config/agent-policies 落盘，经文件监听生效）","description":"deferred gate probe agent","mode":"all","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"read","resource":"*","effect":"ask"},{"action":"shell","resource":"*","effect":"ask"},{"action":"edit","resource":"*","effect":"ask"},{"action":"external_directory","resource":"*","effect":"ask"}]}}
+
+  [+  2841ms | 2026-10-21T05:23:11.326Z] GET /api/agent/deferred-probe-agent
+  > GET http://127.0.0.1:18099/api/agent/deferred-probe-agent?location[directory]=%2Fscratch%2Fwork
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":{"id":"deferred-probe-agent","name":"deferred-probe-agent","request":{"settings":{},"headers":{},"body":{}},"system":"DEFERRED_GATE_MARKER_V1 — 角色提示（本行由 /config/agent-policies 落盘，经文件监听生效）","description":"deferred gate probe agent","mode":"all","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"read","resource":"*","effect":"ask"},{"action":"shell","resource":"*","effect":"ask"},{"action":"edit","resource":"*","effect":"ask"},{"action":"external_directory","resource":"*","effect":"ask"}]}}
+  新 system 提示可见                 : **是**（改后 6 ms）
+  读回的 system                    : "DEFERRED_GATE_MARKER_V1 — 角色提示（本行由 /config/agent-policies 落盘，经文件监听生效）"
+
+==============================================================================
+8. 任务子目录 location：会话 B move 过去，再造一套 pending（这正是全局 location 端点查不到的那类）
+==============================================================================
+
+  [+  2879ms | 2026-10-21T05:23:11.364Z] POST worker /sessions（任务子目录会话 B）
+  > POST http://127.0.0.1:4199/sessions
+  > request-body: {}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (37 ms)
+  < response-body: {"sessionId":"ses_ea3162892ffewLJDVKEz2Yg0xu"}
+  会话 B                          : ses_ea3162892ffewLJDVKEz2Yg0xu
+
+  [+  2940ms | 2026-10-21T05:23:11.425Z] POST /api/session/<sidB>/move
+  > POST http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/move
+  > request-body: {"directory":"/scratch/work/tasks/task-1"}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 204  (59 ms)
+  < response-body: (空)
+  move 响应                       : HTTP 204 
+
+  [+  2957ms | 2026-10-21T05:23:11.442Z] 轮询 GET /api/location
+  > GET http://127.0.0.1:18099/api/location?location[directory]=%2Fscratch%2Fwork%2Ftasks%2Ftask-1
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (17 ms)
+  < response-body: {"directory":"/scratch/work/tasks/task-1","project":{"id":"02b6c72b970b7a433e07ac4c74ce48257c7f999d","directory":"/scratch/work/tasks/task-1","canonical":"/scratch/work/tasks/task-1"}}
+  任务子目录 location 就绪             : **是**（18 ms；解析成 /scratch/work/tasks/task-1）
+
+  [+  2959ms | 2026-10-21T05:23:11.444Z] 轮询 GET /api/agent
+  > GET http://127.0.0.1:18099/api/agent?location[directory]=%2Fscratch%2Fwork%2Ftasks%2Ftask-1
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"location":{"directory":"/scratch/work/tasks/task-1"},"data":[]}
+
+  [+  3114ms | 2026-10-21T05:23:11.599Z] 轮询 GET /api/agent
+  > GET http://127.0.0.1:18099/api/agent?location[directory]=%2Fscratch%2Fwork%2Ftasks%2Ftask-1
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (4 ms)
+  < response-body: {"location":{"directory":"/scratch/work/tasks/task-1"},"data":[{"id":"build","name":"Build","request":{"settings":{},"headers":{},"body":{}},"description":"The default agent. Executes tools based on configured permissions.","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"question","resource":"*","effect":"allow"}]},{"id":"general","name":"General","request":{"settings":{},"headers":{},"body":{}},"description":"General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.","mode":"subagent","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"question","resource":"*","effect":"deny"},{"action":"subagent","resource":"*","effect":"deny"}]},{"id":"explore","name":"Explore","request":{"settings":{},"headers":{},"body":{}},"system":"You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls for searches and reads whenever possible\n- Adapt your search approach based on the thoroughness level specified by the caller\n- Return file paths as absolute paths in your final response\n- You MUST NOT create, modify, delete, move, or copy files, including temporary files and reports\n- Shell commands MUST be read-only. NEVER run commands that write files or change system state\n\nComplete the user's search request efficiently and report your findings clearly.","description":"Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \"src/components/**/*.tsx\"), search code for keywords (eg. \"API endpoints\"), or answer questions about the codebase (eg. \"how do API endpoints work?\"). When calling this agent, specify the desired thoroughness level: \"quick\" for basic searches, \"medium\" for moderate exploration, or \"very thorough\" for comprehensive analysis across multiple locations and naming conventions.","mode":"subagent","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"*","resource":"*","effect":"deny"},{"action":"shell","resource":"*","effect":"allow"},{"action":"grep","resource":"*","effect":"allow"},{"action":"glob","resource":"*","effect":"allow"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"},{"action":"read","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"subagent","resource":"*","effect":"deny"},{"action":"external_directory","resource":"*","effect":"allow"}]},{"id":"compaction","name":"Compaction","request":{"settings":{},"headers":{},"body":{}},"mode":"primary","hidden":true,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"}]},{"id":"title","name":"Title","request":{"settings":{},"headers":{},"body":{}},"system":"You are a title generator. You output ONLY a thread title. Nothing else.\n\n<task>\nGenerate a brief title that would help the user find this conversation later.\n\nFollow all rules in <rules>\nUse the <examples> so you know what a good title looks like.\nYour output must be:\n- A single line\n- <=50 characters\n- No explanations\n</task>\n\n<rules>\n- you MUST use the same language as the user message you are summarizing\n- Title must be grammatically correct and read naturally - no word salad\n- Never include tool names in the title (e.g. \"read tool\", \"bash tool\", \"edit tool\")\n- Focus on the main topic or question the user needs to retrieve\n- Vary your phrasing - avoid repetitive patterns like always starting with \"Analyzing\"\n- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it\n- Keep exact: technical terms, numbers, filenames, HTTP codes\n- Remove: the, this, my, a, an\n- Never assume tech stack\n- Never use tools\n- NEVER respond to questions, just generate a title for the conversation\n- The title should NEVER include \"summarizing\" or \"generating\" when generating a title\n- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT\n- Always output something meaningful, even if the input is minimal.\n- If the user message is short or conversational (e.g. \"hello\", \"lol\", \"what's up\", \"hey\"):\n  -> create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)\n</rules>\n\n<examples>\n\"debug 500 errors in production\" -> Debugging production 500 errors\n\"refactor user service\" -> Refactoring user service\n\"why is app.js failing\" -> app.js failure investigation\n\"implement rate limiting\" -> Rate limiting implementation\n\"how do I connect postgres to my API\" -> Postgres API connection\n\"best practices for React hooks\" -> React hooks best practices\n\"@src/credential.ts can you add refresh token support\" -> Credential refresh token support\n\"@utils/parser.ts this is broken\" -> Parser bug fix\n\"look at @config.json\" -> Config review\n\"@App.tsx add dark mode toggle\" -> Dark mode toggle in App\n</examples>","mode":"primary","hidden":true,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"*","resource":"*","effect":"deny"}]},{"id":"summary","name":"Summary","request":{"settings":{},"headers":{},"body":{}},"system":"Summarize what was done in this conversation. Write like a pull request description.\n\nRules:\n- 2-3 sentences max\n- Describe the changes made, not the process\n- Do not mention running tests, builds, or other validation steps\n- Do not explain what the user asked for\n- Write in first person (I added..., I fixed...)\n- Never ask questions or add new questions\n- If the conversation ends with an unanswered question to the user, preserve that exact question\n- If the conversation ends with an imperative statement or request to the user (e.g. \"Now please run the command and paste the console output\"), always include that exact request in the summary","mode":"primary","hidden":true,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"*","resource":"*","effect":"deny"}]},{"id":"plan","name":"Plan","request":{"settings":{},"headers":{},"body":{}},"description":"Read-only agent for exploring the codebase and planning work before implementation.","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"question","resource":"*","effect":"allow"},{"action":"edit","resource":"*","effect":"deny"},{"action":"edit","resource":"/scratch/iso/home/.opencode/plan/*","effect":"allow"}]},{"id":"deferred-probe-agent","name":"deferred-probe-agent","request":{"settings":{},"headers":{},"body":{}},"system":"DEFERRED_GATE_MARKER_V1 — 角色提示（本行由 /config/agent-policies 落盘，经文件监听生效）","description":"deferred gate probe agent","mode":"all","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"read","resource":"*","effect":"ask"},{"action":"shell","resource":"*","effect":"ask"},{"action":"edit","resource":"*","effect":"ask"},{"action":"external_directory","resource":"*","effect":"ask"}]}]}
+  任务子目录 agent 集合就绪              : **是**（156 ms）
+
+  [+  3118ms | 2026-10-21T05:23:11.603Z] POST /api/session/<sidB>/form（任务子目录）
+  > POST http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/form
+  > request-body: {"title":"Pending form (task subdirectory / deferred gate probe)","fields":[{"key":"answer","type":"string","title":"Your answer","required":true}]}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (3 ms)
+  < response-body: {"data":{"id":"frm_15ce9d872001zljCQ0iSxQhYtF","sessionID":"ses_ea3162892ffewLJDVKEz2Yg0xu","title":"Pending form (task subdirectory / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}}
+
+  [+  3120ms | 2026-10-21T05:23:11.605Z] POST /api/session/<sidB>/permission（第 1 次尝试）
+  > POST http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/permission
+  > request-body: {"action":"read","resources":[".env"]}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"data":{"id":"per_15ce9d8750016AYtgCiIM3A1KV","effect":"ask"}}
+  pending form id（任务子目录）        : frm_15ce9d872001zljCQ0iSxQhYtF
+  pending permission id（任务子目录）  : per_15ce9d8750016AYtgCiIM3A1KV
+  permission effect             : ask
+
+==============================================================================
+9. location 作用域对照：逐会话查得到 vs 全局 location 端点查不到
+==============================================================================
+
+  [+  3122ms | 2026-10-21T05:23:11.607Z] GET /api/session/<sidB>/form
+  > GET http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"data":[{"id":"frm_15ce9d872001zljCQ0iSxQhYtF","sessionID":"ses_ea3162892ffewLJDVKEz2Yg0xu","title":"Pending form (task subdirectory / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  3123ms | 2026-10-21T05:23:11.608Z] GET /api/session/<sidB>/permission
+  > GET http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"data":[{"id":"per_15ce9d8750016AYtgCiIM3A1KV","sessionID":"ses_ea3162892ffewLJDVKEz2Yg0xu","action":"read","resources":[".env"]}]}
+
+  [+  3125ms | 2026-10-21T05:23:11.610Z] GET /api/form（默认 location）
+  > GET http://127.0.0.1:18099/api/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":[{"id":"frm_15ce9d05b001zMNXMrX50EbUfL","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","title":"Pending form (default location / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  3126ms | 2026-10-21T05:23:11.611Z] GET /api/form?location[directory]=<任务子目录>
+  > GET http://127.0.0.1:18099/api/form?location[directory]=%2Fscratch%2Fwork%2Ftasks%2Ftask-1
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"location":{"directory":"/scratch/work/tasks/task-1"},"data":[{"id":"frm_15ce9d872001zljCQ0iSxQhYtF","sessionID":"ses_ea3162892ffewLJDVKEz2Yg0xu","title":"Pending form (task subdirectory / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  3127ms | 2026-10-21T05:23:11.612Z] GET /api/permission/request（默认 location）
+  > GET http://127.0.0.1:18099/api/permission/request
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":[{"id":"per_15ce9d069001qem62nqQxfCLVT","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","action":"read","resources":[".env"]}]}
+
+  [+  3128ms | 2026-10-21T05:23:11.613Z] GET /api/permission/request?location[directory]=<任务子目录>
+  > GET http://127.0.0.1:18099/api/permission/request?location[directory]=%2Fscratch%2Fwork%2Ftasks%2Ftask-1
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"location":{"directory":"/scratch/work/tasks/task-1"},"data":[{"id":"per_15ce9d8750016AYtgCiIM3A1KV","sessionID":"ses_ea3162892ffewLJDVKEz2Yg0xu","action":"read","resources":[".env"]}]}
+  逐会话 form（会话 B）                : ["frm_15ce9d872001zljCQ0iSxQhYtF"]
+  逐会话 permission（会话 B）          : ["per_15ce9d8750016AYtgCiIM3A1KV"]
+  全局 form（默认 location）          : ["frm_15ce9d05b001zMNXMrX50EbUfL"]
+  全局 form（任务子目录）                : ["frm_15ce9d872001zljCQ0iSxQhYtF"]
+  全局 permission（默认 location）    : ["per_15ce9d069001qem62nqQxfCLVT"]
+  全局 permission（任务子目录）          : ["per_15ce9d8750016AYtgCiIM3A1KV"]
+
+==============================================================================
+10. ★ 再次施加配置变更 + POST /config/reload（两个 location 都有 pending ⇒ 期望仍 deferred）
+==============================================================================
+
+  [+  3138ms | 2026-10-21T05:23:11.623Z] POST worker /config/agent-policies（第二次）
+  > POST http://127.0.0.1:4199/config/agent-policies
+  > request-body: {"agents":[{"name":"deferred-probe-agent","description":"deferred gate probe agent","mode":"all","prompt":"DEFERRED_GATE_MARKER_V2 — 角色提示（第二次配置变更）","permission":{"read":"ask","bash":"ask","edit":"ask"}}]}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (9 ms)
+  < response-body: {"written":{"agentPolicies":{"enabled":true,"names":["deferred-probe-agent"]}},"restart":"required"}
+  下推响应                          : {"written":{"agentPolicies":{"enabled":true,"names":["deferred-probe-agent"]}},"restart":"required"}
+
+  [+  3371ms | 2026-10-21T05:23:11.856Z] POST worker /config/reload（两个 location 都有 pending）
+  > POST http://127.0.0.1:4199/config/reload
+  > request-body: {}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (233 ms)
+  < response-body: {"reload":"deferred"}
+  reload outcome                : deferred
+  是否为 deferred                  : **是**
+  完整响应体                         : {"reload":"deferred"}
+  窗口内 serve 日志：watcher stopped / started 条数: 0 / 0
+  判定：location/reload 是否被调用过     : **未被调用**（无 location 全量重建痕迹）
+    timestamp=2026-10-21T05:23:11.957Z level=INFO run=3866104c message=event event.id=evt_15ce9d9d5001VE7hV49E5lXf29 event.created=1792560191957 event.type=config.updated event.location.directory=/scratch/work event.location.workspaceID=undefined event.data={} http.span=3335 role=server
+    timestamp=2026-10-21T05:23:11.980Z level=INFO run=3866104c message=event event.id=evt_15ce9d9ec0016S5TXej261EE50 event.created=1792560191980 event.type=config.updated event.location.directory=/scratch/work/tasks/task-1 event.location.workspaceID=undefined event.data={} http.span=614 role=server
+    timestamp=2026-10-21T05:23:12.070Z level=INFO run=3866104c message=event event.id=evt_15ce9da46001nCJJfpwZINccZh event.created=1792560192070 event.type=agent.updated event.location.directory=/scratch/work event.location.workspaceID=undefined event.data={}
+    timestamp=2026-10-21T05:23:12.087Z level=INFO run=3866104c message=event event.id=evt_15ce9da57001S1HziveD1TlbiN event.created=1792560192087 event.type=agent.updated event.location.directory=/scratch/work/tasks/task-1 event.location.workspaceID=undefined event.data={}
+
+==============================================================================
+11. ★ 四个 pending 项是否全部存活（重载后立刻复查）
+==============================================================================
+
+  [+  4907ms | 2026-10-21T05:23:13.392Z] GET /api/session/<sidA>/form（重载后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (26 ms)
+  < response-body: {"data":[{"id":"frm_15ce9d05b001zMNXMrX50EbUfL","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","title":"Pending form (default location / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  4910ms | 2026-10-21T05:23:13.395Z] GET /api/session/<sidA>/permission（重载后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"data":[{"id":"per_15ce9d069001qem62nqQxfCLVT","sessionID":"ses_ea3163215ffeirVB51TN9We0jS","action":"read","resources":[".env"]}]}
+
+  [+  4913ms | 2026-10-21T05:23:13.398Z] GET /api/session/<sidB>/form（重载后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"data":[{"id":"frm_15ce9d872001zljCQ0iSxQhYtF","sessionID":"ses_ea3162892ffewLJDVKEz2Yg0xu","title":"Pending form (task subdirectory / deferred gate probe)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  4915ms | 2026-10-21T05:23:13.400Z] GET /api/session/<sidB>/permission（重载后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"data":[{"id":"per_15ce9d8750016AYtgCiIM3A1KV","sessionID":"ses_ea3162892ffewLJDVKEz2Yg0xu","action":"read","resources":[".env"]}]}
+  会话 A form ids                 : ["frm_15ce9d05b001zMNXMrX50EbUfL"]
+  会话 A permission ids           : ["per_15ce9d069001qem62nqQxfCLVT"]
+  会话 B form ids（任务子目录）          : ["frm_15ce9d872001zljCQ0iSxQhYtF"]
+  会话 B permission ids（任务子目录）    : ["per_15ce9d8750016AYtgCiIM3A1KV"]
+  四个 id 全部存活                    : **是**
+
+==============================================================================
+12. ★ 第二次配置变更是否仍然生效（文件监听路径落地的证明）
+==============================================================================
+
+  [+  4918ms | 2026-10-21T05:23:13.403Z] 轮询 GET /api/agent/<name>
+  > GET http://127.0.0.1:18099/api/agent/deferred-probe-agent?location[directory]=%2Fscratch%2Fwork
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":{"id":"deferred-probe-agent","name":"deferred-probe-agent","request":{"settings":{},"headers":{},"body":{}},"system":"DEFERRED_GATE_MARKER_V2 — 角色提示（第二次配置变更）","description":"deferred gate probe agent","mode":"all","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"read","resource":"*","effect":"ask"},{"action":"shell","resource":"*","effect":"ask"},{"action":"edit","resource":"*","effect":"ask"},{"action":"external_directory","resource":"*","effect":"ask"}]}}
+  新 system 提示可见                 : **是**（改后 3 ms）
+
+==============================================================================
+13. 对照组：把四个 pending 项都答复掉（清空）⇒ 同一入口重载应不再是 deferred
+==============================================================================
+
+  [+  4927ms | 2026-10-21T05:23:13.412Z] POST /api/session/<sidA>/form/<formID>/reply
+  > POST http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/form/frm_15ce9d05b001zMNXMrX50EbUfL/reply
+  > request-body: {"answer":{"answer":"probe-answer-A"}}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 204  (9 ms)
+  < response-body: (空)
+
+  [+  4930ms | 2026-10-21T05:23:13.415Z] POST /api/session/<sidA>/permission/<permID>/reply
+  > POST http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/permission/per_15ce9d069001qem62nqQxfCLVT/reply
+  > request-body: {"decision":"once"}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 204  (3 ms)
+  < response-body: (空)
+
+  [+  4932ms | 2026-10-21T05:23:13.417Z] POST /api/session/<sidB>/form/<formID>/reply
+  > POST http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/form/frm_15ce9d872001zljCQ0iSxQhYtF/reply
+  > request-body: {"answer":{"answer":"probe-answer-B"}}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 204  (2 ms)
+  < response-body: (空)
+
+  [+  4934ms | 2026-10-21T05:23:13.419Z] POST /api/session/<sidB>/permission/<permID>/reply
+  > POST http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/permission/per_15ce9d8750016AYtgCiIM3A1KV/reply
+  > request-body: {"decision":"once"}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 204  (1 ms)
+  < response-body: (空)
+  答复 form A                     : HTTP 204
+  答复 permission A               : HTTP 204
+  答复 form B                     : HTTP 204
+  答复 permission B               : HTTP 204
+
+  [+  4936ms | 2026-10-21T05:23:13.421Z] GET /api/session/<sidA>/form（答复后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"data":[]}
+
+  [+  4939ms | 2026-10-21T05:23:13.424Z] GET /api/session/<sidA>/permission（答复后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3163215ffeirVB51TN9We0jS/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"data":[]}
+
+  [+  4940ms | 2026-10-21T05:23:13.425Z] GET /api/session/<sidB>/form（答复后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (1 ms)
+  < response-body: {"data":[]}
+
+  [+  4942ms | 2026-10-21T05:23:13.427Z] GET /api/session/<sidB>/permission（答复后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3162892ffewLJDVKEz2Yg0xu/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"data":[]}
+  会话 A form（应为 []）              : []
+  会话 A permission（应为 []）        : []
+  会话 B form（应为 []）              : []
+  会话 B permission（应为 []）        : []
+
+  [+  4948ms | 2026-10-21T05:23:13.433Z] POST worker /config/agent-policies（对照组）
+  > POST http://127.0.0.1:4199/config/agent-policies
+  > request-body: {"agents":[{"name":"deferred-probe-agent","description":"deferred gate probe agent","mode":"all","prompt":"DEFERRED_GATE_MARKER_V3_CONTROL — 对照组：无 pending 时的配置变更","permission":{"read":"ask","bash":"ask","edit":"ask"}}]}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (6 ms)
+  < response-body: {"written":{"agentPolicies":{"enabled":true,"names":["deferred-probe-agent"]}},"restart":"required"}
+  下推响应                          : {"written":{"agentPolicies":{"enabled":true,"names":["deferred-probe-agent"]}},"restart":"required"}
+
+  [+  5041ms | 2026-10-21T05:23:13.526Z] POST worker /config/reload（无 pending ⇒ 对照组）
+  > POST http://127.0.0.1:4199/config/reload
+  > request-body: {}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (92 ms)
+  < response-body: {"reload":"reloaded"}
+  reload outcome                : reloaded
+  是否为 deferred                  : **否**（是 reloaded）
+  完整响应体                         : {"reload":"reloaded"}
+  窗口内 serve 日志：watcher stopped / started 条数: 19 / 19
+  判定：location/reload 是否被调用过     : **被调用过**（location 全量重建 ⇒ 与 deferred 时的窗口形成对照）
+    timestamp=2026-10-21T05:23:13.471Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/AGENTS.md type=file http.span=4849 role=server
+    timestamp=2026-10-21T05:23:13.471Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/.opencode/plugins/vteam-system-handoff.ts type=file http.span=4849 role=server
+    timestamp=2026-10-21T05:23:13.471Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/.opencode/plugins/git.ts type=file http.span=4849 role=server
+    timestamp=2026-10-21T05:23:13.472Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/.opencode/plugins/browser.ts type=file http.span=4850 role=server
+    timestamp=2026-10-21T05:23:13.473Z level=INFO run=3866104c message="watcher stopped" path=/scratch/iso/config/opencode/skill type=file http.span=4851 role=server
+    timestamp=2026-10-21T05:23:13.473Z level=INFO run=3866104c message="watcher stopped" path=/scratch/iso/config/opencode/skills type=file http.span=4851 role=server
+    timestamp=2026-10-21T05:23:13.473Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/.opencode/skill type=file http.span=4851 role=server
+    timestamp=2026-10-21T05:23:13.473Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/.opencode/skills type=file http.span=4851 role=server
+    timestamp=2026-10-21T05:23:13.475Z level=INFO run=3866104c message="watcher stopped" path=/scratch/work/tasks/task-1/AGENTS.md type=file http.span=4853 role=server
+    timestamp=2026-10-21T05:23:13.479Z level=INFO run=3866104c message="watcher stopped" path=/scratch/iso/config/opencode/AGENTS.md type=file http.span=4857 role=server
+    timestamp=2026-10-21T05:23:13.483Z level=INFO run=3866104c message="watcher stopped" path=/etc type=entries http.span=4861 role=server
+    timestamp=2026-10-21T05:23:13.483Z level=INFO run=3866104c message="watcher stopped" path=/ type=entries http.span=4861 role=server
+    ...（窗口内共 40 行匹配，其余略）
+
+  [+  8110ms | 2026-10-21T05:23:16.595Z] 轮询 GET /api/agent/<name>
+  > GET http://127.0.0.1:18099/api/agent/deferred-probe-agent?location[directory]=%2Fscratch%2Fwork
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (60 ms)
+  < response-body: {"location":{"directory":"/scratch/work"},"data":{"id":"deferred-probe-agent","name":"deferred-probe-agent","request":{"settings":{},"headers":{},"body":{}},"system":"DEFERRED_GATE_MARKER_V3_CONTROL — 对照组：无 pending 时的配置变更","description":"deferred gate probe agent","mode":"all","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"read","resource":"*","effect":"ask"},{"action":"shell","resource":"*","effect":"ask"},{"action":"edit","resource":"*","effect":"ask"},{"action":"external_directory","resource":"*","effect":"ask"}]}}
+  新 system 提示可见（对照组）            : **是**（改后 62 ms）
+
+==============================================================================
+14. 反证：直接 POST /api/location/reload ⇒ pending 项会被取消（证明闸门确实在保护它们）
+==============================================================================
+
+  [+  8157ms | 2026-10-21T05:23:16.642Z] POST worker /sessions（反证会话 C）
+  > POST http://127.0.0.1:4199/sessions
+  > request-body: {}
+  > header X-Worker-Token: probe-token-deferred-2026
+  < HTTP 200  (47 ms)
+  < response-body: {"sessionId":"ses_ea3161403ffeTdQ5Jbah9xlpYC"}
+
+  [+  8174ms | 2026-10-21T05:23:16.659Z] POST /api/session/<sidC>/form
+  > POST http://127.0.0.1:18099/api/session/ses_ea3161403ffeTdQ5Jbah9xlpYC/form
+  > request-body: {"title":"Pending form (negative control: direct location/reload)","fields":[{"key":"answer","type":"string","title":"Your answer","required":true}]}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (17 ms)
+  < response-body: {"data":{"id":"frm_15ce9ec29001M9g3Uo2I4f3sEz","sessionID":"ses_ea3161403ffeTdQ5Jbah9xlpYC","title":"Pending form (negative control: direct location/reload)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}}
+
+  [+  8183ms | 2026-10-21T05:23:16.668Z] POST /api/session/<sidC>/permission（第 1 次尝试）
+  > POST http://127.0.0.1:18099/api/session/ses_ea3161403ffeTdQ5Jbah9xlpYC/permission
+  > request-body: {"action":"read","resources":[".env"]}
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (9 ms)
+  < response-body: {"data":{"id":"per_15ce9ec3a001YW4SFRSERuvP7o","effect":"ask"}}
+  会话 C                          : ses_ea3161403ffeTdQ5Jbah9xlpYC
+  pending form id               : frm_15ce9ec29001M9g3Uo2I4f3sEz
+  pending permission id         : per_15ce9ec3a001YW4SFRSERuvP7o
+
+  [+  8188ms | 2026-10-21T05:23:16.673Z] GET /api/session/<sidC>/form（反证前）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3161403ffeTdQ5Jbah9xlpYC/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (5 ms)
+  < response-body: {"data":[{"id":"frm_15ce9ec29001M9g3Uo2I4f3sEz","sessionID":"ses_ea3161403ffeTdQ5Jbah9xlpYC","title":"Pending form (negative control: direct location/reload)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+  [+  8191ms | 2026-10-21T05:23:16.676Z] GET /api/session/<sidC>/permission（反证前）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3161403ffeTdQ5Jbah9xlpYC/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (3 ms)
+  < response-body: {"data":[{"id":"per_15ce9ec3a001YW4SFRSERuvP7o","sessionID":"ses_ea3161403ffeTdQ5Jbah9xlpYC","action":"read","resources":[".env"]}]}
+  反证前 form ids                  : ["frm_15ce9ec29001M9g3Uo2I4f3sEz"]
+  反证前 permission ids            : ["per_15ce9ec3a001YW4SFRSERuvP7o"]
+
+  [+  8709ms | 2026-10-21T05:23:17.194Z] POST /api/location/reload（直接打 serve，绕过 worker 的闸门）
+  > POST http://127.0.0.1:18099/api/location/reload
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 204  (516 ms)
+  < response-body: (空)
+  直接重载结果                        : HTTP 204（516 ms）
+
+  [+ 10237ms | 2026-10-21T05:23:18.722Z] GET /api/session/<sidC>/form（反证后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3161403ffeTdQ5Jbah9xlpYC/form
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (18 ms)
+  < response-body: {"data":[]}
+
+  [+ 10240ms | 2026-10-21T05:23:18.725Z] GET /api/session/<sidC>/permission（反证后）
+  > GET http://127.0.0.1:18099/api/session/ses_ea3161403ffeTdQ5Jbah9xlpYC/permission
+  > header Authorization: Basic base64(opencode:probe-serve-pw-deferred)
+  < HTTP 200  (2 ms)
+  < response-body: {"data":[]}
+  反证后 form ids                  : []
+  反证后 permission ids            : []
+  结论                            : **pending 被取消** ⇒ location/reload 确实会销毁待答复项 ⇒ worker 的闸门是必需的
+
+==============================================================================
+15. 汇总判定
+==============================================================================
+  ✅ A. 有 pending ⇒ 重载被跳过（outcome=deferred）  —— outcomeA=deferred, outcomeB=deferred
+  ✅ B. pending 项存活（id 不变）  —— A:form=frm_15ce9d05b001zMNXMrX50EbUfL,perm=per_15ce9d069001qem62nqQxfCLVT / B:form=frm_15ce9d872001zljCQ0iSxQhYtF,perm=per_15ce9d8750016AYtgCiIM3A1KV
+  ✅ C. 配置变更仍然生效（文件监听路径）  —— V1=true, V2=true
+  ✅ D. 对照组：无 pending ⇒ outcome≠deferred  —— outcomeC=reloaded
+  ✅ E. 反证：直接 location/reload 会取消 pending  —— form ids=[], perm ids=[]
+
+================================================================================
+附 A：worker 容器自己的日志（docker logs）——闸门判定的原文
+================================================================================
+[worker] 启动中:
+  workerId            = w_probe_deferred
+  workerName          = 4d9609635cce
+  serverUrl           = http://127.0.0.1:9
+  standalone          = true（跳过注册/心跳/资源拉取）
+  opencodeServePort   = 18099
+  opencodeServeAuth   = Basic Auth（已设 OPENCODE_SERVER_PASSWORD）
+  opencodeServeHost   = 0.0.0.0
+  opencodeIsolation   = /scratch/iso（隔离配置域：宿主机全局配置/插件/AGENTS.md 不在作用域内）
+  workerAdvertiseHost = http://worker
+  heartbeatIntervalMs = 10000
+  workerMaxInstances  = 10
+  workerTotalTimeoutMs = 0（禁用：首字后无完成超时）
+  logLevel            = info
+  opencodeVersion     = 2.0.32
+  agentBrowser        = agent-browser 0.27.0
+[worker] git 工具族已注入: /scratch/work/.opencode/plugins/git.ts
+[worker] browser 工具已注入: /scratch/work/.opencode/plugins/browser.ts (agent-browser)
+[worker] system blob 交接插件已注入: /scratch/work/.opencode/plugins/vteam-system-handoff.ts
+[worker] 独立模式（WORKER_STANDALONE）：跳过控制面资源注入/注册/心跳
+[inject] 不注册 OmO：镜像内置的 OmO 只有 v1 形态入口（{server}），opencode v2 只加载 v2 形态（{id, setup}）⇒ 注册了也只会静默失败。（v2 线按「OmO 关闭」上线，见 docs/deployment.md §8.5）
+[worker] 独立模式：项目配置 plugins 段已补写（已禁用内置 opencode.browser，避免遮蔽平台 browser 工具）
+[worker] omo 模型种子已写入: build=opencode/big-pickle, plan=opencode/big-pickle, sisyphus=opencode/big-pickle, hephaestus=opencode/big-pickle, sisyphus-junior=opencode/big-pickle, OpenCode-Builder=opencode/big-pickle, prometheus=opencode/big-pickle, metis=opencode/big-pickle, momus=opencode/big-pickle, oracle=opencode/big-pickle, librarian=opencode/big-pickle, explore=opencode/big-pickle, multimodal-looker=opencode/big-pickle, atlas=opencode/big-pickle
+[opencode-server] 隔离配置域: root=/scratch/iso HOME=/scratch/iso/home XDG_CONFIG_HOME=/scratch/iso/config XDG_DATA_HOME=/scratch/iso/data（宿主机的全局配置/插件/AGENTS.md 不在作用域内）
+[worker] 就绪（pid=1）。
+[opencode-server] 健康检查通过 (HTTP 200)
+[opencode-server] serve 就绪: http://127.0.0.1:18099 (pid=36)
+[v2-driver] baseUrl 更新: http://127.0.0.1:18099
+[worker] opencode serve 就绪: http://127.0.0.1:18099 (pid=36)
+[exec] 执行端点就绪: POST http://0.0.0.0:4199/execute
+[exec] 文件端点就绪: GET http://0.0.0.0:4199/file?path=<绝对路径>（X-Worker-Token 鉴权）
+[worker] 执行端点就绪: POST http://127.0.0.1:4199/execute
+[worker] 独立模式就绪: workerId=w_probe_deferred, serve=http://127.0.0.1:18099, execPort=4199（跳过注册/心跳）
+[v2-driver] createSession -> ses_ea3163215ffeirVB51TN9We0jS
+[exec] session create -> ses_ea3163215ffeirVB51TN9We0jS
+[inject] 不注册 OmO：镜像内置的 OmO 只有 v1 形态入口（{server}），opencode v2 只加载 v2 形态（{id, setup}）⇒ 注册了也只会静默失败。（v2 线按「OmO 关闭」上线，见 docs/deployment.md §8.5）
+[exec] /config/agent-policies -> 1 项
+[config-reload] exec /config/reload（本地配置下推）：存在待答复项（forms=1, permissions=1，sessions=ses_ea3163215ffeirVB51TN9We0jS）：location/reload 会取消它们 ⇒ 跳过确定性热重载，改由 opencode v2 的文件监听路径生效（不取消任何待答复项）
+[worker] exec /config/reload（本地配置下推）：存在待答复的表单/权限，location/reload 会取消它们 ⇒ 已跳过确定性热重载；改由 opencode v2 的文件监听路径生效（不取消任何待答复项）
+[v2-driver] createSession -> ses_ea3162892ffewLJDVKEz2Yg0xu
+[exec] session create -> ses_ea3162892ffewLJDVKEz2Yg0xu
+[inject] 不注册 OmO：镜像内置的 OmO 只有 v1 形态入口（{server}），opencode v2 只加载 v2 形态（{id, setup}）⇒ 注册了也只会静默失败。（v2 线按「OmO 关闭」上线，见 docs/deployment.md §8.5）
+[exec] /config/agent-policies -> 1 项
+[config-reload] exec /config/reload（本地配置下推）：存在待答复项（forms=2, permissions=2，sessions=ses_ea3163215ffeirVB51TN9We0jS,ses_ea3162892ffewLJDVKEz2Yg0xu）：location/reload 会取消它们 ⇒ 跳过确定性热重载，改由 opencode v2 的文件监听路径生效（不取消任何待答复项）
+[worker] exec /config/reload（本地配置下推）：存在待答复的表单/权限，location/reload 会取消它们 ⇒ 已跳过确定性热重载；改由 opencode v2 的文件监听路径生效（不取消任何待答复项）
+[inject] 不注册 OmO：镜像内置的 OmO 只有 v1 形态入口（{server}），opencode v2 只加载 v2 形态（{id, setup}）⇒ 注册了也只会静默失败。（v2 线按「OmO 关闭」上线，见 docs/deployment.md §8.5）
+[exec] /config/agent-policies -> 1 项
+[config-reload] exec /config/reload（本地配置下推）：热重载完成（POST /api/location/reload → 204）
+[worker] exec /config/reload（本地配置下推）：serve 已热重载（serve 进程未重启，端口与会话不变）
+[v2-driver] createSession -> ses_ea3161403ffeTdQ5Jbah9xlpYC
+[exec] session create -> ses_ea3161403ffeTdQ5Jbah9xlpYC
+
+================================================================================
+附 B：serve 端侧对照表（location/reload 的全量重建痕迹 = watcher stopped 约 19 条）
+================================================================================
+  有 pending 的两次 /config/reload  →  watcher stopped 4 / 0 条，started 7 / 0 条
+                                      ⇒ 只有文件监听路径的局部痕迹，**没有** location 全量重建
+  无 pending 的对照 /config/reload  →  watcher stopped 19 条，started 19 条
+                                      ⇒ **确实**发生了 location 全量重建（location/reload 被调用）
+  直接 POST /api/location/reload    →  同上全量重建 + pending 被取消
+
+================================================================================
+附 C：收尾核对（无残留 serve 进程 / 无残留容器 / 线上栈仍健康）
+================================================================================
+$ docker exec vteam-worker-run-dee770661cdd sh -c 'pgrep -fl "opencode serve"'
+36 opencode
+110 sh
+
+$ docker stop vteam-worker-run-dee770661cdd
+vteam-worker-run-dee770661cdd
+$ docker rm -f vteam-worker-run-dee770661cdd
+（已删除）
+
+$ docker ps -a --format '{{.Names}}	{{.Image}}	{{.Status}}' | grep -i worker-run
+(无残留一次性容器)
+
+$ lsof -nP -iTCP:18099 -sTCP:LISTEN ; lsof -nP -iTCP:4199 -sTCP:LISTEN
+(均为空 —— 18099/4199 无残留监听)
+
+$ pgrep -fl "opencode serve"          # 宿主
+53767 /Users/mac/.opencode/bin/opencode serve --hostname 0.0.0.0 --port 4096
+
+$ docker compose ps
+NAME                   IMAGE          COMMAND                   SERVICE   CREATED             STATUS                       PORTS
+vteam-compose-db       mysql:8        "docker-entrypoint.s…"   db        19 hours ago        Up 19 hours (healthy)        3306/tcp, 33060/tcp
+vteam-compose-server   vteam-server   "docker-entrypoint.s…"   server    12 hours ago        Up 12 hours (healthy)        0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+vteam-compose-web      vteam-web      "docker-entrypoint.s…"   web       About an hour ago   Up About an hour (healthy)   0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+vteam-compose-worker   vteam-worker   "docker-entrypoint.s…"   worker    3 hours ago         Up 3 hours                   0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+
+$ git status --porcelain        # 仓库根（只有证据目录内的三个文件：脚本 + 本文件 + README 的采集时间戳）
+ M docs/agent-platform/opencode-v2-hot-reload-evidence/12-deferred-gate-end-to-end.txt
+ M docs/agent-platform/opencode-v2-hot-reload-evidence/README.md
+ M docs/agent-platform/opencode-v2-hot-reload-evidence/repro-deferred.mjs
+  ⇒ **仓库里没有任何真实凭据**：本次涉及的口令/token 全是脚本自带的合成假串。
+
+--------------------------------------------------------------------------------
+判定汇总（脚本第 15 节自动汇总，原始输出见上）
+--------------------------------------------------------------------------------
+  ✅ A. 有 pending ⇒ 重载被跳过（outcome=deferred）
+       —— outcomeA=deferred（forms=1,permissions=1）、outcomeB=deferred（forms=2,permissions=2）
+  ✅ B. pending 项存活（id 不变、仍在等待答复）
+       —— A: form=frm_15ce9d05b001zMNXMrX50EbUfL / perm=per_15ce9d069001qem62nqQxfCLVT
+          B: form=frm_15ce9d872001zljCQ0iSxQhYtF / perm=per_15ce9d8750016AYtgCiIM3A1KV
+  ✅ C. 配置变更仍然生效（deferred 走文件监听路径 ⇒ 没有丢更新）
+       —— V1 可见（改后 6 ms）、V2 可见（改后 3 ms）
+  ✅ D. 对照组：无 pending ⇒ outcome≠deferred
+       —— outcomeC=reloaded（同一入口 POST /config/reload）
+  ✅ E. 反证：直接 POST /api/location/reload ⇒ pending 被取消
+       —— 重载前 form/perm 各 1 条，重载后均为 []

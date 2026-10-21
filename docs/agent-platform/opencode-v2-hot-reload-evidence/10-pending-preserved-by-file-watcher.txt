@@ -2,60 +2,60 @@
 Artifact 10 — 文件监听路径 —— 改配置即生效，且**保留** pending form / permission
 ==============================================================================
 what      : 有 pending form + pending permission 时改项目 opencode.json（不调用 location/reload），看配置生效且 pending 保留
-when      : 2026-10-20T15:21:00.087Z
-binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
-serve     : http://127.0.0.1:61277  (pid 84513)
-isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
-scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+when      : 2026-10-21T04:52:14.405Z
+binary    : opencode v2.0.32  (/usr/local/bin/opencode)
+serve     : http://127.0.0.1:38677  (pid 23)
+isolation : HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg  XDG_CONFIG_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config  XDG_DATA_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/data
+scratch   : /tmp/opencode/hot-reload-20261021T045146Z
 commands  :
   $ # 改配置（触发文件监听路径；**不**调 location/reload）
-  $ node -e 'const f="/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.agents["hotreload-agent"].system="SYSTEM_V3_MARKER_WATCHER";require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
-  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:61277/api/agent/hotreload-agent" --data-urlencode "location[directory]=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"
-  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/session/<sid>/form"
-  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/session/<sid>/permission"
+  $ node -e 'const f="/tmp/opencode/hot-reload-20261021T045146Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.agents["hotreload-agent"].system="SYSTEM_V3_MARKER_WATCHER";require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
+  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:38677/api/agent/hotreload-agent" --data-urlencode "location[directory]=/tmp/opencode/hot-reload-20261021T045146Z/proj"
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:38677/api/session/<sid>/form"
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:38677/api/session/<sid>/permission"
 ------------------------------------------------------------------------------
 --- 观察：有 pending 项时，改配置文件（文件监听路径）--------------------------
-  会话                    : ses_ea6193ef7ffeUN1dAbYsr6RWq4
-  改文件时刻                 : 2026-10-20T15:20:58.770Z
-  新配置生效                 : 改后 312 ms（system -> SYSTEM_V3_MARKER_WATCHER）
+  会话                    : ses_ea332893cffeVv11gWyMRqTFQv
+  改文件时刻                 : 2026-10-21T04:52:13.045Z
+  新配置生效                 : 改后 311 ms（system -> SYSTEM_V3_MARKER_WATCHER）
   窗口内 location/reload 调用: 0 次
   pending form          : **保留**
   pending permission    : **保留**
 
 --- 改之前：GET /api/session/<sid>/form -----------------------------------
 HTTP 200
-{"data":[{"id":"frm_159e6c4f8001lSY3STF9xrdNa9","sessionID":"ses_ea6193ef7ffeUN1dAbYsr6RWq4","title":"Pending form (file-watcher path)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+{"data":[{"id":"frm_15ccd7ac7001j1A8RvJfAQCUdX","sessionID":"ses_ea332893cffeVv11gWyMRqTFQv","title":"Pending form (file-watcher path)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
 
 --- 改之前：GET /api/session/<sid>/permission ------------------------------
 HTTP 200
-{"data":[{"id":"per_159e6c4fa001gtS5q8roDLbH4m","sessionID":"ses_ea6193ef7ffeUN1dAbYsr6RWq4","action":"read","resources":[".env"]}]}
+{"data":[{"id":"per_15ccd7ace001lhF60W4DvWK2aZ","sessionID":"ses_ea332893cffeVv11gWyMRqTFQv","action":"read","resources":[".env"]}]}
 
 --- 改之前：GET /api/agent/hotreload-agent --------------------------------
 HTTP 200
-{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V2_MARKER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
+{"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V2_MARKER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
 
 --- 改之后：GET /api/agent/hotreload-agent（配置确实生效了）----------------
 HTTP 200
-{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V3_MARKER_WATCHER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
+{"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V3_MARKER_WATCHER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
 
 --- 改之后：GET /api/session/<sid>/form -----------------------------------
 HTTP 200
-{"data":[{"id":"frm_159e6c4f8001lSY3STF9xrdNa9","sessionID":"ses_ea6193ef7ffeUN1dAbYsr6RWq4","title":"Pending form (file-watcher path)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+{"data":[{"id":"frm_15ccd7ac7001j1A8RvJfAQCUdX","sessionID":"ses_ea332893cffeVv11gWyMRqTFQv","title":"Pending form (file-watcher path)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
    ⇒ **pending form 保留**（id 与改之前一致）
 
 --- 改之后：GET /api/session/<sid>/permission ------------------------------
 HTTP 200
-{"data":[{"id":"per_159e6c4fa001gtS5q8roDLbH4m","sessionID":"ses_ea6193ef7ffeUN1dAbYsr6RWq4","action":"read","resources":[".env"]}]}
+{"data":[{"id":"per_15ccd7ace001lhF60W4DvWK2aZ","sessionID":"ses_ea332893cffeVv11gWyMRqTFQv","action":"read","resources":[".env"]}]}
    ⇒ **pending permission 保留**（id 与改之前一致）
 
 --- 窗口内的全部 HTTP 请求 -----------------------------------------------
-  2026-10-20T15:20:58.771Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:58.875Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:58.978Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:59.082Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:21:00.085Z  GET /api/session/ses_ea6193ef7ffeUN1dAbYsr6RWq4/form  -> 200
-  2026-10-20T15:21:00.086Z  GET /api/session/ses_ea6193ef7ffeUN1dAbYsr6RWq4/permission  -> 200
-  2026-10-20T15:21:00.087Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:52:13.053Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:52:13.156Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:52:13.258Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:52:13.359Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:52:14.394Z  GET /api/session/ses_ea332893cffeVv11gWyMRqTFQv/form  -> 200
+  2026-10-21T04:52:14.398Z  GET /api/session/ses_ea332893cffeVv11gWyMRqTFQv/permission  -> 200
+  2026-10-21T04:52:14.402Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
 
 --- 结论 -----------------------------------------------------------------
   ⇒ 文件监听路径**不取消**任何待答复项 ⇒ 这就是实现里 `deferred` 分支的落点：

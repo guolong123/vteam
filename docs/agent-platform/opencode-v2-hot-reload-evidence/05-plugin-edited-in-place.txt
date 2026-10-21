@@ -2,32 +2,33 @@
 Artifact 05 — .opencode/plugins/<f>.ts —— **原地编辑**（无 unlink）后 setup() 再次被调用
 ==============================================================================
 what      : 对同一个插件文件做原地 writeFileSync（不 unlink / 不 rename），看 setup() 是否被再次调用
-when      : 2026-10-20T15:20:39.467Z
-binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
-serve     : http://127.0.0.1:61277  (pid 84513)
-isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
-scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+when      : 2026-10-21T04:51:52.460Z
+binary    : opencode v2.0.32  (/usr/local/bin/opencode)
+serve     : http://127.0.0.1:38677  (pid 23)
+isolation : HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg  XDG_CONFIG_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config  XDG_DATA_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/data
+scratch   : /tmp/opencode/hot-reload-20261021T045146Z
 commands  :
   $ # 原地编辑（与 vteam 注入器写文件的方式一致：同路径 truncate+write）
-  $ node -e 'require("fs").writeFileSync("/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/plugins/hotreload-probe.ts", <新内容>)'   # 同一路径，无 unlink
-  $ cat "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/marker-plugin.txt"   # count 应自增
+  $ node -e 'require("fs").writeFileSync("/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/plugins/hotreload-probe.ts", <新内容>)'   # 同一路径，无 unlink
+  $ cat "/tmp/opencode/hot-reload-20261021T045146Z/marker-plugin.txt"   # count 应自增
 ------------------------------------------------------------------------------
 --- 观察：原地编辑插件文件（fs.writeFileSync，无 unlink/rename）---------------
-  编辑时刻                  : 2026-10-20T15:20:39.262Z
-  setup() 再次被调用         : 编辑后 205 ms
+  编辑时刻                  : 2026-10-21T04:51:52.150Z
+  setup() 再次被调用         : 编辑后 305 ms
   marker 计数             : 1 -> 2
   文件是否被删过               : 否（同一路径 writeFileSync，未 unlink / 未 rename）
 
 --- 编辑之前的 marker ---------------------------------------------------
-count=1 tag=V1 pid=84513 location=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj ts=2026-10-20T15:20:39.220Z
+count=1 tag=V1 pid=23 location=/tmp/opencode/hot-reload-20261021T045146Z/proj ts=2026-10-21T04:51:52.135Z
 
 --- 编辑之后的 marker ---------------------------------------------------
-count=2 tag=V2_EDITED_IN_PLACE pid=84513 location=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj ts=2026-10-20T15:20:39.438Z
+count=2 tag=V2_EDITED_IN_PLACE pid=23 location=/tmp/opencode/hot-reload-20261021T045146Z/proj ts=2026-10-21T04:51:52.380Z
 
 --- 轮询时间线 -----------------------------------------------------------
-  t=+    0ms  marker="count=1 tag=V1 pid=84513 location=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj ts=2026-10-20T15:20:39.220Z"
-  t=+  102ms  marker="count=1 tag=V1 pid=84513 location=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj ts=2026-10-20T15:20:39.220Z"
-  t=+  204ms  marker="count=2 tag=V2_EDITED_IN_PLACE pid=84513 location=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj ts=2026-10-20T15:20:39.438Z"
+  t=+    0ms  marker="count=1 tag=V1 pid=23 location=/tmp/opencode/hot-reload-20261021T045146Z/proj ts=2026-10-21T04:51:52.135Z"
+  t=+  101ms  marker="count=1 tag=V1 pid=23 location=/tmp/opencode/hot-reload-20261021T045146Z/proj ts=2026-10-21T04:51:52.135Z"
+  t=+  204ms  marker="count=1 tag=V1 pid=23 location=/tmp/opencode/hot-reload-20261021T045146Z/proj ts=2026-10-21T04:51:52.135Z"
+  t=+  305ms  marker="count=2 tag=V2_EDITED_IN_PLACE pid=23 location=/tmp/opencode/hot-reload-20261021T045146Z/proj ts=2026-10-21T04:51:52.380Z"
 
 --- serve 日志：本次动作期间新增的 loading plugin 行 ----------------------
-timestamp=2026-10-20T15:20:39.436Z level=INFO run=f8afcc2c msg="loading plugin" id=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/plugins/hotreload-probe.ts entrypoint=file:///private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/plugins/hotreload-probe.ts http.span=2456 role=server
+timestamp=2026-10-21T04:51:52.356Z level=INFO run=0ac77ccd msg="loading plugin" id=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/plugins/hotreload-probe.ts entrypoint=file:///tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/plugins/hotreload-probe.ts http.span=3917 role=server
