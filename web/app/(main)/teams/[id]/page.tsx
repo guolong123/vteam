@@ -92,6 +92,7 @@ export default function TeamDetailPage() {
   const [addAlias, setAddAlias] = useState("");
   const [addWorkDir, setAddWorkDir] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [removeConfirm, setRemoveConfirm] = useState<TeamMemberDto | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const teamQuery = useQuery({
@@ -492,10 +493,7 @@ export default function TeamDetailPage() {
                 });
               }} onRemove={() => {
                 setActionError(null);
-                removeMemberMutation.mutate(m.id, {
-                  onSuccess: () => queryClient.invalidateQueries({ queryKey: ["team", id] }),
-                  onError: (err) => setActionError(isApiError(err) ? err.message : "移除失败"),
-                });
+                setRemoveConfirm(m);
               }} onSetMain={() => handleSetMainAgent(m.id)} />
             ))}
           </div>
@@ -521,6 +519,27 @@ export default function TeamDetailPage() {
           try { await deleteMutation.mutateAsync(); router.push("/teams"); } catch (err) { setActionError(isApiError(err) ? err.message : "删除失败"); setDeleteConfirm(false); }
         }}
         onClose={() => setDeleteConfirm(false)}
+      />
+
+      <ConfirmDialog
+        open={!!removeConfirm}
+        testid="confirm-remove-member"
+        title="移除成员"
+        description={`确认将「${removeConfirm?.alias ?? removeConfirm?.agentId ?? ""}」移出团队？该成员的会话/任务历史会保留，但不再归属该成员。`}
+        confirmLabel="确认移除"
+        submitting={removeMemberMutation.isPending}
+        onConfirm={async () => {
+          if (!removeConfirm) return;
+          try {
+            await removeMemberMutation.mutateAsync(removeConfirm.id);
+            setRemoveConfirm(null);
+            queryClient.invalidateQueries({ queryKey: ["team", id] });
+          } catch (err) {
+            setActionError(isApiError(err) ? err.message : "移除失败");
+            setRemoveConfirm(null);
+          }
+        }}
+        onClose={() => setRemoveConfirm(null)}
       />
     </div>
     </div>

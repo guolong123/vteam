@@ -1,5 +1,8 @@
+import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
 import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
+import { TASK_TRANSITIONS } from '../common/constants/task.constants';
+import { ISSUE_TRANSITIONS } from '../issues/issues.constants';
 import {
   layerBudgetTable,
   NOTIFY_STAGE,
@@ -1050,6 +1053,216 @@ const SECRET_COMMAND_DESCRIPTION = [
 ].join('\n');
 
 /**
+ * `vteam_tool_schema` 入参：`name` 省略 ⇒ 全量清单；给出 ⇒ 单工具详情。
+ * 名称用**裸名**（与 `tools/call` 的 `params.name` 同口径，如 `issue_transition`）。
+ */
+const toolSchemaSchema = z.object({
+  name: z
+    .string()
+    .optional()
+    .describe(
+      '平台工具名（裸名，如 issue_transition；省略 ⇒ 一行一个返回全部工具清单）',
+    ),
+});
+
+type ToolSchemaArgs = z.infer<typeof toolSchemaSchema>;
+
+/** schema 自省输出的字节上限（≈8KB）：超出即降级，绝不把上下文窗口吃满。 */
+export const TOOL_SCHEMA_MAX_BYTES = 8 * 1024;
+
+/** 清单行里描述首句的字符上限。 */
+const TOOL_SCHEMA_LIST_DESC_CHARS = 120;
+
+/** 单工具详情里描述全文的字符上限。 */
+const TOOL_SCHEMA_DETAIL_DESC_CHARS = 1200;
+
+/** 状态机工具（裸名）→ 迁移表；未登记的工具不返回状态机段。 */
+const TRANSITION_TABLE_BY_TOOL: Record<
+  string,
+  Record<
+    string,
+    { readonly from: readonly string[] | string; readonly to: string }
+  >
+> = {
+  issue_transition: ISSUE_TRANSITIONS,
+  task_transition: TASK_TRANSITIONS,
+};
+
+/** JSON Schema 里需要原样透出的约束键（长度/数值/格式/数组规模）。 */
+const SCHEMA_CONSTRAINT_KEYS = [
+  'minLength',
+  'maxLength',
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'pattern',
+  'format',
+  'minItems',
+  'maxItems',
+] as const;
+
+/** 描述首句（压缩空白 + 按中文/英文句末截断，超长以 `…` 收尾）。 */
+function firstSentence(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const stop = flat.search(/[。.;!?！？]/);
+  const sentence = (stop >= 0 ? flat.slice(0, stop + 1) : flat).trim();
+  return sentence.length > max ? `${sentence.slice(0, max - 1)}…` : sentence;
+}
+
+/** 编辑距离（候选工具名排序用；工具名规模 ≤ 数十，O(n·m) 足够）。 */
+function editDistance(left: string, right: string): number {
+  const prev = Array.from({ length: right.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const above = prev[j];
+      prev[j] = Math.min(
+        prev[j] + 1,
+        prev[j - 1] + 1,
+        diagonal + (left[i - 1] === right[j - 1] ? 0 : 1),
+      );
+      diagonal = above;
+    }
+  }
+  return prev[right.length];
+}
+
+/** 最接近的工具名（≤5 个）：先按编辑距离阈值收窄，收不到就退回最近的 5 个。 */
+function closestToolNames(
+  tools: readonly PlatformMcpTool[],
+  name: string,
+): string[] {
+  const ranked = tools
+    .map((tool) => ({
+      name: tool.name,
+      distance: editDistance(name, tool.name),
+    }))
+    .sort((a, b) => a.distance - b.distance);
+  const threshold = Math.max(3, Math.ceil(name.length / 2));
+  const near = ranked.filter((item) => item.distance <= threshold);
+  return (near.length > 0 ? near : ranked).slice(0, 5).map((item) => item.name);
+}
+
+/** zod schema → JSON Schema；个别 schema 不可表示时退回既有 shim（不抛错）。 */
+function toolJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
+  try {
+    return z.toJSONSchema(schema) as Record<string, unknown>;
+  } catch (err) {
+    if (!(err instanceof Error)) {
+      throw err;
+    }
+    return zodObjectToJsonSchema(schema) as unknown as Record<string, unknown>;
+  }
+}
+
+/** 单工具详情（required / 枚举全集 / 约束 / 状态机表），按 8KB 上限降级。 */
+function describeSingleTool(tool: PlatformMcpTool): Record<string, unknown> {
+  const jsonSchema = toolJsonSchema(tool.inputSchema);
+  const properties = (jsonSchema.properties ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const enums: Record<string, unknown[]> = {};
+  const constraints: Record<string, Record<string, unknown>> = {};
+  for (const [field, spec] of Object.entries(properties)) {
+    if (Array.isArray(spec.enum)) {
+      enums[field] = spec.enum;
+    }
+    const present = SCHEMA_CONSTRAINT_KEYS.filter((key) => key in spec);
+    if (present.length > 0) {
+      constraints[field] = Object.fromEntries(
+        present.map((key) => [key, spec[key]]),
+      );
+    }
+  }
+  const table = TRANSITION_TABLE_BY_TOOL[tool.name];
+  const stateMachine = table
+    ? Object.entries(table).map(([action, spec]) => {
+        const from = Array.isArray(spec.from) ? spec.from : [spec.from];
+        return `${action}: [${from.join(', ')}] → ${spec.to}`;
+      })
+    : undefined;
+  const result: Record<string, unknown> = {
+    name: tool.name,
+    description: firstSentence(tool.description, TOOL_SCHEMA_DETAIL_DESC_CHARS),
+    inputSchema: jsonSchema,
+    required: (jsonSchema.required as string[] | undefined) ?? [],
+    enums,
+    constraints,
+    ...(stateMachine ? { stateMachine } : {}),
+  };
+  if (
+    Buffer.byteLength(JSON.stringify(result), 'utf8') > TOOL_SCHEMA_MAX_BYTES
+  ) {
+    // 超限降级：先压描述，再舍 JSON Schema（required/enums/constraints 仍保留，
+    // 那三项才是 agent 真正要读的），并显式标注被省略，避免误以为「无 schema」。
+    result.description = firstSentence(tool.description, 200);
+    if (
+      Buffer.byteLength(JSON.stringify(result), 'utf8') > TOOL_SCHEMA_MAX_BYTES
+    ) {
+      result.inputSchema = {
+        type: jsonSchema.type ?? 'object',
+        required: result.required,
+      };
+      result.inputSchemaTruncated = `输入 schema 超过 ${TOOL_SCHEMA_MAX_BYTES} 字节上限，仅保留 required；字段细节见 enums/constraints`;
+    }
+  }
+  return result;
+}
+
+/**
+ * `vteam_tool_schema` 的纯函数实现（工具集由调用方传入 ⇒ 与注册项同源）。
+ *
+ * - `name` 省略 ⇒ `{ count, tools: [一行一个], truncated? }`，整体 ≤ 8KB；
+ * - `name` 给出 ⇒ `describeSingleTool`（未知名 ⇒ 400 稳定码 + 最接近候选）。
+ */
+export function introspectPlatformTools(
+  tools: readonly PlatformMcpTool[],
+  name?: string,
+): Record<string, unknown> {
+  if (name === undefined || name === '') {
+    const linesFor = (keepDescriptions: boolean): string[] =>
+      tools.map((tool) => {
+        const required = (
+          (toolJsonSchema(tool.inputSchema).required as string[] | undefined) ??
+          []
+        ).join(',');
+        const description = keepDescriptions
+          ? ` — ${firstSentence(tool.description, TOOL_SCHEMA_LIST_DESC_CHARS)}`
+          : '';
+        return `${tool.name}${description} (required: ${required || '—'})`;
+      });
+    let lines = linesFor(true);
+    let truncated = false;
+    if (
+      Buffer.byteLength(JSON.stringify(lines), 'utf8') > TOOL_SCHEMA_MAX_BYTES
+    ) {
+      lines = linesFor(false);
+      truncated = true;
+    }
+    return {
+      count: tools.length,
+      tools: lines,
+      ...(truncated ? { truncated: true } : {}),
+    };
+  }
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) {
+    throw new BadRequestException({
+      code: 'PLATFORM_MCP_TOOL_UNKNOWN',
+      message: `未知平台工具：${name}；最接近的候选：${closestToolNames(
+        tools,
+        name,
+      ).join('、')}；省略 name 可列出全部工具`,
+    });
+  }
+  return describeSingleTool(tool);
+}
+
+/**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
  * args 已在 tools/call 内经 inputSchema.safeParse 校验，此处收窄为具体类型。
@@ -1069,7 +1282,7 @@ export function buildPlatformMcpTools(
  * 枚举全集行贴到描述首行（缺陷 4），从而描述与 schema 不会漂移。
  */
 function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
-  return [
+  const tools: PlatformMcpTool[] = [
     {
       name: 'chat_history',
       description:
@@ -1321,6 +1534,19 @@ function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
         service.secretCommand(ctx, args as SecretCommandArgs, signal),
     },
   ];
+  // schema 自省工具（Fix 2）：handler 闭包持**同一份**工具表 ⇒ 返回的 schema/枚举/
+  // 状态机与真实注册项同源，不另立镜像（镜像必漂移）。
+  tools.push({
+    name: 'tool_schema',
+    description:
+      '查看平台 MCP 工具的参数结构（只读）：省略 name ⇒ 一行一个列出全部工具（名字 — 描述首句 + required）；传 name ⇒ 返回该工具的 JSON Schema、required 列表、枚举全集、长度/数值约束；issue_transition / task_transition 额外返回状态机表（action: from[] → to）。调用前先用它确认必填字段与合法取值，不必靠报错反推。',
+    inputSchema: toolSchemaSchema,
+    handler: (_ctx, args) => {
+      const input = args as ToolSchemaArgs;
+      return Promise.resolve(introspectPlatformTools(tools, input.name));
+    },
+  });
+  return tools;
 }
 
 /**

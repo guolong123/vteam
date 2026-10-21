@@ -49,7 +49,8 @@ export const REQUIRED_OPENCODE_CLI_SPEC = '@opencode/cli@2.0.32';
 export const OPENCODE_UPGRADE_HINT =
   `容器部署：重建 worker 镜像并设置 --build-arg OPENCODE_CLI_SPEC=${REQUIRED_OPENCODE_CLI_SPEC}；` +
   `物理机部署：npm i -g ${REQUIRED_OPENCODE_CLI_SPEC}` +
-  '（v1 的 npm 包 opencode-ai 已冻结在 1.19.3，永远到不了 v2；v2 换了包名 @opencode/cli）';
+  '（v1 的 npm 包 opencode-ai 已冻结在 1.19.3，永远到不了 v2、也过不了 worker 的「主版本 ≥ 2」闸门；' +
+  'v2 换了包名 @opencode/cli）';
 
 /**
  * 宽松版本号正则：兼容三种形态

@@ -483,9 +483,10 @@ OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 自身对外
 - 一键安装：`bash install-worker.sh ... --mcp-url http://<控制面外部地址>/api/v1/platform-mcp
   --advertise-host http://<worker 局域网 IP> --serve-hostname 0.0.0.0`；未提供时脚本会醒目提示
   （不强制，本机/集群内 worker 忽略即可）。
-- 一键安装的 **opencode 版本缺省 = npm `latest`**（`@opencode/cli@latest` = 最新已发布的 v2）；
-  要可复现就加 `--opencode 2.0.32` 钉版。⚠️ 脚本**拒绝 v3+ 的 opencode**（主版本 ≥ 3 硬失败退出），
-  且**镜像路径仍单独锁版 2.0.32**（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——详见 **§8.1.1**。
+- 一键安装的 **opencode 版本缺省 = 钉版 `@opencode/cli@2.0.32`**（与 `worker/Dockerfile` 的
+  `ARG OPENCODE_CLI_SPEC` 同版 ⇒ 镜像与裸机两条路径同版）；要跟上游走就加 `--opencode latest`
+  （浮动标签）。⚠️ 脚本**拒绝 v3+ 的 opencode**（主版本 ≥ 3 硬失败退出），
+  且**拒绝 v1**（v1 的 npm 包 `opencode-ai` 冻结在 1.19.3、永远到不了 v2）——详见 **§8.1.1**。
 - worker 探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在日志输出 WORKER_MCP_URL
   引导提示；启动时未显式设置 `WORKER_ADVERTISE_HOST`（上报 baseUrl 为 `http://127.0.0.1`）时，
   worker 启动日志输出一次可达地址引导提示。
@@ -691,16 +692,17 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
 由运维手工控制 ⇒ "**先升 server、再升 worker**"这条硬约束**天然可执行**（先把 server 升完，
 再重启 worker）。四条要点：
 
-- **opencode CLI 必须是 v2**：物理机一键安装脚本（`install-worker.sh`）**缺省按 npm 的 `latest` 标签装**
-  （`@opencode/cli@latest` = 最新已发布的 v2）——裸机安装跟随上游发布；需要可复现时用
-  `--opencode 2.0.32` **钉版**（v2 **改了包名**；v1 的 npm 包 `opencode-ai` 永远停在 1.19.3，
-  **到不了 v2**）。
+- **opencode CLI 必须是 v2**：物理机一键安装脚本（`install-worker.sh`）**缺省钉版 `@opencode/cli@2.0.32`**
+  ——与 `worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC` **同版** ⇒ 镜像路径与裸机路径落在同一个
+  opencode 版本上（控制面按 opencode 版本串**精确过滤** worker，两边版本分叉会让过滤与排障都变难）。
+  要跟上游走就显式 `--opencode latest`（**浮动**标签，与精确过滤两套口径 ⇒ 生产上不建议）。
+  ⚠️ **v2 改了包名**：v1 的 npm 包 `opencode-ai` 永远停在 1.19.3、**到不了 v2** ⇒ 脚本遇到
+  v1 请求（`opencode-ai` / `1.x`）会**改用 v2 缺省并告警**；机器上**已装** v1 时脚本**自动升级**
+  （**先卸 v1 再装 v2**：两个包都往全局 bin 目录放 `opencode`，先装后卸会把 v2 的入口一起删掉）。
   ⚠️ **脚本拒绝 v3+ 的 opencode**：装出来的 opencode 主版本 ≥ 3 时**硬失败退出**——worker 驱动只对着
   v2 验证过，而 worker 自身的版本闸门只拦 `< 2` ⇒ v3 会被放行、到运行期才以难排查的方式失败
   （契约漂移）⇒ 请钉一个 v2 版本，如 `--opencode 2.0.32`。
-  ⚠️ **镜像路径仍单独锁版 2.0.32**（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——与脚本的
-  `latest` 缺省互不影响 ⇒ 物理机与镜像两条路径可能落在不同 opencode 版本上（但都满足 worker 的
-  「主版本 ≥ 2」闸门）。
+  ⚠️ **v1 包要卸掉**：`npm uninstall -g opencode-ai`——留着它，PATH 上的 `opencode` 指向谁就不确定了。
 - **`OPENCODE_SERVER_PASSWORD` 必须写进那份 `.env`**：v2 **恒开鉴权**，缺它 worker
   **启动即 fail-fast**（不是"先跑起来再报错"）。
 - **控制面只连 worker 的执行端点**（`WORKER_EXEC_PORT`，缺省 4198）：该端口必须对控制面
@@ -724,7 +726,11 @@ kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e
 # 0.3 快照数据卷（见 §8.6.3 的具体命令），并**验证快照可恢复**
 # 0.4 构建并推送 v2 线的三个镜像（server / web / worker）
 # 0.5 升级前数据检查：成员是否仍绑着「v2 上不存在」的外部 agent（详见 §8.2.1）
-#     期望：**0 行**；有输出 ⇒ 先按 §8.2.1 的两条修复 SQL 处理完，再动第一个 v2 worker
+#     这一步**只读**：跑它只是为了把「有几行要处理」摸清楚，**不改任何数据**。
+#     ⚠️ 两条修复 UPDATE **不要在这一步做**——必须留到阶段 1 的 worker 切换窗口内
+#        （worker 还停在 v1 时，OmO agent 是真实存在的，提前清名会把这些成员**静默降级**
+#          成默认 agent；时序理由见 §8.2.1 的「时序约束」）。
+#     期望：**0 行**；有输出 ⇒ 记下待处理行数，在阶段 1 的切换窗口内按 §8.2.1 修完再放量
 kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e \
   "SELECT tm.id, t.name, tm.alias, ar.key, tm.opencode_agent_name FROM team_members tm JOIN teams t ON t.id=tm.team_id LEFT JOIN agent_roles ar ON ar.id=tm.role_id WHERE tm.opencode_agent_name IS NOT NULL AND TRIM(tm.opencode_agent_name)<>'' AND tm.opencode_agent_name NOT IN ('build','plan','general','explore','compaction','title','summary') AND NOT EXISTS (SELECT 1 FROM agents a2 WHERE a2.agent_key IS NOT NULL AND CONCAT('vteam-',a2.agent_key)=tm.opencode_agent_name);"
 ```
@@ -740,12 +746,24 @@ kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e
 > ⇒ opencode **静默接受**（`POST /api/session/{id}/agent` 返回 **204**，无任何错误信号）
 > ⇒ **每一轮**真正执行时抛 `Agent not found` ⇒ **该成员在 v2 上每一轮都失败、没有回复**。
 > ⇒ **必须在第一个 v2 worker 起来之前**清掉这类绑定（否则灰度第一档就踩）。
+>
+> ⚠️ **时序约束：检查可以提前跑，修复必须跟着 worker 切换一起做**（别做早）：
+> - **① 检查是纯只读**（SELECT）⇒ 阶段 0 就跑、跑多少遍都行，**不改任何数据**；
+>   提前跑只为把"有几行要处理、要处理哪些团队"摸清楚。
+> - **② 两条修复 UPDATE 必须在 worker 切换的同一个变更窗口内做**：worker **还停在 v1** 时，
+>   那三个 OmO agent 名是**真实存在**的（v1 的镜像带 OmO 插件）⇒ 那些成员此时由**真的 OmO agent**
+>   干活；**提前把名字清掉** ⇒ v1 上这些成员会被**静默降级**成默认 agent（派发回落：成员行的
+>   `opencodeAgentName` 为空 ⇒ 策略候选名解析不出 ⇒ 不带 `agent` 键 ⇒ opencode 用默认 agent）
+>   ——**不报错、只是干活的角色变了**，比 v2 上那种"每轮都硬失败"更难发现。
+> - ⇒ **正确时序**：阶段 0 只跑检查（拿到待处理行数）→ 阶段 1「v1 worker 下线 + 起 v2 worker」的
+>   窗口内执行两条修复 → 复检 0 行 → 再放量。
 
 **列名口径（先对，别照抄 prisma 字段名）**：prisma 用 `@map` 把 camelCase 字段映射成
 snake_case 列 ⇒ SQL 里必须写**列名**：`team_members.opencode_agent_name`（字段
-`opencodeAgentName`）、`team_members.role_id`、`team_members.team_id`、
-`agent_roles.default_opencode_agent_name`（字段 `defaultOpencodeAgentName`）、
-`agent_roles.key`、`agents.agent_key`、`teams.name`。
+`opencodeAgentName`）、`team_members.role_id`、`team_members.team_id`、`team_members.agent_id`、
+`team_members.seq`、`agent_roles.default_opencode_agent_name`（字段
+`defaultOpencodeAgentName`）、`agent_roles.default_agent_id`、`agent_roles.key`、
+`agent_roles.updated_at`、`agents.agent_key`、`teams.name`。
 
 **① 检查（只读 SELECT）**：列出所有**绑着 v2 上不存在的 agent 名**的成员
 （"存在"的判据 = 控制面注入的 `vteam-<agent_key>`（v2 上存在）或 opencode 内置 agent）：
@@ -786,7 +804,8 @@ ORDER BY t.name, tm.seq, tm.id;
 **② 修复（两条 UPDATE，按顺序做；先在测试库演练）**：
 
 ```sql
--- 修复 ①：清掉**成员行**里的外部名 ⇒ 派发回落到平台的 vteam-<role> agent（v2 上存在）
+-- 修复 ①：清掉**成员行**里的外部名 ⇒ 派发不再把那个不存在的名字发给 opencode，
+--          回落到策略候选名 `vteam-<agents.agent_key>`（该 key 缺席时是**默认 agent**，见 ④）
 UPDATE team_members tm
 SET tm.opencode_agent_name = NULL
 WHERE tm.opencode_agent_name IS NOT NULL
@@ -814,8 +833,9 @@ WHERE `key` IN ('sisyphus','prometheus','atlas')
 **两条修复各自为什么必须存在**：
 
 - **修复 ①（成员行）**：派发时 `opencodeAgentName` **无条件**优先（`?? policyCandidate ?? omit`）
-  ⇒ 只要成员行里还留着那个名字，opencode 就会收到它 ⇒ 清成 `NULL` 后派发才回落到平台的
-  `vteam-<role>` agent（控制面注入 ⇒ v2 上**存在**）。
+  ⇒ 只要成员行里还留着那个名字，opencode 就会收到它 ⇒ 清成 `NULL` 后派发才回落到策略候选名
+  `vteam-<agents.agent_key>`（控制面注入 ⇒ v2 上**存在**；若该成员的 `agent_id` 仍是占位
+  `a_external` ⇒ 候选名解析为 null ⇒ 落到**默认 agent**，见 ④——两种都**能跑**）。
 - **修复 ②（岗位行）**：**只清成员行不持久**——`resolveMemberBinding`（**规则 5 预填**）在
   **成员被重新绑定岗位**时会把岗位的 `defaultOpencodeAgentName` **再填回**成员行
   （`prefill ≠ override`：仅当成员当前值为空时写入）⇒ 岗位不改，成员下次被重绑就**又变回**
@@ -837,6 +857,35 @@ WHERE `key` IN ('sisyphus','prometheus','atlas');
 
 ⇒ 期望：外部槽位 = `vteam-developer` / `vteam-plan` / `vteam-developer`，且 `default_agent_id` 仍为 `NULL`。
 
+**④ 成员行的 `agent_id` 可能还是占位 `a_external`（可选收尾，不阻塞切换）**：
+
+- 这三个外部岗位的成员，`team_members.agent_id` 历史上被置成**占位行** `a_external`
+  （`agents` 表里 `id='a_external'`、`agent_key` 为 `NULL`——只用来满足 `team_members.agent_id`
+  的 NOT NULL 外键，本身没有执行语义）。
+- ⇒ 派发时的**策略候选名**解析为 **null**：`resolvePolicyAgentCandidate` 只认 `agents.agent_key`
+  （`agentKey` 缺席 ⇒ 返回 `null`）⇒ `vteam-<agent_key>` 拼不出来 ⇒ 修复 ① 清空
+  `opencode_agent_name` 之后，这些成员**不会**落到该岗位的 `vteam-<role>` agent，
+  而是**落到默认 agent**（`opencodeAgentName ?? policyCandidate ?? omit` ⇒ 三个都空 ⇒ 不带
+  `agent` 键 ⇒ opencode 用它自己的默认 agent）。
+- ⇒ **这与"v2 上必然失败"是两回事**：默认 agent 在 v2 上**存在** ⇒ 成员**能跑**，只是干活的角色
+  退回了默认那个 ⇒ **不阻塞切换**，属于收尾性质的"锦上添花"。
+- 想让它落到**真正的**平台 agent，可以把 `team_members.agent_id` 改指一个**真实**的平台 agent 行
+  （如 `a_developer` / `a_plan`）——**可选，不做也不会失败**。
+  ⚠️ **别照抄一条 UPDATE 就完事**：`team_members` 上有唯一键
+  **(team_id, agent_id, seq)**（`uk_team_members_team_agent_seq`）⇒ 同一团队里**已有**同 `agent_id`
+  且同 `seq` 的成员时，这条改指会**撞唯一键直接失败**（MySQL 报 Duplicate entry）⇒ 改指前先查
+  同队同 `seq` 的成员，或改 `seq`。
+  ⇒ **排查口径**：改指报 Duplicate entry = **唯一键冲突**，不是数据坏了。
+  查当前落点：
+
+```sql
+SELECT tm.id, t.name AS team_name, tm.alias, tm.seq, tm.agent_id, a.agent_key
+FROM team_members tm
+JOIN teams t        ON t.id = tm.team_id
+LEFT JOIN agents a  ON a.id = tm.agent_id
+WHERE tm.agent_id = 'a_external';
+```
+
 **闸门 G0**（全部满足才允许动 worker）：
 
 - [ ] home 卷 + work 卷快照**已创建**，且**做过一次恢复演练**（"创建了快照" ≠ "能恢复"）
@@ -845,9 +894,14 @@ WHERE `key` IN ('sisyphus','prometheus','atlas');
 - [ ] 灰度前基线（会话成功率、首字延迟）已记录
 - [ ] `OPENCODE_SERVER_PASSWORD` 已就位（v2 恒开鉴权，缺失 → worker 起不来）
 - [ ] `WORKER_TOKEN`（server 侧）== `X_WORKER_TOKEN`（worker 侧）——**同一个 Secret key**
-- [ ] **（§8.2.1）没有成员绑着「v2 上不存在」的 agent 名**——升级前数据检查 0.5 **无输出**
-      （存量团队若有成员绑在 OmO 的 agent 名上 ⇒ v2 上**每一轮都失败**且没有回复，
-      故障点在 opencode 的**执行期**、不在切换期 ⇒ 灰度第一档就会踩，见 §8.5）
+- [ ] **（§8.2.1）升级前数据检查 0.5 已跑过**——结果**已记录**（待处理行数 / 涉及团队），
+      且**两条修复 UPDATE 已排进阶段 1 的 worker 切换窗口**。
+      ⚠️ **不要在阶段 0 就把修复做掉**：worker 还停在 v1 时那三个 OmO agent 名是**真实存在**的
+      ⇒ 提前清名会把这些成员**静默降级**成默认 agent（不报错、只是角色变了）⇒ 时序理由见
+      §8.2.1「时序约束」
+- [ ] **（§8.2.1）切换窗口内修复完成后复检为 0 行**（把 §8.2.1 的 ① 再跑一遍）——这是**放量前**的
+      最后一道，不是 G0 的前置。（存量团队若有成员绑在 OmO 的 agent 名上 ⇒ v2 上**每一轮都失败**且
+      没有回复，故障点在 opencode 的**执行期**、不在切换期 ⇒ 灰度第一档就会踩，见 §8.5）
 - [ ] **（事实 5）server 侧 MCP 状态校验已接受 v2 五态**（`connected` / `pending` /
       `disabled` / `failed` / `needs_auth`）——**必须在任何新 worker 起来之前**；
       校验未放宽就放 worker ⇒ 心跳 400 ⇒ worker 判离线
@@ -866,6 +920,7 @@ WHERE `key` IN ('sisyphus','prometheus','atlas');
 ```bash
 # 1.1 v1 worker 全部下线（事实 4：没有混跑保护网）
 kubectl scale sts/vteam-worker -n vteam --replicas=0
+#    ⇒ 此刻**没有任何 worker 在服务** ⇒ 不会有派发发生 ⇒ 这是做数据修复的安全点（见 1.2b）
 
 # 1.2a 先把 server（+ web）升到 v2 线并等它就绪——它必须先接受 MCP 五态（事实 5）
 helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml \
@@ -874,7 +929,17 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml 
   --wait --timeout 300s
 kubectl rollout status deploy/vteam-server -n vteam --timeout=300s
 
-# 1.2b server 就绪后再升 worker 镜像（此时 worker 只起 1 个）
+# 1.2b **数据修复窗口**（§8.2.1 的两条修复）——必须在 worker 切换的同一个窗口内做，
+#      不能提前到阶段 0（worker 还停在 v1 时那三个 OmO agent 名是真实存在的，
+#      提前清名 ⇒ 那些成员被**静默降级**成默认 agent；时序理由见 §8.2.1「时序约束」）。
+#      此刻 v1 worker 已下线、v2 worker 还没起 ⇒ 没有派发 ⇒ 改这两张表是安全的。
+kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e \
+  "UPDATE team_members tm SET tm.opencode_agent_name = NULL WHERE tm.opencode_agent_name IS NOT NULL AND TRIM(tm.opencode_agent_name) <> '' AND tm.opencode_agent_name NOT IN ('build','plan','general','explore','compaction','title','summary') AND NOT EXISTS (SELECT 1 FROM agents a2 WHERE a2.agent_key IS NOT NULL AND CONCAT('vteam-',a2.agent_key)=tm.opencode_agent_name);"
+kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e \
+  "UPDATE agent_roles SET default_opencode_agent_name = CASE \`key\` WHEN 'sisyphus' THEN 'vteam-developer' WHEN 'prometheus' THEN 'vteam-plan' WHEN 'atlas' THEN 'vteam-developer' END, updated_at = NOW(3) WHERE \`key\` IN ('sisyphus','prometheus','atlas') AND default_agent_id IS NULL;"
+# 复检：把 §8.2.1 的 ① 再跑一遍 ⇒ **必须 0 行**（不 0 行就不要起 v2 worker）
+
+# 1.2c server 就绪、**数据也修完**后再升 worker 镜像（此时 worker 只起 1 个）
 helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml \
   --set server.image.tag=<v2-tag> \
   --set web.image.tag=<v2-tag> \

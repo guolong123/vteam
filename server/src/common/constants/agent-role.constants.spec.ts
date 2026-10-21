@@ -133,7 +133,7 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
     expect(buildFactoryCapabilityMatrix()['secret.command']).toBe(true);
   });
 
-  it('外部 3 岗定义：key 清单/外部槽位/sortOrder 紧随内置 1..7/一行式 rolePrompt', () => {
+  it('外部 3 岗定义：key 清单/平台 Agent 槽位/sortOrder 紧随内置 1..7/一行式 rolePrompt', () => {
     expect(EXTERNAL_AGENT_ROLES.map((r) => r.key)).toEqual([
       'sisyphus',
       'prometheus',
@@ -149,8 +149,16 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
     for (const role of EXTERNAL_AGENT_ROLES) {
       expect(role.id).toBe(`ar_${role.key}`);
       expect(role.name.length).toBeGreaterThan(0);
-      expect(role.defaultOpencodeAgentName.length).toBeGreaterThan(0);
-      expect(role.defaultOpencodeAgentName.length).toBeLessThanOrEqual(128);
+      // 2026-10-21（opencode v2）：外部槽位改用**平台 Agent**（`agents` 表 id）——
+      // v2 不加载 OmO ⇒ `Sisyphus - ultraworker` / `Prometheus - Plan Builder` /
+      // `Atlas - Plan Executor` 在 v2 上不存在 ⇒ 岗位不得再指向它们。
+      expect(role.defaultAgentId).toMatch(/^a_[a-z_]+$/);
+      expect(role.defaultAgentId).not.toMatch(
+        /ultraworker|Plan Builder|Plan Executor/i,
+      );
+      expect(role.rolePrompt).not.toMatch(
+        /ultraworker|Plan Builder|Plan Executor/i,
+      );
       expect(role.sortOrder).toBeGreaterThan(7);
       expect(role.sortOrder).toBeLessThan(FALLBACK_AGENT_ROLE.sortOrder);
       expect(role.rolePrompt.startsWith('# 角色：')).toBe(true);

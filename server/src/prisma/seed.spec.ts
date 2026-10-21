@@ -1128,7 +1128,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     }
   });
 
-  it('外部 3 岗预置：按 key create-if-absent（type=custom、外部槽位、8 工具矩阵、sortOrder 8..10、一行式 rolePrompt）', async () => {
+  it('外部 3 岗预置：按 key create-if-absent（type=custom、平台 Agent 槽位、9 工具矩阵、sortOrder 8..10、一行式 rolePrompt）', async () => {
     await main();
 
     const externalCalls = mockPrisma.agentRole.upsert.mock.calls.filter(
@@ -1150,19 +1150,56 @@ describe('seed（计划 skills + 评审子句）', () => {
         key: role.key,
         name: role.name,
         type: 'custom',
-        defaultAgentId: null,
-        defaultOpencodeAgentName: role.defaultOpencodeAgentName,
+        // 2026-10-21（opencode v2）：内部槽位 = 平台 Agent（`agents` 表 id）。
+        defaultAgentId: role.defaultAgentId,
         capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES,
         rolePrompt: role.rolePrompt,
         sortOrder: role.sortOrder,
       });
-      // 槽位互斥：外部槽位非空 ⇒ defaultAgentId 必须 null（已在 toMatchObject 断言）。
-      expect(call![0].create.defaultOpencodeAgentName.length).toBeGreaterThan(
-        0,
-      );
+      // 槽位互斥：只填内部槽位 ⇒ 外部槽位必须为空（不写，或显式 null；
+      // 两槽位同时非空 ⇒ 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT）。
+      expect(call![0].create.defaultOpencodeAgentName ?? null).toBeNull();
+      expect(call![0].create.defaultAgentId).toBeTruthy();
       // 一行式岗位定义，风格对齐内置 rolePrompt 的 `# 角色：` 身份行。
       expect(String(call![0].create.rolePrompt)).toMatch(/^# 角色：/);
       expect(String(call![0].create.rolePrompt)).not.toContain('\n');
+    }
+  });
+
+  /**
+   * 回归护栏（opencode v2 事故）：opencode v2 不加载 v1 形态的 OmO ⇒ `Sisyphus - ultraworker` /
+   * `Prometheus - Plan Builder` / `Atlas - Plan Executor` 三个 agent 名在 v2 上**不存在**
+   * （实测 v2.0.32：设会话 agent 返回 204 静默接受，下一轮抛 `Agent not found`）
+   * ⇒ 岗位的外部槽位一旦写回这些名字，派发到该岗位的成员**每一轮都失败**。
+   * 断言按**名字**而非固定 id，钉住「任何 seed 落库的岗位都不得携带 v1 引擎名」。
+   */
+  it('回归护栏：seed 落库的岗位不得携带 opencode v1 的 OmO agent 名（v2 上不存在 ⇒ 派发必失败）', async () => {
+    await main();
+
+    const V1_AGENT_NAME = /ultraworker|Plan Builder|Plan Executor/i;
+    for (const call of mockPrisma.agentRole.upsert.mock.calls) {
+      const create =
+        (call[0] as { create?: Record<string, unknown> }).create ?? {};
+      expect(String(create.defaultOpencodeAgentName ?? '')).not.toMatch(
+        V1_AGENT_NAME,
+      );
+      // 槽位互斥且不可同为空：恰好一个槽位非空（空 ⇒ 400 ROLE_DEFAULT_AGENT_MISSING）。
+      const hasInternal = Boolean(create.defaultAgentId);
+      const hasExternal = Boolean(create.defaultOpencodeAgentName);
+      expect(hasInternal !== hasExternal).toBe(true);
+    }
+    // 三个外部岗位：改绑平台 Agent（内部槽位），且角色说明不再宣称跑某个外部引擎 agent。
+    for (const role of EXTERNAL_AGENT_ROLES) {
+      expect(role.defaultAgentId).toMatch(/^a_[a-z_]+$/);
+      expect(role.defaultAgentId).not.toMatch(V1_AGENT_NAME);
+      expect(role.rolePrompt).not.toMatch(V1_AGENT_NAME);
+    }
+    // 平台 Agent id 必须来自 seed 的 `agents` 表（不得凭空捏造）。
+    const seededAgentIds = mockPrisma.agent.upsert.mock.calls.map((call) =>
+      String((call[0] as { create?: { id?: string } }).create?.id ?? ''),
+    );
+    for (const role of EXTERNAL_AGENT_ROLES) {
+      expect(seededAgentIds).toContain(role.defaultAgentId);
     }
   });
 

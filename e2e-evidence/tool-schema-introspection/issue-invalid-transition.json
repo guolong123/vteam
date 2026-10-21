@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":5,"error":{"code":-32009,"message":"[409] ISSUE_INVALID_TRANSITION Issue 状态流转不合法 | current=open action=resolve from=[in_progress] to=resolved allowedActions=[start] allowedTo={\"start\":\"in_progress\"}"}}

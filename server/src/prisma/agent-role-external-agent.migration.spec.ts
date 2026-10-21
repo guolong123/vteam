@@ -88,14 +88,21 @@ describe('agent_roles external-agent slot current-schema contract (historical 20
     expect(roleModel).toContain('AGENT_ROLE_DEFAULT_SLOT_CONFLICT');
   });
 
-  it('all seeded external slot values obey the DTO length contract', () => {
+  it('seeded external roles bind a platform agent id, never an opencode v1 engine name', () => {
     expect(AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH).toBe(128);
     expect(EXTERNAL_AGENT_ROLES).toHaveLength(3);
     for (const role of EXTERNAL_AGENT_ROLES) {
-      expect(role.defaultOpencodeAgentName.length).toBeLessThanOrEqual(
-        AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH,
+      // 2026-10-21（opencode v2）：opencode v2 不加载 v1 形态的 OmO ⇒
+      // `Sisyphus - ultraworker` / `Prometheus - Plan Builder` / `Atlas - Plan Executor`
+      // 在 v2 上不存在（实测 v2.0.32：设会话 agent 返回 204 静默接受，下一轮抛
+      // `Agent not found`）⇒ seed 预置的三个岗位改绑平台 Agent（`agents` 表 id）。
+      expect(role.defaultAgentId).toMatch(/^a_[a-z_]+$/);
+      expect(role.defaultAgentId).not.toMatch(
+        /ultraworker|Plan Builder|Plan Executor/i,
       );
-      expect(role.defaultOpencodeAgentName.length).toBeGreaterThan(0);
+      expect(role.rolePrompt).not.toMatch(
+        /ultraworker|Plan Builder|Plan Executor/i,
+      );
       expect(role.rolePrompt).toMatch(/^# 角色：/);
     }
   });

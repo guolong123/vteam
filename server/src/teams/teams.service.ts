@@ -47,6 +47,12 @@ const TEAM_ERRORS = {
   MEMBER_AGENT_REQUIRED: 'MEMBER_AGENT_REQUIRED',
   MEMBER_ROLE_REQUIRED: 'MEMBER_ROLE_REQUIRED',
   MEMBER_NOT_FOUND: 'MEMBER_NOT_FOUND',
+  /**
+   * 移除成员兜底：事务内已把 sessions / chat_channels / task_group_instances 的
+   * `team_member_id` 与 `teams.main_agent_member_id` 全部解绑，理论上 `teamMember.delete`
+   * 不会再撞 RESTRICT；仍撞（未来新增 RESTRICT 关联表）⇒ 409 业务码，绝不裸 500。
+   */
+  MEMBER_HAS_HISTORY: 'MEMBER_HAS_HISTORY',
   USER_NOT_FOUND: 'USER_NOT_FOUND',
   USER_ALREADY_MEMBER: 'USER_ALREADY_MEMBER',
   VERSION_CONFLICT: 'VERSION_CONFLICT',
@@ -63,6 +69,19 @@ const TEAM_ERRORS = {
   QUEUE_ENTRY_NOT_FOUND: 'QUEUE_ENTRY_NOT_FOUND',
   MAIN_AGENT_NOT_MEMBER: 'MAIN_AGENT_NOT_MEMBER',
 } as const;
+
+/**
+ * FK 违规识别：Prisma 已知错误码 `P2003`，或驱动原文 `Foreign key constraint violated`
+ * （RESTRICT/NO ACTION 拒绝删除时的裸消息形态）。命中 ⇒ 调用方映射为业务 409，绝不裸 500。
+ */
+function isForeignKeyViolation(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown };
+  if (e?.code === 'P2003') return true;
+  return (
+    typeof e?.message === 'string' &&
+    e.message.includes('Foreign key constraint violated')
+  );
+}
 
 @Injectable()
 export class TeamsService implements OnModuleInit {
@@ -765,6 +784,19 @@ export class TeamsService implements OnModuleInit {
     return this.findOne(teamId);
   }
 
+  /**
+   * DELETE /teams/:id/members/:memberId：移除成员 = 解除归属 + 删成员行，历史一条不删。
+   *
+   * 四张表对 `team_members.id` 全是 `ON DELETE RESTRICT` 且列可空
+   * （`sessions.team_member_id`、`chat_channels.team_member_id`、
+   * `task_group_instances.team_member_id`、`teams.main_agent_member_id`）
+   * ⇒ 直接硬删成员行必被 FK 拦下（P2003 `Foreign key constraint violated on the fields:
+   * (team_member_id)`，线上表现为 500）。
+   * ⇒ 事务内固定顺序：清主 Agent 指针 → 解绑会话 → 解绑私聊频道 → 解绑任务组实例 → 删成员行。
+   *
+   * ⚠️ `chat_channels` 只能解绑不能删：`messages.channel_id` 同为 RESTRICT，
+   * 有消息的频道删不掉；且 `@@unique([teamId, teamMemberId])` 在成员键置 NULL 时互不冲突。
+   */
   async removeMember(teamId: string, memberId: string) {
     const team = await this.prisma.team.findUnique({ where: { id: teamId } });
     if (!team) {
@@ -782,16 +814,41 @@ export class TeamsService implements OnModuleInit {
         message: '成员不存在',
       });
     }
-    await this.prisma.$transaction(async (tx) => {
-      await tx.teamMember.delete({ where: { id: memberId } });
-      const mainCleared = (team as any).mainAgentMemberId === memberId;
-      await tx.team.update({
-        where: { id: teamId },
-        data: mainCleared
-          ? { mainAgentMemberId: null, version: { increment: 1 } }
-          : { version: { increment: 1 } },
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const mainCleared = team.mainAgentMemberId === memberId;
+        await tx.team.update({
+          where: { id: teamId },
+          data: mainCleared
+            ? { mainAgentMemberId: null, version: { increment: 1 } }
+            : { version: { increment: 1 } },
+        });
+        await tx.session.updateMany({
+          where: { teamMemberId: memberId },
+          data: { teamMemberId: null },
+        });
+        await tx.chatChannel.updateMany({
+          where: { teamMemberId: memberId },
+          data: { teamMemberId: null },
+        });
+        await tx.taskGroupInstance.updateMany({
+          where: { teamMemberId: memberId },
+          data: { teamMemberId: null },
+        });
+        await tx.teamMember.delete({ where: { id: memberId } });
       });
-    });
+    } catch (err) {
+      if (isForeignKeyViolation(err)) {
+        this.logger.warn(
+          `removeMember 仍有 RESTRICT 关联，拒绝硬删 team=${teamId} member=${memberId}`,
+        );
+        throw new ConflictException({
+          code: TEAM_ERRORS.MEMBER_HAS_HISTORY,
+          message: '该成员仍有关联数据，无法移除',
+        });
+      }
+      throw err;
+    }
     await this.realtime.broadcast(
       EVENT_TYPES.TEAM_CHANGED,
       { teamId, action: 'member_remove', memberId },

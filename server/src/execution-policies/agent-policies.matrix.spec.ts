@@ -16,6 +16,7 @@ import {
   loadAgentPoliciesBaseline,
   projectNativePermission,
 } from './__fixtures__/policy-fixtures';
+import { PLATFORM_MCP_READONLY_TOOLS } from '../platform-mcp/platform-mcp.constants';
 import { ExecutionPolicyService } from './execution-policy.service';
 
 /**
@@ -46,6 +47,10 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
   const MCP_SET = new Set<string>(VTEAM_MCP_TOOL_NAMES);
   const GIT_SET = new Set<string>(VTEAM_GIT_TOOL_NAMES);
   const BROWSER_SET = new Set<string>(VTEAM_BROWSER_TOOL_NAMES);
+  // 只读自省（vteam_tool_schema）不入授权目录，但仍是真实暴露名 ⇒ 允许显式列入 allowlist。
+  const READONLY_SET = new Set<string>(
+    PLATFORM_MCP_READONLY_TOOLS.map((name) => `vteam_${name}`),
+  );
 
   it('7 agents：vteam-plan + 5 角色 + vteam-librarian（key 即 opencode agent 名）', () => {
     expect(AGENT_NAMES).toHaveLength(7);
@@ -68,9 +73,10 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         const inMcp = MCP_SET.has(key);
         const inGit = GIT_SET.has(key);
         const inBrowser = BROWSER_SET.has(key);
-        expect(inMcp || inGit || inBrowser).toBe(true);
+        const inReadonly = READONLY_SET.has(key);
+        expect(inMcp || inGit || inBrowser || inReadonly).toBe(true);
         // MCP 命名空间一律 `vteam_` 前缀；自定义 git 键不强制该前缀但必须在 GIT 注册表内。
-        if (inMcp) expect(key).toMatch(/^vteam_/);
+        if (inMcp || inReadonly) expect(key).toMatch(/^vteam_/);
         // `task`/`execute` 永不列入 allowlist（guard 默认 deny）。
         expect(key).not.toBe('task');
         expect(key).not.toBe('execute');

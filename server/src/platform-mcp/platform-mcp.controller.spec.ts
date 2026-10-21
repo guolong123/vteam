@@ -1,4 +1,8 @@
-import { ForbiddenException, INestApplication } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  INestApplication,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter } from 'node:events';
@@ -50,6 +54,8 @@ describe('PlatformMcpController (HTTP)', () => {
     hookRegister: jest.Mock;
     hookCancel: jest.Mock;
     secretCommand: jest.Mock;
+    issueTransition: jest.Mock;
+    taskTransition: jest.Mock;
   };
 
   /** 手写 JSON-RPC 端点：无需 Accept 头，直接 POST JSON 即可。 */
@@ -181,6 +187,8 @@ describe('PlatformMcpController (HTTP)', () => {
         status: 'cancelled',
       }),
       secretCommand: jest.fn(),
+      issueTransition: jest.fn(),
+      taskTransition: jest.fn(),
     };
     service.resolveToolCallerId = jest
       .fn()
@@ -276,7 +284,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 34 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_list/memory_update + memory_archive/memory_merge + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel + secret_command；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 35 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_list/memory_update + memory_archive/memory_merge + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel + secret_command + tool_schema；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -327,6 +335,7 @@ describe('PlatformMcpController (HTTP)', () => {
         'hook_register',
         'hook_cancel',
         'secret_command',
+        'tool_schema',
       ]);
 
       for (const tool of tools) {
@@ -342,6 +351,13 @@ describe('PlatformMcpController (HTTP)', () => {
           expect(tool.inputSchema).toMatchObject({
             type: 'object',
             properties: expect.objectContaining({ teamId: { type: 'string' } }),
+          });
+          continue;
+        }
+        if (tool.name === 'tool_schema') {
+          expect(tool.inputSchema).toMatchObject({
+            type: 'object',
+            properties: expect.objectContaining({ name: { type: 'string' } }),
           });
           continue;
         }
@@ -1753,6 +1769,250 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ jsonrpc: '2.0', id: 91 }),
       );
+    });
+  });
+
+  // ==================================================================
+  // Fix 1：MCP 错误报文携带结构化 details（`[409]CODE message` 前缀不变）
+  // ==================================================================
+  describe('错误报文 details 透出', () => {
+    const callTool = (name: string, args: Record<string, unknown>) =>
+      mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 401,
+          method: 'tools/call',
+          params: { name, arguments: args },
+        })
+        .expect(200);
+
+    it('ISSUE_INVALID_TRANSITION（current=open）⇒ 单行含当前态/尝试动作/当前态合法动作全集', async () => {
+      service.issueTransition.mockRejectedValue(
+        new ConflictException({
+          code: 'ISSUE_INVALID_TRANSITION',
+          message: 'Issue 状态流转不合法',
+          details: {
+            action: 'resolve',
+            from: ['in_progress'],
+            to: 'resolved',
+            current: 'open',
+          },
+        }),
+      );
+
+      const res = await callTool('issue_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        issueId: 'is_1',
+        action: 'resolve',
+      });
+
+      expect(res.body.error.code).toBe(-32009);
+      // 真实迁移表（issues.constants.ts）：open 只允许 start；resolve/close 均不在其中。
+      expect(res.body.error.message).toBe(
+        '[409] ISSUE_INVALID_TRANSITION Issue 状态流转不合法 | ' +
+          'current=open action=resolve from=[in_progress] to=resolved ' +
+          'allowedActions=[start] allowedTo={"start":"in_progress"}',
+      );
+      expect(res.body.error.message).not.toContain('\n');
+    });
+
+    it('ISSUE_TRANSITIONS：current=in_progress ⇒ 合法动作含 resolve/reject 且不含 start', async () => {
+      service.issueTransition.mockRejectedValue(
+        new ConflictException({
+          code: 'ISSUE_INVALID_TRANSITION',
+          message: 'Issue 状态流转不合法',
+          details: {
+            action: 'close',
+            from: ['resolved'],
+            to: 'closed',
+            current: 'in_progress',
+          },
+        }),
+      );
+
+      const res = await callTool('issue_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        issueId: 'is_1',
+        action: 'close',
+      });
+
+      const message = res.body.error.message as string;
+      expect(message).toContain('allowedActions=[resolve,reject]');
+      expect(message).not.toContain('allowedActions=[start');
+    });
+
+    it('TASK_INVALID_TRANSITION ⇒ 用 TASK_TRANSITIONS 算合法动作（当前态不可判定时为空表）', async () => {
+      service.taskTransition.mockRejectedValue(
+        new ConflictException({
+          code: 'TASK_INVALID_TRANSITION',
+          message: '任务状态迁移不合法',
+          details: { from: 'pending', to: 'in_progress', current: null },
+        }),
+      );
+
+      const res = await callTool('task_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        action: 'start',
+      });
+
+      expect(res.body.error.message).toBe(
+        '[409] TASK_INVALID_TRANSITION 任务状态迁移不合法 | ' +
+          'current=null from=pending to=in_progress allowedActions=[]',
+      );
+    });
+
+    it('TASK_INVALID_TRANSITION（current=in_progress）⇒ 合法动作 = mark-pending-review/block + 各自去向', async () => {
+      service.taskTransition.mockRejectedValue(
+        new ConflictException({
+          code: 'TASK_INVALID_TRANSITION',
+          message: '任务状态迁移不合法',
+          details: {
+            from: 'pending',
+            to: 'in_progress',
+            current: 'in_progress',
+          },
+        }),
+      );
+
+      const res = await callTool('task_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        action: 'start',
+      });
+
+      expect(res.body.error.message).toBe(
+        '[409] TASK_INVALID_TRANSITION 任务状态迁移不合法 | ' +
+          'current=in_progress from=pending to=in_progress ' +
+          'allowedActions=[mark-pending-review,block] ' +
+          'allowedTo={"mark-pending-review":"pending_review","block":"blocked"}',
+      );
+    });
+
+    it('409 无 details ⇒ 报文与改造前逐字一致（前缀契约不变）', async () => {
+      service.issueTransition.mockRejectedValue(
+        new ConflictException({
+          code: 'ISSUE_TASK_ARCHIVED',
+          message: '任务已归档，不可创建 issue',
+        }),
+      );
+
+      const res = await callTool('issue_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        issueId: 'is_1',
+        action: 'start',
+      });
+
+      expect(res.body.error.message).toBe(
+        '[409] ISSUE_TASK_ARCHIVED 任务已归档，不可创建 issue',
+      );
+    });
+
+    it('非状态机 details ⇒ 追加紧凑 JSON（`details=` 前缀）', async () => {
+      service.issueTransition.mockRejectedValue(
+        new ConflictException({
+          code: 'ISSUE_OTHER',
+          message: '其他冲突',
+          details: { field: 'assigneeId', expected: ['a', 'b'] },
+        }),
+      );
+
+      const res = await callTool('issue_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        issueId: 'is_1',
+        action: 'start',
+      });
+
+      expect(res.body.error.message).toBe(
+        '[409] ISSUE_OTHER 其他冲突 | details={"field":"assigneeId","expected":["a","b"]}',
+      );
+    });
+
+    it('非 HttpException ⇒ 报文不变（不追加任何 details 段）', async () => {
+      service.issueTransition.mockRejectedValue(new Error('boom'));
+
+      const res = await callTool('issue_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        issueId: 'is_1',
+        action: 'start',
+      });
+
+      expect(res.body.error.message).toBe('boom');
+    });
+
+    it('超大 details ⇒ 截断到 ≤600 字符并以 `…` 收尾（报文有界）', async () => {
+      service.issueTransition.mockRejectedValue(
+        new ConflictException({
+          code: 'ISSUE_HUGE',
+          message: '载荷过大',
+          details: { blob: 'x'.repeat(5000) },
+        }),
+      );
+
+      const res = await callTool('issue_transition', {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_sender',
+        issueId: 'is_1',
+        action: 'start',
+      });
+
+      const message = res.body.error.message as string;
+      const detailsPart = message.slice(message.indexOf(' | ') + 3);
+      expect(detailsPart.endsWith('…')).toBe(true);
+      expect(detailsPart.length).toBe(600);
+      expect(message.length).toBeLessThan(700);
+    });
+  });
+
+  describe('只读自省工具（vteam_tool_schema）', () => {
+    it('无 taskId/teamId 也能调用：跳过身份解析与岗位门，直接返回全量清单', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 402,
+          method: 'tools/call',
+          params: { name: 'tool_schema', arguments: {} },
+        })
+        .expect(200);
+
+      expect(res.body.error).toBeUndefined();
+      const body = JSON.parse(res.body.result.content[0].text) as {
+        count: number;
+        tools: string[];
+      };
+      expect(body.count).toBe(35);
+      expect(
+        body.tools.some((line) => line.startsWith('issue_transition ')),
+      ).toBe(true);
+      // 归属解析必然回退到「worker 最近会话」（可能无成员）⇒ 只读工具不得走该链路。
+      expect(service.resolveToolCallerWithContext).not.toHaveBeenCalled();
+      expect(toolPermission.assertToolAllowed).not.toHaveBeenCalled();
+    });
+
+    it('未知工具名 ⇒ 400 JSON-RPC 错误（-32602）+ 候选清单', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 403,
+          method: 'tools/call',
+          params: {
+            name: 'tool_schema',
+            arguments: { name: 'issue_transitio' },
+          },
+        })
+        .expect(200);
+
+      expect(res.body.error.code).toBe(-32602);
+      expect(res.body.error.message).toContain('PLATFORM_MCP_TOOL_UNKNOWN');
+      expect(res.body.error.message).toContain('issue_transition');
     });
   });
 });

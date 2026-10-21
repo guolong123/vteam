@@ -13,8 +13,11 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Public } from '../auth/decorators/public.decorator';
+import { TASK_TRANSITIONS } from '../common/constants/task.constants';
+import { ISSUE_TRANSITIONS } from '../issues/issues.constants';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import {
+  PLATFORM_MCP_READONLY_TOOLS,
   PLATFORM_MCP_SERVER_NAME,
   PLATFORM_MCP_SERVER_VERSION,
   SECRET_COMMAND_BUDGET_HEADER,
@@ -66,6 +69,66 @@ function messageId(body: unknown): unknown {
 const ERROR_METHOD_NOT_FOUND = -32601;
 const ERROR_INVALID_PARAMS = -32602;
 const ERROR_INTERNAL_ERROR = -32603;
+
+/**
+ * 错误报文里结构化 `details` 的追加上限（字符）。报文是**给 agent 的行动依据**，
+ * 不是载荷转储 ⇒ 超限即截断并留 `…`，避免一次 409 吃掉上下文窗口。
+ */
+const MAX_ERROR_DETAILS_CHARS = 600;
+
+/**
+ * 状态机错误码 → 迁移表（**单一事实来源**：本文件不硬编码任何动作清单，
+ * 新增/调整迁移动作只改 `ISSUE_TRANSITIONS` / `TASK_TRANSITIONS`）。
+ */
+const TRANSITION_TABLES: Record<
+  string,
+  Record<
+    string,
+    { readonly from: readonly string[] | string; readonly to: string }
+  >
+> = {
+  ISSUE_INVALID_TRANSITION: ISSUE_TRANSITIONS,
+  TASK_INVALID_TRANSITION: TASK_TRANSITIONS,
+};
+
+/** `from` 归一为数组（issue 表恒为数组，task 表为单值）。 */
+function fromStatusesOf(from: readonly string[] | string): readonly string[] {
+  return typeof from === 'string' ? [from] : from;
+}
+
+/** 一行式取值渲染：数组 `[a,b]`、对象紧凑 JSON、其余原样（保持可 grep / 可解析）。 */
+function renderDetailValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => renderDetailValue(item)).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+/**
+ * 当前态 → 合法动作（含每个动作的去向）。
+ * `current` 不可判定（缺失/非字符串，如并发冲突读到 null）⇒ 空表，不臆造动作。
+ */
+function legalActionsFor(
+  table: Record<
+    string,
+    { readonly from: readonly string[] | string; readonly to: string }
+  >,
+  current: unknown,
+): { actions: string[]; to: Record<string, string> } {
+  if (typeof current !== 'string') {
+    return { actions: [], to: {} };
+  }
+  const actions = Object.entries(table)
+    .filter(([, spec]) => fromStatusesOf(spec.from).includes(current))
+    .map(([action]) => action);
+  return {
+    actions,
+    to: Object.fromEntries(actions.map((action) => [action, table[action].to])),
+  };
+}
 
 /**
  * 平台 MCP Streamable HTTP 端点（阶段 1）。
@@ -358,22 +421,34 @@ export class PlatformMcpController {
         teamId?: string;
         selfInstanceId?: string;
       };
-      // 回填前先记录「调用方是否显式传了上下文」——input 是 parsed.data 的同一引用，
-      // 回填写入会就地改写它，故必须在此刻快照。
-      const fromFallback = !input.taskId && !input.teamId;
-      const resolved = await this.service.resolveToolCallerWithContext(
-        { workerId },
-        input,
-      );
-      if (!input.taskId && resolved.taskId) input.taskId = resolved.taskId;
-      if (!input.teamId && resolved.teamId) input.teamId = resolved.teamId;
-      await this.toolPermission.assertToolAllowed(resolved.callerId, tool.name);
+      // 只读自省（`vteam_tool_schema`）**不参与归属/授权链路**：它没有 taskId/teamId，
+      // 归属解析必然回退到 worker 最近会话（可能是无成员的会话）而误 403；且它不读任何
+      // 业务数据 ⇒ 跳过身份解析与岗位门（岗位门内另有同名白名单兜底）。
+      const readonlyTool = (
+        PLATFORM_MCP_READONLY_TOOLS as readonly string[]
+      ).includes(tool.name);
+      let fromFallback = false;
+      if (!readonlyTool) {
+        // 回填前先记录「调用方是否显式传了上下文」——input 是 parsed.data 的同一引用，
+        // 回填写入会就地改写它，故必须在此刻快照。
+        fromFallback = !input.taskId && !input.teamId;
+        const resolved = await this.service.resolveToolCallerWithContext(
+          { workerId },
+          input,
+        );
+        if (!input.taskId && resolved.taskId) input.taskId = resolved.taskId;
+        if (!input.teamId && resolved.teamId) input.teamId = resolved.teamId;
+        await this.toolPermission.assertToolAllowed(
+          resolved.callerId,
+          tool.name,
+        );
+      }
       const result = await tool.handler(
         {
           workerId,
           resolvedContext: {
-            ...(resolved.taskId ? { taskId: resolved.taskId } : {}),
-            ...(resolved.teamId ? { teamId: resolved.teamId } : {}),
+            ...(input.taskId ? { taskId: input.taskId } : {}),
+            ...(input.teamId ? { teamId: input.teamId } : {}),
             fromFallback,
           },
         },
@@ -437,11 +512,73 @@ export class PlatformMcpController {
         response && typeof response === 'object' && 'code' in response
           ? ` ${(response as { code?: string }).code}`
           : '';
-      return `${prefix}${code} ${msg}`.trim();
+      // 前缀 + `CODE message` 契约**逐字不变**（其他 spec 断言它），details 只追加在尾部。
+      const base = `${prefix}${code} ${msg}`.trim();
+      return `${base}${this.detailsSuffix(response)}`;
     }
     if (err instanceof Error) {
       return err.message;
     }
     return String(err);
+  }
+
+  /**
+   * 结构化 `details` 的追加串（Fix 1）：`[409]CODE message | current=… action=… allowedActions=…`。
+   *
+   * - 状态机错误码（`ISSUE_INVALID_TRANSITION` / `TASK_INVALID_TRANSITION`）⇒ 先用迁移表
+   *   补出 `allowedActions` 与 `allowedTo`（当前态的**全部**合法动作及其去向）⇒ 调用方在
+   *   这一次响应里就能改对动作，不必再猜或二次往返。
+   * - 其余 `details` ⇒ 紧凑 JSON（`details=…`），保持通用可读。
+   * - 两者都截断到 `MAX_ERROR_DETAILS_CHARS`（`…` 收尾）：报文有界，不随载荷膨胀。
+   */
+  private detailsSuffix(response: unknown): string {
+    if (!response || typeof response !== 'object' || !('details' in response)) {
+      return '';
+    }
+    const details = (response as { details?: unknown }).details;
+    if (!details || typeof details !== 'object' || Array.isArray(details)) {
+      return '';
+    }
+    const code = (response as { code?: unknown }).code;
+    const table =
+      typeof code === 'string' ? TRANSITION_TABLES[code] : undefined;
+    let text: string;
+    if (table) {
+      const record = details as Record<string, unknown>;
+      const { actions, to } = legalActionsFor(table, record.current);
+      const parts: string[] = [];
+      for (const key of ['current', 'action', 'from', 'to']) {
+        if (key in record) {
+          parts.push(`${key}=${renderDetailValue(record[key])}`);
+        }
+      }
+      parts.push(`allowedActions=${renderDetailValue(actions)}`);
+      if (actions.length > 0) {
+        parts.push(`allowedTo=${JSON.stringify(to)}`);
+      }
+      // 未知的额外 detail 键也不丢：稳定追加在尾部（顺序 = 原对象键序）。
+      for (const [key, value] of Object.entries(record)) {
+        if (
+          ![
+            'current',
+            'action',
+            'from',
+            'to',
+            'allowedActions',
+            'allowedTo',
+          ].includes(key)
+        ) {
+          parts.push(`${key}=${renderDetailValue(value)}`);
+        }
+      }
+      text = parts.join(' ');
+    } else {
+      text = `details=${JSON.stringify(details)}`;
+    }
+    const bounded =
+      text.length > MAX_ERROR_DETAILS_CHARS
+        ? `${text.slice(0, MAX_ERROR_DETAILS_CHARS - 1)}…`
+        : text;
+    return ` | ${bounded}`;
   }
 }

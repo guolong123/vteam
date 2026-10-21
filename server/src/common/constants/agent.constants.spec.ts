@@ -11,6 +11,7 @@ import {
   VTEAM_MCP_TOOL_NAMES,
   type VteamAgentName,
 } from './agent.constants';
+import { PLATFORM_MCP_READONLY_TOOLS } from '../../platform-mcp/platform-mcp.constants';
 
 const ROLE_NAMES: VteamAgentName[] = [
   'vteam-product',
@@ -61,11 +62,18 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   });
 
   it('toolAllows 的 MCP 键必须带 vteam_ 前缀（禁止裸 MCP 名；browser 例外，见下）', () => {
+    // 只读自省工具不参与授权目录（权限门恒放行），故不要求 ∈ VTEAM_MCP_TOOL_NAMES；
+    // 但仍须带 `vteam_` 前缀（它是真实暴露名）。
+    const readonlyKeys = PLATFORM_MCP_READONLY_TOOLS.map(
+      (name) => `vteam_${name}`,
+    );
     for (const name of ROLE_NAMES) {
       for (const tool of Object.keys(ROLE_BOUNDARIES[name].toolAllows)) {
         if (tool.startsWith('git_')) continue;
         if (tool === 'browser') continue;
-        expect(VTEAM_MCP_TOOL_NAMES).toContain(tool);
+        if (!readonlyKeys.includes(tool)) {
+          expect(VTEAM_MCP_TOOL_NAMES).toContain(tool);
+        }
         expect(tool).toMatch(/^vteam_/);
       }
     }
@@ -330,6 +338,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_todo: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_secret_command: 'allow',
+      vteam_tool_schema: 'allow',
       browser: 'allow',
     });
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toEqual({
@@ -351,6 +360,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       browser: 'allow',
       vteam_todo: 'allow',
       vteam_secret_command: 'allow',
+      vteam_tool_schema: 'allow',
     });
     // 反转旧断言：formerly-gated 工具按授权矩阵进/不进 toolAllows（不再一律不进）。
     for (const name of ROLE_NAMES) {

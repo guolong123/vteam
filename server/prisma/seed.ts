@@ -136,7 +136,11 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
   { key: 'memory.save', tools: ['vteam_memory_save'], defaultDeny: false },
   { key: 'memory.search', tools: ['vteam_memory_list'], defaultDeny: false },
   { key: 'memory.update', tools: ['vteam_memory_update'], defaultDeny: false },
-  { key: 'memory.archive', tools: ['vteam_memory_archive'], defaultDeny: false },
+  {
+    key: 'memory.archive',
+    tools: ['vteam_memory_archive'],
+    defaultDeny: false,
+  },
   { key: 'memory.merge', tools: ['vteam_memory_merge'], defaultDeny: false },
   { key: 'skill.create', tools: ['vteam_skill_create'], defaultDeny: true },
   {
@@ -238,6 +242,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
       vteam_issue_create: 'allow',
@@ -283,6 +288,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
       vteam_read_file: 'allow',
@@ -325,6 +331,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_read_file: 'allow',
       vteam_doclib: 'allow',
@@ -375,6 +382,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_submit_artifact: 'allow',
       vteam_issue_create: 'allow',
       vteam_issue_list: 'allow',
@@ -421,6 +429,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_task_context: 'allow',
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
@@ -470,6 +479,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_task_context: 'allow',
       vteam_read_file: 'allow',
       vteam_doclib: 'allow',
@@ -505,6 +515,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     readGlobs: ['*'],
     bashEffect: 'allow',
     toolAllows: {
+      vteam_tool_schema: 'allow',
       vteam_chat_history: 'allow',
       vteam_task_context: 'allow',
       vteam_doclib: 'allow',
@@ -745,22 +756,37 @@ const BUILTIN_AGENT_ROLES: readonly {
 ];
 
 /**
- * 外部引擎岗位（`defaultOpencodeAgentName` 非空、无内部 Agent）的最小权限策略。
+ * 外部引擎岗位（历史名岗位）的最小权限策略。
  * 与 `src/common/constants/agent-role.constants.ts` 的 EXTERNAL_AGENT_ROLE_* 逐字节一致
- * （自包含镜像，理由见文件头）。外部 Agent 不得创建任务/加成员/流转任务/创建技能/
+ * （自包含镜像，理由见文件头）。这三个岗位**不得**创建任务/加成员/流转任务/创建技能/
  * 确认提问/驱动外发通道，只放行协作、取证与产出所需 8 个 `vteam_*` 工具（其余 deny）。
  */
 /**
  * 外部引擎岗位行（与 `src/common/constants/agent-role.constants.ts` 的
  * EXTERNAL_AGENT_ROLES 逐字节一致，自包含镜像，理由见文件头）。2026-09-22 起 seed
- * 预置到全新库（此前 fresh 不存在外部岗）：type=custom、外部槽位
- * `defaultOpencodeAgentName`（与 defaultAgentId 互斥）、sortOrder 紧随内置 1..7。
+ * 预置到全新库（此前 fresh 不存在外部岗）：type=custom、sortOrder 紧随内置 1..7。
+ *
+ * 2026-10-21（opencode v2 适配）：三个岗位的默认 Agent 槽位由「**外部引擎名**」
+ * （`defaultOpencodeAgentName` = OmO 的 `Sisyphus - ultraworker` /
+ * `Prometheus - Plan Builder` / `Atlas - Plan Executor`）改为「**平台 Agent**」
+ * （`defaultAgentId` = `agents` 表的 `a_developer` / `a_plan`，与内置岗位同形）。
+ *
+ * 原因：opencode v2 移除了 v1 插件 API ⇒ 镜像内置的 OmO（v1 形态）在 v2 上**不加载**
+ * ⇒ 那三个 agent 名在 v2 上**不存在**（实测 v2.0.32：把会话的 agent 设成不存在的名字
+ * 返回 **204 静默接受**，下一轮执行才抛 `Agent not found` ⇒ 无回复、无回退）
+ * ⇒ 派发到这三个岗位的成员**每一轮都失败**。
+ * 而平台自己的 `vteam-*` agent 由控制面注入进项目 `opencode.json` 的 agents 节
+ * ⇒ 在 v2 上**存在** ⇒ 三个岗位改绑平台 Agent（内部槽位）后重新可派发。
+ *
+ * 槽位互斥（`defaultAgentId` 与 `defaultOpencodeAgentName` 至多一个非空，同时空 ⇒
+ * 400 `ROLE_DEFAULT_AGENT_MISSING`）⇒ 本表只填**内部**槽位，外部槽位一律不写（保持 NULL）。
+ * 语义映射（职责不变）：执行岗 → `a_developer`；计划岗 → `a_plan`。
  */
 const EXTERNAL_AGENT_ROLES: readonly {
   id: string;
   key: string;
   name: string;
-  defaultOpencodeAgentName: string;
+  defaultAgentId: string;
   sortOrder: number;
   rolePrompt: string;
 }[] = [
@@ -768,28 +794,28 @@ const EXTERNAL_AGENT_ROLES: readonly {
     id: 'ar_sisyphus',
     key: 'sisyphus',
     name: 'Sisyphus',
-    defaultOpencodeAgentName: 'Sisyphus - ultraworker',
+    defaultAgentId: 'a_developer',
     sortOrder: 8,
     rolePrompt:
-      '# 角色：Sisyphus——外部引擎执行者（Sisyphus - ultraworker）：受团队分工执行具体任务，只协作、取证与提交产出，不创建任务、不治理团队。',
+      '# 角色：Sisyphus——平台执行者（开发者 Agent）：受团队分工执行具体任务，只协作、取证与提交产出，不创建任务、不治理团队。',
   },
   {
     id: 'ar_prometheus',
     key: 'prometheus',
     name: 'Prometheus',
-    defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+    defaultAgentId: 'a_plan',
     sortOrder: 9,
     rolePrompt:
-      '# 角色：Prometheus——外部计划构建者（Prometheus - Plan Builder）：受派起草与修订实施计划，不执行变更、不治理团队。',
+      '# 角色：Prometheus——平台计划构建者（计划员 Agent）：受派起草与修订实施计划，不执行变更、不治理团队。',
   },
   {
     id: 'ar_atlas',
     key: 'atlas',
     name: 'Atlas',
-    defaultOpencodeAgentName: 'Atlas - Plan Executor',
+    defaultAgentId: 'a_developer',
     sortOrder: 10,
     rolePrompt:
-      '# 角色：Atlas——外部计划执行者（Atlas - Plan Executor）：受派按计划执行任务并回执进展，不制定计划、不治理团队。',
+      '# 角色：Atlas——平台计划执行者（开发者 Agent）：受派按计划执行任务并回执进展，不制定计划、不治理团队。',
   },
 ];
 const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] = EXTERNAL_AGENT_ROLES.map(
@@ -838,6 +864,9 @@ const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
  * EXTERNAL_SYSTEM_AGENT_* 逐字节一致，自包含镜像见文件头）。`team_members.agent_id` NOT NULL，
  * 外部绑定岗位成员不再要求用户另选执行 Agent → 服务端落到本占位行；`agent_key`/`policy_id`
  * 均 NULL，不参与 `buildAgentPolicies` 与权限解析。
+ *
+ * 2026-10-21：seed 预置的三个外部岗位已改绑**平台 Agent**（内部槽位）⇒ 它们**不再**落到
+ * 本占位行；占位行仍为「运营者在 UI 上自建的外部绑定岗位」保留（那条路径仍走外部槽位）。
  */
 const EXTERNAL_SYSTEM_AGENT_ID = 'a_external';
 const EXTERNAL_SYSTEM_AGENT_NAME = '外部执行';
@@ -1302,7 +1331,7 @@ async function main() {
   // 外部引擎岗位（sisyphus/prometheus/atlas）预置：fresh install 落行（2026-09-22 决策
   // 「内置为 seed」——此前全新库不存在外部岗）。幂等策略 = 按唯一键 key 的
   // create-if-absent upsert（update 空对象 ≙ INSERT ... ON DUPLICATE KEY UPDATE no-op）：
-  // 重跑不产生重复行，也绝不覆盖运营者对既有行的后续编辑（名称/排序/外部槽位/rolePrompt/
+  // 重跑不产生重复行，也绝不覆盖运营者对既有行的后续编辑（名称/排序/Agent 槽位/rolePrompt/
   // 矩阵一概不动）；仅 capabilities 仍为 NULL 的存量行由随后的 updateMany 补 9 工具矩阵。
   for (const role of EXTERNAL_AGENT_ROLES) {
     await prisma.agentRole.upsert({
@@ -1313,8 +1342,12 @@ async function main() {
         key: role.key,
         name: role.name,
         type: 'custom',
-        defaultAgentId: null,
-        defaultOpencodeAgentName: role.defaultOpencodeAgentName,
+        // 2026-10-21（opencode v2）：默认 Agent 槽位 = **平台 Agent**（内部槽位）。
+        // 旧值是 OmO 的外部引擎名（`Sisyphus - ultraworker` 等），而 v2 不加载 OmO
+        // ⇒ 那三个名字在 v2 上不存在 ⇒ 派发必失败（`Agent not found`，无回复、无回退）。
+        // 两个槽位互斥 ⇒ 这里**只**填 `defaultAgentId`，`defaultOpencodeAgentName` 不写
+        // （保持 NULL；两槽位同为空 ⇒ 400 ROLE_DEFAULT_AGENT_MISSING ⇒ 岗位不可派发）。
+        defaultAgentId: role.defaultAgentId,
         capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES,
         capabilitiesConfiguredAt: new Date(),
         rolePrompt: role.rolePrompt,
@@ -1686,7 +1719,8 @@ async function main() {
     {
       action: 'memory_merge',
       name: 'vteam_memory_merge',
-      description: '合并重复团队记忆（计数转移 + source 归档，仅本团队 team 级）',
+      description:
+        '合并重复团队记忆（计数转移 + source 归档，仅本团队 team 级）',
     },
     {
       action: 'skill_create',
