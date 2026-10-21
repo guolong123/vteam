@@ -49,12 +49,17 @@ export interface WorkerConfig {
   workDir: string;
   /** SSH 私钥路径（T5 git 凭证注入：GIT_SSH_KEY_PATH，D6 2B）；可选，空 = 不注入 GIT_SSH_COMMAND */
   gitSshKeyPath: string;
-  /** worker 对 server 公布的 serve 基址主机（D2：capabilities.baseUrl 上报用；容器 compose 设 http://worker） */
+  /** worker 对控制面公布的基址主机（D2：capabilities.baseUrl 上报用；容器 compose 设 http://worker） */
   workerAdvertiseHost: string;
   /** WORKER_ADVERTISE_HOST 是否显式设置（env 中非空值即 true）。未显式设置时上报 baseUrl 为
    *  http://127.0.0.1（仅本机可访问）——外部/跨机 worker 场景需启动告警引导（见 index.ts）。 */
   workerAdvertiseHostExplicit: boolean;
-  /** opencode serve 绑定地址（D2：默认 127.0.0.1 保住本地铁律；容器内设 0.0.0.0 供 server 容器访问） */
+  /**
+   * opencode serve 绑定地址（D2：默认 127.0.0.1 保住本地铁律）。
+   *
+   * ⚠️ v2：控制面**不**直连 opencode serve（只连 worker 执行端点）⇒ 跨机/集群外 worker
+   * 也**不必**为控制面把它改成 0.0.0.0——serve 只在 worker 进程内部使用，留在回环更安全。
+   */
   opencodeServeHostname: string;
   /** C2：worker 默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID）；未设 = 不指定（serve 默认） */
   defaultModelId?: string;
@@ -238,9 +243,9 @@ export function ensureIsolationScope(scope: OpencodeIsolationScope): string[] {
 /**
  * 自动探测本机非回环网卡 IPv4，作为 WORKER_ADVERTISE_HOST 缺省来源（用户未显式设置时
  * 用探测到的内网 IP 上报，替代固定回退 http://127.0.0.1——后者仅本机可访问，跨机 worker
- * server 连不上）。
+ * 控制面连不上）。
  * 遍历 os.networkInterfaces()：按返回顺序取第一个非 internal 的 IPv4 地址；跳过虚拟网卡
- * （docker/veth/br-/vnic/virbr/cni/flannel 等桥接/容器网络，非 server 可达的真实网卡）。
+ * （docker/veth/br-/vnic/virbr/cni/flannel 等桥接/容器网络，非控制面可达的真实网卡）。
  * 返回裸 IP 字符串（如 "192.168.1.10"）；无命中（全回环/无网卡/仅 IPv6）返回 undefined。
  * 纯函数（仅依赖 os 内置模块），独立导出便于单测 mock。
  */

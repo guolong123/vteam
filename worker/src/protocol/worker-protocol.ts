@@ -51,13 +51,14 @@ export interface WorkerCapabilities {
    */
   executableModels?: string[];
   /**
-   * serve 实际监听端口（F2 C2：随机端口场景必须上报，否则 server 回退连死端口 4199）。
-   * 对齐 server worker.client.ts resolveBaseUrl：capabilities.port → http://localhost:{port}。
+   * serve 实际监听端口（F2 C2：随机端口场景上报，便于详情页展示与排障）。
+   * ⚠️ v2：控制面**不**用它拨号——它只连 worker 执行端点（见 `execPort`）。
    */
   port?: number;
   /**
-   * serve 对 server 公布的基址（D2：`${WORKER_ADVERTISE_HOST}:${port}`，容器内 http://worker:port）。
-   * 对齐 server worker.client.ts resolveBaseUrl：capabilities.baseUrl 优先于 port。
+   * serve 对控制面公布的基址（D2：`${WORKER_ADVERTISE_HOST}:${port}`，容器内 http://worker:port）。
+   * ⚠️ v2：控制面**只取其中的主机部分**（server 侧 `resolveAdvertiseOrigin`）——它连的是
+   * 执行端点（`execPort`），**不连** serve 端口。
    */
   baseUrl?: string;
   /**

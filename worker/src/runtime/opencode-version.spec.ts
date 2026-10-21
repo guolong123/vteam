@@ -86,6 +86,20 @@ describe('assertOpencodeVersionSupported（T1：启动期版本闸门）', () =>
     expect(() => assertOpencodeVersionSupported(info)).toThrow(/--build-arg/);
   });
 
+  it('major < 2 → 错误信息**同时**给出物理机的补救手段（npm i -g @opencode/cli@…）', () => {
+    // worker 也跑在物理机（systemd 裸装）——那里没有镜像可重建，只说"重建镜像"会把
+    // 运维指到错误的 remediation。
+    const info = parseOpencodeVersion('opencode 1.19.0');
+    expect(() => assertOpencodeVersionSupported(info)).toThrow(/容器部署/);
+    expect(() => assertOpencodeVersionSupported(info)).toThrow(/物理机部署/);
+    expect(() => assertOpencodeVersionSupported(info)).toThrow(
+      new RegExp(`npm i -g ${REQUIRED_OPENCODE_CLI_SPEC.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+    // v1 的 npm 包冻结在 1.19.3 ⇒ 必须点明"换包名"这条唯一出路
+    expect(() => assertOpencodeVersionSupported(info)).toThrow(/opencode-ai/);
+    expect(() => assertOpencodeVersionSupported(info)).toThrow(/@opencode\/cli/);
+  });
+
   it('major >= 2 → 放行（不抛错、不告警）', () => {
     const warn = jest.fn();
     expect(() =>
@@ -99,6 +113,17 @@ describe('assertOpencodeVersionSupported（T1：启动期版本闸门）', () =>
     const warn = jest.fn();
     expect(() => assertOpencodeVersionSupported(parseOpencodeVersion('garbage'), { warn })).not.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('无法判定 opencode 版本'));
+  });
+
+  it('无法解析 → 告警文案同样给出两种部署形态的确认/补救手段', () => {
+    const warn = jest.fn();
+    assertOpencodeVersionSupported(parseOpencodeVersion('garbage'), { warn });
+    const message = warn.mock.calls[0][0] as string;
+    expect(message).toContain('容器部署');
+    expect(message).toContain('物理机部署');
+    expect(message).toContain(REQUIRED_OPENCODE_CLI_SPEC);
+    // 不再假设"镜像内"——物理机上没有镜像
+    expect(message).not.toContain('镜像内 opencode');
   });
 });
 

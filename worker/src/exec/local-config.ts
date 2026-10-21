@@ -58,6 +58,13 @@ export interface LocalConfigResult {
 export interface LocalConfigApplierOptions {
   injector: ResourceInjector;
   logger?: { info?(message: string): void; warn?(message: string): void };
+  /**
+   * git 凭证文件的**插件可见 HOME**（= opencode 隔离配置域的 HOME）。
+   *
+   * 独立模式同样会拉起 opencode serve（隔离配置域照样生效）⇒ 凭证只写 worker 自己 HOME
+   * 的话，serve 子进程里的 git 插件永远读不到（私有仓库 clone/push 失败）。
+   */
+  gitCredsHome?: string;
 }
 
 /** 技能名即目录名（路径穿越唯一防线）：字母数字开头，仅含字母数字/`_`.`-`。 */
@@ -89,10 +96,12 @@ function readFileIfExists(filePath: string): string | null {
 export class LocalConfigApplier {
   private readonly injector: ResourceInjector;
   private readonly logger?: LocalConfigApplierOptions['logger'];
+  private readonly gitCredsHome?: string;
 
   constructor(options: LocalConfigApplierOptions) {
     this.injector = options.injector;
     this.logger = options.logger;
+    this.gitCredsHome = options.gitCredsHome;
   }
 
   /** 按类别分派（HTTP 路径 /config/<kind>）。 */
@@ -234,7 +243,7 @@ export class LocalConfigApplier {
         permission: typeof rec.permission === 'string' ? rec.permission : undefined,
       };
     });
-    const result = writeGitCredsFile(credentials);
+    const result = writeGitCredsFile(credentials, this.gitCredsHome);
     this.logger?.info?.(`[exec] /config/git-credentials -> ${credentials.length} 项`);
     return { written: { gitCredsPath: result.path }, restart: 'not-required' };
   }

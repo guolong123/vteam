@@ -434,6 +434,17 @@ export interface V2DriverOptions {
   baseUrl?: string;
   /** serve 认证密码（OPENCODE_SERVER_PASSWORD，Basic Auth username=opencode）；空=不鉴权 */
   serverPassword?: string;
+  /**
+   * 鉴权口令的**动态来源**（优先于 `serverPassword`；**每次请求时求值**）。
+   *
+   * 为什么需要：v2 **恒开鉴权**，未配置 OPENCODE_SERVER_PASSWORD 时 opencode 会
+   * **自动生成**随机密码并打到 stdout——worker 要等 serve 起来、捕获到它之后才知道
+   * 真实口令 ⇒ 口令**不能**在建驱动那一刻固化（固化 = 空口令 ⇒ 驱动每个请求都 401，
+   * 而 worker 仍注册成功、看起来健康——最坏的静默失败形态）。
+   *
+   * 契约：返回 null/undefined/空串 = 此刻没有口令 ⇒ 回落到静态 `serverPassword`。
+   */
+  serverPasswordProvider?: () => string | null | undefined;
   /** 单次 HTTP 请求超时 ms；默认 60000 */
   timeoutMs?: number;
   /** 日志输出；默认 console */
@@ -457,6 +468,8 @@ export interface V2DriverOptions {
 export class V2Driver implements OpenCodeDriver {
   private baseUrlValue: string;
   private readonly serverPassword: string;
+  /** 鉴权口令的动态来源（每次请求时求值；见 `V2DriverOptions.serverPasswordProvider`）。 */
+  private readonly serverPasswordProvider?: () => string | null | undefined;
   private readonly timeoutMs: number;
   private readonly logger: Logger;
   private readonly defaultDirectory: string;
@@ -510,6 +523,7 @@ export class V2Driver implements OpenCodeDriver {
   constructor(options: V2DriverOptions = {}) {
     this.baseUrlValue = (options.baseUrl ?? '').replace(/\/+$/, '');
     this.serverPassword = options.serverPassword ?? '';
+    this.serverPasswordProvider = options.serverPasswordProvider;
     this.timeoutMs = options.timeoutMs ?? V2_DEFAULT_REQUEST_TIMEOUT_MS;
     this.logger = options.logger ?? console;
     this.defaultDirectory = options.directory ?? '';
@@ -538,6 +552,20 @@ export class V2Driver implements OpenCodeDriver {
 
   /** serve Basic Auth 密码（订阅事件流时用；空=不鉴权）。 */
   get authPassword(): string {
+    return this.resolveServerPassword();
+  }
+
+  /**
+   * 实际用于鉴权的口令：动态来源优先（serve 的**实际**口令），空则回落静态值。
+   *
+   * 动态来源优先的原因：v2 自动生成的密码只有 serve 起来之后才知道（见
+   * `V2DriverOptions.serverPasswordProvider`）。
+   */
+  private resolveServerPassword(): string {
+    const dynamic = this.serverPasswordProvider?.();
+    if (typeof dynamic === 'string' && dynamic !== '') {
+      return dynamic;
+    }
     return this.serverPassword;
   }
 
@@ -1435,10 +1463,11 @@ export class V2Driver implements OpenCodeDriver {
 
   /** Basic Auth 头：password 为空 → 不鉴权；否则 `Basic base64(opencode:<password>)`。 */
   private buildAuthHeader(): string | undefined {
-    if (!this.serverPassword) {
+    const password = this.resolveServerPassword();
+    if (!password) {
       return undefined;
     }
-    return `Basic ${Buffer.from(`opencode:${this.serverPassword}`, 'utf8').toString('base64')}`;
+    return `Basic ${Buffer.from(`opencode:${password}`, 'utf8').toString('base64')}`;
   }
 
   /** 错误信息归一（超时/网络/HTTP 消息，Node 18+ fetch abort 抛 DOMException 非 Error 实例）。 */

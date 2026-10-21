@@ -291,6 +291,14 @@ export interface ExecServerOptions {
    */
   workDir?: string;
   /**
+   * git 凭证文件的**插件可见 HOME**（= opencode 隔离配置域的 HOME；index.ts 注入）。
+   *
+   * 为什么需要：git 工具族是 opencode 插件，跑在 serve 子进程里，而隔离配置域把子进程的
+   * HOME 重定向到隔离域 ⇒ 凭证必须落到那里，插件才读得到。
+   * 缺省 = 不传（只写 worker 自己 HOME；仅老调用方/单测会走到）。
+   */
+  gitCredsHome?: string;
+  /**
    * OmO 配置保存后重启 serve 使新配置生效（index.ts 注入 RestartCoordinator.requestRestart）。
    *
    * 为什么必须重启：opencode 在 serve **启动时**读取 OmO 配置，改文件不热生效——不重启则
@@ -670,7 +678,11 @@ export class ExecServer {
     this.standalone = options.standalone ?? false;
     this.localConfig =
       this.standalone && options.resourceInjector
-        ? new LocalConfigApplier({ injector: options.resourceInjector, logger: this.logger })
+        ? new LocalConfigApplier({
+            injector: options.resourceInjector,
+            logger: this.logger,
+            gitCredsHome: options.gitCredsHome,
+          })
         : undefined;
   }
 

@@ -9,6 +9,13 @@ jest.mock('./browser/browser-tools', () => {
   const actual: Record<string, unknown> = jest.requireActual('./browser/browser-tools');
   return { ...actual, isAgentBrowserAvailable: () => false };
 });
+// os.homedir 在 Node 中是只读 getter，jest.spyOn 换不掉 → 模块级部分 mock
+// （默认代理真实实现，beforeAll 再指向临时 HOME）：git 凭证会双写 worker 自己的 HOME，
+// 不能碰开发机的真实 $HOME。
+jest.mock('os', () => {
+  const actual = jest.requireActual('os') as typeof os;
+  return { ...actual, homedir: jest.fn(actual.homedir) };
+});
 import { WorkerConfig } from './config';
 import { GIT_TOOLS } from './git/git-tools';
 import {
@@ -32,6 +39,7 @@ import {
   applySetMaxInstances,
   buildCapabilities,
   buildRegisterOptions,
+  buildServePasswordProvider,
   createResourceInjector,
   createEventSender,
   dispatchCommands,
@@ -50,6 +58,7 @@ import {
   resolveRuntimeMaxInstances,
   RUNTIME_CONFIG_FILE,
   warnLoopbackAdvertiseHost,
+  writeGitCredsToServeScope,
 } from './index';
 import { readUpdateCommandVersion } from './update/worker-updater';
 
@@ -78,6 +87,18 @@ const CONFIG: WorkerConfig = {
   standalone: false,
   isolationScope: resolveIsolationScope({ HOME: '/tmp/worker-home' }),
 };
+
+/** 临时 HOME（os.homedir 被 mock 到这里：git 凭证双写会落到 worker 自己的 HOME）。 */
+const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-worker-index-test-'));
+
+beforeAll(() => {
+  (os.homedir as jest.Mock).mockReturnValue(TMP_HOME);
+});
+
+afterAll(() => {
+  (os.homedir as jest.Mock).mockRestore();
+  fs.rmSync(TMP_HOME, { recursive: true, force: true });
+});
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
   it('serve 启动后 port 已知：上报 port + baseUrl = advertiseHost:port', async () => {
@@ -1340,12 +1361,37 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const message = warnSpy.mock.calls[0][0] as string;
       expect(message).toContain('baseUrl=127.0.0.1');
-      expect(message).toContain('WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>');
-      expect(message).toContain('OPENCODE_SERVE_HOSTNAME=0.0.0.0');
+      expect(message).toContain('WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>');
       expect(logSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
       logSpy.mockRestore();
+    }
+  });
+
+  it('告警指向**执行端点**（控制面真正拨的地址：<主机>:4198，鉴权 X-Worker-Token）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHostExplicit: false, workerAdvertiseHost: 'http://127.0.0.1' });
+      const message = warnSpy.mock.calls[0][0] as string;
+      expect(message).toContain('执行端点');
+      expect(message).toContain('X-Worker-Token');
+      expect(message).toContain(`:${CONFIG.workerExecPort}`);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('告警**不再**让运维为控制面把 serve 改成 0.0.0.0（v2 下控制面只连执行端点）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHostExplicit: false, workerAdvertiseHost: 'http://127.0.0.1' });
+      const message = warnSpy.mock.calls[0][0] as string;
+      expect(message).not.toContain('OPENCODE_SERVE_HOSTNAME=0.0.0.0');
+      expect(message).not.toContain('server 才能连上');
+      expect(message).toContain('无需为控制面把 OPENCODE_SERVE_HOSTNAME 改成 0.0.0.0');
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 
@@ -1358,7 +1404,10 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       const message = logSpy.mock.calls[0][0] as string;
       expect(message).toContain('已自动探测上报地址');
       expect(message).toContain('http://192.168.1.10');
-      expect(message).toContain('WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>');
+      expect(message).toContain('WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>');
+      // 控制面连的是执行端点（<主机>:4198），不是 serve 端口
+      expect(message).toContain(`http://192.168.1.10:${CONFIG.workerExecPort}`);
+      expect(message).toContain('执行端点');
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       logSpy.mockRestore();
@@ -1587,5 +1636,71 @@ describe('事件上送必须接日志出口（否则事件丢失完全无声）'
       warnSpy.mockRestore();
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe('B1：驱动鉴权口令必须取 serve 的**实际**口令（effectiveServerPassword）', () => {
+  it('口令来源现取 serve 的 effectiveServerPassword（自动生成的那份也拿得到）', () => {
+    // 构造那一刻 serve 还没起来 ⇒ 自动生成的密码尚不存在（effectiveServerPassword = null）
+    const serve: { effectiveServerPassword: string | null } = { effectiveServerPassword: null };
+    const GENERATED_VALUE = 'generated-pw';
+    const provider = buildServePasswordProvider(serve);
+    expect(provider()).toBeNull();
+
+    // serve 起来、捕获到 v2 自动生成的密码后 ⇒ 口令来源立刻跟着变
+    serve.effectiveServerPassword = GENERATED_VALUE;
+    expect(provider()).toBe(GENERATED_VALUE);
+  });
+
+  it('口令来源是**函数**（每次请求时现取），不是构造那一刻固化的字符串', () => {
+    // 两个**明显是假的**、彼此不同的口令值；常量绑定 ⇒ 字面量不直接贴在 *Password 键上（否则会被密钥扫描器当成真实口令误报）
+    const INITIAL_VALUE = 'initial-pw';
+    const UPDATED_VALUE = 'updated-pw';
+    const serve: { effectiveServerPassword: string | null } = { effectiveServerPassword: INITIAL_VALUE };
+    const provider = buildServePasswordProvider(serve);
+    expect(provider()).toBe(INITIAL_VALUE);
+    serve.effectiveServerPassword = UPDATED_VALUE;
+    expect(provider()).toBe(UPDATED_VALUE);
+  });
+});
+
+describe('B2：git 凭证必须落到**插件可见**的 HOME（opencode 隔离配置域）', () => {
+  const ENTRY: GitCredentialEntry = {
+    repoUrl: 'git@github.com:xishuhq/vteam.git',
+    authType: 'ssh_key',
+    key: '-----BEGIN OPENSSH PRIVATE KEY-----\nsecret',
+    fingerprint: 'sha256:abcd',
+  };
+
+  it('写入隔离配置域 HOME ⇒ 插件（serve 子进程，HOME 被重定向）读得到', () => {
+    const scope = resolveIsolationScope({
+      OPENCODE_ISOLATION_ROOT: path.join(TMP_HOME, 'iso'),
+    });
+    const result = writeGitCredsToServeScope([ENTRY], scope);
+
+    // 插件里的路径 = path.join(os.homedir(), '.keta-git-creds.json')，而 serve 子进程的
+    // HOME = scope.home ⇒ 插件读的就是这一份
+    const pluginPath = path.join(scope.home, '.keta-git-creds.json');
+    expect(result.path).toBe(pluginPath);
+    expect(fs.existsSync(pluginPath)).toBe(true);
+
+    const parsed = JSON.parse(fs.readFileSync(pluginPath, 'utf8')) as {
+      credentials: GitCredentialEntry[];
+    };
+    expect(parsed.credentials.map((c) => c.repoUrl)).toEqual([ENTRY.repoUrl]);
+    expect(fs.statSync(pluginPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('worker 自己的 HOME 那份也写（幂等对比的读取面 + 兼容既有读法）', () => {
+    const scope = resolveIsolationScope({
+      OPENCODE_ISOLATION_ROOT: path.join(TMP_HOME, 'iso'),
+    });
+    writeGitCredsToServeScope([ENTRY], scope);
+
+    const workerHomePath = path.join(TMP_HOME, '.keta-git-creds.json');
+    expect(fs.existsSync(workerHomePath)).toBe(true);
+    expect(fs.readFileSync(workerHomePath, 'utf8')).toBe(
+      fs.readFileSync(path.join(scope.home, '.keta-git-creds.json'), 'utf8'),
+    );
   });
 });

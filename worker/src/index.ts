@@ -660,6 +660,9 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
     browserInfo = '未安装';
   }
   // v2 恒开鉴权：密码为空不再是"不设鉴权"，而是"serve 启动时 fail-fast"（T3）
+  // ⚠️ 这里读的是**配置**的密码（不是 serve 的 effectiveServerPassword）：本函数在 serve
+  // 启动**之前**跑（打印的是配置态），v2 自动生成的密码此刻还不存在——换成
+  // effectiveServerPassword 会把"开了逃生开关"误报成"未设密码 ⇒ fail-fast"。
   const serveAuth = config.serverPassword
     ? 'Basic Auth（已设 OPENCODE_SERVER_PASSWORD）'
     : config.allowGeneratedPassword
@@ -689,29 +692,37 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
  * - 探测成功（baseUrl 非 127.0.0.1）→ console.log 输出「已自动探测上报地址」引导提示，
  *   提示多网卡/VPN 场景可显式覆盖。
  * - 探测失败回退 http://127.0.0.1（仅本机可访问）→ console.warn 输出可达地址告警，
- *   worker 与 server 不在同一主机时 server 连不上 → worker 显示不可用。
+ *   控制面与 worker 不在同一主机时控制面连不上 → worker 显示不可用。
  * 已显式设置（即使值恰好为 http://127.0.0.1 的本地开发场景）不提示，避免误报。
  * 独立导出便于单测。
+ *
+ * ⚠️ **v2：控制面只连 worker 的执行端点，从不直连 opencode serve**
+ * （`capabilities.baseUrl` 只被取**主机**部分——见 server 侧 `resolveAdvertiseOrigin`）。
+ * ⇒ 提示必须指向「控制面能到达 `<主机>:<执行端点端口>`」（鉴权 X-Worker-Token），
+ * **不能**再让运维为控制面把 serve 改成监听非回环（serve 只在 worker 进程内部使用）。
  */
 export function warnLoopbackAdvertiseHost(config: WorkerConfig): void {
   if (config.workerAdvertiseHostExplicit) {
     return;
   }
+  const advertiseHost = config.workerAdvertiseHost.replace(/\/+$/, '');
   if (config.workerAdvertiseHost === 'http://127.0.0.1') {
     // 自动探测失败回退：保留原 127.0.0.1 可达性告警
     console.warn(
       `[worker] ⚠️  baseUrl=127.0.0.1 仅本机可访问（未设置 WORKER_ADVERTISE_HOST，自动探测本机 IP 失败）\n` +
-        `  若 worker 与 server 不在同一主机，server 将无法连接本 worker → worker 显示不可用。\n` +
-        `  请设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>（如 http://<worker 局域网 IP>），\n` +
-        `  并设置 OPENCODE_SERVE_HOSTNAME=0.0.0.0（serve 监听非回环，server 才能连上）。`,
+        `  若控制面与 worker 不在同一主机，控制面将无法连接本 worker → worker 显示不可用。\n` +
+        `  请设置 WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>（如 http://<worker 局域网 IP>）——\n` +
+        `  控制面据此访问 ${advertiseHost}:${config.workerExecPort}（执行端点，鉴权走 X-Worker-Token；端口随 capabilities.execPort 上报）。\n` +
+        `  无需为控制面把 OPENCODE_SERVE_HOSTNAME 改成 0.0.0.0：v2 下控制面只连执行端点，opencode serve 仅在 worker 进程内部使用（留在回环更安全）。`,
     );
     return;
   }
   // 自动探测成功：输出引导提示（探测到的地址即上报基址，端口随 serve 启动确定后拼接）
   console.log(
     `[worker] ✓ 已自动探测上报地址 ${config.workerAdvertiseHost}（未设置 WORKER_ADVERTISE_HOST）\n` +
-      `  最终上报 baseUrl = ${config.workerAdvertiseHost}:<serve 端口>（端口随 serve 启动确定）。\n` +
-      `  若 server 无法访问该地址（多网卡/VPN 等），请显式设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>。`,
+      `  最终上报 baseUrl = ${advertiseHost}:<serve 端口>（端口随 serve 启动确定；控制面只取其中的主机部分）。\n` +
+      `  控制面据此访问 ${advertiseHost}:${config.workerExecPort}（执行端点，鉴权走 X-Worker-Token）。\n` +
+      `  若控制面无法访问该地址（多网卡/VPN 等），请显式设置 WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>。`,
   );
 }
 
@@ -929,10 +940,11 @@ export async function resolveExecutableModels(
 
 /**
  * T6：注册能力声明（T10 细化并发上限/技能清单；当前单实例 + 已注入的 git 工具族）。
- * F2 C2：serve 实际监听端口必须随注册上报——随机端口（OPENCODE_SERVE_PORT=0）场景下
- * server 侧 WorkerClient.resolveBaseUrl 读 capabilities.port，缺失会回退死端口 4199。
+ * F2 C2：serve 实际监听端口随注册上报——随机端口（OPENCODE_SERVE_PORT=0）场景。
+ * ⚠️ v2：控制面**不**用它拨号（只连执行端点），上报它只为展示与排障。
  * D2：另上报 capabilities.baseUrl = ${advertiseHost}:${port}（容器内 compose 设
- * WORKER_ADVERTISE_HOST=http://worker，server resolveBaseUrl 优先读 baseUrl 直连）。
+ * WORKER_ADVERTISE_HOST=http://worker；⚠️ v2 起控制面**只取 baseUrl 的主机部分**
+ * （`resolveAdvertiseOrigin`：serve 端口不再被使用——控制面只连 worker 执行端点））。
  * T9：接入注入器清单——skills 上报注入器实际注入的 skill 名，tools 合并内置 git 工具族
  * 与注入的自定义工具（去重）。
  * C2：models 为 serve 真实模型 id 列表（resolveModels 结果）；undefined（探测失败）不携带。
@@ -978,7 +990,8 @@ export async function buildCapabilities(
 
 /**
  * T4c/T6：组装注册选项。T4c 重启后 serve 端口可能变化（随机端口），reRegister 用当前
- * serveServer.port 重新组装 → capabilities.baseUrl/port 随心跳后注册更新，server 才能连上新端口。
+ * serveServer.port 重新组装 → capabilities.baseUrl/port 随心跳后注册更新（控制面据此刷新
+ * 执行端点的主机；serve 端口本身不再被控制面使用）。
  * T9：injected 为最近一次注入报告（启动注入 + reload-config 重注入后更新），
  * 注册/reRegister 携带真实 skills/tools 清单，保证 worker 详情页数据非陈旧。
  * C2：models 透传 buildCapabilities（resolveModels 结果，失败 undefined 不带）；
@@ -1020,6 +1033,38 @@ export async function buildRegisterOptions(
     ...(config.defaultModelId ? { defaultModelId: config.defaultModelId } : {}),
     ...(config.mcpUrl ? { mcpUrl: config.mcpUrl } : {}),
   };
+}
+
+/**
+ * serve 鉴权口令的**唯一来源**（B1）。
+ *
+ * 为什么取 serve 的 `effectiveServerPassword` 而不是 env 里那份：v2 未配置
+ * OPENCODE_SERVER_PASSWORD 时 opencode 会**自动生成**随机密码并打到 stdout——worker
+ * 捕获它之后 env 里依然是空的。谁按 env 那份构造鉴权，谁的每个请求都是 401，而 worker
+ * 仍注册成功、看起来健康（最坏的静默失败形态）。
+ *
+ * 为什么是**函数**而不是字符串：自动生成的密码要等 serve 起来、捕获到之后才知道 ⇒
+ * 只能在**每次请求时**现取（与 `serveEndpoint()` / `mcpStatusProbe` 同一套做法）。
+ */
+export function buildServePasswordProvider(
+  serveServer: Pick<OpencodeServer, 'effectiveServerPassword'>,
+): () => string | null {
+  return () => serveServer.effectiveServerPassword;
+}
+
+/**
+ * git 凭证落盘（**插件可见的那份 + worker 自己 HOME 那份**）。
+ *
+ * 为什么必须落到隔离配置域的 HOME：git 工具族是 opencode **插件**，跑在 serve 子进程里，
+ * 而 v2 隔离配置域把子进程的 HOME 重定向到隔离域 ⇒ 插件里的 `os.homedir()` 解析到的是
+ * 隔离域，不是 worker 自己的 HOME ⇒ 只写 worker HOME ⇒ 平台下发的凭证插件永远读不到
+ * （私有仓库 clone/push 失败）。
+ */
+export function writeGitCredsToServeScope(
+  entries: GitCredentialEntry[],
+  isolationScope: OpencodeIsolationScope,
+): GitCredsResult {
+  return writeGitCredsFile(entries, isolationScope.home);
 }
 
 export function main(env: NodeJS.ProcessEnv = process.env): void {
@@ -1091,7 +1136,13 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   });
   const driver = createOpencodeDriver({
     mode: driverMode,
-    serverPassword: config.serverPassword,
+    // B1：口令取 serve 的**实际**鉴权口令（配置密码或 v2 自动生成的密码），且**每次请求
+    // 时现取**——v2 自动生成的密码要等 serve 起来、从 stdout 捕获后才知道；把它固化在
+    // 构造那一刻 = 无口令 ⇒ 驱动每个请求都 401，而 worker 仍注册成功、看起来健康。
+    // 绝不从环境变量另读一份（会与 serve 的真实鉴权漂移 ⇒ 全线 401）——与
+    // serveEndpoint() / mcpStatusProbe 同一套做法。
+    serverPassword: serveServer.effectiveServerPassword ?? undefined,
+    serverPasswordProvider: buildServePasswordProvider(serveServer),
     systemHandoff,
   });
 
@@ -1233,7 +1284,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   };
 
   // T4c：重启后重新注册——serve 随机端口重启后可能变化，用当前 port 重新组装注册选项；
-  // 失败不退出（serve 已在新端口运行，server 连旧端口报 degraded，再次 reload-config 可修复）。
+  // 失败不退出（serve 已在新端口运行；控制面只连执行端点，端口不随 serve 变化 ⇒ 仍可达，
+  // 再次 reload-config 可把新的能力清单补注册上去）。
   const reRegister = async (): Promise<void> => {
     // 重注册快路径：模型目录没变，跳过稳定性探测（省 ~9s）——但上次注册降级
     // （未上报 models）或 C6 配置刚变更（opencode provider 段可能变了模型集）时
@@ -1243,7 +1295,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     const result = await registerCurrent(!needsFullProbe);
     if (result === null) {
       console.warn(
-        '[worker] 重启后重新注册失败：serve 已在新端口运行，server 可能连不上（可再次触发 reload-config 修复）',
+        '[worker] 重启后重新注册失败：serve 已在新端口运行（控制面只连执行端点，端口不随 serve 变化 ⇒ 仍可达）；' +
+          '但控制面侧的能力清单（模型目录/serve 端口）暂时是旧的，可再次触发 reload-config 修复',
       );
       return;
     }
@@ -1491,7 +1544,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
                 return null;
               }
             },
-            writeContent: (entries) => writeGitCredsFile(entries),
+            writeContent: (entries) => writeGitCredsToServeScope(entries, config.isolationScope),
             log: (message) => console.log(message),
             warn: (message) => console.warn(message),
           });
@@ -1571,6 +1624,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // GET /agents 未显式传 directory 时的回落值：与 serve cwd（config.workDir）一致，
     // 保证列出的 opencode agent 集合与实际执行时发现的集合相同
     workDir: config.workDir,
+    // git 凭证落到**插件可见**的 HOME（隔离配置域）——serve 子进程的 HOME 被重定向到那里，
+    // 插件里的 os.homedir() 解析到的也是那里（只写 worker 自己 HOME ⇒ 插件读不到）。
+    gitCredsHome: config.isolationScope.home,
     // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors(会话 id)，
     // 命中模型 API 错误（Rate limit/Free usage 等不透传 message.info.error；已按会话过滤避免
     // stale 泄漏）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）

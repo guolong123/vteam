@@ -40,6 +40,13 @@ export interface OpencodeDriverOptions {
   baseUrl?: string;
   /** 被驱动端鉴权口令（空 = 不鉴权） */
   serverPassword?: string;
+  /**
+   * 鉴权口令的**动态来源**（优先于 `serverPassword`；每次请求时求值）。
+   *
+   * 为什么需要：v2 未配置口令时 opencode 会**自动生成**并打到 stdout，worker 要等
+   * serve 起来捕获到它之后才知道真实口令 ⇒ 不能在建驱动那一刻固化。
+   */
+  serverPasswordProvider?: () => string | null | undefined;
   /** 单次请求超时 ms */
   timeoutMs?: number;
   /** 日志输出 */

@@ -39,6 +39,19 @@ export const MIN_OPENCODE_MAJOR = 2;
 export const REQUIRED_OPENCODE_CLI_SPEC = '@opencode/cli@2.0.32';
 
 /**
+ * 版本不达标时的**可操作指引**（两种部署形态都给）。
+ *
+ * 为什么必须两种都给：worker 既跑在**容器**（compose / chart）也跑在**物理机**
+ * （systemd 裸装）——"重建 worker 镜像"对物理机运维是**无意义**的（根本没有镜像可重建），
+ * 而物理机的正确手段是重装 npm 包，且**必须换包名**：v1 的 `opencode-ai` 冻结在 1.19.3，
+ * 永远到不了 v2；v2 的包名是 `@opencode/cli`。
+ */
+export const OPENCODE_UPGRADE_HINT =
+  `容器部署：重建 worker 镜像并设置 --build-arg OPENCODE_CLI_SPEC=${REQUIRED_OPENCODE_CLI_SPEC}；` +
+  `物理机部署：npm i -g ${REQUIRED_OPENCODE_CLI_SPEC}` +
+  '（v1 的 npm 包 opencode-ai 已冻结在 1.19.3，永远到不了 v2；v2 换了包名 @opencode/cli）';
+
+/**
  * 宽松版本号正则：兼容三种形态
  * - v2 形：`opencode v2.0.28`
  * - v1 形：`opencode 1.19.0`
@@ -138,15 +151,17 @@ export function assertOpencodeVersionSupported(
     emitGateWarn(
       options,
       `[opencode-version] 无法判定 opencode 版本（原始输出: "${info.raw}"），继续启动；` +
-        '控制面按版本串精确过滤兜底，请确认镜像内 opencode 是否为 ' +
-        REQUIRED_OPENCODE_CLI_SPEC,
+        '控制面按版本串精确过滤兜底，请确认 opencode 是否为 ' +
+        REQUIRED_OPENCODE_CLI_SPEC +
+        '（容器看镜像内版本，物理机看 npm 全局安装版本）；' +
+        OPENCODE_UPGRADE_HINT,
     );
     return;
   }
   if (info.major < MIN_OPENCODE_MAJOR) {
     throw new Error(
       `[opencode-version] 需要 opencode >= ${MIN_OPENCODE_MAJOR}，当前 ${info.raw || 'unknown'}；` +
-        `请重建 worker 镜像并设置 --build-arg OPENCODE_CLI_SPEC=${REQUIRED_OPENCODE_CLI_SPEC}`,
+        OPENCODE_UPGRADE_HINT,
     );
   }
 }

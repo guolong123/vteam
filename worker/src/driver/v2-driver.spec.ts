@@ -1426,6 +1426,80 @@ describe('V2Driver 鉴权 / 错误归一', () => {
   });
 });
 
+describe('V2Driver 鉴权口令的动态来源（B1：口令必须取 serve 的**实际**口令）', () => {
+  /** 只回 /api/model 的假 serve，顺带记录 Authorization 头。 */
+  async function startAuthCapturingServer(): Promise<{
+    baseUrl: string;
+    authHeaders: (string | undefined)[];
+    close: () => Promise<void>;
+  }> {
+    const authHeaders: (string | undefined)[] = [];
+    const server = http.createServer((req, res) => {
+      authHeaders.push(req.headers.authorization);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    return {
+      baseUrl: `http://127.0.0.1:${port}`,
+      authHeaders,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  const basic = (password: string): string =>
+    `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
+
+  it('动态来源给出的是 v2 自动生成的那份口令 → Authorization 头用它（构造时还没有口令也不影响）', async () => {
+    const server = await startAuthCapturingServer();
+    // 构造那一刻 serve 还没起来 ⇒ 自动生成的密码尚不存在（动态来源此刻为空）
+    let current: string | null = null;
+    const driver = new V2Driver({
+      baseUrl: server.baseUrl,
+      serverPasswordProvider: () => current,
+    });
+    expect(driver.authPassword).toBe('');
+
+    current = 'generated-pw';
+    await driver.listModels();
+    expect(driver.authPassword).toBe('generated-pw');
+    expect(server.authHeaders[0]).toBe(basic('generated-pw'));
+    await server.close();
+  });
+
+  it('口令每次请求时现取（serve 重启换口令 ⇒ 下一个请求用新口令，不吃旧值）', async () => {
+    const server = await startAuthCapturingServer();
+    let current = 'pw-1';
+    const driver = new V2Driver({
+      baseUrl: server.baseUrl,
+      serverPasswordProvider: () => current,
+    });
+    await driver.listModels();
+    current = 'pw-2';
+    await driver.listModels();
+    expect(server.authHeaders).toEqual([basic('pw-1'), basic('pw-2')]);
+    await server.close();
+  });
+
+  it('动态来源为空 ⇒ 回落静态 serverPassword；两者都空 ⇒ 完全不带 Authorization 头', async () => {
+    const server = await startAuthCapturingServer();
+    const STATIC_VALUE = 'static-pw';
+    const withFallback = new V2Driver({
+      baseUrl: server.baseUrl,
+      serverPassword: STATIC_VALUE,
+      serverPasswordProvider: () => null,
+    });
+    await withFallback.listModels();
+    expect(server.authHeaders[0]).toBe(basic(STATIC_VALUE));
+
+    const withoutAny = new V2Driver({ baseUrl: server.baseUrl });
+    await withoutAny.listModels();
+    expect(server.authHeaders[1]).toBeUndefined();
+    await server.close();
+  });
+});
+
 describe('V2Driver 凭据不外泄（provider settings.apiKey 不得进入返回值 / 日志 / 错误）', () => {
   /**
    * ⚠️ opencode v2 的 `GET /api/model` 与 `GET /api/provider` **明文**返回
