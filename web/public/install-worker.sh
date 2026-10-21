@@ -4,43 +4,67 @@
 #
 # 用法（控制面安装向导页生成的命令）：
 #   curl -fsSL <控制面地址>/install-worker.sh | bash -s -- \
-#     --server http://<控制面地址> --worker-id my-worker-1 --concurrency 8 --opencode v1.18.15
+#     --server http://<控制面地址> --worker-id my-worker-1 --concurrency 8 --opencode 2.0.32
 #
-# 流程：自动安装前置（git / node >= 18 / opencode CLI，缺失即自动装）→ 下载 worker 发布包
-#   → npm install → 生成 .env（SERVER_URL / WORKER_ID）→ 校验 X_WORKER_TOKEN → 启动
+# 流程：自动安装前置（git / node >= 18 / opencode CLI v2，缺失即自动装）→ 下载 worker 发布包
+#   → npm install → 生成 .env（SERVER_URL / WORKER_ID / X_WORKER_TOKEN /
+#   OPENCODE_SERVER_PASSWORD）→ 校验 X_WORKER_TOKEN → 启动
 #   （复用仓库内 worker/scripts/start.sh 语义：启动即注册，随后每 10s 心跳）。
 #   worker 源码以发布包（pack-worker.sh 产物）从控制面下载，不做 git clone——
 #   目标机器无需任何仓库 SSH 凭证，复制命令即可完整安装。
+#
+# ⚠️ opencode v2 契约（本脚本只支持 v2；v1 时代的假设已全部作废）：
+#   ① CLI 包名：v1 的 npm 包 `opencode-ai` 已冻结在 1.19.3（永远到不了 v2）→ v2 换包名
+#      `@opencode/cli`（锁版 2.0.32，与 worker/Dockerfile 的 ARG OPENCODE_CLI_SPEC 一致）。
+#   ② 恒开鉴权：v2 的 serve **总是**要求 Basic Auth（用户名固定 opencode），密码来自
+#      `OPENCODE_SERVER_PASSWORD`——该变量在 v2 下**必填**；为空时 opencode 自动生成随机密码
+#      并打到 stdout，worker 不解析它 → 启动即 fail-fast。故本脚本保证该变量一定写进 .env
+#      （= systemd 的 EnvironmentFile）；逃生开关 `OPENCODE_ALLOW_GENERATED_PASSWORD=1`
+#      **本脚本不会启用**（worker 侧默认关闭，属不推荐路径）。
+#   ③ 拓扑：控制面**不再**直连 opencode serve，而是调用 worker 自己的执行端点
+#      （POST /sessions、POST /sessions/:id/prompt、GET /sessions/:id/messages、
+#       POST /sessions/:id/abort、GET /models，以及 /execute、/file、/agents、/todos），
+#      端口取注册上报的 capabilities.execPort（缺省 4198 = WORKER_EXEC_PORT），
+#      地址取 WORKER_ADVERTISE_HOST 的**主机部分**（serve 端口不再被使用）。
+#      ⇒ 控制面要能访问的是 **<advertise-host>:4198**；serve 端口绑回环（127.0.0.1）完全没问题。
 #
 # 参数：
 #   --server <url>      控制面地址（缺省 http://localhost:3000）
 #   --worker-id <id>    worker 唯一 id（缺省 w_<hostname>）
 #   --concurrency <n>   并发上限（预留：worker 侧当前硬编码 maxInstances=1，见 worker/src/index.ts）
-#   --opencode <ver>    opencode CLI 版本（如 v1.18.15）；CLI 缺失时按此版本 npm 安装（缺省 latest），已安装则仅提示校验
+#   --opencode <ver>    opencode CLI 版本（缺省 2.0.32 = npm 包 @opencode/cli@2.0.32，与 worker 镜像锁版一致）：
+#                       可传裸版本号（2.0.32 / v2.0.32）或完整 npm spec（@opencode/cli@2.0.32）；
+#                       CLI 缺失时按此规格 npm 全局安装，已安装则仅提示校验（不自动切换）。
+#                       ⚠️ v2 worker 的启动期版本闸门要求 opencode 主版本 ≥ 2：传 1.x / v1 包
+#                       （opencode-ai）会被自动改用缺省的 @opencode/cli@2.0.32（v1 线已冻结，永不到 v2）。
 #   --token <token>     X_WORKER_TOKEN（注册鉴权，需与 server 侧约定一致；缺省引导手动填写）
 #   --src-url <url>     worker 发布包下载地址（缺省 ${SERVER_URL%/}/worker-src.tar.gz）
 #   --dir <path>        安装目录（缺省 $HOME/vteam-worker）
 #   --mcp-url <url>     内置 vteam MCP 地址覆盖（WORKER_MCP_URL，可选）：集群外 worker 必须设置
 #                       为外部可达地址（如 http://<控制面外部地址>/api/v1/platform-mcp），否则内置
-#                       MCP 不可达（server 下发的默认地址为集群内服务名）；集群内 worker 可省略。
+#                       MCP 不可达（server 下发的默认地址是集群内服务名 http://server:3000 /
+#                       http://vteam-server:3000，集群外机器无法解析）；集群内 worker 可省略。
 #                       未提供时仅提示，不强制写入（保证集群内 worker 无感知）。
-#   --advertise-host <url>   worker 对 server 公布的 serve 基址（WORKER_ADVERTISE_HOST，可选）：
+#   --advertise-host <url>   worker 对 server 公布的基址（WORKER_ADVERTISE_HOST，可选）：
 #                       外部/跨机 worker 建议显式设置 server 可达的 worker 地址（只填 IP 即可，
 #                       脚本自动补 http:// 前缀，如 192.168.1.10 → http://192.168.1.10）；
 #                       未提供时 worker 会自动探测本机非回环 IPv4 上报（探测失败回退
 #                       http://127.0.0.1 仅本机可访问）；集群内/本机 worker 可省略。
+#                       ⚠️ v2 拓扑：控制面只取该基址的**主机部分**，执行端点端口取注册上报的
+#                       capabilities.execPort（缺省 4198）——真正的可达性要求是
+#                       「控制面能访问 <advertise-host>:4198」，与 serve 端口无关。
 #   --serve-hostname <host>  opencode serve 监听地址（OPENCODE_SERVE_HOSTNAME；缺省 0.0.0.0）。
-#                       本脚本面向「独立机器安装」场景，server 必须能直连 worker 的 serve
-#                       端口，故默认监听所有网卡；worker 代码内默认 127.0.0.1 是为集群内
-#                       部署（容器另设 0.0.0.0），独立安装若沿用回环将导致
-#                       「worker 在线但发消息失败：fetch failed」——server 连的是上报的
-#                       可达地址，而 serve 只绑回环则该地址无监听。
-#                       ⚠️ 0.0.0.0 会把 serve 暴露到本机所有网卡；serve 带 Basic Auth
-#                       （OPENCODE_SERVER_PASSWORD），但仍建议在防火墙/安全组限制来源 IP。
-#                       确需仅本机访问可显式传 --serve-hostname 127.0.0.1。
+#                       ⚠️ v2 拓扑：**控制面不再连 opencode serve**（它只调 worker 的执行端点
+#                       <advertise-host>:4198），serve 只是 worker 自己的后端 ⇒ 绑回环
+#                       （127.0.0.1）完全可以，且更安全（不必把 serve 暴露到本机所有网卡）。
+#                       缺省仍写 0.0.0.0 仅为兼容既有安装（不改变已生成 .env 的暴露面）；
+#                       想更收敛可显式传 --serve-hostname 127.0.0.1。
+#                       serve 带 Basic Auth（OPENCODE_SERVER_PASSWORD），仍建议在防火墙/安全组
+#                       限制来源 IP。
 #   --serve-port <port>  opencode serve 端口（OPENCODE_SERVE_PORT，可选）：缺省安装时自动
 #                       从 4199 起探测首个空闲端口并固定写入 .env（重启不变）；显式传入则
 #                       以传入值为准；传 0 表示恢复随机端口（每次启动由 OS 分配）。
+#                       （v2 下该端口只对 worker 自身有意义——控制面走执行端点 4198。）
 #   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /data/vteam-worker）：opencode serve
 #                       工作目录 + 资源注入落点（opencode.json / 技能 / 工具）。外部 worker 若
 #                       需固定工作目录/挂载持久化盘可设置；缺省不写入（worker 用内置默认）。
@@ -62,8 +86,9 @@ WORKER_SRC_URL=""
 INSTALL_DIR="${HOME}/vteam-worker"
 WORKER_MCP_URL=""
 WORKER_ADVERTISE_HOST=""
-# 缺省 0.0.0.0：独立安装的 worker 必须被 server 直连，serve 只绑回环会导致
-# 「worker 在线但发消息失败：fetch failed」（server 连上报地址，而该地址无监听）。
+# 缺省 0.0.0.0（保持既有安装不变，不改动已生成 .env 的暴露面）：v2 拓扑下**控制面不再连
+# serve**（它只调 worker 的执行端点 <advertise-host>:4198），serve 只是 worker 自己的后端
+# ⇒ 绑回环 127.0.0.1 完全可行且更安全；保留 0.0.0.0 仅为不改变既有部署行为。
 WORKER_SERVE_HOSTNAME="0.0.0.0"
 WORK_DIR=""
 NO_SERVICE=""
@@ -143,18 +168,99 @@ ensure_node() {
   echo "[install-worker] Node.js 已安装：$(node --version)（npm $(npm --version)）"
 }
 
+# ------------------------------ opencode CLI 规格解析（v2 包名 @opencode/cli） ------------------------------
+# 缺省锁版 2.0.32：与 worker/Dockerfile 的 ARG OPENCODE_CLI_SPEC 默认值保持一致
+# （控制面调度器按 opencode 版本串精确过滤 worker，版本必须可复现、可知）。
+# v1 的 npm 包 `opencode-ai` 冻结在 1.19.3（永不到 v2），v2 换包名 `@opencode/cli`。
+OPENCODE_CLI_DEFAULT_SPEC="@opencode/cli@2.0.32"
+OPENCODE_CLI_SPEC=""
+OPENCODE_CLI_VERSION=""
+
+# 把 --opencode 的取值规范化成 npm spec（结果写入 OPENCODE_CLI_SPEC / OPENCODE_CLI_VERSION）：
+#   2.0.32 / v2.0.32        → @opencode/cli@2.0.32（裸版本号 → v2 包）
+#   @opencode/cli@2.0.32    → 原样
+#   @opencode/cli           → @opencode/cli@2.0.32（补缺省版本）
+#   opencode-ai@1.19.3     → v1 包（已冻结）→ 改用缺省 v2 规格
+#   1.x / v1.18.15          → v1 版本 → 改用缺省 v2 规格（v2 worker 版本闸门要求 major ≥ 2）
+resolve_opencode_spec() {
+  local raw="${1:-}"
+  local pkg="" ver="" major=""
+  if [ -z "$raw" ]; then
+    OPENCODE_CLI_SPEC="${OPENCODE_CLI_DEFAULT_SPEC}"
+    OPENCODE_CLI_VERSION="${OPENCODE_CLI_DEFAULT_SPEC##*@}"
+    return 0
+  fi
+  case "$raw" in
+    *@*)
+      if [ "${raw#@}" != "$raw" ]; then
+        # 作用域包：@scope/name[@version]
+        local rest="${raw#@}"
+        case "$rest" in
+          *@*) pkg="@${rest%@*}"; ver="${rest##*@}" ;;
+          *) pkg="@${rest}"; ver="" ;;
+        esac
+      else
+        pkg="${raw%@*}"; ver="${raw##*@}"
+      fi
+      ;;
+    *) ver="$raw" ;;
+  esac
+
+  if [ -n "$pkg" ]; then
+    if [ "$pkg" != "@opencode/cli" ]; then
+      echo "[install-worker] ⚠️  请求的 opencode 包 ${pkg} 不是 v2 包（v1 的 opencode-ai 已冻结在 1.19.3，永不到 v2）" >&2
+      echo "[install-worker] ⚠️  v2 worker 只支持 @opencode/cli → 改用缺省 ${OPENCODE_CLI_DEFAULT_SPEC}" >&2
+      OPENCODE_CLI_SPEC="${OPENCODE_CLI_DEFAULT_SPEC}"
+      OPENCODE_CLI_VERSION="${OPENCODE_CLI_DEFAULT_SPEC##*@}"
+      return 0
+    fi
+    if [ -z "$ver" ]; then
+      ver="${OPENCODE_CLI_DEFAULT_SPEC##*@}"
+    fi
+  else
+    ver="${ver#v}"
+    major="${ver%%.*}"
+    if ! printf '%s' "$major" | grep -qE '^[0-9]+$'; then
+      echo "[install-worker] ERROR: 无法识别的 opencode 版本：${raw}（应形如 2.0.32 或 @opencode/cli@2.0.32）" >&2
+      exit 1
+    fi
+    if [ "$major" -lt 2 ]; then
+      echo "[install-worker] ⚠️  请求的 opencode 版本 ${raw} 是 v1（npm 包 opencode-ai 已冻结在 1.19.3，永不到 v2）" >&2
+      echo "[install-worker] ⚠️  v2 worker 的版本闸门要求 opencode 主版本 ≥ 2 → 改用 ${OPENCODE_CLI_DEFAULT_SPEC}" >&2
+      ver="${OPENCODE_CLI_DEFAULT_SPEC##*@}"
+    fi
+  fi
+
+  OPENCODE_CLI_SPEC="@opencode/cli@${ver}"
+  OPENCODE_CLI_VERSION="${ver}"
+}
+
 ensure_opencode() {
+  resolve_opencode_spec "${OPENCODE_VERSION}"
   if ! command -v opencode >/dev/null 2>&1; then
-    local pkg="opencode-ai"
-    [ -n "${OPENCODE_VERSION}" ] && pkg="opencode-ai@${OPENCODE_VERSION#v}"
-    echo "[install-worker] 未找到 opencode CLI，执行 npm install -g ${pkg} ..."
-    if ! npm install -g "$pkg"; then
+    echo "[install-worker] 未找到 opencode CLI，执行 npm install -g ${OPENCODE_CLI_SPEC} ..."
+    if ! npm install -g "${OPENCODE_CLI_SPEC}"; then
       echo "[install-worker] ERROR: opencode 自动安装失败；如为权限问题请加 sudo 重试" >&2
       exit 1
     fi
   fi
-  if [ -n "${OPENCODE_VERSION}" ] && [ "$(opencode --version 2>/dev/null || true)" != "${OPENCODE_VERSION#v}" ]; then
-    echo "[install-worker] 提示：opencode 当前 $(opencode --version 2>/dev/null || echo 未知)，与要求 ${OPENCODE_VERSION} 不一致（不自动切换，避免破坏已有环境）"
+  # 版本校验：v2 的 `opencode --version` 形如 "opencode v2.0.32" / "2.0.32" → 归一化成 semver 再比
+  local raw_version actual_version actual_major
+  raw_version="$(opencode --version 2>/dev/null || true)"
+  actual_version="$(printf '%s' "$raw_version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+  actual_major=""
+  if [ -n "$actual_version" ]; then
+    actual_major="${actual_version%%.*}"
+  fi
+  if [[ "$actual_major" =~ ^[0-9]+$ ]] && [ "$actual_major" -lt 2 ]; then
+    echo "[install-worker] ERROR: 机器上已安装的 opencode 是 v1（${actual_version}），v2 worker 不支持 v1" >&2
+    echo "  v1 的 npm 包 opencode-ai 已冻结在 1.19.3，永远到不了 v2——worker 启动即被版本闸门判死" >&2
+    echo "  请先升级到 v2 再重跑本脚本：npm install -g ${OPENCODE_CLI_SPEC}" >&2
+    echo "  （旧的 v1 可一并卸载：npm uninstall -g opencode-ai）" >&2
+    exit 1
+  fi
+  if [ -n "$actual_version" ] && [ "$actual_version" != "${OPENCODE_CLI_VERSION}" ]; then
+    echo "[install-worker] 提示：opencode 当前 ${actual_version}，与要求 ${OPENCODE_CLI_VERSION}（${OPENCODE_CLI_SPEC}）不一致（不自动切换，避免破坏已有环境）"
   fi
 }
 
@@ -193,6 +299,32 @@ update_env() {
   echo "${key}=${value}" >> .env
 }
 
+# 读取 .env 中某个键的值（去掉可能的首尾引号；键不存在返回空串）。
+# set -euo pipefail 下 grep 无匹配返回非零，需 || true 兜底。
+read_env_value() {
+  local key="$1" raw
+  raw="$(grep "^${key}=" .env | tail -n 1 | cut -d= -f2- || true)"
+  case "$raw" in
+    \"*\") raw="${raw#\"}"; raw="${raw%\"}" ;;
+    \'*\') raw="${raw#\'}"; raw="${raw%\'}" ;;
+  esac
+  printf '%s' "$raw"
+}
+
+# 写密钥类变量：值含空格/引号/$ 等 shell 特殊字符时加双引号并转义
+# （.env 会被 worker/scripts/start.sh 用 `source .env` 加载，不能是裸的非法 shell 片段）。
+update_env_secret() {
+  local key="$1" value="$2"
+  sed -i "/^${key}=/d" .env
+  if printf '%s' "$value" | grep -qE '^[A-Za-z0-9._~+/=@-]+$'; then
+    echo "${key}=${value}" >> .env
+  else
+    local escaped
+    escaped="$(printf '%s' "$value" | sed -e 's/[\\"$`]/\\&/g')"
+    echo "${key}=\"${escaped}\"" >> .env
+  fi
+}
+
 update_env SERVER_URL "${SERVER_URL}"
 if [ -n "${WORKER_TOKEN}" ]; then
   update_env X_WORKER_TOKEN "${WORKER_TOKEN}"
@@ -202,7 +334,8 @@ if [ -n "${WORKER_MCP_URL}" ]; then
   update_env WORKER_MCP_URL "${WORKER_MCP_URL}"
 fi
 if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
-  # 只填 IP（如 192.168.1.10）时自动补协议前缀（WORKER_ADVERTISE_HOST 须为完整 URL，server 直连）
+  # 只填 IP（如 192.168.1.10）时自动补协议前缀（WORKER_ADVERTISE_HOST 须为完整 URL；
+  # v2 下控制面只取其中的主机部分，执行端点端口另由 capabilities.execPort 给出）
   case "${WORKER_ADVERTISE_HOST}" in
     *://*) ;;
     *) WORKER_ADVERTISE_HOST="http://${WORKER_ADVERTISE_HOST}" ;;
@@ -210,10 +343,10 @@ if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
   update_env WORKER_ADVERTISE_HOST "${WORKER_ADVERTISE_HOST}"
 fi
 if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
-  # 缺省即 0.0.0.0（独立安装必须被 server 直连）；显式传 127.0.0.1 可退回仅本机。
+  # 缺省即 0.0.0.0（保持既有安装不变）；显式传 127.0.0.1 可退回仅本机（v2 下同样可用）。
   update_env OPENCODE_SERVE_HOSTNAME "${WORKER_SERVE_HOSTNAME}"
   if [ "${WORKER_SERVE_HOSTNAME}" != "127.0.0.1" ]; then
-    echo "[install-worker] serve 监听 ${WORKER_SERVE_HOSTNAME}（所有网卡；serve 带 Basic Auth，建议防火墙限制来源 IP）"
+    echo "[install-worker] serve 监听 ${WORKER_SERVE_HOSTNAME}（所有网卡；v2 下控制面不连 serve——它只调执行端点 <advertise-host>:4198；serve 带 Basic Auth，仍建议限制来源 IP）"
   fi
 fi
 if [ -n "${WORK_DIR}" ]; then
@@ -247,10 +380,74 @@ const net = require("net");
   fi
 fi
 resolved_serve_port="$(grep '^OPENCODE_SERVE_PORT=' .env | tail -n 1 | cut -d= -f2- || true)"
-echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}，OPENCODE_SERVE_PORT=${resolved_serve_port:-0}）"
+
+# ------------------------------ 执行端点端口（v2 拓扑：控制面唯一要访问的端口） ------------------------------
+# v2 下控制面只调 worker 的执行端点（/sessions、/execute、/file、/agents、/todos…），
+# 端口随注册上报为 capabilities.execPort（worker 侧读 WORKER_EXEC_PORT，缺省 4198）。
+# .env 里已有该键则保留（运维可能改过），否则显式写入缺省值——便于运维一眼看到该放行哪个端口。
+if ! grep -q '^WORKER_EXEC_PORT=' .env; then
+  update_env WORKER_EXEC_PORT "4198"
+fi
+resolved_exec_port="$(read_env_value WORKER_EXEC_PORT)"
+resolved_exec_port="${resolved_exec_port:-4198}"
+# 端口占用预检：被占时 worker 的执行端点绑不上（注册时不上报 capabilities.execPort），
+# 控制面将无法派发任务 → 提前提醒换端口（改 .env 的 WORKER_EXEC_PORT 即可）。
+exec_port_state="$(node -e '
+const net = require("net");
+const port = Number(process.argv[1]);
+const s = net.createServer();
+s.once("error", () => { process.stdout.write("busy"); });
+s.listen(port, "0.0.0.0", () => s.close(() => process.stdout.write("free")));
+' "${resolved_exec_port}" 2>/dev/null || true)"
+if [ "${exec_port_state}" = "busy" ]; then
+  echo "[install-worker] ⚠️  执行端点端口 ${resolved_exec_port} 已被占用：若占用者不是本 worker 自身的进程，则执行端点将绑不上（注册时不上报 capabilities.execPort，控制面无法派发任务）" >&2
+  echo "  请确认 ${INSTALL_DIR}/worker/.env 里的 WORKER_EXEC_PORT 为空闲端口（控制面需能访问 <advertise-host>:<端口>）" >&2
+fi
+
+# ------------------------------ opencode serve 密码（v2 恒开鉴权，必填） ------------------------------
+# v2 的 serve **恒开鉴权**（Basic Auth，用户名固定 opencode）：OPENCODE_SERVER_PASSWORD 为空时，
+# opencode 自动生成随机密码并打到 stdout，worker 不解析它 → 启动即 fail-fast
+# （"[opencode-server] v2 恒开鉴权：请设置环境变量 OPENCODE_SERVER_PASSWORD"），
+# systemd 下表现为崩溃重启循环。故安装期必须保证该变量落在 .env（= systemd 的 EnvironmentFile）。
+#
+# 取值优先级（**明文不入 stdout/日志**：脚本由 web 静态服务分发，stdout 可能进 shell 历史 / CI 日志）：
+#   ① .env 已有非空值 → 沿用（不覆盖；重复安装保持同一个密码）
+#   ② 环境变量 OPENCODE_SERVER_PASSWORD 已设置 → 写入 .env（systemd 只认 EnvironmentFile）
+#   ③ 都没有 → 现场随机生成（openssl rand -hex 32；无 openssl 时退回 node crypto.randomBytes）
+serve_password="$(read_env_value OPENCODE_SERVER_PASSWORD)"
+if [ -n "$serve_password" ]; then
+  if [ -n "${OPENCODE_SERVER_PASSWORD:-}" ] && [ "${OPENCODE_SERVER_PASSWORD}" != "$serve_password" ]; then
+    echo "[install-worker] 提示：环境中的 OPENCODE_SERVER_PASSWORD 与 .env 已有值不同，沿用 .env 已有值（不覆盖）"
+  fi
+  echo "[install-worker] OPENCODE_SERVER_PASSWORD 已存在于 .env（沿用；读取：grep OPENCODE_SERVER_PASSWORD ${INSTALL_DIR}/worker/.env）"
+elif [ -n "${OPENCODE_SERVER_PASSWORD:-}" ]; then
+  serve_password="${OPENCODE_SERVER_PASSWORD}"
+  update_env_secret OPENCODE_SERVER_PASSWORD "$serve_password"
+  echo "[install-worker] 已将环境中的 OPENCODE_SERVER_PASSWORD 写入 ${INSTALL_DIR}/worker/.env（读取：grep OPENCODE_SERVER_PASSWORD ${INSTALL_DIR}/worker/.env）"
+else
+  serve_password="$(openssl rand -hex 32 2>/dev/null || true)"
+  if [ -z "$serve_password" ]; then
+    serve_password="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("hex"))' 2>/dev/null || true)"
+  fi
+  if [ -z "$serve_password" ]; then
+    echo "[install-worker] ERROR: 无法生成 OPENCODE_SERVER_PASSWORD（openssl 与 node 均不可用）" >&2
+    exit 1
+  fi
+  update_env_secret OPENCODE_SERVER_PASSWORD "$serve_password"
+  echo "[install-worker] 已生成随机 OPENCODE_SERVER_PASSWORD 并写入 ${INSTALL_DIR}/worker/.env（读取：grep OPENCODE_SERVER_PASSWORD ${INSTALL_DIR}/worker/.env）"
+fi
+unset serve_password
+
+# .env 含注册 token 与 serve 密码 → 收紧权限（systemd 以同用户读取，不影响启动）
+if ! chmod 600 .env; then
+  echo "[install-worker] ⚠️  未能把 .env 权限收紧到 600，请手动执行：chmod 600 ${INSTALL_DIR}/worker/.env" >&2
+fi
+
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}，OPENCODE_SERVE_PORT=${resolved_serve_port:-0}，OPENCODE_SERVER_PASSWORD 已注入）"
 if [ "${resolved_serve_port:-0}" != "0" ]; then
   echo "[install-worker] opencode serve 端口已固定为 ${resolved_serve_port}（重启不变；改端口可重跑并加 --serve-port <port>）"
 fi
+echo "[install-worker] v2 拓扑提醒：控制面只调 worker 的执行端点（<advertise-host>:${resolved_exec_port}），不连 opencode serve——请确保控制面到该端口可达（防火墙/安全组放行）"
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then
@@ -280,12 +477,12 @@ fi
 # ------------------------------ 可达地址提示 ------------------------------
 # 外部/跨机 worker：未设置 WORKER_ADVERTISE_HOST 时 worker 会自动探测本机非回环 IPv4 上报
 # （探测失败才回退 http://127.0.0.1）。未提供 --advertise-host 且 .env 亦无
-# WORKER_ADVERTISE_HOST 时提醒：若 server 无法访问探测到的地址，可显式设置；不强制
+# WORKER_ADVERTISE_HOST 时提醒：若控制面无法访问探测到的地址，可显式设置；不强制
 # （本机/集群内 worker 无感知）。
 if [ -z "${WORKER_ADVERTISE_HOST}" ] && ! grep -q '^WORKER_ADVERTISE_HOST=' .env; then
   echo "[install-worker] 提示：未配置 WORKER_ADVERTISE_HOST"
   echo "  worker 会自动探测本机内网 IP 上报（探测失败才回退 http://127.0.0.1 仅本机可访问）。"
-  echo "  若 server 无法访问探测到的地址（多网卡/VPN 等），请显式设置 --advertise-host <只填 IP>"
+  echo "  若控制面无法访问探测到的地址（多网卡/VPN 等），请显式设置 --advertise-host <只填 IP>"
   echo "  —— 可重跑本命令携带 --advertise-host <IP>，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh"
 fi
 
