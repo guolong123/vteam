@@ -33,8 +33,8 @@
  *   空值不拼接，集群内/本机 worker 无需配置；详见 worker install-worker.sh。
  *
  * - docker 路径的镜像引用可编辑（③ 的「worker 镜像」字段，缺省 guojongg/vteam-worker:latest）：
- *   内网机器常拉不到 Docker Hub；且镜像必须是含 opencode v2 适配的构建——当前 latest 仍指向
- *   v1.0.4（v1 worker + v1 opencode CLI），与 v2 控制面不兼容。
+ *   内网机器常拉不到 Docker Hub；且镜像必须是含 opencode v2 适配的构建——latest 自 v1.1.0 起已带
+ *   v2 适配，v1.0.x 各 tag 仍是 v1 worker（v1 worker + v1 opencode CLI），与 v2 控制面不兼容。
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
@@ -304,8 +304,8 @@ export default function WorkerInstallPage() {
      ketaops/opencode-worker 在 Docker Hub 上不存在，docker run 直接拉取失败）。
      内网机器常拉不到 Docker Hub → 需改填内网仓库（docker-hosted.ketaops.cc /
      docker-release.ketaops.cc / chart 缺省 docker.ketaops.cc），故做成可编辑字段。
-     ⚠️ 镜像必须含 opencode v2 适配：当前 latest 仍指向 v1.0.4（v1 worker + v1 opencode CLI），
-     与 v2 控制面不兼容（见 dockerSteps 的告警）。 */
+     ⚠️ 镜像必须含 opencode v2 适配：latest 自 v1.1.0 起已带 v2 适配；v1.0.x 各 tag 仍是 v1 worker
+     （v1 worker + v1 opencode CLI），与 v2 控制面不兼容（见 dockerSteps 的告警）⇒ 勿钉 v1.0.x tag。 */
   const [workerImage, setWorkerImage] = useState("guojongg/vteam-worker:latest");
 
   /* 网络可达性（可选）：外部/跨机 worker 专用，空值不拼接命令——集群内/本机无需配置 */
@@ -379,7 +379,7 @@ export default function WorkerInstallPage() {
 
   const dockerSteps = [
     "在目标机器执行 docker run 命令，拉取「worker 镜像」字段指定的镜像（缺省 guojongg/vteam-worker:latest；内网机器改填 docker-hosted.ketaops.cc/ketaops/vteam-worker、docker-release.ketaops.cc/ketaops/vteam-worker 等内网仓库；镜像内 opencode 版本由构建期 OPENCODE_CLI_SPEC 锁定为 @opencode/cli@2.0.32，运行期改不了）",
-    "⚠️ 镜像必须含 opencode v2 适配：当前 latest 仍指向 v1.0.4（v1 worker + v1 opencode CLI），与 v2 控制面不兼容（控制面调 worker 执行端点返回 404，消息不跑但界面显示在线）——待首个带 v2 适配的发布替换 latest 前，请钉一个含 v2 适配的 tag，勿用 opencode CLI 为 v1 的镜像",
+    "⚠️ 镜像必须含 opencode v2 适配：latest 自 v1.1.0 起已带 v2 适配（v1.1.0 是首个带 v2 适配的发布）；v1.0.x 各 tag 仍是 v1 worker（v1 worker + v1 opencode CLI），与 v2 控制面不兼容（控制面调 worker 执行端点返回 404，消息不跑但界面显示在线）⇒ 勿钉 v1.0.x tag，请钉 ≥ v1.1.0",
     "容器启动后读取环境变量注入的 SERVER_URL / WORKER_ID / 能力声明（WORKER_MAX_INSTANCES → 上报 capabilities.maxInstances）并注册（X_WORKER_TOKEN 注册鉴权必填；OPENCODE_SERVER_PASSWORD 为 v2 serve 恒开鉴权必填项，命令中已用 openssl rand 现场生成；外部/跨机 worker 需在上方填写「上报 IP」）",
     "SERVER_URL 必须是目标机器能访问到的控制面地址：跨机 worker 填控制面的集群可达地址（如 http://<控制面可达 IP>:13000），别留 127.0.0.1——那指向 worker 机器自身，页面缺省值正是本机 origin",
     "等待首次心跳：宿主机端口 4198 是 worker 的执行端点（控制面按注册上报的 <上报主机>:4198 拨，X-Worker-Token 鉴权）；opencode serve 只在容器内使用，无需映射到宿主机",
@@ -681,7 +681,7 @@ export default function WorkerInstallPage() {
               {method === "docker" && (
                 <FieldRow
                   label="worker 镜像"
-                  hint="Docker Hub 缺省 guojongg/vteam-worker · 内网可换内网仓库 · 须为含 opencode v2 适配的构建"
+                  hint="Docker Hub 缺省 guojongg/vteam-worker · 内网可换内网仓库 · 须为含 opencode v2 适配的构建（≥ v1.1.0）"
                 >
                   <input
                     data-testid="worker-image-input"
