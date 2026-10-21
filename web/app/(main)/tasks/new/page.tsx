@@ -172,7 +172,7 @@ function TeamSelectPanel({
             >
               <option value="">请选择团队</option>
               {teams.map((t) => (
-                <option key={t.id} value={t.id} data-testid="team-option" data-team-id={t.id}>{t.name}（{t.members.length}人{t.currentTaskId ? " · 忙碌中" : " · 空闲"}）</option>
+                <option key={t.id} value={t.id} data-testid="team-option" data-team-id={t.id}>{t.name}（{t.members.length}人{(t.activeTaskCount ?? 0) > 0 ? " · 忙碌中" : " · 空闲"}）</option>
               ))}
             </select>
             {teamError && <div data-testid="team-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626" }}>{teamError}</div>}

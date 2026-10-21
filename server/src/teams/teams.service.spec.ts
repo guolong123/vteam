@@ -110,6 +110,7 @@ describe('TeamsService', () => {
         aggregate: jest.fn(),
       },
       task: { groupBy: jest.fn().mockResolvedValue([]) },
+      session: { groupBy: jest.fn().mockResolvedValue([]) },
       teamUserMember: {
         create: jest.fn(),
         findFirst: jest.fn(),
@@ -625,6 +626,117 @@ describe('TeamsService', () => {
       // We can verify findAll returns pageSize 100
       const res = await service.findAll({ page: 1, pageSize: 999 } as any);
       expect(res.pageSize).toBe(100);
+    });
+
+    describe('lastActivityAt（团队群聊最近活动时间）', () => {
+      /** 模拟 prisma.session.groupBy({ by:['teamId'], _max:{lastActivityAt:true} }) 的真实语义。 */
+      const mockSessionMax = (
+        rows: Array<{
+          teamId: string | null;
+          taskId: string | null;
+          lastActivityAt: Date | null;
+        }>,
+      ) => {
+        prisma.session.groupBy.mockImplementation(async (args: any) => {
+          const ids: string[] = args.where.teamId.in;
+          const groups = new Map<string, Date | null>();
+          for (const r of rows) {
+            if (r.teamId == null || !ids.includes(r.teamId)) continue;
+            if (args.where.taskId === null && r.taskId !== null) continue;
+            const cur = groups.get(r.teamId) ?? null;
+            if (r.lastActivityAt && (cur == null || r.lastActivityAt > cur)) {
+              groups.set(r.teamId, r.lastActivityAt);
+            }
+          }
+          return [...groups.entries()].map(([teamId, lastActivityAt]) => ({
+            teamId,
+            _max: { lastActivityAt },
+          }));
+        });
+      };
+
+      const listWith = async () => {
+        prisma.$transaction.mockResolvedValue([
+          2,
+          [
+            teamRow({ id: 'tm_0000000001' }),
+            teamRow({ id: 'tm_0000000002', name: 'other' }),
+          ],
+        ]);
+        return (await service.findAll({ page: 1, pageSize: 20 } as any)) as any;
+      };
+
+      it('有会话活动的团队给 ISO 字符串，无活动的给 null', async () => {
+        mockSessionMax([
+          {
+            teamId: 'tm_0000000001',
+            taskId: null,
+            lastActivityAt: new Date('2026-09-05T10:00:00.000Z'),
+          },
+          { teamId: 'tm_0000000002', taskId: null, lastActivityAt: null },
+        ]);
+        const result = await listWith();
+        const busy = result.items.find((t: any) => t.id === 'tm_0000000001');
+        const idle = result.items.find((t: any) => t.id === 'tm_0000000002');
+        expect(busy.lastActivityAt).toBe('2026-09-05T10:00:00.000Z');
+        expect(idle.lastActivityAt).toBeNull();
+      });
+
+      it('同一团队多行会话取最近的活动时间（MAX）', async () => {
+        mockSessionMax([
+          {
+            teamId: 'tm_0000000001',
+            taskId: null,
+            lastActivityAt: new Date('2026-09-01T00:00:00.000Z'),
+          },
+          {
+            teamId: 'tm_0000000001',
+            taskId: null,
+            lastActivityAt: new Date('2026-09-07T12:30:00.000Z'),
+          },
+          {
+            teamId: 'tm_0000000001',
+            taskId: null,
+            lastActivityAt: new Date('2026-09-03T00:00:00.000Z'),
+          },
+        ]);
+        const result = await listWith();
+        const t = result.items.find((x: any) => x.id === 'tm_0000000001');
+        expect(t.lastActivityAt).toBe('2026-09-07T12:30:00.000Z');
+      });
+
+      it('只统计 team-mode 会话（taskId 为空），任务执行会话不计入', async () => {
+        mockSessionMax([
+          {
+            teamId: 'tm_0000000001',
+            taskId: 't_0000000001',
+            lastActivityAt: new Date('2026-09-09T00:00:00.000Z'),
+          },
+        ]);
+        const result = await listWith();
+        const t = result.items.find((x: any) => x.id === 'tm_0000000001');
+        expect(t.lastActivityAt).toBeNull();
+        expect(prisma.session.groupBy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            by: ['teamId'],
+            _max: { lastActivityAt: true },
+            where: expect.objectContaining({ taskId: null }),
+          }),
+        );
+      });
+
+      it('批量取回（单次 groupBy，无按团队逐个查的 N+1）且不动接口排序/分页', async () => {
+        mockSessionMax([]);
+        await listWith();
+        expect(prisma.session.groupBy).toHaveBeenCalledTimes(1);
+        expect(prisma.team.findMany.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+            skip: 0,
+          }),
+        );
+      });
     });
   });
 

@@ -277,8 +277,16 @@ export class TeamsService implements OnModuleInit {
       }),
     ]);
     const activeCounts = await this.activeTaskCounts(rows);
+    // 团队群聊最近活动时间（单次 groupBy 批量取回，与 activeTaskCounts 同形 ⇒ 无 N+1）。
+    const lastActivity = await this.lastActivityByTeam(rows);
     return {
-      items: rows.map((t) => this.toTeamDto(t, activeCounts.get(t.id) ?? 0)),
+      items: rows.map((t) =>
+        this.toTeamDto(
+          t,
+          activeCounts.get(t.id) ?? 0,
+          lastActivity.get(t.id) ?? null,
+        ),
+      ),
       total,
       page,
       pageSize,
@@ -303,6 +311,38 @@ export class TeamsService implements OnModuleInit {
         .filter((g): g is typeof g & { teamId: string } => g.teamId != null)
         .map((g) => [g.teamId, g._count._all]),
     );
+  }
+
+  /**
+   * 团队最近活动时间（团队群聊会话 last_activity_at 的最大值）。
+   * =============================================
+   * 口径：**只取 team-mode 会话**（teamId 非空 + taskId 为空）——即「按团队复用、切任务不切群」
+   * 的常驻群聊会话，每团队成员一行（uk_sessions_team_member = teamId|teamMemberId）。
+   * ⇒ 口径选择：需求问的是「这个团队的对话最近被聊过没有」⇒ 取常驻群聊会话的最大活动时间；
+   *   而不是「该团队所有会话」——后者会把单次任务执行会话的活动混进对话活跃度，
+   *   让「在跑任务但没人说话」的团队挤到最前 ⇒ 排序答非所问。
+   * ⇒ 无会话 / lastActivityAt 为 NULL ⇒ map 里没有该团队 ⇒ DTO 输出 null（前端排最后）。
+   * 形状对齐 activeTaskCounts：一次 groupBy 批量取回，无 N+1。
+   */
+  private async lastActivityByTeam(
+    teams: { id: string }[],
+  ): Promise<Map<string, Date>> {
+    if (teams.length === 0) return new Map();
+    const grouped = await this.prisma.session.groupBy({
+      by: ['teamId'],
+      where: {
+        teamId: { in: teams.map((t) => t.id) },
+        taskId: null,
+      },
+      _max: { lastActivityAt: true },
+    });
+    const result = new Map<string, Date>();
+    for (const g of grouped) {
+      const at = g._max.lastActivityAt;
+      if (g.teamId == null || at == null) continue;
+      result.set(g.teamId, at);
+    }
+    return result;
   }
 
   async findOne(id: string) {
@@ -1395,7 +1435,11 @@ export class TeamsService implements OnModuleInit {
       : `/data/vteam-worker/${base}`;
   }
 
-  private toTeamDto(team: any, activeTaskCount = 0) {
+  private toTeamDto(
+    team: any,
+    activeTaskCount = 0,
+    lastActivityAt: Date | null = null,
+  ) {
     const members = (team.members ?? []).map((m: any) => ({
       id: m.id,
       teamId: m.teamId,
@@ -1445,6 +1489,8 @@ export class TeamsService implements OnModuleInit {
       preferredWorkerId: team.preferredWorkerId ?? null,
       maxConcurrentTasks: team.maxConcurrentTasks ?? null,
       activeTaskCount,
+      // 团队群聊最近活动时间（ISO 字符串；null = 从未活动）。团队切换器按它排序。
+      lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
       version: team.version,
       createdBy: team.createdBy,
       createdAt: team.createdAt,

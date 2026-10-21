@@ -42,6 +42,11 @@ export interface TeamDto {
   currentTaskStatus?: string | null;
   /** 当前活跃任务数（in_progress + blocked，并行调度顶栏计数用）。 */
   activeTaskCount?: number;
+  /**
+   * 团队常驻群聊的最后活动时间（ISO 字符串；null = 从未活动）。
+   * 团队切换器按它倒序排列（最近有对话的团队排最前，从未活动的排最后）。
+   */
+  lastActivityAt?: string | null;
   /** 团队并发上限（null = 不限；start 时后端校验 TEAM_PARALLEL_LIMIT）。 */
   maxConcurrentTasks?: number | null;
   mainAgentMemberId: string | null;
