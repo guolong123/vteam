@@ -1,5 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { WSClient, generateReqId } from '@wecom/aibot-node-sdk';
+import {
+  WSClient,
+  generateReqId,
+  type QuoteContent,
+} from '@wecom/aibot-node-sdk';
 import {
   InboundCommand,
   MessageAdapter,
@@ -13,6 +17,18 @@ import {
 import { FileStorageService } from '../../uploads/uploads.service';
 
 export const WECOM_OPERATOR_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * 引用内容里的**视频**槽位。
+ *
+ * 官方文档（智能机器人 / 接收消息，document/path/100719）的引用 struct 里
+ * `msgtype` ∈ text / image / mixed / voice / file / **video**，并带 `video: { url }` 槽位；
+ * 但一方的 Node SDK 的 `QuoteContent` 类型**漏收录 video**（以官方文档为准）。
+ * 故本地补一个窄类型，仅用于读取该槽位——不把整个 QuoteContent cast 成 any。
+ */
+type QuoteContentWithVideo = QuoteContent & {
+  video?: { url?: string; aeskey?: string };
+};
 
 /**
  * 渠道连接状态（由 bindListeners 已绑定的事件维护，见 connStates）。
@@ -612,6 +628,169 @@ export class WecomAibotAdapter extends MessageAdapter {
     return `企微用户-${userId.slice(-4)}`;
   }
 
+  /**
+   * 抽取引用（quote）内容中的文本。
+   *
+   * 企微长连接协议里引用内容挂在消息体**顶层** `quote` 字段（SDK `QuoteContent`，
+   * 见 @wecom/aibot-node-sdk dist/types/message.d.ts）：
+   * - `msgtype='text'`  → `quote.text.content`
+   * - `msgtype='mixed'` → `quote.mixed.msg_item[].text.content`（逐项拼接）
+   * - `msgtype='voice'` → `quote.voice.content`（企微已转写成文本，本质就是文本）
+   *
+   * 引用文件（`msgtype='file'`）只有 url+aeskey，本函数不产出文本（文件引用暂不支持）。
+   */
+  private static extractQuoteText(quote: QuoteContent | undefined): string {
+    if (!quote) return '';
+    const parts: string[] = [];
+    const push = (raw: unknown): void => {
+      const t = typeof raw === 'string' ? raw.trim() : '';
+      if (t) parts.push(t);
+    };
+    push(quote.text?.content);
+    if (quote.msgtype === 'mixed') {
+      for (const item of quote.mixed?.msg_item ?? []) {
+        if (item.msgtype === 'text') push(item.text?.content);
+      }
+    }
+    // 语音引用由企微转写成文本，一并计入（无需额外下载，成本为零）
+    push(quote.voice?.content);
+    return parts.join('\n').trim();
+  }
+
+  /**
+   * 抽取引用（quote）内容中的图片（url + 可选 aeskey）。
+   *
+   * - `msgtype='image'` → `quote.image`
+   * - `msgtype='mixed'` → `quote.mixed.msg_item[].image`（逐项）
+   *
+   * 图片下载链接只有 5 分钟有效期，aeskey 也可能缺失，故下载侧另有失败隔离。
+   */
+  private static extractQuoteImages(
+    quote: QuoteContent | undefined,
+  ): Array<{ url: string; aeskey?: string }> {
+    if (!quote) return [];
+    const out: Array<{ url: string; aeskey?: string }> = [];
+    if (quote.msgtype === 'image' && quote.image?.url) {
+      out.push({ url: quote.image.url, aeskey: quote.image.aeskey });
+    }
+    if (quote.msgtype === 'mixed') {
+      for (const item of quote.mixed?.msg_item ?? []) {
+        if (item.msgtype === 'image' && item.image?.url) {
+          out.push({ url: item.image.url, aeskey: item.image.aeskey });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 组装「引用上下文 + 用户自述」的正文。
+   *
+   * 生产缺陷：用户**引用**一条消息并 @机器人时，引用文本挂在 `quote` 字段而非
+   * `text.content`，改造前正文为空 ⇒ 直接回「消息内容为空，已忽略。」并丢弃，
+   * agent 根本收不到消息。三种情形：
+   * ① 无引用 → 只用自述文本（与改造前逐字一致）
+   * ② 有引用、自述为空 → 引用文本本身就是正文
+   * ③ 有引用且自述非空 → 引用文本作为上下文在前，自述在后，中间空行分隔
+   *    （`[引用]` 标记沿用本适配器既有的方括号约定，如 `'[图片]'`）
+   */
+  private static assembleQuotedText(
+    ownText: string,
+    quotedText: string,
+  ): string {
+    const own = (ownText ?? '').trim();
+    const quoted = (quotedText ?? '').trim();
+    if (!quoted) return own;
+    if (!own) return quoted;
+    return `[引用]\n${quoted}\n\n${own}`;
+  }
+
+  /**
+   * 落原始入站报文（截断 4000 字符）——与 `template_card_event` 的排障日志同规格。
+   *
+   * 只打 body 不打 headers：frame headers 可能带 Authorization 等凭据。
+   * 引用消息这类「字段在但正文为空」的缺陷，只有看原始包才能定位。
+   */
+  private dumpInboundBody(
+    channelId: string,
+    event: string,
+    body: unknown,
+  ): void {
+    try {
+      const rawJson = JSON.stringify(body ?? {})?.slice(0, 4000);
+      this.logger.log(
+        `wecom ${event} received channel=${channelId} body=${rawJson}`,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `wecom ${event} raw body dump failed channel=${channelId}: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * 引用**文件/视频**暂不支持落盘附件：记告警并继续按文本处理。
+   *
+   * 官方文档的引用 struct 的 `msgtype` ∈ text/image/mixed/voice/file/**video**，
+   * 但 SDK 的 `QuoteContent` 类型未收录 video（见 QuoteContentWithVideo），
+   * 故此处按实际 msgtype 分支处理，日志里带上具体 msgtype 以便区分
+   * 「引用了视频」与「引用了文件」。两者都**不下载、不附加**，正文照常送达 agent。
+   */
+  private logUnsupportedQuoteMedia(
+    channelId: string,
+    msgid: string,
+    quote: QuoteContent | undefined,
+  ): void {
+    if (!quote) return;
+    // SDK 的 msgtype 联合类型不含 video，故按字符串读，避免「比较无交集」的类型报错
+    const msgtype = String(quote.msgtype ?? '');
+    if (msgtype === 'file') {
+      if (!quote.file?.url) return;
+    } else if (msgtype === 'video') {
+      const video = (quote as QuoteContentWithVideo).video;
+      if (!video?.url) return;
+    } else {
+      return;
+    }
+    this.logger.warn(
+      `wecom quote ${msgtype} unsupported (仅处理文本/图片引用) channel=${channelId} msgid=${msgid}`,
+    );
+  }
+
+  /**
+   * 下载并落盘**引用**图片（失败隔离：单张失败只丢图、不丢文本）。
+   *
+   * 与「消息自身图片」（handleInboundMixed）的差别：自身图片下载失败会让整条
+   * 消息失败；而引用图片的 url 只有 5 分钟有效期、aeskey 也可能缺失——失败时
+   * 只记告警并继续，保证引用文本仍能送达 agent。
+   */
+  private async downloadQuoteImages(
+    client: WSClient,
+    channelId: string,
+    images: Array<{ url: string; aeskey?: string }>,
+  ): Promise<Array<{ url: string; name: string; ext: string }>> {
+    const stored: Array<{ url: string; name: string; ext: string }> = [];
+    for (const img of images) {
+      try {
+        const { buffer, filename } = await client.downloadFile(
+          img.url,
+          img.aeskey,
+        );
+        const ext = WecomAibotAdapter.detectImageExt(buffer, filename);
+        const file = await FileStorageService.saveBufferFile(
+          buffer,
+          filename ?? `wecom-image.${ext}`,
+        );
+        stored.push({ url: file.url, name: file.name, ext: file.ext });
+      } catch (e) {
+        this.logger.warn(
+          `wecom quote image download failed channel=${channelId} url=${img.url}: ${(e as Error).message}`,
+        );
+      }
+    }
+    return stored;
+  }
+
   private bindListeners(
     channelId: string,
     client: WSClient,
@@ -627,6 +806,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         body?: {
           msgid: string;
           text?: { content: string };
+          quote?: QuoteContent;
           from?: { userid: string; name?: string };
           chatid?: string;
           chattype?: string;
@@ -634,15 +814,37 @@ export class WecomAibotAdapter extends MessageAdapter {
       };
       const body = f.body;
       if (!body) return;
+      this.dumpInboundBody(channelId, 'message.text', body);
+      this.logUnsupportedQuoteMedia(channelId, body.msgid, body.quote);
       const rawContent = body.text?.content ?? '';
-      const text = rawContent.replace(/^@[^ ]+\s*/, '').trim();
+      // @提及剥离：官方文档只给了 "@RobotA hello robot" / "@机器人 这是今日的测试情况"
+      // 这类示例，**并未规定分隔符**——可能是半角空格、全角空格（U+3000），也可能
+      // 压根没有分隔符。故用 `\S`（非空白）切分提及 token：JS 的 \S/\s 把 U+3000
+      // 也算空白，而 `[^ ]` 只认 U+0020——旧写法遇到全角空格会把「@机器人　正文」
+      // 整条吞掉，正文变空 ⇒ 误回「消息内容为空，已忽略。」
+      //
+      // 已知局限（无法从文档消除，只能显式记录）：机器人**显示名本身含空格**时，
+      // 通用正则无法可靠剥离，残余的「Bot」之类片段会漏进正文。厂商第一方插件
+      // （WecomTeam/wecom-openclaw-plugin）干脆**不剥离** @提及；我们因平台既有
+      // 行为一直在剥离而保留，残余风险已知并在此留痕。
+      const ownText = rawContent.replace(/^@\S+\s*/, '').trim();
+      // 引用内容（引用消息 + @机器人）：正文取引用文本，引用图片另行下载后作为附件附上
+      const quotedText = WecomAibotAdapter.extractQuoteText(body.quote);
+      const quotedImages = WecomAibotAdapter.extractQuoteImages(body.quote);
+      const text = WecomAibotAdapter.assembleQuotedText(ownText, quotedText);
       const fromUserId = body.from?.userid;
       const fromUserName = WecomAibotAdapter.resolveSenderName(
         body.from?.name,
         fromUserId,
       );
       const chattype = body.chattype ?? 'single';
-      if (!text) {
+      // 引用图片：失败隔离（只丢图不丢文本）
+      const quoteFiles = await this.downloadQuoteImages(
+        client,
+        channelId,
+        quotedImages,
+      );
+      if (!text && quoteFiles.length === 0) {
         try {
           await client.replyStream(
             f as { headers: { req_id: string } },
@@ -663,17 +865,41 @@ export class WecomAibotAdapter extends MessageAdapter {
         } catch {}
         return;
       }
-      const cmd: InboundCommand = {
-        kind: 'post_message',
-        text,
-        senderExternalId: fromUserId,
-        senderName: fromUserName,
-        dedupKey: body.msgid,
-        chattype,
-        chatid: body.chatid,
-        wecomUserId: fromUserId,
-        wecomUserName: fromUserName,
-      };
+      const cmds: InboundCommand[] = [];
+      if (quoteFiles.length === 0) {
+        cmds.push({
+          kind: 'post_message',
+          text,
+          senderExternalId: fromUserId,
+          senderName: fromUserName,
+          dedupKey: body.msgid,
+          chattype,
+          chatid: body.chatid,
+          wecomUserId: fromUserId,
+          wecomUserName: fromUserName,
+        });
+      } else {
+        // 多图约定（与图文混排路径同形）：一张图一条命令，首条带正文，其余为 '[图片]'
+        for (let i = 0; i < quoteFiles.length; i++) {
+          cmds.push({
+            kind: 'post_message',
+            text: i === 0 && text ? text : '[图片]',
+            senderExternalId: fromUserId,
+            senderName: fromUserName,
+            dedupKey:
+              quoteFiles.length > 1
+                ? `${body.msgid}_${i}`
+                : (body.msgid ?? undefined),
+            chattype,
+            chatid: body.chatid,
+            wecomUserId: fromUserId,
+            wecomUserName: fromUserName,
+            attachmentUrl: quoteFiles[i].url,
+            attachmentName: quoteFiles[i].name,
+            attachmentType: quoteFiles[i].ext,
+          } as InboundCommand);
+        }
+      }
       const streamId = generateReqId('stream');
       const spinnerFrames = WecomAibotAdapter.SPINNER_FRAMES;
       let spinnerIndex = 0;
@@ -786,7 +1012,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         | { results: Array<{ ok: boolean; internalMessageId?: string }> }
         | undefined;
       try {
-        result = await ctx.submitInbound(channelId, [cmd]);
+        result = await ctx.submitInbound(channelId, cmds);
       } catch (e) {
         this.logger.error(
           `wecom submitInbound failed channel=${channelId}: ${(e as Error).message}`,
@@ -2168,6 +2394,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         from?: { userid: string; name?: string };
         chatid?: string;
         chattype?: string;
+        quote?: QuoteContent;
         mixed?: {
           msg_item?: Array<{
             msgtype: string;
@@ -2178,7 +2405,10 @@ export class WecomAibotAdapter extends MessageAdapter {
       };
     };
     const body = f.body;
-    if (!body?.mixed?.msg_item?.length) return;
+    if (!body) return;
+    this.dumpInboundBody(channelId, 'message.mixed', body);
+    this.logUnsupportedQuoteMedia(channelId, body.msgid, body.quote);
+    if (!body.mixed?.msg_item?.length && !body.quote) return;
     const fromUserId = body.from?.userid;
     const fromUserName = WecomAibotAdapter.resolveSenderName(
       body.from?.name,
@@ -2187,42 +2417,56 @@ export class WecomAibotAdapter extends MessageAdapter {
     const chattype = body.chattype ?? 'single';
     const texts: string[] = [];
     const images: Array<{ url: string; aeskey?: string }> = [];
-    for (const item of body.mixed.msg_item) {
+    for (const item of body.mixed?.msg_item ?? []) {
       if (item.msgtype === 'text' && item.text?.content) {
         texts.push(item.text.content);
       } else if (item.msgtype === 'image' && item.image?.url) {
         images.push(item.image);
       }
     }
-    const text = texts.join('\n').trim();
+    // 引用内容（引用消息 + @机器人）：正文取引用文本，引用图片排在自身图片之后
+    const ownText = texts.join('\n').trim();
+    const quotedText = WecomAibotAdapter.extractQuoteText(body.quote);
+    const quoteImages = WecomAibotAdapter.extractQuoteImages(body.quote);
+    const text = WecomAibotAdapter.assembleQuotedText(ownText, quotedText);
     try {
       const cmds: InboundCommand[] = [];
-      for (let i = 0; i < images.length; i++) {
+      // ① 消息自身图片：沿用原语义（任一张下载失败即整条消息失败并回错误提示）
+      const ownFiles: Array<{ url: string; name: string; ext: string }> = [];
+      for (const img of images) {
         const { buffer, filename } = await client.downloadFile(
-          images[i].url,
-          images[i].aeskey,
+          img.url,
+          img.aeskey,
         );
         const ext = WecomAibotAdapter.detectImageExt(buffer, filename);
         const stored = await FileStorageService.saveBufferFile(
           buffer,
           filename ?? `wecom-image.${ext}`,
         );
+        ownFiles.push({ url: stored.url, name: stored.name, ext: stored.ext });
+      }
+      // ② 引用图片：失败隔离（只丢图不丢文本）
+      const quoteFiles = await this.downloadQuoteImages(
+        client,
+        channelId,
+        quoteImages,
+      );
+      const files = [...ownFiles, ...quoteFiles];
+      for (let i = 0; i < files.length; i++) {
         cmds.push({
           kind: 'post_message',
           text: i === 0 && text ? text : '[图片]',
           senderExternalId: fromUserId,
           senderName: fromUserName,
           dedupKey:
-            images.length > 1
-              ? `${body.msgid}_${i}`
-              : (body.msgid ?? undefined),
+            files.length > 1 ? `${body.msgid}_${i}` : (body.msgid ?? undefined),
           chattype,
           chatid: body.chatid,
           wecomUserId: fromUserId,
           wecomUserName: fromUserName,
-          attachmentUrl: stored.url,
-          attachmentName: stored.name,
-          attachmentType: stored.ext,
+          attachmentUrl: files[i].url,
+          attachmentName: files[i].name,
+          attachmentType: files[i].ext,
         } as InboundCommand);
       }
       if (cmds.length === 0) {

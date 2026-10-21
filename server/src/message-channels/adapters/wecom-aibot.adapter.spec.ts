@@ -19,6 +19,7 @@ jest.mock('@wecom/aibot-node-sdk', () => ({
       updateTemplateCard: jest.fn().mockResolvedValue({}),
       sendMessage: jest.fn().mockResolvedValue({}),
       sendCard: jest.fn().mockResolvedValue({}),
+      downloadFile: jest.fn(),
     };
     mockClients.push(c);
     return c;
@@ -27,6 +28,10 @@ jest.mock('@wecom/aibot-node-sdk', () => ({
 }));
 
 import { WecomAibotAdapter } from './wecom-aibot.adapter';
+import { Logger } from '@nestjs/common';
+import * as fs from 'fs';
+import { basename, join } from 'path';
+import { resolveUploadDir } from '../../uploads/uploads.constants';
 
 /**
  * 最小 MessageHost 替身。
@@ -1405,6 +1410,360 @@ describe('WecomAibotAdapter (message-channels)', () => {
         msgtype: 'markdown',
         markdown: { content: '兜底文案' },
       });
+    });
+  });
+
+  /**
+   * 引用消息（quote）入站。
+   *
+   * 生产事故：群里用户**引用**一条需求清单并 @机器人，机器人回「消息内容为空，已忽略。」
+   * 且消息在到达 agent 之前就被丢弃——因为引用文本挂在消息体顶层 `quote` 字段，
+   * 不在 `text.content` 里，改造前的正文组装只看 `text.content`。
+   *
+   * 三种正文形态：① 无引用 → 只用自身文本；② 有引用、自身为空 → 引用即正文；
+   * ③ 有引用且自身非空 → 引用作上下文在前、自身在后（`[引用]` 标记分隔）。
+   */
+  describe('引用消息（quote）入站', () => {
+    /** 最小 PNG 头（detectImageExt 只需魔数） */
+    const PNG = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+    ]);
+    const originalUploadDir = process.env.UPLOAD_DIR;
+    const TEST_UPLOAD_DIR = 'uploads-test-tmp-quote';
+
+    beforeEach(() => {
+      process.env.UPLOAD_DIR = TEST_UPLOAD_DIR;
+    });
+
+    afterEach(() => {
+      fs.rmSync(resolveUploadDir(), { recursive: true, force: true });
+      if (originalUploadDir === undefined) {
+        delete process.env.UPLOAD_DIR;
+      } else {
+        process.env.UPLOAD_DIR = originalUploadDir;
+      }
+    });
+
+    /** 起一个渠道并把 body 喂给指定入站事件，返回 host 与 mock client。 */
+    const drive = async (
+      event: 'message.text' | 'message.mixed',
+      body: any,
+      downloadFile?: jest.Mock,
+    ) => {
+      const host = makeHost([{ id: 'mc_a' }]);
+      host.submitInbound.mockResolvedValue({
+        results: [{ ok: true, internalMessageId: 'm_1' }],
+      });
+      await adapter.start(host);
+      const client = mockClients[0];
+      if (downloadFile) client.downloadFile = downloadFile;
+      const handler = client.on.mock.calls.find(
+        (c: any[]) => c[0] === event,
+      )?.[1];
+      expect(typeof handler).toBe('function');
+      await handler({ headers: { req_id: 'r1' }, body });
+      return { host, client };
+    };
+
+    const repliesOf = (client: any): string[] =>
+      client.replyStream.mock.calls.map((c: any[]) => String(c[2]));
+
+    it('② 引用文本且自身无正文：引用内容即正文（不再回「消息内容为空」）', async () => {
+      const { host, client } = await drive('message.text', {
+        msgid: 'm_q1',
+        from: { userid: 'u_1' },
+        text: { content: '@bot ' },
+        quote: { msgtype: 'text', text: { content: '需求清单：A/B/C' } },
+        chattype: 'group',
+        chatid: 'gid_1',
+      });
+
+      expect(host.submitInbound).toHaveBeenCalledTimes(1);
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].text).toBe('需求清单：A/B/C');
+      expect(repliesOf(client)).not.toContain('消息内容为空，已忽略。');
+    });
+
+    it('③ 引用文本 + 自身正文：引用作上下文在前、自身正文在后', async () => {
+      const { host } = await drive('message.text', {
+        msgid: 'm_q2',
+        from: { userid: 'u_1' },
+        text: { content: '@bot 帮我排期' },
+        quote: { msgtype: 'text', text: { content: '需求清单：A/B/C' } },
+        chattype: 'group',
+      });
+
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].text).toBe('[引用]\n需求清单：A/B/C\n\n帮我排期');
+      expect(cmds[0].text.indexOf('[引用]')).toBeLessThan(
+        cmds[0].text.indexOf('需求清单'),
+      );
+      expect(cmds[0].text.indexOf('需求清单')).toBeLessThan(
+        cmds[0].text.indexOf('帮我排期'),
+      );
+    });
+
+    it('① 无引用：正文仍只是自身文本（既有行为不变）', async () => {
+      const { host, client } = await drive('message.text', {
+        msgid: 'm_q3',
+        from: { userid: 'u_1' },
+        text: { content: '@bot 你好' },
+        chattype: 'group',
+      });
+
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].text).toBe('你好');
+      expect(cmds[0].dedupKey).toBe('m_q3');
+      expect(repliesOf(client)).not.toContain('消息内容为空，已忽略。');
+    });
+
+    it('全角空格（U+3000）分隔的 @提及也能剥掉：正文不被整条吞掉', async () => {
+      const { host } = await drive('message.text', {
+        msgid: 'm_q3b',
+        from: { userid: 'u_1' },
+        // 旧正则 `[^ ]+` 只认半角空格，遇到全角空格会把整条当成提及吞掉 ⇒ 正文变空
+        text: { content: '@机器人\u3000这是今日的测试情况' },
+        chattype: 'group',
+      });
+
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].text).toBe('这是今日的测试情况');
+    });
+
+    it('自身正文为空串（text.content=""）+ 引用：引用文本仍是正文', async () => {
+      const { host, client } = await drive('message.text', {
+        msgid: 'm_q3c',
+        from: { userid: 'u_1' },
+        text: { content: '' },
+        quote: { msgtype: 'text', text: { content: '需求清单：A/B/C' } },
+        chattype: 'group',
+      });
+
+      expect(host.submitInbound).toHaveBeenCalledTimes(1);
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].text).toBe('需求清单：A/B/C');
+      expect(repliesOf(client)).not.toContain('消息内容为空，已忽略。');
+    });
+
+    it('引用图片：下载落盘并作为附件挂到入站命令上', async () => {
+      const downloadFile = jest
+        .fn()
+        .mockResolvedValue({ buffer: PNG, filename: 'quoted.png' });
+
+      const { host, client } = await drive(
+        'message.text',
+        {
+          msgid: 'm_q4',
+          from: { userid: 'u_1' },
+          text: { content: '@bot 看看这张' },
+          quote: {
+            msgtype: 'image',
+            image: { url: 'https://wecom/img/1', aeskey: 'k1' },
+          },
+          chattype: 'group',
+        },
+        downloadFile,
+      );
+
+      expect(downloadFile).toHaveBeenCalledWith('https://wecom/img/1', 'k1');
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].attachmentUrl).toMatch(/^\/uploads\//);
+      expect(cmds[0].attachmentName).toBe('quoted.png');
+      expect(cmds[0].attachmentType).toBe('png');
+      // 附件确实落盘了
+      expect(
+        fs.existsSync(
+          join(resolveUploadDir(), basename(cmds[0].attachmentUrl)),
+        ),
+      ).toBe(true);
+      expect(repliesOf(client)).not.toContain('消息内容为空，已忽略。');
+    });
+
+    it('引用图文混排消息里的图片：同样落盘并附上（文本按引用规则并入）', async () => {
+      const downloadFile = jest
+        .fn()
+        .mockResolvedValue({ buffer: PNG, filename: 'q-mixed.png' });
+
+      const { host } = await drive(
+        'message.text',
+        {
+          msgid: 'm_q5',
+          from: { userid: 'u_1' },
+          text: { content: '@bot 这个' },
+          quote: {
+            msgtype: 'mixed',
+            mixed: {
+              msg_item: [
+                { msgtype: 'text', text: { content: '原消息正文' } },
+                {
+                  msgtype: 'image',
+                  image: { url: 'https://wecom/img/2', aeskey: 'k2' },
+                },
+              ],
+            },
+          },
+          chattype: 'group',
+        },
+        downloadFile,
+      );
+
+      expect(downloadFile).toHaveBeenCalledWith('https://wecom/img/2', 'k2');
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].text).toBe('[引用]\n原消息正文\n\n这个');
+      expect(cmds[0].attachmentUrl).toMatch(/^\/uploads\//);
+      expect(cmds[0].attachmentName).toBe('q-mixed.png');
+    });
+
+    it('引用图片下载失败：只丢图不丢文本（仍投递给 agent 并记告警）', async () => {
+      const downloadFile = jest
+        .fn()
+        .mockRejectedValue(new Error('aeskey missing'));
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      try {
+        const { host } = await drive(
+          'message.text',
+          {
+            msgid: 'm_q6',
+            from: { userid: 'u_1' },
+            text: { content: '@bot 看看这张' },
+            quote: {
+              msgtype: 'image',
+              image: { url: 'https://wecom/img/3', aeskey: 'k3' },
+            },
+            chattype: 'group',
+          },
+          downloadFile,
+        );
+
+        expect(host.submitInbound).toHaveBeenCalledTimes(1);
+        const [, cmds] = host.submitInbound.mock.calls[0];
+        expect(cmds[0].text).toBe('看看这张');
+        expect(cmds[0].attachmentUrl).toBeUndefined();
+        expect(
+          warnSpy.mock.calls.some((c: any[]) =>
+            String(c[0]).includes('quote image download failed'),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('引用既无文本也无图片：仍回「消息内容为空，已忽略。」并丢弃', async () => {
+      const { host, client } = await drive('message.text', {
+        msgid: 'm_q7',
+        from: { userid: 'u_1' },
+        text: { content: '@bot ' },
+        quote: { msgtype: 'text', text: { content: '   ' } },
+        chattype: 'group',
+      });
+
+      expect(host.submitInbound).not.toHaveBeenCalled();
+      expect(repliesOf(client)).toContain('消息内容为空，已忽略。');
+    });
+
+    it('引用视频（官方文档有、SDK 类型漏收录）：记告警、不下载不附加、正文照送', async () => {
+      const downloadFile = jest
+        .fn()
+        .mockResolvedValue({ buffer: PNG, filename: 'quoted.mp4' });
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      try {
+        const { host } = await drive(
+          'message.text',
+          {
+            msgid: 'm_q7b',
+            from: { userid: 'u_1' },
+            text: { content: '@bot 这个视频讲了什么' },
+            quote: {
+              msgtype: 'video',
+              video: { url: 'https://wecom/video/1' },
+            },
+            chattype: 'group',
+          },
+          downloadFile,
+        );
+
+        // 不下载、不附加
+        expect(downloadFile).not.toHaveBeenCalled();
+        const [, cmds] = host.submitInbound.mock.calls[0];
+        expect(cmds[0].attachmentUrl).toBeUndefined();
+        // 正文照常送达 agent
+        expect(cmds[0].text).toBe('这个视频讲了什么');
+        // 告警里带上真实 msgtype，运营能区分「引用视频」与「引用文件」
+        expect(
+          warnSpy.mock.calls.some((c: any[]) =>
+            String(c[0]).includes('wecom quote video unsupported'),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('图文混排消息带引用：引用文本按 [引用] 规则并入正文', async () => {
+      const { host } = await drive('message.mixed', {
+        msgid: 'm_q8',
+        from: { userid: 'u_1' },
+        mixed: {
+          msg_item: [{ msgtype: 'text', text: { content: '自身正文' } }],
+        },
+        quote: { msgtype: 'text', text: { content: '被引用的内容' } },
+        chattype: 'group',
+      });
+
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds[0].text).toBe('[引用]\n被引用的内容\n\n自身正文');
+    });
+
+    it('图文混排：自身图片在前、引用图片在后（一条命令一张图，dedupKey 带序号）', async () => {
+      const downloadFile = jest
+        .fn()
+        .mockResolvedValueOnce({ buffer: PNG, filename: 'own.png' })
+        .mockResolvedValueOnce({ buffer: PNG, filename: 'quoted.png' });
+
+      const { host } = await drive(
+        'message.mixed',
+        {
+          msgid: 'm_q9',
+          from: { userid: 'u_1' },
+          mixed: {
+            msg_item: [
+              { msgtype: 'text', text: { content: '自身正文' } },
+              {
+                msgtype: 'image',
+                image: { url: 'https://wecom/img/own', aeskey: 'ko' },
+              },
+            ],
+          },
+          quote: {
+            msgtype: 'mixed',
+            mixed: {
+              msg_item: [
+                { msgtype: 'text', text: { content: '引用正文' } },
+                {
+                  msgtype: 'image',
+                  image: { url: 'https://wecom/img/q', aeskey: 'kq' },
+                },
+              ],
+            },
+          },
+          chattype: 'group',
+        },
+        downloadFile,
+      );
+
+      const [, cmds] = host.submitInbound.mock.calls[0];
+      expect(cmds).toHaveLength(2);
+      expect(cmds[0].attachmentName).toBe('own.png');
+      expect(cmds[0].text).toBe('[引用]\n引用正文\n\n自身正文');
+      expect(cmds[1].attachmentName).toBe('quoted.png');
+      expect(cmds[1].text).toBe('[图片]');
+      expect(cmds[0].dedupKey).toBe('m_q9_0');
+      expect(cmds[1].dedupKey).toBe('m_q9_1');
     });
   });
 });
