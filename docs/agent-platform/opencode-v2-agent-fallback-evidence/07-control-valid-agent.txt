@@ -1,0 +1,63 @@
+=== 07 对照组：**有效** agent（`vteam-developer`，控制面注入 ⇒ v2 上存在） ===
+--- POST /api/session（对照组）
+REQUEST : POST /api/session
+BODY    : {"location":{"directory":"/scratch/proj"}}
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 132 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28eec7bffel3Hjm8w24RAchq","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792569054114,"updated":1792569054114},"location":{"directory":"/scratch/proj"}}}
+
+--- POST /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/agent  {"agent":"vteam-developer"}  ← 有效名字
+REQUEST : POST /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/agent
+BODY    : {"agent":"vteam-developer"}
+STATUS  : 204 No Content
+CTYPE   : -
+ELAPSED : 16 ms
+RESPONSE BODY (verbatim):
+
+
+--- GET /api/session/ses_ea28eec7bffel3Hjm8w24RAchq
+REQUEST : GET /api/session/ses_ea28eec7bffel3Hjm8w24RAchq
+BODY    : (none)
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 1 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28eec7bffel3Hjm8w24RAchq","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","agent":"vteam-developer","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792569054114,"updated":1792569054134},"location":{"directory":"/scratch/proj"}}}
+
+--- POST /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/model
+REQUEST : POST /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/model
+BODY    : {"model":{"providerID":"probelocal","id":"probe-model"}}
+STATUS  : 204 No Content
+CTYPE   : -
+ELAPSED : 7 ms
+RESPONSE BODY (verbatim):
+
+
+--- POST /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/prompt
+REQUEST : POST /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/prompt
+BODY    : {"text":"PROBE: 回答任意内容。"}
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 8 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"msg_15d7113cc001ar0e2iz17vxWQe","sessionID":"ses_ea28eec7bffel3Hjm8w24RAchq","time":{"created":1792569054158},"type":"user","payload":{"text":"PROBE: 回答任意内容。"},"delivery":"steer"}}
+
+--- GET /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/message?order=asc&limit=200
+REQUEST : GET /api/session/ses_ea28eec7bffel3Hjm8w24RAchq/message?order=asc&limit=200
+BODY    : (none)
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 38 ms
+RESPONSE BODY (verbatim):
+{"data":[{"id":"msg_15d7113b60011R4aNXqf7PFHco","time":{"created":1792569054134},"type":"agent-switched","agent":"vteam-developer"},{"id":"msg_15d7113c3001Av2z8Iobk2AuGz","time":{"created":1792569054149},"type":"model-switched","model":{"id":"probe-model","providerID":"probelocal"}},{"id":"msg_15d7113cc001ar0e2iz17vxWQe","time":{"created":1792569054197},"text":"PROBE: 回答任意内容。","type":"user"},{"id":"msg_15d711416001XFMvRExePoWSjw","time":{"created":1792569054244,"streamed":1792569054274,"completed":1792569054275},"type":"assistant","agent":"vteam-developer","model":{"id":"probe-model","providerID":"probelocal","variant":"default"},"content":[{"type":"text","text":"PROBE_STUB_REPLY"}],"finish":"stop","rawFinish":"stop","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}},{"id":"msg_15d7114450017Z3MuvsfS7FYL0","time":{"created":1792569054277},"type":"idle","outcome":"succeeded"}],"cursor":{"previous":"eyJpZCI6Im1zZ18xNWQ3MTEzYjYwMDExUjRhTlhxZjdQRkhjbyIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoicHJldmlvdXMifQ","next":"eyJpZCI6Im1zZ18xNWQ3MTE0NDUwMDE3WjNNdXZzZlM3RllMMCIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoibmV4dCJ9"}}
+
+--- 消息逐条摘要
+{"id":"msg_15d7113b60011R4aNXqf7PFHco","type":"agent-switched","agent":"vteam-developer","text":"","error":null}
+{"id":"msg_15d7113c3001Av2z8Iobk2AuGz","type":"model-switched","agent":null,"text":"","error":null}
+{"id":"msg_15d7113cc001ar0e2iz17vxWQe","type":"user","agent":null,"text":"PROBE: 回答任意内容。","error":null}
+{"id":"msg_15d711416001XFMvRExePoWSjw","type":"assistant","agent":"vteam-developer","text":"PROBE_STUB_REPLY","error":null}
+{"id":"msg_15d7114450017Z3MuvsfS7FYL0","type":"idle","agent":null,"text":"","error":null}
+--- 判定：assistant 消息的 agent 字段 = ["vteam-developer"]
+--- 事件总线里出现过的帧类型：["server.connected","session.inbox.enqueued","session.execution.started","session.instructions.updated","session.inbox.delivered","session.usage.updated","session.renamed","session.step.started","session.text.started","session.text.delta","session.text.ended","session.step.streamed","session.step.ended","session.execution.succeeded"]

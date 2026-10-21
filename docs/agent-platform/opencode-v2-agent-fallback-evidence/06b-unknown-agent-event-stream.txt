@@ -1,0 +1,15 @@
+=== 06b 未知 agent：事件总线（`GET /api/event`）原始帧 ===
+（平台的终态判定**只认** durable 的 `session.execution.*` ⇒ 这里有没有 failed 帧，
+ 决定了"成员这一轮"是**立刻判失败**还是**挂到首字超时**）
+
+--- 事件帧（会话 ses_ea28fd93affeRxxc0dJGGJZh5G）
+总线帧总数：7；与本会话相关的：7
+（v2 的 SSE 帧类型在 `data.type`；终态只认 durable 的 `session.execution.*`）
+
+{"id":"evt_15d7027350010kMYvfyTeJ2WUM","type":"server.connected","data":{}}
+{"id":"evt_15d70275e001RotZC8LSAZSXj1","created":1792568993631,"type":"session.execution.started","data":{"sessionID":"ses_ea28fd93affeRxxc0dJGGJZh5G"},"durable":{"aggregateID":"ses_ea28fd93affeRxxc0dJGGJZh5G","seq":4,"version":1}}
+{"id":"evt_15d70277a001rChv3CsNwqWApj","created":1792568993659,"type":"session.execution.failed","data":{"sessionID":"ses_ea28fd93affeRxxc0dJGGJZh5G","error":{"type":"unknown","message":"Agent not found: \"Prometheus - Plan Builder\""}},"durable":{"aggregateID":"ses_ea28fd93affeRxxc0dJGGJZh5G","seq":5,"version":1}}
+{"id":"evt_15d702d4c001Qu6x0x03I8NAKJ","created":1792568995149,"type":"models-dev.refreshed","location":{"directory":"/scratch/proj"},"data":{}}
+{"id":"evt_15d702dc6001YXBONgtJAVX0Ya","created":1792568995270,"type":"integration.updated","location":{"directory":"/scratch/proj"},"data":{}}
+{"id":"evt_15d702df4001Ml4RxgsEsRbzln","created":1792568995316,"type":"provider.updated","location":{"directory":"/scratch/proj"},"data":{}}
+{"id":"evt_15d702dfa0019YDKqYXgJ1cVz6","created":1792568995322,"type":"model.updated","location":{"directory":"/scratch/proj"},"data":{}}

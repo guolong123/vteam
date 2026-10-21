@@ -1,0 +1,6 @@
+=== 99 摘要（脚本自动汇总） ===
+GET /api/info => 200 {"version":"2.0.32","pid":27,"urls":["http://127.0.0.1:45991"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}
+GET /api/agent => 200；agent id = ["build","general","explore","compaction","title","summary","plan","vteam-product","vteam-architect","vteam-developer","vteam-tester","vteam-project_manager","vteam-plan","vteam-librarian"]
+serve 进程：已退出（code=130）
+容器内 pgrep -fl "[o]pencode serve" => (空 —— 无残留 serve 进程)
+桩 provider：已关闭

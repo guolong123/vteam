@@ -723,7 +723,119 @@ kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e
 
 # 0.3 快照数据卷（见 §8.6.3 的具体命令），并**验证快照可恢复**
 # 0.4 构建并推送 v2 线的三个镜像（server / web / worker）
+# 0.5 升级前数据检查：成员是否仍绑着「v2 上不存在」的外部 agent（详见 §8.2.1）
+#     期望：**0 行**；有输出 ⇒ 先按 §8.2.1 的两条修复 SQL 处理完，再动第一个 v2 worker
+kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e \
+  "SELECT tm.id, t.name, tm.alias, ar.key, tm.opencode_agent_name FROM team_members tm JOIN teams t ON t.id=tm.team_id LEFT JOIN agent_roles ar ON ar.id=tm.role_id WHERE tm.opencode_agent_name IS NOT NULL AND TRIM(tm.opencode_agent_name)<>'' AND tm.opencode_agent_name NOT IN ('build','plan','general','explore','compaction','title','summary') AND NOT EXISTS (SELECT 1 FROM agents a2 WHERE a2.agent_key IS NOT NULL AND CONCAT('vteam-',a2.agent_key)=tm.opencode_agent_name);"
 ```
+
+#### 8.2.1 升级前数据检查：成员绑定的外部 agent 在 v2 上是否存在
+
+> **为什么必须"切换前"做**（不是切换后再说）：v2 线**不加载 OmO** ⇒ 三个 OmO 的 agent 名
+> （`Sisyphus - ultraworker` / `Prometheus - Plan Builder` / `Atlas - Plan Executor`）在 v2 上
+> **不存在**（实测见 §8.5 与 `docs/agent-platform/opencode-v2-agent-fallback-evidence/`）；
+> 而存量团队里绑定这三个外部岗位的成员，**`TeamMember.opencodeAgentName` 里已经写着这些名字**
+> （`server/src/teams/teams.service.ts` 的 `resolveMemberBinding` 规则 5 预填）
+> ⇒ 派发时它**无条件胜出**（`server/src/chat/worker-dispatcher.ts`）
+> ⇒ opencode **静默接受**（`POST /api/session/{id}/agent` 返回 **204**，无任何错误信号）
+> ⇒ **每一轮**真正执行时抛 `Agent not found` ⇒ **该成员在 v2 上每一轮都失败、没有回复**。
+> ⇒ **必须在第一个 v2 worker 起来之前**清掉这类绑定（否则灰度第一档就踩）。
+
+**列名口径（先对，别照抄 prisma 字段名）**：prisma 用 `@map` 把 camelCase 字段映射成
+snake_case 列 ⇒ SQL 里必须写**列名**：`team_members.opencode_agent_name`（字段
+`opencodeAgentName`）、`team_members.role_id`、`team_members.team_id`、
+`agent_roles.default_opencode_agent_name`（字段 `defaultOpencodeAgentName`）、
+`agent_roles.key`、`agents.agent_key`、`teams.name`。
+
+**① 检查（只读 SELECT）**：列出所有**绑着 v2 上不存在的 agent 名**的成员
+（"存在"的判据 = 控制面注入的 `vteam-<agent_key>`（v2 上存在）或 opencode 内置 agent）：
+
+```sql
+SELECT
+  tm.id                          AS member_id,
+  t.name                         AS team_name,
+  tm.team_id                     AS team_id,
+  tm.alias                       AS member_alias,
+  tm.seq                         AS seq,
+  tm.role_id                     AS role_id,
+  ar.key                         AS role_key,
+  ar.name                        AS role_name,
+  tm.opencode_agent_name         AS bound_agent_name,
+  ar.default_opencode_agent_name AS role_default_agent_name,
+  CASE
+    WHEN tm.opencode_agent_name IN ('Sisyphus - ultraworker','Prometheus - Plan Builder','Atlas - Plan Executor')
+      THEN 'OmO agent（v2 不加载 ⇒ 必然不存在）'
+    ELSE '其它未知名字'
+  END AS verdict
+FROM team_members tm
+JOIN teams t             ON t.id  = tm.team_id
+LEFT JOIN agent_roles ar ON ar.id = tm.role_id
+LEFT JOIN agents a       ON a.id  = tm.agent_id
+WHERE tm.opencode_agent_name IS NOT NULL
+  AND TRIM(tm.opencode_agent_name) <> ''
+  AND tm.opencode_agent_name NOT IN
+      ('build','plan','general','explore','compaction','title','summary')
+  AND NOT EXISTS (
+        SELECT 1 FROM agents a2
+        WHERE a2.agent_key IS NOT NULL
+          AND CONCAT('vteam-', a2.agent_key) = tm.opencode_agent_name
+      )
+ORDER BY t.name, tm.seq, tm.id;
+```
+
+**② 修复（两条 UPDATE，按顺序做；先在测试库演练）**：
+
+```sql
+-- 修复 ①：清掉**成员行**里的外部名 ⇒ 派发回落到平台的 vteam-<role> agent（v2 上存在）
+UPDATE team_members tm
+SET tm.opencode_agent_name = NULL
+WHERE tm.opencode_agent_name IS NOT NULL
+  AND TRIM(tm.opencode_agent_name) <> ''
+  AND tm.opencode_agent_name NOT IN
+      ('build','plan','general','explore','compaction','title','summary')
+  AND NOT EXISTS (
+        SELECT 1 FROM agents a2
+        WHERE a2.agent_key IS NOT NULL
+          AND CONCAT('vteam-', a2.agent_key) = tm.opencode_agent_name
+      );
+
+-- 修复 ②：把**岗位**的外部槽位指向平台自己的 agent 名（v2 上存在）
+UPDATE agent_roles
+SET default_opencode_agent_name = CASE `key`
+      WHEN 'sisyphus'   THEN 'vteam-developer'
+      WHEN 'prometheus' THEN 'vteam-plan'
+      WHEN 'atlas'      THEN 'vteam-developer'
+    END,
+    updated_at = NOW(3)
+WHERE `key` IN ('sisyphus','prometheus','atlas')
+  AND default_agent_id IS NULL;
+```
+
+**两条修复各自为什么必须存在**：
+
+- **修复 ①（成员行）**：派发时 `opencodeAgentName` **无条件**优先（`?? policyCandidate ?? omit`）
+  ⇒ 只要成员行里还留着那个名字，opencode 就会收到它 ⇒ 清成 `NULL` 后派发才回落到平台的
+  `vteam-<role>` agent（控制面注入 ⇒ v2 上**存在**）。
+- **修复 ②（岗位行）**：**只清成员行不持久**——`resolveMemberBinding`（**规则 5 预填**）在
+  **成员被重新绑定岗位**时会把岗位的 `defaultOpencodeAgentName` **再填回**成员行
+  （`prefill ≠ override`：仅当成员当前值为空时写入）⇒ 岗位不改，成员下次被重绑就**又变回**
+  那个不存在的名字。岗位改指 `vteam-developer` / `vteam-plan`（**平台自己的 agent 名**）后，
+  之后发生的预填也落在**存在**的名字上。
+- ⚠️ **不要把岗位的外部槽位清空**：两个槽位**互斥**
+  （`default_agent_id` 与 `default_opencode_agent_name` 同时非空 ⇒ 400 `AGENT_ROLE_DEFAULT_SLOT_CONFLICT`），
+  而这三个外部岗位**本来就没有** `default_agent_id` ⇒ 两个都空 ⇒ 派发直接失败
+  （400 `ROLE_DEFAULT_AGENT_MISSING`）⇒ **岗位必须保持可派发**。
+  修复 ② 的条件里限定了 `default_agent_id IS NULL` ⇒ **只改外部槽位 ⇒ 不产生互斥冲突**。
+
+**③ 复检**：把 ① 再跑一遍 ⇒ **必须 0 行**；再抽查岗位行：
+
+```sql
+SELECT id, `key`, default_agent_id, default_opencode_agent_name
+FROM agent_roles
+WHERE `key` IN ('sisyphus','prometheus','atlas');
+```
+
+⇒ 期望：外部槽位 = `vteam-developer` / `vteam-plan` / `vteam-developer`，且 `default_agent_id` 仍为 `NULL`。
 
 **闸门 G0**（全部满足才允许动 worker）：
 
@@ -733,6 +845,9 @@ kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e
 - [ ] 灰度前基线（会话成功率、首字延迟）已记录
 - [ ] `OPENCODE_SERVER_PASSWORD` 已就位（v2 恒开鉴权，缺失 → worker 起不来）
 - [ ] `WORKER_TOKEN`（server 侧）== `X_WORKER_TOKEN`（worker 侧）——**同一个 Secret key**
+- [ ] **（§8.2.1）没有成员绑着「v2 上不存在」的 agent 名**——升级前数据检查 0.5 **无输出**
+      （存量团队若有成员绑在 OmO 的 agent 名上 ⇒ v2 上**每一轮都失败**且没有回复，
+      故障点在 opencode 的**执行期**、不在切换期 ⇒ 灰度第一档就会踩，见 §8.5）
 - [ ] **（事实 5）server 侧 MCP 状态校验已接受 v2 五态**（`connected` / `pending` /
       `disabled` / `failed` / `needs_auth`）——**必须在任何新 worker 起来之前**；
       校验未放宽就放 worker ⇒ 心跳 400 ⇒ worker 判离线
@@ -858,7 +973,35 @@ curl -s -H "Authorization: Bearer $JWT" http://<server>/api/v1/workers | jq '.[]
     （配置文件仍可写，但没人加载它）；
   - **平台的角色不受影响**：计划/执行职责判定用的是 `plan`（原生）/ `prometheus`（OmO 约定）/
     `vteam-plan`（平台）三选一，缺 OmO 时 `plan` 与 `vteam-plan` 仍在；
+    ⚠️ **但"外部引擎岗位"的成员除外**——它们绑的**就是** OmO 的 agent 名，见下面那条；
   - 平台的**角色 agent 与权限**来自控制面注入的 `agents` 节，**与 OmO 无关**。
+- ⚠️ **三个"外部引擎岗位"的成员会**逐轮失败**（实测 opencode **v2.0.32**，原始证据见
+  `docs/agent-platform/opencode-v2-agent-fallback-evidence/`）：
+  - **谁会中招**：`server/src/common/constants/agent-role.constants.ts` 的 `EXTERNAL_AGENT_ROLES`
+    三个岗位（key `sisyphus` / `prometheus` / `atlas`）的外部槽位存的是 **OmO 的 agent 名**
+    ——`Sisyphus - ultraworker` / `Prometheus - Plan Builder` / `Atlas - Plan Executor`
+    ⇒ **v2 上这三个 agent 不存在**（`GET /api/agent` 里查无此名；证据 `03-agent-list.txt`）。
+    成员绑这些岗位时，该名字会被**预填**进 `TeamMember.opencodeAgentName`
+    （`server/src/teams/teams.service.ts` 的 `resolveMemberBinding` 规则 5：显式值 > 岗位的
+    `defaultOpencodeAgentName`）⇒ **存量库里已经写着这些名字**。
+  - **派发时它无条件胜出**：`server/src/chat/worker-dispatcher.ts` 的
+    `opencodeAgentName ?? policyCandidate ?? omit` ⇒ 平台**自己**不会发现这个名字不存在；
+    `worker/src/driver/v2-driver.ts` 的 `switchAgent` 也**不校验**名字。
+  - **实测的落点**（v2.0.32，逐条原始响应见证据目录）：
+    ① `POST /api/session/{id}/agent` 对**不存在的**名字返回 **`204 No Content`**
+      （**零错误信号**——不 4xx、不告警）；会话里还**存下了**这个名字
+      （`GET /api/session/{id}` 的 `agent` 字段＝原样字符串）⇒ "切成功"是假象；
+    ② **爆点在下一轮执行**：opencode 抛 `Session.AgentNotFoundError`
+      ⇒ 那一轮**直接失败**、**没有任何回复**——消息流里只有一条
+      `{"type":"idle","outcome":"failed","error":{"type":"unknown","message":"Agent not found: \"Prometheus - Plan Builder\""}}`，
+      **assistant 消息数 = 0**；
+    ③ 失败是**快失败 + 有据**：事件流里发 **durable** 的 `session.execution.failed`
+      ⇒ 平台终态闸门**立刻**拿到失败（**不会**挂到首字超时）；serve 日志里是
+      `Session.AgentNotFoundError: Agent not found: "…"`（**可 grep**）。
+  - ⇒ **不是"悄悄换成别的 agent 干活"**（那才是最难查的形态），而是"**这一轮没人干活**"
+    ——故障**可见、可归因**（错误文案直接点名那个不存在的 agent 名）。
+  - ⇒ **切换前必须先做数据检查 + 修复**（否则这些成员在 v2 上**每一轮都失败**）：
+    见 **§8.2.1 升级前数据检查**。
 - **要恢复 OmO 需要什么**：一个 **v2 形态入口**（`export default { id, setup(ctx) }`）的 OmO
   包，且镜像能力标记的 `v2` 字段改成 `true`。**不要**依赖仓库外的路径。
 

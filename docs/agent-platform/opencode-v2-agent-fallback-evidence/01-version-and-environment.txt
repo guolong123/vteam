@@ -1,0 +1,131 @@
+=== opencode v2 未知 agent 名落点实测 —— 01 版本与环境 ===
+采集时间(UTC)     : 2026-10-21T07:49:51.522Z
+opencode 版本串   : opencode v2.0.32   （`/usr/local/bin/opencode --version` 的原样输出；serve 自报版本见本文件末尾的 GET /api/info）
+opencode 二进制   : /usr/local/bin/opencode
+serve 命令        : /usr/local/bin/opencode serve --port 45991 --hostname 127.0.0.1 --print-logs --log-level debug
+serve cwd         : /scratch/proj
+HOME              : /scratch/home
+XDG_CONFIG_HOME   : /scratch/home/.config
+XDG_DATA_HOME     : /scratch/home/.local/share
+OPENCODE_SERVER_PASSWORD : probe-fallback-pw-2026   （合成假串；Basic Auth 的 username 恒为 opencode）
+桩 provider 监听  : http://127.0.0.1:45992/v1   （本地 openai-compatible 假端点，无外网、无真实凭据）
+容器镜像 ID       : sha256:b4a46ba1cd23d87d12e018f2e5a79f8b6c2979b6be7a52c6cad13d7648c38113
+容器 ID           : 5ae8481a56df   （os.hostname() = 容器短 ID）
+宿主平台          : Darwin 25.5.0 arm64
+node 版本         : v22.23.3
+
+--- 项目 opencode.json（控制面同形态注入；每个 agent 的 system 里埋了判别标记）
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agents": {
+    "vteam-product": {
+      "description": "PROBE platform agent vteam-product",
+      "mode": "primary",
+      "permissions": [
+        {
+          "action": "external_directory",
+          "resource": "*",
+          "effect": "ask"
+        }
+      ],
+      "system": "PROBE_SYSTEM_MARKER vteam-product"
+    },
+    "vteam-architect": {
+      "description": "PROBE platform agent vteam-architect",
+      "mode": "primary",
+      "permissions": [
+        {
+          "action": "external_directory",
+          "resource": "*",
+          "effect": "ask"
+        }
+      ],
+      "system": "PROBE_SYSTEM_MARKER vteam-architect"
+    },
+    "vteam-developer": {
+      "description": "PROBE platform agent vteam-developer",
+      "mode": "primary",
+      "permissions": [
+        {
+          "action": "external_directory",
+          "resource": "*",
+          "effect": "ask"
+        }
+      ],
+      "system": "PROBE_SYSTEM_MARKER vteam-developer"
+    },
+    "vteam-tester": {
+      "description": "PROBE platform agent vteam-tester",
+      "mode": "primary",
+      "permissions": [
+        {
+          "action": "external_directory",
+          "resource": "*",
+          "effect": "ask"
+        }
+      ],
+      "system": "PROBE_SYSTEM_MARKER vteam-tester"
+    },
+    "vteam-project_manager": {
+      "description": "PROBE platform agent vteam-project_manager",
+      "mode": "primary",
+      "permissions": [
+        {
+          "action": "external_directory",
+          "resource": "*",
+          "effect": "ask"
+        }
+      ],
+      "system": "PROBE_SYSTEM_MARKER vteam-project_manager"
+    },
+    "vteam-plan": {
+      "description": "PROBE platform agent vteam-plan",
+      "mode": "primary",
+      "permissions": [
+        {
+          "action": "external_directory",
+          "resource": "*",
+          "effect": "ask"
+        }
+      ],
+      "system": "PROBE_SYSTEM_MARKER vteam-plan"
+    },
+    "vteam-librarian": {
+      "description": "PROBE platform agent vteam-librarian",
+      "mode": "primary",
+      "permissions": [
+        {
+          "action": "external_directory",
+          "resource": "*",
+          "effect": "ask"
+        }
+      ],
+      "system": "PROBE_SYSTEM_MARKER vteam-librarian"
+    }
+  },
+  "provider": {
+    "probelocal": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ProbeLocalStub",
+      "options": {
+        "baseURL": "http://127.0.0.1:45992/v1",
+        "apiKey": "sk-probe-not-a-real-key"
+      },
+      "models": {
+        "probe-model": {
+          "name": "probe-model"
+        }
+      }
+    }
+  }
+}
+
+--- GET /api/info（serve 自报版本）
+--- GET /api/info
+REQUEST : GET /api/info
+BODY    : (none)
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 26 ms
+RESPONSE BODY (verbatim):
+{"version":"2.0.32","pid":27,"urls":["http://127.0.0.1:45991"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}

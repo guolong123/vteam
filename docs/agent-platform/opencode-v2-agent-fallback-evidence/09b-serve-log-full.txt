@@ -1,0 +1,39 @@
+=== 09b serve 日志全文（`--print-logs --log-level debug`） ===
+timestamp=2026-10-21T07:49:51.709Z level=INFO run=783c8266 message="database schema bootstrap started" migrations=50 role=server
+timestamp=2026-10-21T07:49:51.714Z level=INFO run=783c8266 message="database schema bootstrap completed" migrations=50 durationMs=5 role=server
+server listening on http://127.0.0.1:45991
+timestamp=2026-10-21T07:49:52.070Z level=INFO run=783c8266 message="Sent HTTP response" http.span=0 role=server http.method=GET http.url=/api/doc http.status=404
+timestamp=2026-10-21T07:49:52.227Z level=INFO run=783c8266 message="Sent HTTP response" http.span=0 role=server http.method=GET http.url=/api/openapi.json http.status=404
+timestamp=2026-10-21T07:49:52.229Z level=INFO run=783c8266 message="Sent HTTP response" http.span=1 role=server http.method=GET http.url=/api http.status=404
+timestamp=2026-10-21T07:49:52.332Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch/home/.config/opencode type=directory ignores=3 http.span=85 role=server
+timestamp=2026-10-21T07:49:52.351Z level=INFO run=783c8266 message="watcher subscribe" path=/etc type=entries ignores=0 http.span=104 role=server
+timestamp=2026-10-21T07:49:52.354Z level=INFO run=783c8266 message="watcher started" path=/etc type=entries backend=node ignores=0 http.span=107 role=server
+timestamp=2026-10-21T07:49:52.354Z level=INFO run=783c8266 message="watcher subscribe" path=/ type=entries ignores=0 http.span=107 role=server
+timestamp=2026-10-21T07:49:52.355Z level=INFO run=783c8266 message="watcher started" path=/ type=entries backend=node ignores=0 http.span=108 role=server
+timestamp=2026-10-21T07:49:52.355Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch type=entries ignores=0 http.span=108 role=server
+timestamp=2026-10-21T07:49:52.356Z level=INFO run=783c8266 message="watcher started" path=/scratch type=entries backend=node ignores=0 http.span=109 role=server
+timestamp=2026-10-21T07:49:52.356Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch/proj type=entries ignores=0 http.span=109 role=server
+timestamp=2026-10-21T07:49:52.357Z level=INFO run=783c8266 message="watcher started" path=/scratch/proj type=entries backend=node ignores=0 http.span=110 role=server
+timestamp=2026-10-21T07:49:52.357Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch/home type=entries ignores=0 http.span=110 role=server
+timestamp=2026-10-21T07:49:52.357Z level=INFO run=783c8266 message="watcher started" path=/scratch/home type=entries backend=node ignores=0 http.span=110 role=server
+timestamp=2026-10-21T07:49:52.400Z level=INFO run=783c8266 message="watcher started" path=/scratch/home/.config/opencode type=directory backend=inotify ignores=3 http.span=153 role=server
+timestamp=2026-10-21T07:49:52.413Z level=INFO run=783c8266 message="location services booted" directory=/scratch/proj workspaceID=undefined durationMs=162 http.span=166 role=server
+timestamp=2026-10-21T07:49:52.965Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch/home/.config/opencode/AGENTS.md type=file ignores=0
+timestamp=2026-10-21T07:49:52.966Z level=INFO run=783c8266 message="watcher started" path=/scratch/home/.config/opencode/AGENTS.md type=file backend=node ignores=0 http.span=719 role=server
+timestamp=2026-10-21T07:49:52.966Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch/proj/AGENTS.md type=file ignores=0
+timestamp=2026-10-21T07:49:52.967Z level=INFO run=783c8266 message="watcher started" path=/scratch/proj/AGENTS.md type=file backend=node ignores=0 http.span=720 role=server
+timestamp=2026-10-21T07:49:53.005Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch/home/.config/opencode/skill type=file ignores=0
+timestamp=2026-10-21T07:49:53.006Z level=INFO run=783c8266 message="watcher started" path=/scratch/home/.config/opencode/skill type=file backend=node ignores=0 http.span=759 role=server
+timestamp=2026-10-21T07:49:53.009Z level=DEBUG run=783c8266 message="skill source loaded" source=directory:/scratch/home/.config/opencode/skill type=directory directories="[\"/scratch/home/.config/opencode/skill\"]" skills=[]
+timestamp=2026-10-21T07:49:53.011Z level=INFO run=783c8266 message="watcher subscribe" path=/scratch/home/.config/opencode/skills type=file ignores=0
+timestamp=2026-10-21T07:49:53.013Z level=INFO run=783c8266 message="watcher started" path=/scratch/home/.config/opencode/skills type=file backend=node ignores=0 http.span=766 role=server
+timestamp=2026-10-21T07:49:53.015Z level=DEBUG run=783c8266 message="skill source loaded" source=directory:/scratch/home/.config/opencode/skills type=directory directories="[\"/scratch/home/.config/opencode/skills\"]" skills=[]
+timestamp=2026-10-21T07:49:53.054Z level=INFO run=783c8266 message=event event.id=evt_15d70251e001vfB8czCHpMsCrP event.created=1792568993054 event.type=provider.updated event.location.directory=/scratch/proj event.location.workspaceID=undefined event.data={} http.span=807 role=server
+timestamp=2026-10-21T07:49:53.071Z level=INFO run=783c8266 message=event event.id=evt_15d70252f001qByo2e7nUW8upB event.created=1792568993071 event.type=model.updated event.location.directory=/scratch/proj event.location.workspaceID=undefined event.data={} http.span=824 role=server
+timestamp=2026-10-21T07:49:53.076Z level=INFO run=783c8266 message=event event.id=evt_15d702534001D4Eyk0Sm0Opmr2 event.created=1792568993076 event.type=agent.updated event.location.directory=/scratch/proj event.location.workspaceID=undefined event.data={} http.span=829 role=server
+timestamp=2026-10-21T07:49:53.078Z level=INFO run=783c8266 message=event event.id=evt_15d702536001fbEp3INKrkD1IV event.created=1792568993078 event.type=command.updated event.location.directory=/scratch/proj event.location.workspaceID=undefined event.data={} http.span=831 role=server
+timestamp=2026-10-21T07:49:53.653Z level=ERROR run=783c8266 message="Failed to drain Session" cause="Session.AgentNotFoundError: Agent not found: \"Prometheus - Plan Builder\"\n    at <anonymous> (/$bunfs/root/chunk-bsjae5s0.js:108:7835)\n    at SessionContext.select (/$bunfs/root/chunk-z0vsfcm3.js:383:2776)\n    at SessionContext.select (definition) (/$bunfs/root/chunk-bsjae5s0.js:108:7543)\n    at SessionRunner.prepareContext (/$bunfs/root/chunk-z0vsfcm3.js:383:2364)\n    at SessionRunner.prepareContext (definition) (/$bunfs/root/chunk-z0vsfcm3.js:383:2710)\n    at SessionRunner.advanceToStep (/$bunfs/root/chunk-z0vsfcm3.js:383:2629)\n    at SessionRunner.advanceToStep (definition) (/$bunfs/root/chunk-z0vsfcm3.js:383:899)\n    at SessionRunner.drain (/$bunfs/root/chunk-ceepacy3.js:18:2552)\n    at SessionRunner.drain (definition) (/$bunfs/root/chunk-z0vsfcm3.js:383:516)\n    at ServerProcess.start (/$bunfs/root/chunk-p7a1hv49.js:2:7534)\n    at ServerProcess.start (definition) (/$bunfs/root/chunk-z0vsfcm3.js:454:25665)" role=server sessionID=ses_ea28fd93affeRxxc0dJGGJZh5G
+timestamp=2026-10-21T07:49:55.316Z level=INFO run=783c8266 message=event event.id=evt_15d702df4001Ml4RxgsEsRbzln event.created=1792568995316 event.type=provider.updated event.location.directory=/scratch/proj event.location.workspaceID=undefined event.data={}
+timestamp=2026-10-21T07:49:55.322Z level=INFO run=783c8266 message=event event.id=evt_15d702dfa0019YDKqYXgJ1cVz6 event.created=1792568995322 event.type=model.updated event.location.directory=/scratch/proj event.location.workspaceID=undefined event.data={} http.span=3075 role=server
+timestamp=2026-10-21T07:50:23.593Z level=INFO run=783c8266 message="Sent HTTP response" http.span=30005 role=server http.method=GET http.url=/api/event http.status=200
+timestamp=2026-10-21T07:51:24.177Z level=INFO run=783c8266 message="Sent HTTP response" http.span=30024 role=server http.method=GET http.url=/api/event http.status=200
