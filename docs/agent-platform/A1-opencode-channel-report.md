@@ -5,12 +5,14 @@
 > 关联：`.omo/plans/vteam-agent-strengthening.md` Wave3 T7  
 > 决策影响：决定 Wave4 A2 单通道形态（`ExecutionConfig → opencode`）
 
+> ⚠️ **本文档是 2026-08/09 的阶段性验证记录，保留为历史依据。** 其中若干事实已被后续改造取代：① **层② worker guard 插件已删除**（工具授权的唯一权威改为服务端闸门，见 16 篇 §2.1.2）；② opencode 已切到 **v2**（配置形态、权限 action 名、工具注册形态都变了，见 07 篇 §12）；③ `opencode.json` 的段名已 v2 化（`agents` / `mcp.servers` / `plugins`）。**本文件里的 v1 形态描述不再代表当前实现**——当前口径以 07 篇 §12 与 16 篇 §2.1.2 为准。
+
 ## 0. 通道①已落地（2026-09-13，分层角色强制）
 
 本节记录通道①选型后的实际落地形态；§2 原选型结论保持为历史依据，不再复核。
 
 - **层①（主）opencode 原生 `permission`**：`edit` 为 edit/write/apply_patch 的唯一原生写闸门（无 `write` 键），路径 glob 做文件写约束；`permission.read` glob 约束读取。glob 用通用根无关形式 `**tasks/*/<subdir>/**`（两种 worktree 基址均命中：非 git `worktree="/"` 与 git `worktree=<WORK_DIR>`；绝对路径 glob 无效，禁用）。配置发现：`<workDir>/tasks/<id>` 无自有 `opencode.json` 时向上查找到 `<workDir>/opencode.json` 的 agent 节（worker injector 单写者写入）。
-- **opencode 版本**：实测 **1.18.30**；`worker/Dockerfile:30` 为未锁定的 `OPENCODE_CLI_SPEC`（`opencode-ai`，复现时用 `--build-arg OPENCODE_CLI_SPEC=opencode-ai@<ver>` 锁定）。
+- **opencode 版本**：本报告实测于 **1.18.30**（v1 线，**已冻结在 1.19.3**）。⚠️ **当前平台锁版是 v2**：`@opencode/cli@2.0.32`（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`；`opencode-ai` 永远到不了 v2），worker 启动期做版本闸门（major < 2 → fail-fast）。见 07 篇 §6 / §12.3。
 - **`permission.task`**：默认六角色 `deny`（运行时经 `Permission.ask` 拒绝子代理调用，非工具隐藏），**仅 `vteam-plan` 为 `allow`**（计划员可经 `task` 扇出只读评审子会话）；不依赖子代理权限继承。
 - **层②（辅）guard 插件**：worker 注入 `vteam-role-guard`（`tool.execute.before`，opencode.json `plugin` 数组显式注册 `<workDir>/.opencode/plugin/vteam-role-guard.ts`），策略源 `.vteam-role-guard/roles.json`（`{enabled, roles}`）+ `.vteam-role-guard/sessions/<sessionID>.json`（`{agent, dir}`）。分支优先级：`roles.json` 缺失/`enabled!==true`/解析失败 → pass-through + 告警；session 未映射/agent 未知 → pass-through + 告警；角色条目残缺 → fail-closed；read 类交层①；edit 类按 writeGlobs；bash 按 `ROLE_BASH_DENY_PATTERNS`（已下线，空数组），未命中交层①；`task`/`execute` deny；其余未知/自定义/MCP 按 `tools` allowlist（未列出即 deny）；deny 回传纠正文案。`enabled` 为 sentinel：失败中性化时 injector 主动写 `roles.json{enabled:false}` 并移除插件文件与 `plugin` 条目，再置能力位假，杜绝残留 enabled guard 造成全平台 fail-closed。**层② guard 的 `tools` allowlist 是工具授权唯一来源**；服务端不再按主实例身份做工具级门禁，只保留流程状态合法性、拓扑路由、人类权威与资源范围/归属校验。
 - **真实工具名**：MCP 工具一律 `vteam_<action>`（前缀取自注册的 MCP server 名 `vteam`）；自定义 git 工具为 `git_<action>`（独立命名空间，不带 `vteam_` 前缀）；`execute`/`task` 永不列入 allowlist。

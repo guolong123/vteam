@@ -1,8 +1,10 @@
 import * as vm from 'node:vm';
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import * as ts from 'typescript';
 import {
   CustomToolFileDef,
-  renderCustomToolFile,
+  renderCustomToolPlugin,
+  resolveToolName,
 } from './custom-tool';
 
 function cliDef(): CustomToolFileDef {
@@ -23,16 +25,62 @@ function cliDef(): CustomToolFileDef {
   };
 }
 
-/** 把渲染出的工具文件在 vm 沙箱中真实执行（stub tool()，提供真实 spawnSync），返回工具定义。 */
-function evalRenderedTool(content: string): { execute: (args: Record<string, unknown>) => Promise<string> } {
-  const executable = content
+/** v1 形态的工具定义（`server()` 返回的 `{ tool: { name: def } }`）。 */
+interface V1ToolDef {
+  description: string;
+  execute: (args: Record<string, unknown>) => Promise<string>;
+}
+
+/** v2 形态的工具注册（`editor.add({...})` 的入参）。 */
+interface V2ToolDef {
+  name: string;
+  description: string;
+  input: {
+    type: string;
+    properties: Record<string, { type: string; description: string }>;
+    required: string[];
+    additionalProperties: boolean;
+  };
+  options?: { codemode?: boolean };
+  execute: (input: Record<string, unknown>, context: unknown) => Promise<{ content: string }>;
+}
+
+/**
+ * 把渲染出的**插件模块**在 vm 沙箱中真实执行：
+ * - 顶层 await 的插件 API 加载 → 换成 identity 兜底（v1 分支的语义）；
+ * - v1 分支的 `@opencode-ai/plugin` 动态 import → 换成 `tool()` stub；
+ * - 然后分别取 v1 形态（`server()`）与 v2 形态（`setup(ctx)`）的工具定义。
+ */
+async function evalRenderedPlugin(content: string): Promise<{
+  v1Tools: Record<string, V1ToolDef>;
+  v2Tools: V2ToolDef[];
+}> {
+  // vm 沙箱是原生 JS → 先把两处动态 import 换成 stub，再用 typescript 转译（去掉类型注解）
+  const stubbed = content
+    .replace(
+      'const { Plugin } = (await import("@opencode/plugin").catch(() => ({\n' +
+        '  Plugin: { define: (plugin: unknown) => plugin },\n' +
+        '}))) as unknown as typeof import("@opencode/plugin")',
+      'const Plugin = { define: (plugin: any) => plugin }',
+    )
+    .replace(
+      'const __vteamV1PluginPackage = "@opencode-ai/plugin"\n' +
+        '    const { tool } = (await import(__vteamV1PluginPackage)) as any',
+      'const { tool } = __toolStub',
+    )
     .split('\n')
     .filter((line) => !line.trim().startsWith('import '))
-    .join('\n')
-    .replace('export default tool({', 'const __toolDef = tool({')
-    // vm 沙箱是原生 JS，不转译 TS 类型注解（渲染代码仅 cli execute 有一处 cmdArgs 注解）
-    .replace('const cmdArgs: string[] = [];', 'const cmdArgs = [];')
-    .concat('\nglobalThis.__toolDef = __toolDef;');
+    .join('\n');
+
+  const transpiled = ts.transpileModule(stubbed, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+
+  const executable = transpiled.replace('export default {', 'const __plugin = {');
+
   const schemaVal = () => ({
     optional: () => ({ describe: () => ({}) }),
     describe: () => ({}),
@@ -42,23 +90,73 @@ function evalRenderedTool(content: string): { execute: (args: Record<string, unk
     schema: Record<string, () => unknown>;
   };
   toolStub.schema = { string: schemaVal, number: schemaVal, boolean: schemaVal };
+
   const sandbox: Record<string, unknown> = {
     spawnSync: nodeSpawnSync,
-    tool: toolStub,
+    __toolStub: { tool: toolStub },
   };
   vm.createContext(sandbox);
-  vm.runInContext(executable, sandbox);
-  return sandbox.__toolDef as { execute: (args: Record<string, unknown>) => Promise<string> };
-}
+  const runner = `(async () => { ${executable}\n globalThis.__plugin = __plugin; })()`;
+  await vm.runInContext(runner, sandbox);
 
-describe('renderCustomToolFile', () => {
-  it('默认导出：export default + 工具名 = 文件名（注入 DB 工具形态）', () => {
-    const content = renderCustomToolFile(cliDef());
-    expect(content).toContain('export default tool({');
-    expect(content).not.toContain('export const');
+  const plugin = sandbox.__plugin as {
+    id: string;
+    setup: (ctx: unknown) => Promise<unknown>;
+    server: () => Promise<{ tool: Record<string, V1ToolDef> }>;
+  };
+
+  const v2Tools: V2ToolDef[] = [];
+  await plugin.setup({
+    tool: {
+      transform: async (fn: (editor: { add: (t: V2ToolDef) => void }) => void) => {
+        fn({ add: (t: V2ToolDef) => v2Tools.push(t) });
+      },
+    },
   });
 
-  it('具名导出：export const <name>（git 族多工具形态）', () => {
+  const v1 = await plugin.server();
+  return { v1Tools: v1.tool, v2Tools };
+}
+
+describe('renderCustomToolPlugin', () => {
+  it('产物形态：v1/v2 双形态插件模块（Plugin.define + setup + server）', () => {
+    const content = renderCustomToolPlugin(cliDef());
+    expect(content).toContain('Plugin.define');
+    expect(content).toContain('id: "vteam-tool-jira-query"');
+    expect(content).toContain('async setup(ctx: any)');
+    expect(content).toContain('ctx.tool.transform');
+    expect(content).toContain('editor.add({');
+    expect(content).toContain('async server()');
+    // v1 形态：Zod 入参 + 裸字符串返回；v2 形态：JSON Schema 入参 + { content } 返回
+    expect(content).toContain('tool.schema.string().describe("任务名")');
+    expect(content).toContain('type: "object"');
+    expect(content).toContain('content: await');
+    // T15 陷阱：agent 段的 `prompt` 键会被 v2 静默丢弃——生成物里不允许出现
+    expect(content).not.toMatch(/\bprompt\s*:/);
+  });
+
+  it('每个工具注册都带 options: { codemode: false }（否则模型只能经 Code Mode 调）', () => {
+    const content = renderCustomToolPlugin(cliDef());
+    const registrations = content.split('editor.add({').length - 1;
+    expect(registrations).toBe(1);
+    expect(content).toContain('options: { codemode: false },');
+  });
+
+  it('v2 分支带 setup 防呆护栏（v1 也会调用 setup，其 ctx 没有 ctx.tool）', () => {
+    const content = renderCustomToolPlugin(cliDef());
+    expect(content).toContain('if (!ctx?.tool?.transform) return');
+  });
+
+  it('插件 API 用动态 import（v1 二进制没有 @opencode/plugin，静态 import 会让模块加载失败）', () => {
+    const content = renderCustomToolPlugin(cliDef());
+    expect(content).toContain('await import("@opencode/plugin")');
+    expect(content).not.toMatch(/^import \{ Plugin \} from "@opencode\/plugin"/m);
+  });
+
+  it('工具名规则：默认导出 = 文件名；具名导出 = <文件名>_<导出名>', () => {
+    expect(resolveToolName('jira-query', 'default')).toBe('jira-query');
+    expect(resolveToolName('git', 'clone')).toBe('git_clone');
+
     const def: CustomToolFileDef = {
       fileName: 'math',
       exports: [
@@ -66,13 +164,13 @@ describe('renderCustomToolFile', () => {
         { exportName: 'mul', description: '乘法', args: [], execute: { type: 'code', code: 'return String(2 * 2);' } },
       ],
     };
-    const content = renderCustomToolFile(def);
-    expect(content).toContain('export const add = tool({');
-    expect(content).toContain('export const mul = tool({');
+    const content = renderCustomToolPlugin(def);
+    expect(content).toContain('name: "math_add"');
+    expect(content).toContain('name: "math_mul"');
   });
 
   it('cli 分支：注入 spawnSync + command 拆分（file 字符串 + 参数数组）+ args 序列化（boolean→--flag）', () => {
-    const content = renderCustomToolFile(cliDef());
+    const content = renderCustomToolPlugin(cliDef());
     expect(content).toContain('import { spawnSync } from "node:child_process";');
     expect(content).toContain('spawnSync("jcli", ["issue", "get", ...cmdArgs], { encoding: "utf8" })');
     expect(content).not.toContain('spawnSync(["jcli"');
@@ -81,7 +179,7 @@ describe('renderCustomToolFile', () => {
     expect(content).toContain('result.status !== 0');
   });
 
-  it('cli 分支运行时语义：渲染代码真实执行成功（echo 工具，boolean→--flag + positional）', async () => {
+  it('cli 分支运行时语义：v1/v2 两侧渲染代码真实执行成功（echo 工具，boolean→--flag + positional）', async () => {
     const def: CustomToolFileDef = {
       fileName: 'echo-hello',
       exports: [
@@ -96,12 +194,22 @@ describe('renderCustomToolFile', () => {
         },
       ],
     };
-    const toolDef = evalRenderedTool(renderCustomToolFile(def));
-    const output = await toolDef.execute({ suffix: 'world', loud: true });
+    const { v1Tools, v2Tools } = await evalRenderedPlugin(renderCustomToolPlugin(def));
+    const v1Output = await v1Tools['echo-hello'].execute({ suffix: 'world', loud: true });
     // echo hello world --loud：命令前缀 + positional 后缀 + boolean→--flag 均真实生效
-    expect(output).toContain('hello');
-    expect(output).toContain('world');
-    expect(output).toContain('--loud');
+    expect(v1Output).toContain('hello');
+    expect(v1Output).toContain('world');
+    expect(v1Output).toContain('--loud');
+
+    // v2 侧：返回值是 { content }，入参是 JSON Schema
+    expect(v2Tools).toHaveLength(1);
+    expect(v2Tools[0].name).toBe('echo-hello');
+    expect(v2Tools[0].input.type).toBe('object');
+    expect(v2Tools[0].input.properties.suffix.type).toBe('string');
+    expect(v2Tools[0].input.required).toEqual([]);
+    const v2Result = await v2Tools[0].execute({ suffix: 'world', loud: true }, {});
+    expect(v2Result.content).toContain('hello');
+    expect(v2Result.content).toContain('--loud');
   });
 
   it('cli 分支运行时语义：非 0 退出抛错（真实 spawnSync 执行）', async () => {
@@ -116,8 +224,8 @@ describe('renderCustomToolFile', () => {
         },
       ],
     };
-    const toolDef = evalRenderedTool(renderCustomToolFile(def));
-    await expect(toolDef.execute({})).rejects.toThrow(/failed \(exit 3\)/);
+    const { v1Tools } = await evalRenderedPlugin(renderCustomToolPlugin(def));
+    await expect(v1Tools['fail-tool'].execute({})).rejects.toThrow(/failed \(exit 3\)/);
   });
 
   it('http 分支：注入 fetch + method/url/headers + args JSON body', () => {
@@ -137,7 +245,7 @@ describe('renderCustomToolFile', () => {
         },
       ],
     };
-    const content = renderCustomToolFile(def);
+    const content = renderCustomToolPlugin(def);
     expect(content).toContain('await fetch("https://hooks.example.com/tools/jira", {');
     expect(content).toContain('method: "POST"');
     expect(content).toContain('headers: {"Content-Type":"application/json"},');
@@ -157,16 +265,21 @@ describe('renderCustomToolFile', () => {
         },
       ],
     };
-    const content = renderCustomToolFile(def);
-    expect(content).toContain('async execute(args) {');
+    const content = renderCustomToolPlugin(def);
+    expect(content).toContain('async function __vteam_exec_1(args: any): Promise<string> {');
     expect(content).toContain('return String(Number(args.a) + Number(args.b));');
   });
 
-  it('参数 schema：required 不带 optional、描述用 describe 序列化', () => {
-    const content = renderCustomToolFile(cliDef());
+  it('参数 schema：v1 用 Zod（required 不带 optional），v2 用 JSON Schema（required 进数组）', () => {
+    const content = renderCustomToolPlugin(cliDef());
     expect(content).toContain('jobName: tool.schema.string().describe("任务名")');
     expect(content).toContain('limit: tool.schema.number().optional().describe("条数上限")');
     expect(content).toContain('verbose: tool.schema.boolean().optional().describe("详细输出")');
+    expect(content).toContain('"jobName": { type: "string", description: "任务名" },');
+    expect(content).toContain('"limit": { type: "number", description: "条数上限" },');
+    expect(content).toContain('"verbose": { type: "boolean", description: "详细输出" },');
+    expect(content).toContain('required: ["jobName"],');
+    expect(content).toContain('additionalProperties: false,');
   });
 
   it('纯 code 工具不引入 spawnSync import', () => {
@@ -176,8 +289,7 @@ describe('renderCustomToolFile', () => {
         { exportName: 'default', description: 'd', args: [], execute: { type: 'code', code: 'return "ok";' } },
       ],
     };
-    const content = renderCustomToolFile(def);
-    expect(content).toContain('import { tool } from "@opencode-ai/plugin";');
+    const content = renderCustomToolPlugin(def);
     expect(content).not.toContain('child_process');
   });
 });

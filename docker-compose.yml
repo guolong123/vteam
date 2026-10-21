@@ -8,6 +8,7 @@
 #   web     Next.js standalone（build ARG 注入 API_PROXY_TARGET=http://server:3000；
 #           宿主 13001 避开本地 dev 3001）
 #   worker  opencode worker（X-Worker-Token 注册 + serve 0.0.0.0 + 上报 http://worker；
+#           serve 鉴权密码 OPENCODE_SERVER_PASSWORD（v2 恒开鉴权，仅 worker 一侧持有）；
 #           模型管理：WORKER_DEFAULT_MODEL 默认模型兜底 + 凭据下发注入 auth.json）
 #
 # 端口避开原则：本机本地 dev server 占 3000 / web dev 占 3001，relay-mysql 占 3306，
@@ -65,6 +66,12 @@ services:
       JWT_ACCESS_EXPIRES_IN: "2h"
       JWT_REFRESH_EXPIRES_IN: "7d"
       WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
+      # ⚠️ 这里**不再**导出 SERVER_PASSWORD：控制面自 v2 适配起**不再直连 opencode serve**
+      # （决策 D3），它只调 worker 的执行端点（`POST /sessions`、`POST /sessions/:id/prompt`、
+      # `GET /sessions/:id/messages`、`POST /sessions/:id/abort`、`GET /models`），
+      # 鉴权用 `X-Worker-Token`（= 上面这个 WORKER_TOKEN，与 worker 侧 X_WORKER_TOKEN 同值）。
+      # ⇒ serve 的 Basic Auth 密码只存在于 worker 一侧（OPENCODE_SERVER_PASSWORD），
+      # **控制面不需要知道它**；两侧不同值也不会再导致 401。
       # 模型 provider token 加密密钥（C4 AES-256-GCM，32 字节/64 hex）。
       # 必填校验：未设置即启动报错（拒绝公开默认值导致密钥泄露）。生成方式：openssl rand -hex 32
       MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY 未设置，请生成 32 字节随机密钥（openssl rand -hex 32）}
@@ -134,6 +141,13 @@ services:
       OPENCODE_SERVE_HOSTNAME: 0.0.0.0
       # 固定 opencode serve 端口（不再随机；容器内 4000）
       OPENCODE_SERVE_PORT: "4000"
+      # opencode serve 认证密码（Basic Auth，用户名固定 opencode；v2 **恒开鉴权**，worker 必需）：
+      # 为空 → worker 启动 fail-fast（v2 会自动生成随机密码打到 stdout，worker 不解析就全线 401）。
+      # 默认值是**本地开发占位**（与 WORKER_TOKEN 的 compose-worker-token 同性质），生产必须
+      # 用 .env 覆盖为随机值（openssl rand -hex 32）。
+      # ⚠️ 该密码**只存在于 worker 一侧**：控制面自 v2 适配起不再直连 serve（只经 worker
+      # 执行端点 + X-Worker-Token 鉴权）⇒ 不再需要与 server 侧同值，server 侧也没有该变量。
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-compose-dev-serve-password}
       WORKER_ADVERTISE_HOST: http://worker
       # worker 默认模型兜底（C2 新增，Agent 未配模型时用，C7 模型解析优先级第 3 级）；空 = 不指定（serve 默认）
       WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
@@ -156,9 +170,18 @@ services:
       # 注意：OPENCODE_PURE 由 opencode 自己解析为布尔环境变量，**空串会让 serve 直接启动失败**
       # （SchemaError: Expected "true"|...|"false"..., got ""）。因此这里绝不能写成
       # ${OPENCODE_PURE:-}（未设时会产生空串）。默认整条注释掉 = 不设该变量 = 非 pure
-      #（内置插件 omo 生效）；需要纯净基线对照 token（约 1900 pure vs 7601 非 pure）时
-      # 取消注释并设 true。
+      #（内置插件 omo 生效）。
+      # ⚠️ v2 已删掉 serve 的 --pure flag（照传直接 exit 1）：设 true **不再抑制插件**，worker 只打
+      # 一条告警——v1 时代的「纯净基线对照 token（约 1900 pure vs 7601 非 pure）」在 v2 上暂无可用
+      # 等价机制（纯基线语义待后续配置层方案落地），故此处保持整条注释掉。
       # OPENCODE_PURE: "true"
+      #
+      # 同理，serve 的**认证密码**（OPENCODE_SERVER_PASSWORD）在 v2 上必填：为空时 opencode
+      # 自动生成随机密码打到 stdout，worker 不解析 → 启动 fail-fast（错误信息提示设置该变量）；
+      # 只有显式开 OPENCODE_ALLOW_GENERATED_PASSWORD=1 逃生开关，worker 才会从 stdout 捕获
+      # 该密码并采用（明文不落日志）。compose 默认**不开启**该开关——该密码只用于 worker
+      # 自己访问 serve（控制面不直连 serve，鉴权走 X-Worker-Token）。
+      # OPENCODE_ALLOW_GENERATED_PASSWORD: "1"
       # agent-browser 容器内默认参数（覆盖 Dockerfile ENV，可通过 env 调整）
       AGENT_BROWSER_ARGS: --no-sandbox,--disable-gpu
       # 可选：agent-browser 额外配置（按需覆盖）

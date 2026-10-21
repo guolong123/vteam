@@ -30,15 +30,23 @@ replicaCount:
 ##   --set secret.jwtSecret=$(openssl rand -hex 32) 等
 ## existingSecret：提供外部 Secret 名时，模板不再自建 Secret，各组件从
 ## 该 Secret 读取同名 key（JWT_SECRET / WORKER_TOKEN / MODEL_CREDENTIAL_KEY /
-## DB_PASSWORD）。若同时启用内置 MySQL（db.enabled=true），需一并提供
-## secret.dbPassword（configmap 拼装 DATABASE_URL 需要明文密码）。
+## DB_PASSWORD / OPENCODE_SERVER_PASSWORD）。若同时启用内置 MySQL（db.enabled=true），
+## 需一并提供 secret.dbPassword（configmap 拼装 DATABASE_URL 需要明文密码）。
+## OPENCODE_SERVER_PASSWORD：worker 的 opencode serve 密码（**v2 恒开鉴权，worker 必需**：
+## 未下发则 serve 启动即 fail-fast，worker 起不来）。**本 chart 不提供明文入口**
+## （明文落 values.yaml = 泄露面，且会进 helm 命令行 / values 仓库）——缺省自动生成
+## 随机值写入上面的 Secret（升级复用，不轮换）；需自控密码时用 secret.existingSecret
+## 指向自己的 Secret（data 须含同名 key OPENCODE_SERVER_PASSWORD）。
+## ⚠️ 该密码**只由 worker 容器持有**：控制面自 v2 适配起不再直连 serve（只经 worker 执行
+## 端点 + X-Worker-Token 鉴权）⇒ server 容器**不再注入** SERVER_PASSWORD，两侧也**不需要**
+## 同值（旧文档里"必须同值否则全线 401"的说法已随 v2 适配失效）。
 ## ---------------------------------------------------------------------------
 secret:
   jwtSecret: ""            # 空 → 自动生成（32 字符随机）
   workerToken: ""          # 空 → 自动生成（32 字符随机）
   modelCredentialKey: ""   # 空 → 自动生成（32 字节 utf8，满足 AES-256-GCM 约束）
   dbPassword: ""           # 空 → 自动生成（16 字符随机）
-  existingSecret: ""       # 外部 Secret 名（data 含 JWT_SECRET 等同名 key）
+  existingSecret: ""       # 外部 Secret 名（data 含 JWT_SECRET 等同名 key，含 OPENCODE_SERVER_PASSWORD）
 
 ## ---------------------------------------------------------------------------
 ## 数据库
@@ -312,9 +320,15 @@ ingress:
 ## ---------------------------------------------------------------------------
 ## worker 内部 opencode serve 的独立 Ingress（web 终端调试入口）
 ## ---------------------------------------------------------------------------
-## ⚠️ 安全：opencode serve **无鉴权** —— 该入口等同于「可执行任意命令、读写任意文件的
-##    Web 终端」。默认关闭；仅在受控环境开启，并强烈建议同时设置
-##    whitelistSourceRange（如 "10.0.0.0/8,203.0.113.7/32"）限源。
+## ⚠️ 安全：OpenCode v2 的 serve **恒开鉴权** —— 密码由 worker 侧显式下发
+##    （OPENCODE_SERVER_PASSWORD）。本 chart 已把该密码纳入 Secret 管理：缺省自动
+##    生成随机值写入 Secret 的 OPENCODE_SERVER_PASSWORD key，worker 容器经
+##    secretKeyRef 注入（**明文不进 values.yaml / extraEnv**）；需自控密码时走
+##    secret.existingSecret（该 Secret 须含同名 key，值与 worker 侧一致）。
+##    紧急/调试可用 extraEnv 下发 OPENCODE_ALLOW_GENERATED_PASSWORD=1——未设密码时
+##    改为让 worker 捕获 opencode 自动生成的密码（明文不落日志）。
+##    该入口仍等同于「可执行任意命令、读写任意文件的 Web 终端」。默认关闭；仅在受控
+##    环境开启，并强烈建议同时设置 whitelistSourceRange（如 "10.0.0.0/8,203.0.113.7/32"）限源。
 ##
 ## host 默认 opencode.<ingress.host>（独立 host：nginx-ingress 的注解按 host 生效，
 ## 与主 ingress 混用同 host 会互相污染；opencode web 是 SPA，独立 host 也无需 rewrite）。

@@ -4,12 +4,37 @@ import {
   DEFAULT_EXEC_PORT,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_SECRET_COMMAND_TIMEOUT_MS,
+  isWorkerRateLimited,
+  isWorkerSessionInvalid,
   SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS,
   WorkerClient,
+  WorkerFileNotFoundException,
   WorkerUnavailableException,
 } from './worker.client';
+import type {
+  CreateSessionRequestPayload as ServerCreateSessionRequestPayload,
+  CreateSessionResponsePayload as ServerCreateSessionResponsePayload,
+  SessionAbortResponsePayload as ServerSessionAbortResponsePayload,
+  SessionMessagesQuery as ServerSessionMessagesQuery,
+  SessionMessagesResponsePayload as ServerSessionMessagesResponsePayload,
+  SessionPromptRequestPayload as ServerSessionPromptRequestPayload,
+  SessionPromptResponsePayload as ServerSessionPromptResponsePayload,
+  WorkerModelInfo as ServerWorkerModelInfo,
+  WorkerModelsResponsePayload as ServerWorkerModelsResponsePayload,
+} from './worker-session-protocol';
+import type {
+  CreateSessionRequestPayload as WorkerCreateSessionRequestPayload,
+  CreateSessionResponsePayload as WorkerCreateSessionResponsePayload,
+  SessionAbortResponsePayload as WorkerSessionAbortResponsePayload,
+  SessionMessagesQuery as WorkerSessionMessagesQuery,
+  SessionMessagesResponsePayload as WorkerSessionMessagesResponsePayload,
+  SessionPromptRequestPayload as WorkerSessionPromptRequestPayload,
+  SessionPromptResponsePayload as WorkerSessionPromptResponsePayload,
+  WorkerModelInfo as WorkerWorkerModelInfo,
+  WorkerModelsResponsePayload as WorkerWorkerModelsResponsePayload,
+} from '../../../worker/src/protocol/worker-protocol';
 
-/** mock global.fetch（Node 18+ 全局 fetch；worker.client.ts 裸 fetch 调 serve）。 */
+/** mock global.fetch（Node 18+ 全局 fetch；worker.client.ts 裸 fetch 调 worker 执行端点）。 */
 const mockFetch = jest.fn();
 const originalFetch = global.fetch;
 
@@ -31,18 +56,27 @@ function response(
   } as unknown as Response;
 }
 
-/** 构造 WorkerClient（SERVER_PASSWORD 默认为空=不鉴权；公开字段可再覆盖）。 */
-function makeClient(password = '') {
+/** 构造 WorkerClient（公开字段可再覆盖）。 */
+function makeClient() {
   const config = {
-    get: jest.fn((key: string, def?: unknown) =>
-      key === 'SERVER_PASSWORD' ? password : def,
-    ),
+    get: jest.fn((key: string, def?: unknown) => def),
   } as unknown as ConfigService;
   return new WorkerClient(config);
 }
 
-/** worker 行最小形态（capabilities 无 baseUrl/port → 走 WORKER_BASE_URL 回退）。 */
+/**
+ * worker 行最小形态（capabilities 无 execPort/execBaseUrl → 走 WORKER_BASE_URL 回退）。
+ *
+ * ⚠️ T18：控制面**只**调 worker 执行端点（不再是 opencode serve），故这里的 URL 断言
+ * 一律指向执行端点（默认 `http://localhost:4198`）。
+ */
 const worker = { id: 'w_00001', capabilities: {} };
+
+/** 执行端点 worker（capabilities.execBaseUrl 优先）。 */
+const execWorker = {
+  id: 'w_1',
+  capabilities: { execBaseUrl: 'http://worker:4198' },
+};
 
 describe('WorkerClient', () => {
   beforeEach(() => {
@@ -54,27 +88,31 @@ describe('WorkerClient', () => {
     global.fetch = originalFetch;
   });
 
-  describe('createSession', () => {
-    it('POST /session 200 + {id} → 返回 {sessionID}（映射 serve 实际返回的 id 字段）', async () => {
+  describe('createSession（POST /sessions：建会话走 worker 执行端点）', () => {
+    it('POST /sessions 200 + {sessionId} → 返回 {sessionId}（vteam 协议拼写归一）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(
-        response({ json: async () => ({ id: 'ses_abc' }) }),
+        response({ json: async () => ({ sessionId: 'ses_abc' }) }),
       );
 
       await expect(client.createSession(worker)).resolves.toEqual({
-        sessionID: 'ses_abc',
+        sessionId: 'ses_abc',
       });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('http://localhost:4199/session');
+      expect(url).toBe(`http://localhost:${DEFAULT_EXEC_PORT}/sessions`);
       expect(init.method).toBe('POST');
       expect(JSON.parse(String(init.body))).toEqual({});
+      // 执行端点鉴权：X-Worker-Token（不再有 opencode 的 Basic Auth）
+      expect(new Headers(init.headers).get('X-Worker-Token')).toBe(
+        'dev-worker-token',
+      );
     });
 
-    it('传入 model → body 仍为 {}（serve 1.18.15 拒收 model，模型在 prompt_async 指定）', async () => {
+    it('传入 model → 进 body（worker 侧按 providerID/modelID 选模型）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(
-        response({ json: async () => ({ id: 'ses_1' }) }),
+        response({ json: async () => ({ sessionId: 'ses_1' }) }),
       );
 
       await client.createSession(worker, {
@@ -83,7 +121,9 @@ describe('WorkerClient', () => {
       });
 
       const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(JSON.parse(String(init.body))).toEqual({});
+      expect(JSON.parse(String(init.body))).toEqual({
+        model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+      });
     });
 
     it('fetch 抛错 → WorkerUnavailableException（503 语义，带 workerId）', async () => {
@@ -96,7 +136,7 @@ describe('WorkerClient', () => {
       });
     });
 
-    it('响应缺 session id → 抛 WorkerUnavailableException', async () => {
+    it('响应缺 sessionId → 抛 WorkerUnavailableException', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ json: async () => ({ foo: 1 }) }));
 
@@ -106,45 +146,100 @@ describe('WorkerClient', () => {
     });
   });
 
-  describe('promptAsync', () => {
-    it('204 → resolve（成功，不抛异常）', async () => {
+  describe('promptSession（POST /sessions/:id/prompt：下发提示走 worker 执行端点）', () => {
+    it('200 → 回带收件条目 id + 实际生效的投递策略', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ ok: true, status: 204 }));
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            sessionId: 'ses_1',
+            messageId: 'msg_inbox_1',
+            delivery: 'steer',
+            admitted: true,
+          }),
+        }),
+      );
 
       await expect(
-        client.promptAsync(worker, 'ses_1', {
-          parts: [{ type: 'text', text: 'hello' }],
-        }),
-      ).resolves.toBeUndefined();
-
-      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('http://localhost:4199/session/ses_1/prompt_async');
-      expect(init.method).toBe('POST');
-      expect(JSON.parse(String(init.body))).toEqual({
-        parts: [{ type: 'text', text: 'hello' }],
-      });
-    });
-
-    it('directory 走 query 参数；model/agent 进 body', async () => {
-      const client = makeClient();
-      mockFetch.mockResolvedValue(response({ ok: true, status: 204 }));
-
-      await client.promptAsync(worker, 'ses_1', {
-        model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
-        agent: 'build',
-        parts: [{ type: 'text', text: 'hi' }],
-        directory: '/data/git-project/vteam',
+        client.promptSession(worker, 'ses_1', { prompt: 'hello' }),
+      ).resolves.toEqual({
+        sessionId: 'ses_1',
+        messageId: 'msg_inbox_1',
+        delivery: 'steer',
+        admitted: true,
       });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(
-        'http://localhost:4199/session/ses_1/prompt_async?directory=%2Fdata%2Fgit-project%2Fvteam',
+        `http://localhost:${DEFAULT_EXEC_PORT}/sessions/ses_1/prompt`,
       );
+      expect(init.method).toBe('POST');
       expect(JSON.parse(String(init.body))).toEqual({
+        prompt: 'hello',
+        delivery: 'steer',
+      });
+      expect(new Headers(init.headers).get('X-Worker-Token')).toBe(
+        'dev-worker-token',
+      );
+    });
+
+    it('请求体是 vteam 形状 {prompt, model, agent, directory, system, delivery}（不再是 opencode 的 parts）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({ sessionId: 'ses_1', admitted: true }),
+        }),
+      );
+
+      await client.promptSession(worker, 'ses_1', {
+        prompt: [{ type: 'text', text: 'hi' }],
         model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
         agent: 'build',
-        parts: [{ type: 'text', text: 'hi' }],
+        directory: '/data/git-project/vteam',
+        system: '系统提示',
       });
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({
+        prompt: [{ type: 'text', text: 'hi' }],
+        model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        agent: 'build',
+        directory: '/data/git-project/vteam',
+        system: '系统提示',
+        delivery: 'steer',
+      });
+    });
+
+    it('在飞注入（inFlight）→ 强制 delivery:"steer"（插队打断当前轮）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({ sessionId: 'ses_1', admitted: true }),
+        }),
+      );
+
+      await client.promptSession(worker, 'ses_1', {
+        prompt: '注入',
+        inFlight: true,
+        delivery: 'queue',
+      });
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body)).delivery).toBe('steer');
+    });
+
+    it('常规下发也显式带 delivery（不依赖被驱动端默认值）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({ sessionId: 'ses_1', admitted: true }),
+        }),
+      );
+
+      await client.promptSession(worker, 'ses_1', { prompt: 'x' });
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body)).delivery).toBe('steer');
     });
 
     it('HTTP 500 → WorkerUnavailableException', async () => {
@@ -152,23 +247,23 @@ describe('WorkerClient', () => {
       mockFetch.mockResolvedValue(response({ ok: false, status: 500 }));
 
       await expect(
-        client.promptAsync(worker, 'ses_1', { parts: [] }),
+        client.promptSession(worker, 'ses_1', { prompt: 'x' }),
       ).rejects.toMatchObject({ workerId: 'w_00001' });
     });
   });
 
   describe('execute（方案 A：worker 执行端点 POST /execute）', () => {
-    const execWorker = {
+    const execWorkerWithPort = {
       id: 'w_1',
       capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
     };
 
-    it('202 → resolve；URL = serve origin + execPort 拼接，body 含完整 payload', async () => {
+    it('202 → resolve；URL = worker 公布主机 + execPort 拼接，body 含完整 payload', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
 
       await expect(
-        client.execute(execWorker, {
+        client.execute(execWorkerWithPort, {
           prompt: [{ type: 'text', text: 'hi' }],
           model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
           agent: 'build',
@@ -198,12 +293,8 @@ describe('WorkerClient', () => {
     it('capabilities.execBaseUrl 优先（worker 上报完整执行端点基址，绕过拼接）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
-      const workerWithExecBase = {
-        id: 'w_1',
-        capabilities: { execBaseUrl: 'http://worker:4198' },
-      };
 
-      await client.execute(workerWithExecBase, {
+      await client.execute(execWorker, {
         prompt: [{ type: 'text', text: 'x' }],
       });
 
@@ -230,7 +321,7 @@ describe('WorkerClient', () => {
       });
     });
 
-    it('baseUrl 缺失 → WORKER_BASE_URL 回退 origin 拼接 execPort', async () => {
+    it('worker 未公布主机 → WORKER_BASE_URL 回退 origin 拼接 execPort', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
 
@@ -260,7 +351,7 @@ describe('WorkerClient', () => {
   });
 
   describe('fetchFile（FR-41：GET /file 从 worker 工作区拉取文件）', () => {
-    const execWorker = {
+    const execWorkerWithPort = {
       id: 'w_1',
       capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
     };
@@ -279,7 +370,7 @@ describe('WorkerClient', () => {
       } as unknown as Response);
 
       await expect(
-        client.fetchFile(execWorker, '/tmp/opencode/test_file.txt'),
+        client.fetchFile(execWorkerWithPort, '/tmp/opencode/test_file.txt'),
       ).resolves.toEqual(content);
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
@@ -295,7 +386,7 @@ describe('WorkerClient', () => {
       const config = {
         get: jest.fn((key: string, def?: unknown) => {
           if (key === 'WORKER_TOKEN') return 'compose-worker-token';
-          return key === 'SERVER_PASSWORD' ? '' : def;
+          return def;
         }),
       } as unknown as ConfigService;
       const client = new WorkerClient(config);
@@ -305,7 +396,7 @@ describe('WorkerClient', () => {
         arrayBuffer: async () => new ArrayBuffer(0),
       } as unknown as Response);
 
-      await client.fetchFile(execWorker, '/tmp/x.txt');
+      await client.fetchFile(execWorkerWithPort, '/tmp/x.txt');
 
       const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       const headers = init.headers as Headers;
@@ -320,25 +411,42 @@ describe('WorkerClient', () => {
         arrayBuffer: async () => new ArrayBuffer(0),
       } as unknown as Response);
 
-      await client.fetchFile(
-        { id: 'w_1', capabilities: { execBaseUrl: 'http://worker:4198' } },
-        '/tmp/x.txt',
-      );
+      await client.fetchFile(execWorker, '/tmp/x.txt');
 
       const [url] = mockFetch.mock.calls[0] as [string];
       expect(url).toBe('http://worker:4198/file?path=%2Ftmp%2Fx.txt');
     });
 
-    it('HTTP 非 2xx（404 文件不存在）→ WorkerUnavailableException（503，带 workerId）', async () => {
+    it('HTTP 404（worker 上没有这个文件）→ WorkerFileNotFoundException（404，**不是**「worker 不可用」）', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ ok: false, status: 404 }));
+      mockFetch.mockResolvedValue(
+        response({
+          ok: false,
+          status: 404,
+          text: jest.fn(async () =>
+            JSON.stringify({ error: '文件不存在: /tmp/missing.txt' }),
+          ),
+        }),
+      );
 
-      await expect(
-        client.fetchFile(execWorker, '/tmp/missing.txt'),
-      ).rejects.toMatchObject({
-        workerId: 'w_1',
-        status: 503,
-      });
+      const err = await client
+        .fetchFile(execWorkerWithPort, '/tmp/missing.txt')
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkerFileNotFoundException);
+      // 状态语义 = 找不到（404），不是节点故障（503）
+      expect((err as WorkerUnavailableException).getStatus()).toBe(404);
+      expect((err as WorkerUnavailableException).httpStatus).toBe(404);
+      expect((err as WorkerUnavailableException).code).toBe('FILE_NOT_FOUND');
+      expect((err as WorkerUnavailableException).message).not.toContain(
+        '不可用',
+      );
+      expect((err as WorkerUnavailableException).message).toContain(
+        '/tmp/missing.txt',
+      );
+      // 仍是 WorkerUnavailableException 的子类：platform-mcp 的多候选路径回退
+      // 按 `instanceof WorkerUnavailableException && httpStatus === 404` 换下一个候选
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
     });
 
     it('fetch 抛错（连接失败）→ WorkerUnavailableException（503，带 workerId）', async () => {
@@ -346,20 +454,29 @@ describe('WorkerClient', () => {
       mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
 
       await expect(
-        client.fetchFile(execWorker, '/tmp/x.txt'),
+        client.fetchFile(execWorkerWithPort, '/tmp/x.txt'),
       ).rejects.toMatchObject({
         workerId: 'w_1',
         status: 503,
       });
     });
+
+    it('worker 真不可达 → 仍是「worker 不可用」（503），与 404 区分开', async () => {
+      const client = makeClient();
+      mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
+
+      const err = await client
+        .fetchFile(execWorkerWithPort, '/tmp/x.txt')
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
+      expect(err).not.toBeInstanceOf(WorkerFileNotFoundException);
+      expect((err as WorkerUnavailableException).getStatus()).toBe(503);
+      expect((err as WorkerUnavailableException).message).toContain('不可用');
+    });
   });
 
   describe('questionReply / permissionReply（POST /question-reply 转发用户回复）', () => {
-    const execWorker = {
-      id: 'w_1',
-      capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
-    };
-
     it('questionReply：POST /question-reply 带 X-Worker-Token，body {sessionId, requestId, answers}', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 200 }));
@@ -435,10 +552,6 @@ describe('WorkerClient', () => {
   });
 
   describe('runSecretCommand（POST /secret-command 显式超时客户端）', () => {
-    const execWorker = {
-      id: 'w_1',
-      capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
-    };
     /** 哨兵 secret：只允许出现在测试代码与请求体里，绝不能出现在日志/异常消息。 */
     const SENTINEL = 's3cr3t-A9f';
     const okPayload = {
@@ -627,7 +740,6 @@ describe('WorkerClient', () => {
           timeoutMs: 300_000,
         })
         .catch((e) => e);
-
       expect(err).toBeInstanceOf(WorkerUnavailableException);
       expect(err.status).toBe(503);
     });
@@ -690,22 +802,26 @@ describe('WorkerClient', () => {
     });
   });
 
-  describe('listModels', () => {
-    it('GET /api/model → 映射为 {id: providerID/modelID} 列表', async () => {
+  describe('listModels（GET /models：模型目录走 worker 执行端点）', () => {
+    it('GET /models 200 → 映射为 {id: providerID/modelID} 列表', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(
         response({
           json: async () => ({
-            data: [
+            models: [
               {
-                id: 'deepseek-v4-flash',
-                providerID: 'opencode-go',
+                id: 'opencode-go/deepseek-v4-flash',
                 name: 'DeepSeek V4 Flash',
+                providerID: 'opencode-go',
+                modelID: 'deepseek-v4-flash',
+                status: 'active',
               },
               {
-                id: 'ling-3.0-tiny-free',
-                providerID: 'opencode',
+                id: 'opencode/ling-3.0-tiny-free',
                 name: 'Ling-3.0-tiny Free',
+                providerID: 'opencode',
+                modelID: 'ling-3.0-tiny-free',
+                status: 'active',
               },
             ],
           }),
@@ -718,22 +834,60 @@ describe('WorkerClient', () => {
           name: 'DeepSeek V4 Flash',
           providerID: 'opencode-go',
           modelID: 'deepseek-v4-flash',
+          status: 'active',
         },
         {
           id: 'opencode/ling-3.0-tiny-free',
           name: 'Ling-3.0-tiny Free',
           providerID: 'opencode',
           modelID: 'ling-3.0-tiny-free',
+          status: 'active',
         },
       ]);
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`http://localhost:${DEFAULT_EXEC_PORT}/models`);
+      expect(init.method).toBe('GET');
+      expect(new Headers(init.headers).get('X-Worker-Token')).toBe(
+        'dev-worker-token',
+      );
     });
 
-    it('F2 MINOR：缺省 providerID/id → id 兜底为 /，不产出 undefined/undefined（与 worker 侧统一）', async () => {
+    it('GET /models：响应信封只有 models 一个键（与双写契约一致；拼错的键不被读取）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(
         response({
           json: async () => ({
-            data: [{ name: 'Bare Model' }],
+            models: [
+              {
+                id: 'opencode-go/deepseek-v4-flash',
+                name: 'DeepSeek V4 Flash',
+                providerID: 'opencode-go',
+                modelID: 'deepseek-v4-flash',
+              },
+            ],
+            // 反向：worker 若回 {model:[...]}（拼写漂移），控制面**读不到** ⇒ 降级
+            model: [{ id: 'wrong-key' }],
+          }),
+        }),
+      );
+
+      await expect(client.listModels(worker)).resolves.toEqual([
+        {
+          id: 'opencode-go/deepseek-v4-flash',
+          name: 'DeepSeek V4 Flash',
+          providerID: 'opencode-go',
+          modelID: 'deepseek-v4-flash',
+        },
+      ]);
+    });
+
+    it('F2 MINOR：缺省 id/providerID/modelID → id 兜底为 /，不产出 undefined/undefined（与 worker 侧统一）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            models: [{ name: 'Bare Model' }],
           }),
         }),
       );
@@ -748,7 +902,7 @@ describe('WorkerClient', () => {
       ]);
     });
 
-    it('/api/model 404（旧版 serve）→ 回退 capabilities.models 数组', async () => {
+    it('worker 端点 404（旧版 worker 无该端点）→ 回退 capabilities.models 数组', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: false, status: 404 }));
       const workerWithModels = {
@@ -779,11 +933,6 @@ describe('WorkerClient', () => {
   });
 
   describe('listAgents（GET /agents：opencode 原生 agent 清单）', () => {
-    const execWorker = {
-      id: 'w_1',
-      capabilities: { execBaseUrl: 'http://worker:4198' },
-    };
-
     it('200 → 透传 agents 数组（含 native/hidden/mode 实测字段）', async () => {
       const client = makeClient();
       const agents = [
@@ -837,11 +986,6 @@ describe('WorkerClient', () => {
     });
   });
   describe('listTodos（GET /todos：opencode 会话 todo 步骤）', () => {
-    const execWorker = {
-      id: 'w_1',
-      capabilities: { execBaseUrl: 'http://worker:4198' },
-    };
-
     it('200 → 透传 todos 数组（含 content/status 实测字段）', async () => {
       const client = makeClient();
       const todos = [
@@ -892,11 +1036,6 @@ describe('WorkerClient', () => {
   });
 
   describe('listPlanFiles / writePlanFile（计划文档同步：GET /plan-files + POST /plan-file）', () => {
-    const execWorker = {
-      id: 'w_1',
-      capabilities: { execBaseUrl: 'http://worker:4198' },
-    };
-
     it('listPlanFiles 200 → 透传 files 数组（含正文，Modal 免二次请求）', async () => {
       const client = makeClient();
       const files = [
@@ -1015,16 +1154,28 @@ describe('WorkerClient', () => {
     });
   });
 
-  describe('abort', () => {
-    it('200 → resolve', async () => {
+  describe('abort（POST /sessions/:id/abort）', () => {
+    it('200 → 回带 sessionId + interrupted', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ ok: true, status: 200 }));
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({ sessionId: 'ses_1', interrupted: true }),
+        }),
+      );
 
-      await expect(client.abort(worker, 'ses_1')).resolves.toBeUndefined();
+      await expect(client.abort(worker, 'ses_1')).resolves.toEqual({
+        sessionId: 'ses_1',
+        interrupted: true,
+      });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('http://localhost:4199/session/ses_1/abort');
+      expect(url).toBe(
+        `http://localhost:${DEFAULT_EXEC_PORT}/sessions/ses_1/abort`,
+      );
       expect(init.method).toBe('POST');
+      expect(new Headers(init.headers).get('X-Worker-Token')).toBe(
+        'dev-worker-token',
+      );
     });
 
     it('HTTP 非 2xx → WorkerUnavailableException', async () => {
@@ -1037,18 +1188,42 @@ describe('WorkerClient', () => {
     });
   });
 
-  describe('getMessages', () => {
-    it('200 + 数组 → 原样返回', async () => {
+  describe('getMessages（GET /sessions/:id/messages）', () => {
+    it('200 + {sessionId, messages} → 返回消息数组', async () => {
       const client = makeClient();
-      const messages = [{ id: 'msg_1', info: { role: 'assistant' } }];
-      mockFetch.mockResolvedValue(response({ json: async () => messages }));
+      const messages = [
+        { info: { id: 'msg_1', role: 'assistant' }, parts: [] },
+      ];
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ sessionId: 'ses_1', messages }) }),
+      );
 
       await expect(client.getMessages(worker, 'ses_1')).resolves.toEqual(
         messages,
       );
 
       const [url] = mockFetch.mock.calls[0] as [string];
-      expect(url).toBe('http://localhost:4199/session/ses_1/message');
+      expect(url).toBe(
+        `http://localhost:${DEFAULT_EXEC_PORT}/sessions/ses_1/messages`,
+      );
+    });
+
+    it('分页参数 → 作为 query 下发（limit/order/cursor）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ sessionId: 'ses_1', messages: [] }) }),
+      );
+
+      await client.getMessages(worker, 'ses_1', {
+        limit: 20,
+        order: 'asc',
+        cursor: 'cur_1',
+      });
+
+      const [url] = mockFetch.mock.calls[0] as [string];
+      expect(decodeURIComponent(url)).toBe(
+        `http://localhost:${DEFAULT_EXEC_PORT}/sessions/ses_1/messages?limit=20&order=asc&cursor=cur_1`,
+      );
     });
 
     it('fetch 抛错 → WorkerUnavailableException', async () => {
@@ -1061,14 +1236,79 @@ describe('WorkerClient', () => {
     });
   });
 
-  describe('isHealthy', () => {
-    it('GET / 200 → true', async () => {
+  describe('错误语义：会话失效（404）与限流（429）必须可区分', () => {
+    it('404 + code:SESSION_NOT_FOUND → 会话失效（httpStatus 404 + code SESSION_NOT_FOUND）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          ok: false,
+          status: 404,
+          text: async () =>
+            JSON.stringify({
+              error: 'session not found',
+              code: 'SESSION_NOT_FOUND',
+            }),
+        }),
+      );
+
+      const err = await client.getMessages(worker, 'ses_1').catch((e) => e);
+
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
+      expect(err.httpStatus).toBe(404);
+      expect(err.code).toBe('SESSION_NOT_FOUND');
+      expect(isWorkerSessionInvalid(err)).toBe(true);
+      expect(isWorkerRateLimited(err)).toBe(false);
+    });
+
+    it('429 + code:RATE_LIMITED → 限流（httpStatus 429 + code RATE_LIMITED）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          ok: false,
+          status: 429,
+          text: async () =>
+            JSON.stringify({ error: 'rate limited', code: 'RATE_LIMITED' }),
+        }),
+      );
+
+      const err = await client
+        .promptSession(worker, 'ses_1', { prompt: 'x' })
+        .catch((e) => e);
+
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
+      expect(err.httpStatus).toBe(429);
+      expect(err.code).toBe('RATE_LIMITED');
+      expect(isWorkerRateLimited(err)).toBe(true);
+      expect(isWorkerSessionInvalid(err)).toBe(false);
+    });
+
+    it('404 但**没有** SESSION_NOT_FOUND 码（旧版 worker 无该端点）→ 不误判为会话失效', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          ok: false,
+          status: 404,
+          text: async () =>
+            JSON.stringify({ error: '未支持的路径: /sessions/ses_1/messages' }),
+        }),
+      );
+
+      const err = await client.getMessages(worker, 'ses_1').catch((e) => e);
+
+      expect(err.httpStatus).toBe(404);
+      expect(err.code).toBe('WORKER_UNAVAILABLE');
+      expect(isWorkerSessionInvalid(err)).toBe(false);
+    });
+  });
+
+  describe('isHealthy（探活 worker 执行端点）', () => {
+    it('GET /models 200 → true', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 200 }));
 
       await expect(client.isHealthy(worker)).resolves.toBe(true);
       const [url] = mockFetch.mock.calls[0] as [string];
-      expect(url).toBe('http://localhost:4199/');
+      expect(url).toBe(`http://localhost:${DEFAULT_EXEC_PORT}/models`);
     });
 
     it('非 200 → false（不抛异常）', async () => {
@@ -1087,43 +1327,33 @@ describe('WorkerClient', () => {
   });
 
   describe('baseUrl / 鉴权解析', () => {
-    it('capabilities.baseUrl 优先于 WORKER_BASE_URL 回退', async () => {
+    it('capabilities.baseUrl 的**主机**用于发现执行端点（serve 端口不被使用）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response());
 
       await client.isHealthy({
         id: 'w_1',
-        capabilities: { baseUrl: 'http://10.0.0.5:4300' },
+        capabilities: { baseUrl: 'http://10.0.0.5:4300', execPort: 4198 },
       });
 
       const [url] = mockFetch.mock.calls[0] as [string];
-      expect(url).toBe('http://10.0.0.5:4300/');
+      expect(url).toBe('http://10.0.0.5:4198/models');
     });
 
-    it('capabilities.port 拼 localhost', async () => {
+    it('capabilities.port（serve 端口）**不再**被使用（控制面不连 opencode serve）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response());
 
-      await client.isHealthy({ id: 'w_1', capabilities: { port: 4321 } });
+      await client.isHealthy({
+        id: 'w_1',
+        capabilities: { port: 4321, execPort: 4198 },
+      });
 
       const [url] = mockFetch.mock.calls[0] as [string];
-      expect(url).toBe('http://localhost:4321/');
+      expect(url).toBe(`http://localhost:${DEFAULT_EXEC_PORT}/models`);
     });
 
-    it('SERVER_PASSWORD 设置时注入 Basic Auth 头（opencode:<password>）', async () => {
-      const client = makeClient('secret-pass');
-      mockFetch.mockResolvedValue(response());
-
-      await client.isHealthy(worker);
-
-      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      const headers = init.headers as Headers;
-      expect(headers.get('Authorization')).toBe(
-        `Basic ${Buffer.from('opencode:secret-pass', 'utf8').toString('base64')}`,
-      );
-    });
-
-    it('SERVER_PASSWORD 为空 → 不注入 Authorization 头', async () => {
+    it('opencode 的 Basic Auth 不再注入（控制面只带 X-Worker-Token）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response());
 
@@ -1132,6 +1362,7 @@ describe('WorkerClient', () => {
       const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       const headers = init.headers as Headers;
       expect(headers.get('Authorization')).toBeNull();
+      expect(headers.get('X-Worker-Token')).toBeTruthy();
     });
   });
 
@@ -1155,11 +1386,6 @@ describe('WorkerClient', () => {
     });
   });
   describe('setOmoConfig 错误映射（4xx vs 5xx）', () => {
-    const execWorker = {
-      id: 'w_1',
-      capabilities: { execBaseUrl: 'http://worker:4198' },
-    };
-
     it('400（请求不合法）→ 原样 BadRequestException，不误报为 worker 不可用', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(
@@ -1188,6 +1414,275 @@ describe('WorkerClient', () => {
       await expect(
         client.setOmoConfig(execWorker, { a: 'b/c' }),
       ).rejects.toThrow(WorkerUnavailableException);
+    });
+  });
+
+  /**
+   * T21 双端契约一致性（五个会话/模型端点）。
+   *
+   * 协议类型在仓库里是**双写**的：worker 侧 `worker/src/protocol/worker-protocol.ts`
+   * 与 server 侧 `server/src/workers/worker-session-protocol.ts`。控制面按自己那份读字段，
+   * 一旦两侧漂移就是**静默丢字段**（`sessionId` vs `sessionID` ⇒ 会话 id 丢失）。
+   *
+   * - **编译期**：两侧副本逐类型相等（`Equals<>` 判定；任一字段漂移 ⇒ 编译失败）。
+   * - **运行时**：客户端实际发出的 body 键集与实际读取的响应键集必须与协议一致
+   *   （含**反向**断言：拼错的键名不被读取 ⇒ 漂移会立刻暴露，而不是静默降级）。
+   */
+  describe('T21 双端契约一致性（五个会话/模型端点）', () => {
+    /** 类型恒等判定（字段名/可选性/类型任一不同即 false）。 */
+    type Equals<X, Y> =
+      (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
+        ? true
+        : false;
+    type Expect<T extends true> = T;
+
+    type _E1 = Expect<
+      Equals<
+        ServerCreateSessionRequestPayload,
+        WorkerCreateSessionRequestPayload
+      >
+    >;
+    type _E2 = Expect<
+      Equals<
+        ServerCreateSessionResponsePayload,
+        WorkerCreateSessionResponsePayload
+      >
+    >;
+    type _E3 = Expect<
+      Equals<
+        ServerSessionPromptRequestPayload,
+        WorkerSessionPromptRequestPayload
+      >
+    >;
+    type _E4 = Expect<
+      Equals<
+        ServerSessionPromptResponsePayload,
+        WorkerSessionPromptResponsePayload
+      >
+    >;
+    type _E5 = Expect<
+      Equals<
+        ServerSessionAbortResponsePayload,
+        WorkerSessionAbortResponsePayload
+      >
+    >;
+    type _E6 = Expect<
+      Equals<ServerSessionMessagesQuery, WorkerSessionMessagesQuery>
+    >;
+    type _E7 = Expect<
+      Equals<
+        ServerSessionMessagesResponsePayload,
+        WorkerSessionMessagesResponsePayload
+      >
+    >;
+    type _E8 = Expect<Equals<ServerWorkerModelInfo, WorkerWorkerModelInfo>>;
+    type _E9 = Expect<
+      Equals<
+        ServerWorkerModelsResponsePayload,
+        WorkerWorkerModelsResponsePayload
+      >
+    >;
+
+    it('两侧协议副本逐类型相等（编译期钉死；Equals<> 为 false 时本组编译失败）', () => {
+      const createSessionEqual: true = true as Equals<
+        ServerCreateSessionRequestPayload,
+        WorkerCreateSessionRequestPayload
+      >;
+      const promptEqual: true = true as Equals<
+        ServerSessionPromptRequestPayload,
+        WorkerSessionPromptRequestPayload
+      >;
+      const promptResponseEqual: true = true as Equals<
+        ServerSessionPromptResponsePayload,
+        WorkerSessionPromptResponsePayload
+      >;
+      const abortEqual: true = true as Equals<
+        ServerSessionAbortResponsePayload,
+        WorkerSessionAbortResponsePayload
+      >;
+      const messagesQueryEqual: true = true as Equals<
+        ServerSessionMessagesQuery,
+        WorkerSessionMessagesQuery
+      >;
+      const messagesResponseEqual: true = true as Equals<
+        ServerSessionMessagesResponsePayload,
+        WorkerSessionMessagesResponsePayload
+      >;
+      const modelsEqual: true = true as Equals<
+        ServerWorkerModelInfo,
+        WorkerWorkerModelInfo
+      >;
+      const modelsEnvelopeEqual: true = true as Equals<
+        ServerWorkerModelsResponsePayload,
+        WorkerWorkerModelsResponsePayload
+      >;
+      expect([
+        createSessionEqual,
+        promptEqual,
+        promptResponseEqual,
+        abortEqual,
+        messagesQueryEqual,
+        messagesResponseEqual,
+        modelsEqual,
+        modelsEnvelopeEqual,
+      ]).toEqual([true, true, true, true, true, true, true, true]);
+    });
+
+    it('createSession：body 只含 model 键；响应只认 sessionId（拼错的键不被读取）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ sessionId: 'ses_1' }) }),
+      );
+      await client.createSession(worker, {
+        providerID: 'opencode',
+        modelID: 'gpt-5',
+      });
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(Object.keys(JSON.parse(String(init.body))).sort()).toEqual([
+        'model',
+      ]);
+
+      // 反向：worker 若回 {sessionID:...}（拼写漂移），控制面**读不到** ⇒ 明确报错
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ sessionID: 'ses_1' }) }),
+      );
+      await expect(client.createSession(worker)).rejects.toThrow(
+        WorkerUnavailableException,
+      );
+    });
+
+    it('promptSession：body 键集 = prompt/model/agent/directory/system/delivery；响应只认 4 个键', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            sessionId: 'ses_1',
+            messageId: 'inbox_1',
+            delivery: 'steer',
+            admitted: true,
+          }),
+        }),
+      );
+      await client.promptSession(worker, 'ses_1', {
+        prompt: 'hello',
+        model: { providerID: 'opencode', modelID: 'gpt-5' },
+        agent: 'build',
+        directory: '/work',
+        system: 'SYS',
+      });
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(Object.keys(JSON.parse(String(init.body))).sort()).toEqual([
+        'agent',
+        'delivery',
+        'directory',
+        'model',
+        'prompt',
+        'system',
+      ]);
+
+      // 反向：worker 若回 {sessionID:...}（拼写漂移）⇒ 控制面回落到请求里的 sessionId
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({ sessionID: 'ses_1', admitted: true }),
+        }),
+      );
+      await expect(
+        client.promptSession(worker, 'ses_1', { prompt: 'x' }),
+      ).resolves.toEqual({ sessionId: 'ses_1', admitted: true });
+    });
+
+    it('abort：无请求体；响应只认 sessionId/interrupted（interrupted 严格取 true）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({ sessionId: 'ses_1', interrupted: true }),
+        }),
+      );
+      await expect(client.abort(worker, 'ses_1')).resolves.toEqual({
+        sessionId: 'ses_1',
+        interrupted: true,
+      });
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(init.body).toBeUndefined();
+
+      // 反向：非布尔值不算「已中断」
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({ sessionId: 'ses_1', interrupted: 'yes' }),
+        }),
+      );
+      await expect(client.abort(worker, 'ses_1')).resolves.toEqual({
+        sessionId: 'ses_1',
+        interrupted: false,
+      });
+    });
+
+    it('getMessages：query 键集 = limit/order/cursor；响应只认 messages（不认 v1 的 data 包装）', async () => {
+      const client = makeClient();
+      const messages = [
+        {
+          info: { id: 'msg_1', role: 'assistant' },
+          parts: [{ id: 'prt_1', type: 'text', text: '你好' }],
+        },
+      ];
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ sessionId: 'ses_1', messages }) }),
+      );
+      await expect(
+        client.getMessages(worker, 'ses_1', {
+          limit: 20,
+          order: 'asc',
+          cursor: 'cur_1',
+        }),
+      ).resolves.toEqual(messages);
+      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const query = new URL(url).searchParams;
+      expect([...query.keys()].sort()).toEqual(['cursor', 'limit', 'order']);
+
+      // 反向：被驱动端的原始包装（data）不被当成消息数组
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ data: messages }) }),
+      );
+      await expect(client.getMessages(worker, 'ses_1')).resolves.toEqual([]);
+    });
+
+    it('listModels：响应只认 models 信封（不认被驱动端的 {location,data} 包装）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            models: [
+              {
+                id: 'opencode/gpt-5',
+                name: 'GPT-5',
+                providerID: 'opencode',
+                modelID: 'gpt-5',
+                status: 'active',
+              },
+            ],
+          }),
+        }),
+      );
+      await expect(client.listModels(worker)).resolves.toEqual([
+        {
+          id: 'opencode/gpt-5',
+          name: 'GPT-5',
+          providerID: 'opencode',
+          modelID: 'gpt-5',
+          status: 'active',
+        },
+      ]);
+
+      // 反向：被驱动端的原始包装不被识别 ⇒ 降级到 capabilities（此处为空 → []）
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            location: '/tmp',
+            data: [{ id: 'opencode/gpt-5' }],
+          }),
+        }),
+      );
+      await expect(client.listModels(worker)).resolves.toEqual([]);
     });
   });
 });

@@ -108,6 +108,8 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 
 > **工具名即权限 action（FR-48）**：权限点不是固定枚举，而是随工具注册动态扩展的开放命名空间——内置工具（`bash`）、自定义工具（`math_add`）、MCP 工具（`github_create_issue`，`<server>_<tool>` 形态）注册后自动成为可配置的权限点（11 篇 §2/§3/§5）。工具不提供 DELETE（09 篇 §3.8 尾注）：停用（enabled=false）替代删除，避免历史 Agent 配置悬空。
 
+> ⚠️ **v2 的默认取值口径（勿按 v1 理解）**：平台控制面实际只声明**四个原生 action**（`edit` / `read` / `bash` / `task`）与已注册的 vteam MCP 工具名，而 opencode **v2** 的每个 agent 内置规则集以 `{action:"*",resource:"*",effect:"allow"}` 开头、配置规则**追加其后**、按 `findLast` 求值 ⇒ **凡未被声明的 action 一律放行**（`webfetch` / `glob` / `grep` / `todowrite` / `skill` / `websearch` 及全部 MCP 工具）；v1 下它们落到引擎的逐 action ask/deny 默认。平台已**明确接受**该放宽（**不**补 catch-all ask、**不**加逐 action 默认表），记录见 07 篇 §3.2。工具类权限的**真正权威**仍是服务端闸门（`ROLE_BOUNDARIES[*].toolAllows`，16 篇 §2.1.2）。
+
 ### 3.4 权限范围配置（FR-36）
 
 权限范围限定 Agent 可访问的**资源与操作边界**（如仅可读取指定团队、仅可查看文档库、不可执行写操作）。超出范围的操作不直接执行，由平台**转交成员确认后放行**。
@@ -320,13 +322,13 @@ flowchart LR
 
 | 变更项 | 作用范围 | v1 生效方式 | v2 生效方式 | 代价 |
 |--------|---------|------------|------------|------|
-| 提示词（FR-33） | 后续会话（进行中会话维持原提示） | 配置随实例重下发生效；不涉及文件新增，**仅新分派生效** | agent transform 热更新（`ctx.agent.transform` + `switchAgent`） | 无会话中断 |
+| 提示词（FR-33） | 后续会话（进行中会话维持原提示） | 配置随实例重下发生效；不涉及文件新增，**仅新分派生效** | ⚠️ v2 实测：**配置键 `agents.<name>.system`** + `POST /api/session/{id}/agent` 激活（**不是** `ctx.agent.transform`；见 07 篇 §12.4） | 无会话中断 |
 | 技能勾选（FR-34） | 后续会话 | 写 SKILL.md 到该任务组 skills 目录 + **重启实例**（discoverSkills 启动时一次性发现） | `ctx.skill.transform` 热更新 | v1：仅该任务组会话中断 |
 | 工具 effect（FR-35/48） | 后续会话 | 生成 permission 节注入 + 重启实例（11 篇 §7.1 工具生效路径） | `ctx.tool.transform` / 权限热更新 | v1：仅该任务组会话中断 |
 | 工具停用（FR-35） | 后续会话 | `tools: {action: false}` + 重启实例 | 同上 | 同上 |
 | 权限范围（FR-36） | 后续会话 | permission 规则重下发 + 重启实例 | 权限热更新 | 同上 |
 | 默认模型（FR-47） | 后续会话 | 会话创建/分派携带新模型 | 同 v1（模型为分派参数） | 无会话中断 |
-| 自定义工具新增 | 后续会话 | 写 `.opencode/tools/*.ts` + 重启实例（07 §10.3 四步：写文件→close→重新 spawn→发现生效） | `ctx.tool.transform` 热更新 | v1：仅该任务组会话中断 |
+| 自定义工具新增 | 后续会话 | 写 `.opencode/plugins/*.ts`（**v2 形态**：v2 移除了 `.opencode/tools/*.ts` 的文件自动发现）+ 重启实例（07 §10.3 四步：写文件→close→重新 spawn→发现生效） | `ctx.tool.transform` 热更新 | v1：仅该任务组会话中断 |
 | MCP 挂载 | 后续会话 | 写 mcp 配置节 + 重启实例 | **待验证**（v2 MCP 适配未实现，11 篇 §5.7） | v1：仅该任务组会话中断 |
 
 ### 7.2 生效链路（v1 示例：技能勾选变更）

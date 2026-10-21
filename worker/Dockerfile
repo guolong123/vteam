@@ -1,6 +1,6 @@
 # worker 镜像（Phase 5 T3，D4 Oracle 实测方案；2026-08 agent-browser 集成版）。
 # 双阶段：build（TS 编译）→ runner（全局安装 opencode CLI + agent-browser + 运行 dist）。
-# opencode CLI = npm 包 opencode-ai（**不锁版本**，每次构建取最新；见下方 OPENCODE_CLI_SPEC）。
+# opencode CLI = npm 包 @opencode/cli（**锁版本** @opencode/cli@2.0.32，见下方 OPENCODE_CLI_SPEC）。
 # agent-browser = Vercel / vercel-labs/agent-browser（Rust + Chrome CDP，给 opencode Agent 补浏览器能力）。
 #
 # 基座说明：原 node:22-alpine (musl) 跑不了 Chrome(glibc)，切到 debian bookworm-slim；
@@ -27,10 +27,13 @@ RUN apt-get update && apt-get install -y ca-certificates && \
 # 国内源加速（npm）
 RUN npm config set registry https://registry.npmmirror.com
 # opencode CLI 全局安装（serve spawn 依赖，需在 PATH；npm 全局 bin 默认进 PATH）
-# 不锁版本：每次构建取 npm registry 上的最新版。如需复现某次构建，构建时覆盖
-#   --build-arg OPENCODE_CLI_SPEC=opencode-ai@1.18.30
+# **锁版本**（计划 T1 / D2）：v1 的 npm 包 `opencode-ai` 已冻结在 1.19.3（不再发版），
+# 永远到不了 v2；v2 换了包名 → `@opencode/cli`。不锁版本会让"镜像里跑的是哪一版"不可知，
+# 而控制面调度器按 opencode 版本串精确过滤 worker（版本闸门必须先于 v2 worker 上线）。
+# 复现/升级某次构建时覆盖：
+#   --build-arg OPENCODE_CLI_SPEC=@opencode/cli@2.0.32
 # 构建日志会打印实际装到的版本（下方 echo），便于事后追溯"这个镜像用的是哪版"。
-ARG OPENCODE_CLI_SPEC=opencode-ai
+ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32
 # bun：omo 官方安装器（bunx oh-my-openagent install）的运行依赖，仅构建期需要。
 RUN npm i -g "${OPENCODE_CLI_SPEC}" agent-browser bun && \
     echo "opencode CLI installed: $(opencode --version)" && \
@@ -66,7 +69,11 @@ RUN set -e; \
     [ -n "${OMO_VER}" ] || OMO_VER=unknown; \
     # 能力标记：运行期据此判断"本镜像是否内置 OmO"，决定是否展示/允许开启开关。
     # 写在镜像里（不是数据卷）——没有内置 OmO 的镜像就不会有这个文件。
-    printf '{"bundled":true,"spec":"%s","version":"%s"}' "${OMO_INSTALL_SPEC}" "${OMO_VER}" \
+    # "v2" 字段 = 内置 OmO 是否具备 **v2 形态入口**（导出 {id, setup}）。
+    # 当前安装器装出的是 **v1 形态**（导出 {server}）⇒ v2 上不会运行 ⇒ 注入器据此
+    # **不注册** OmO 条目（注册了也只会静默失败：plugins 是合法键，不产生归一化诊断）。
+    # 只有换成 v2 形态入口的 OmO 后才可改成 true（改前先跑一遍 worker 契约测试）。
+    printf '{"bundled":true,"v2":false,"spec":"%s","version":"%s"}' "${OMO_INSTALL_SPEC}" "${OMO_VER}" \
       > /opt/omo-bundled.json; \
     echo "omo capability marker: $(cat /opt/omo-bundled.json)"
 

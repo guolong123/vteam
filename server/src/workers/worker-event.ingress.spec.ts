@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import {
   EVENT_TYPES,
   MESSAGE_STATUS,
@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
   AgentStatusPayload,
+  DEDUP_WINDOW,
   DELTA_PERSIST_INTERVAL_MS,
   SessionActivityPayload,
   TaskCompletedPayload,
@@ -144,6 +145,212 @@ describe('WorkerEventIngress', () => {
       const b = event('w_1', 'evw_5', 'agent.status', { phase: 'operating' });
       expect(await ingress.handleEvent(a)).toBe(true);
       expect(await ingress.handleEvent(b)).toBe(false);
+    });
+  });
+
+  /**
+   * 幂等：上游身份键（opencode v2 适配 T12）。
+   *
+   * 口径（键的唯一构造点 = `dedupKeyOf`）：
+   * - durable 上游事件 → `upstream:<aggregateId>:<seq>`
+   * - ephemeral delta → `upstream:<eventId>:<ordinal>`
+   * - 无上游身份 → `worker:<workerId>:<eventId>`（存量口径不变）
+   *
+   * 观测口径：**每条被处理的 delta 广播一帧** MESSAGE_PART_DELTA，被判重的不广播
+   * ⇒ 帧数即「真正被处理的 delta 条数」。
+   */
+  describe('幂等：上游身份键（T12）', () => {
+    /** 带上游身份的 delta 事件（private 频道 + 可渲染 text part）。 */
+    const upstreamDelta = (
+      workerId: string,
+      eventId: string,
+      upstream: Record<string, unknown>,
+    ) =>
+      event(workerId, eventId, 'message.part.delta', {
+        taskId: 't_1',
+        agentId: 'a_1',
+        sessionId: 's_1',
+        channelId: 'c_dm',
+        parts: [{ type: 'text', text: '你好', synthetic: false }],
+        upstream,
+      });
+
+    /** 已广播的 MESSAGE_PART_DELTA 帧数（= 被真正处理的 delta 条数）。 */
+    const deltaEmits = () =>
+      realtime.emit.mock.calls.filter(
+        (c) => c[0] === EVENT_TYPES.MESSAGE_PART_DELTA,
+      ).length;
+
+    beforeEach(() => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_0000000043',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '你好', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+    });
+
+    it('同一 durable 上游事件投递 3 次 → 只落库 1 次', async () => {
+      const e = upstreamDelta('w_1', 'evw_boot1_1', {
+        eventId: 'evt_1',
+        aggregateId: 'ses_1',
+        seq: 7,
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(await ingress.handleEvent(e)).toBe(false);
+      expect(await ingress.handleEvent(e)).toBe(false);
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(deltaEmits()).toBe(1);
+    });
+
+    it('同一 delta 帧（同 eventId + 同 ordinal）投递 3 次 → 只落库 1 次', async () => {
+      const e = upstreamDelta('w_1', 'evw_boot1_2', {
+        eventId: 'evt_delta_1',
+        ordinal: 0,
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(await ingress.handleEvent(e)).toBe(false);
+      expect(await ingress.handleEvent(e)).toBe(false);
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(deltaEmits()).toBe(1);
+    });
+
+    it('同 ordinal 但不同 eventId → 视为不同事件（保守：宁可多处理一次也不吞真实增量）', async () => {
+      const a = upstreamDelta('w_1', 'evw_boot1_3', {
+        eventId: 'evt_d1',
+        ordinal: 5,
+      });
+      const b = upstreamDelta('w_1', 'evw_boot1_4', {
+        eventId: 'evt_d2',
+        ordinal: 5,
+      });
+      expect(await ingress.handleEvent(a)).toBe(true);
+      expect(await ingress.handleEvent(b)).toBe(true);
+      expect(deltaEmits()).toBe(2);
+    });
+
+    it('无上游身份的事件 → 仍按 (workerId, eventId) 去重（存量口径不变）', async () => {
+      const a = upstreamDelta('w_1', 'evw_legacy_1', {});
+      expect(await ingress.handleEvent(a)).toBe(true);
+      expect(await ingress.handleEvent(a)).toBe(false);
+      expect(deltaEmits()).toBe(1);
+
+      const b = upstreamDelta('w_1', 'evw_legacy_2', {});
+      expect(await ingress.handleEvent(b)).toBe(true);
+      expect(deltaEmits()).toBe(2);
+    });
+
+    it('worker 重启（不同 evw_ boot id、同一上游 id）→ 同一上游事件不被重复落库', async () => {
+      const beforeRestart = upstreamDelta('w_1', 'evw_bootA_1', {
+        eventId: 'evt_1',
+        aggregateId: 'ses_1',
+        seq: 7,
+      });
+      const afterRestart = upstreamDelta('w_1', 'evw_bootB_1', {
+        eventId: 'evt_1',
+        aggregateId: 'ses_1',
+        seq: 7,
+      });
+      expect(await ingress.handleEvent(beforeRestart)).toBe(true);
+      expect(await ingress.handleEvent(afterRestart)).toBe(false);
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(deltaEmits()).toBe(1);
+    });
+
+    it('worker 重启后的 delta 帧（同 eventId + 同 ordinal）→ 同样不被重复落库', async () => {
+      const beforeRestart = upstreamDelta('w_1', 'evw_bootA_2', {
+        eventId: 'evt_delta_1',
+        ordinal: 0,
+      });
+      const afterRestart = upstreamDelta('w_1', 'evw_bootB_2', {
+        eventId: 'evt_delta_1',
+        ordinal: 0,
+      });
+      expect(await ingress.handleEvent(beforeRestart)).toBe(true);
+      expect(await ingress.handleEvent(afterRestart)).toBe(false);
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(deltaEmits()).toBe(1);
+    });
+
+    it('去重表有界：投递远超窗口的事件数后，表大小不超过 DEDUP_WINDOW', async () => {
+      const debugSpy = jest
+        .spyOn(Logger.prototype, 'debug')
+        .mockImplementation(() => undefined);
+      try {
+        for (let i = 0; i < DEDUP_WINDOW + 500; i += 1) {
+          await ingress.handleEvent(
+            event('w_1', `evw_bound_${i}`, 'worker.heartbeat', {}),
+          );
+        }
+        expect(ingress.dedupStoreSize).toBeLessThanOrEqual(DEDUP_WINDOW);
+        // 窗口外的旧键已被淘汰 → 早期的键可以再次进入（窗口语义，非持久化语义）
+        expect(ingress.dedupStoreSize).toBe(DEDUP_WINDOW);
+      } finally {
+        debugSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('存储形态边界：delta 负载的 v2 形 content[] 也能落库（T20）', () => {
+    beforeEach(() => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_0000000077',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '结论', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+    });
+
+    it('负载只带 v2 形 content[]（无 parts）→ 经边界归一后落库为内部模型', async () => {
+      expect(
+        await ingress.handleEvent(
+          event('w_1', 'evw_v2shape_1', 'message.part.delta', {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            content: [
+              { type: 'text', text: '结论' },
+              {
+                type: 'tool',
+                id: 'call_1',
+                name: 'bash',
+                state: {
+                  status: 'completed',
+                  input: {},
+                  content: [{ type: 'text', text: 'ok' }],
+                },
+              },
+            ],
+          }),
+        ),
+      ).toBe(true);
+
+      const createArg = prisma.message.create.mock.calls[0][0] as {
+        data: { content: { text: string; parts: Record<string, unknown>[] } };
+      };
+      const parts = createArg.data.content.parts;
+      expect(parts).toHaveLength(2);
+      expect(parts[0].type).toBe('text');
+      expect(parts[0].text).toBe('结论');
+      expect(parts[1].tool).toBe('bash');
+      expect((parts[1].state as Record<string, unknown>).output).toBe('ok');
     });
   });
 

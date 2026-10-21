@@ -224,6 +224,20 @@ describe('WorkersService', () => {
       });
     });
 
+    it('T18：上报的原始版本串（opencode v2.0.28）→ 落库前归一成 semver（2.0.28）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      const dto = registerDto();
+      dto.opencodeVersion = 'opencode v2.0.28';
+
+      await service.register('secret-token', dto);
+
+      const [args] = prisma.worker.upsert.mock.calls[0];
+      // 落库值必须是规范化 semver——调度器按版本串过滤，两端格式不一致会让 worker
+      // **静默不可调度**（什么都派不出去、无报错）。
+      expect(args.create).toMatchObject({ opencodeVersion: '2.0.28' });
+      expect(args.update).toMatchObject({ opencodeVersion: '2.0.28' });
+    });
+
     it('重复注册走 upsert update：刷新 tokenHash/能力/负载/心跳，不丢 workerId', async () => {
       prisma.worker.upsert.mockResolvedValue(workerRow({ name: null }));
       const dto = registerDto();
@@ -1429,6 +1443,45 @@ describe('WorkersService', () => {
       });
 
       expect(workerId).toBe('w_v2');
+    });
+
+    it('T18：worker 上报规范化 semver（2.0.28）→ 被版本闸门匹配（否则静默不可调度）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_v1', opencodeVersion: '1.19.3' }),
+        workerRow({ id: 'w_v2', opencodeVersion: '2.0.28' }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        opencodeVersion: '2.0.28',
+      });
+
+      expect(workerId).toBe('w_v2');
+    });
+
+    it('T18：需求侧写成原始串（opencode v2.0.28）→ 归一后仍匹配上报 2.0.28 的 worker', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_v1', opencodeVersion: '1.19.3' }),
+        workerRow({ id: 'w_v2', opencodeVersion: '2.0.28' }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        opencodeVersion: 'opencode v2.0.28',
+      });
+
+      expect(workerId).toBe('w_v2');
+    });
+
+    it('T18：混跑期 v1 worker 不被 v2 需求选中（归一后仍按语义比较）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_v1', opencodeVersion: '1.19.3' }),
+        workerRow({ id: 'w_v2', opencodeVersion: '2.0.28' }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        opencodeVersion: '1.19.3',
+      });
+
+      expect(workerId).toBe('w_v1');
     });
 
     it('degraded worker 降权：有 online 可用时优先 online，即便 online 负载更高', async () => {

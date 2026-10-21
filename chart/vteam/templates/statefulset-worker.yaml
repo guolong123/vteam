@@ -59,6 +59,19 @@ spec:
                 secretKeyRef:
                   name: {{ include "vteam.secretName" . }}
                   key: WORKER_TOKEN
+            # opencode serve 密码（**v2 恒开鉴权**：opencode v2 的 serve 恒开鉴权，
+            # 密码为空则 worker 启动即 fail-fast——「v2 恒开鉴权，请设置
+            # OPENCODE_SERVER_PASSWORD」）。密文经 Secret 下发，**明文不进 values.yaml
+            # / extraEnv**；缺省由 chart 自动生成随机值写入 Secret（升级复用）。
+            # optional: true —— 外部 Secret（secret.existingSecret）漏该 key 时不阻断
+            # pod 启动（避免把 worker 侧配置问题升级成 server 一起下线），
+            # 此时由 worker 自身 fail-fast 给出可操作报错。
+            - name: OPENCODE_SERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: OPENCODE_SERVER_PASSWORD
+                  optional: true
             - name: HOME
               value: /root
             # WORKER_ID 唯一化：StatefulSet pod 名 <release>-worker-<ordinal>（如
@@ -78,7 +91,9 @@ spec:
             {{- end }}
             # WORKER_ADVERTISE_HOST 按 pod 注入专属 headless DNS（<pod>.<headless>.<ns>.svc），
             # 每副本上报唯一 baseUrl（http://vteam-worker-N.vteam-worker-headless...:4000），
-            # server 直连持有该副本 session 的 worker，exec 基址自动解析为同 origin :4198。
+            # 控制面**只取其中的主机部分** + 执行端点端口（缺省 4198）拼出执行端点，
+            # 直连持有该副本 session 的 worker（请求带 X-Worker-Token 鉴权；
+            # **serve 端口 :4000 不参与拨号**，控制面不与 opencode serve 通信）。
             # worker 无共享 ClusterIP Service，serve 调试用
             # kubectl port-forward sts/<release>-worker 14000:4000（见 NOTES/README）。
             # 显式设置 worker.env.workerId 时同样按 pod 名拼装（workerId 须与 pod 名对应）。

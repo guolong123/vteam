@@ -1,0 +1,87 @@
+######## T6-A baseline: polluted global config, project config without plugins key
+  env:    project-extra: <none>
+  plugin list:
+    total=89  non-builtin=[('global-spike', 'local')]
+    system(len=8871): GLOBAL_PLUGIN=True GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-B project plugins: []
+  env:    project-extra: {"plugins":[]}
+  plugin list:
+    total=89  non-builtin=[('global-spike', 'local')]
+    system(len=8871): GLOBAL_PLUGIN=True GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-C project plugins: ["-*"]
+  env:    project-extra: {"plugins":["-*"]}
+  plugin list:
+    total=2  non-builtin=[]
+    (no model request recorded at all)
+
+######## T6-D project plugins: ["-global-spike"]
+  env:    project-extra: {"plugins":["-global-spike"]}
+  plugin list:
+    total=88  non-builtin=[]
+    system(len=8798): GLOBAL_PLUGIN=False GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-E project instructions: []
+  env:    project-extra: {"instructions":[]}
+  plugin list:
+    total=89  non-builtin=[('global-spike', 'local')]
+    system(len=8871): GLOBAL_PLUGIN=True GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-F OPENCODE_DISABLE_PROJECT_CONFIG=1
+  env: OPENCODE_DISABLE_PROJECT_CONFIG=1   project-extra: <none>
+  plugin list:
+    total=89  non-builtin=[('global-spike', 'local')]
+    system(len=8698): GLOBAL_PLUGIN=True GLOBAL_AGENTS=True PROJECT_AGENTS=False
+
+######## T6-G OPENCODE_CONFIG=controlled.json (provider+plugins:-*)
+  env: OPENCODE_CONFIG=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/spike/t6b/controlled.json   project-extra: <none>
+  plugin list:
+    total=2  non-builtin=[]
+    (no model request recorded at all)
+
+######## T6-H OPENCODE_CONFIG_CONTENT (provider+plugins:-*)
+  env: OPENCODE_CONFIG_CONTENT={
+  "$schema": "https://opencode.ai/config.json",
+  "model": "spike-mock/spike-model",
+  "providers": {
+    "spike-mock": {
+      "name": "Spike Mock",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:45981/v1"
+      },
+      "models": {
+        "spike-model": {
+          "name": "spike-model",
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 8192,
+            "output": 1024
+          }
+        }
+      }
+    }
+  },
+  "plugins": [
+    "-*"
+  ]
+}   project-extra: <none>
+  plugin list:
+    total=2  non-builtin=[]
+    (no model request recorded at all)
+
+######## T6-I isolated XDG_CONFIG_HOME with NO global config dir
+  env:    project-extra: <none>
+  plugin list:
+    total=88  non-builtin=[]
+    system(len=8597): GLOBAL_PLUGIN=False GLOBAL_AGENTS=False PROJECT_AGENTS=True
+

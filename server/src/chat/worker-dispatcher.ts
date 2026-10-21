@@ -46,6 +46,7 @@ import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
   ExecuteAttachment,
+  isWorkerSessionInvalid,
   WorkerClient,
   WorkerEndpointRef,
   WorkerUnavailableException,
@@ -97,6 +98,17 @@ import { sortMemoriesByImportance } from '../memories/memory-importance';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
+
+/** task_events 主键前缀（与 tasks.service / worker-event.ingress 同源）。 */
+const TASK_EVENT_ID_PREFIX = 'te';
+
+/**
+ * 异常终止通知（缺陷 5）的幂等探针窗口与扫描行数：
+ * 进程重启后内存去重失效，靠群聊内同 (sessionId, 终止类型) 标记扫描兜底；
+ * 窗口取 30min（覆盖事件重投递/断线重连的典型间隔），窗口过后允许新一轮终止再通知。
+ */
+const TERMINATION_NOTICE_WINDOW_MS = 30 * 60 * 1000;
+const TERMINATION_NOTICE_SCAN_LIMIT = 100;
 
 // ==================================================================
 // 用量落库（token-usage-stats Todo 3 usage-sink）
@@ -437,7 +449,7 @@ export const DEFAULT_DOCLIB_TOTAL_BYTES = 128 * 1024;
 export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
 
 /**
- * P7：全局系统提示（注入 prompt_async 顶层 system 字段，serve 拼入 LLM system message）：
+ * P7：全局系统提示（经 worker 执行端点的顶层 system 字段下发，由驱动端落进 LLM system message）：
  * 产出物协议 + @定向机制说明——Agent 默认知晓如何声明可归档产出物，无需每条消息显式要求。
  * 经 system 通道注入（非 parts 文本）→ 不进入会话 user 消息，不会出现在聊天记录回复中。
  *
@@ -684,7 +696,7 @@ export interface BuildSystemInstructionsOptions {
   taskInstanceId?: string | null;
   /** 当前 agent 的实例别名（默认「<角色中文名>-<seq>」）；缺省回退 agent.name。 */
   selfAlias?: string | null;
-  /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，prompt_async directory）；注入
+  /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，下发时的 directory）；注入
    *  提示词作为运行时持久化目录（k8s 只有该目录重启后保留），引导 agent 把工作文件写入。 */
   persistentWorkDir?: string;
   /** 可用记忆索引块（team/global 计数+Top tags+description 列表，已按预算截断 <400 token）；缺省不注入。 */
@@ -1001,7 +1013,7 @@ export function parseTimeoutMs(raw: unknown, fallback: number): number {
 
 /** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /data/vteam-worker）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
- *  作为 prompt_async 的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。
+ *  作为下发的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。
  *  实现与常量已下沉到 ../tasks/work-dir.util（plan-docs.service 要用同一拼法，
  *  从本文件导入会造成 tasks ↔ chat 循环依赖）；此处 re-export 保持既有导入方兼容。 */
 export { DEFAULT_TASK_WORK_DIR };
@@ -1009,7 +1021,7 @@ export { DEFAULT_TASK_WORK_DIR };
 /** 自持轮询间隔 ms（F2 C1：对齐 worker 侧 prompt-await.ts pollMs=500，计划 D8）。 */
 export const POLL_INTERVAL_MS = 500;
 
-/** opencode serve GET /session/{id}/message 消息最小形状（判定/聚合只取所需字段）。 */
+/** worker GET /sessions/:id/messages 的消息最小形状（判定/聚合只取所需字段）。 */
 interface PollMessageShape {
   info?: { role?: string; id?: string };
   parts?: Array<{
@@ -1509,7 +1521,7 @@ export function toExecutionScope(
 /**
  * Phase 4 真实分派器（18 篇 §8.3，替换 Phase 2 mock 分派器的核心，M4 主链路心脏）：
  * dispatch → 定位/分配 worker（T12 bindSessionToWorker）→ doclib 上下文注入（12 篇 §8）
- * → WorkerClient 下发（T8 createSession/promptAsync）→ 回流处理（D5：落库 + broadcast
+ * → WorkerClient 下发（T8 createSession/promptSession）→ 回流处理（D5：落库 + broadcast
  * chat.message.new + emitFinal 归本类）。
  *
  * 与 Phase 2 mock 分派器的关键差异：
@@ -1549,6 +1561,13 @@ export class WorkerDispatcher
   private readonly completedSessions = new Set<string>();
   /** F2 MINOR：watchdog/轮询已超时的会话（迟到回流跳过落库，防用户同时见错误+消息）。 */
   private readonly failedSessions = new Set<string>();
+
+  /**
+   * 异常终止通知去重键（`<sessionId>:<reasonType>`，缺陷 5）：
+   * 同一会话的同一类异常终止只发一次群聊通知；新一轮派发时按 sessionId 清空
+   * （与 failedSessions 同步，见 dispatch 路径）。
+   */
+  private readonly terminationNotices = new Set<string>();
 
   /**
    * 事件静默唤醒计数（sessionId → 已发 wake 次数）：deadline 到期且持续静默 +1 并重武装；
@@ -1676,6 +1695,7 @@ export class WorkerDispatcher
         );
       }
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `履职收口失败（不阻断主链路）：成员 ${teamMemberId} fan-out 回执结清异常 team=${teamId}: ${this.describeError(err)}`,
       );
@@ -1795,6 +1815,7 @@ export class WorkerDispatcher
         (trigger) => this.handleSilenceTrigger(trigger),
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline handler 注册失败（仅内存 watchdog 生效）: ${this.describeError(err)}`,
       );
@@ -1840,6 +1861,7 @@ export class WorkerDispatcher
       try {
         await this.dispatchForTeamTarget(request, target, teamId);
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         const message = this.describeError(err);
         this.logger.error(
           `agent ${target.agentId} dispatch failed: ${message}`,
@@ -1999,6 +2021,7 @@ export class WorkerDispatcher
       planLifecycle =
         this.moduleRef?.get(PlanLifecycleService, { strict: false }) ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `门禁 PlanLifecycleService 未装配 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
       );
@@ -2010,6 +2033,7 @@ export class WorkerDispatcher
     try {
       await planLifecycle.autoEnsureRow(taskId);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `门禁读失败 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
       );
@@ -2046,6 +2070,7 @@ export class WorkerDispatcher
         : [];
       return selectFrozenPlanHash(descriptions);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `冻结哈希读取失败 task=${taskId}，哈希门禁未武装：${this.describeError(err)}`,
       );
@@ -2275,6 +2300,7 @@ export class WorkerDispatcher
       if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
       return memoryIndex;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.debug(
         `记忆索引构建失败 team=${teamId}，返回 null：${this.describeError(err)}`,
       );
@@ -2569,6 +2595,7 @@ export class WorkerDispatcher
           },
         });
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         // 回写失败不影响主链路（prompt 已发给 worker；仅展示少一段上下文）。
         this.logger.warn(
           `组装消息回写展示失败 message=${request.messageId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -2600,13 +2627,14 @@ export class WorkerDispatcher
     if (!opencodeSessionId) {
       try {
         const created = await this.workerClient.createSession(worker, model);
-        opencodeSessionId = created.sessionID;
+        opencodeSessionId = created.sessionId;
         await this.sessionLifecycle.bindSessionToWorker(
           sessionId,
           workerId,
           opencodeSessionId,
         );
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         await this.sessionLifecycle
           .unbindSession(sessionId)
           .catch((rbErr: unknown) =>
@@ -2858,6 +2886,7 @@ export class WorkerDispatcher
         system: buildSystemInstructions(agentIdentity, systemOpts),
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       if (injectFlight) {
         // 注入失败仅告警，不注销原执行的在飞登记（守卫/防冒充语义依赖该登记）；
         // 错误仍向上抛，由 dispatch() 统一 emitError + 广播 agent.error。
@@ -2890,6 +2919,11 @@ export class WorkerDispatcher
 
       this.completedSessions.delete(sessionId);
       this.failedSessions.delete(sessionId);
+      // 新一轮派发：清该会话的异常终止通知去重键（新一轮终止要能再通知一次）
+      for (const key of this.terminationNotices) {
+        if (key.startsWith(`${sessionId}:`))
+          this.terminationNotices.delete(key);
+      }
     }
 
     // 7. loading(operating) + 回流超时 watchdog（team: 作用域 key；注入模式不重复
@@ -3041,6 +3075,7 @@ export class WorkerDispatcher
           }
         }
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         this.logger.error(
           `agent ${agentId} 产出物归档失败: ${this.describeError(err)}`,
           (err as Error).stack,
@@ -3076,6 +3111,7 @@ export class WorkerDispatcher
       });
       return row !== null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       // 查询失败按「可能有待填」处理：宁可多留一条 running 的 secret_command 卡
       // （question 收敛后卡片自然回落），也不能把用户正在填的输入的卡删掉。
       this.logger.warn(
@@ -3361,6 +3397,7 @@ export class WorkerDispatcher
         text: displayText,
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `agent ${agentId} 回复落库失败: ${this.describeError(err)}`,
         (err as Error).stack,
@@ -3449,6 +3486,7 @@ export class WorkerDispatcher
         `[usage] 用量已记账 row=${rowId} model=${model} total=${counts.totalTokens} cost=${cost ?? 'null'}`,
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       if (isUniqueConstraintViolation(err)) {
         this.logger.debug(
           `[usage] 同一 completion 重复投递，主键仲裁下已存在，跳过（row=${rowId}）`,
@@ -3551,6 +3589,19 @@ export class WorkerDispatcher
         resolvedAgentId,
         payload.error?.trim() || 'agent 处理失败',
       );
+      // 异常终止通知（缺陷 5）：worker 上报的失败（v2 durable 事件 session.execution.failed
+      // 经事件表映射为 agent.status{error}；权限被拒导致的失败亦走此路）此前只留一个
+      // 内部 failed 状态，群聊/任务事件无痕 → 主动落一条带原因与 sessionId 的可见通知。
+      if (emitSessionId) {
+        await this.publishTerminationNotice({
+          sessionId: emitSessionId,
+          teamId,
+          teamMemberId,
+          agentId: resolvedAgentId,
+          reason: payload.error?.trim() || 'agent 处理失败',
+          reasonType: 'agent_error',
+        });
+      }
       this.emitError({
         taskId: scope,
         agentId: resolvedAgentId,
@@ -3616,9 +3667,191 @@ export class WorkerDispatcher
         `agent ${agentId} 处理失败，消息 ${message.id} 标记 failed：${errorText}`,
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `agent ${agentId} 失败消息落库失败: ${this.describeError(err)}`,
       );
+    }
+  }
+
+  /**
+   * 异常终止通知（缺陷 5）：成员会话**异常终止**（执行失败 / 事件静默判败 / 空闲判死）
+   * 时，主动在**团队群聊**落一条系统消息（带终止原因 + sessionId），有任务时另落一条
+   * task_event —— 让主 Agent 与人类用户都能追溯，而不是只留下一个静默的 idle/failed 状态。
+   *
+   * 幂等：同一 (sessionId, reasonType) 只发一次——内存去重（新一轮派发即清，
+   * 与 failedSessions 同步）+ 群聊内同标记扫描（进程重启后内存去重失效时的兜底）。
+   * 正常完成不经过本方法（完工走回执），故不会与回执重复通知。
+   */
+  private async publishTerminationNotice(params: {
+    sessionId: string;
+    teamId: string;
+    teamMemberId: string;
+    agentId: string;
+    reason: string;
+    reasonType: string;
+  }): Promise<void> {
+    const { sessionId, teamId, teamMemberId, agentId, reason, reasonType } =
+      params;
+    const key = `${sessionId}:${reasonType}`;
+    if (this.terminationNotices.has(key)) {
+      return;
+    }
+    this.terminationNotices.add(key);
+    try {
+      const channel = await this.prisma.chatChannel.findFirst({
+        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        select: { id: true },
+      });
+      if (!channel) {
+        this.logger.warn(
+          `[dispatcher] 异常终止通知跳过：团队 ${teamId} 无群聊频道 session=${sessionId} type=${reasonType}`,
+        );
+        return;
+      }
+      // 任务归属取会话行的 taskId（事件负载里的 taskId 可能是 `team:<id>` 伪 scope，
+      // 不能直接写 task_events 的外键列）。
+      const taskId = await this.taskIdOfSession(sessionId);
+      const alias = await this.memberAlias(teamMemberId, agentId);
+      const text =
+        `【成员会话异常终止】${alias}（session ${sessionId}，终止类型 ${reasonType}）：` +
+        `${reason}。请主 Agent 复核该成员本轮产出与回执，决定是否重新派发。`;
+      const existing = await this.findTerminationNotice(
+        channel.id,
+        sessionId,
+        reasonType,
+      );
+      if (existing) {
+        this.logger.warn(
+          `[dispatcher] 异常终止通知已存在（幂等跳过）message=${existing} session=${sessionId} type=${reasonType}`,
+        );
+        return;
+      }
+      const message = await this.prisma.message.create({
+        data: {
+          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+          channelId: channel.id,
+          taskId: taskId ?? null,
+          senderType: SENDER_TYPE.system,
+          senderId: null,
+          senderInstanceId: null,
+          content: { text, parts: [] } as Prisma.InputJsonValue,
+          mentions: null,
+          status: MESSAGE_STATUS.sent,
+        } as any,
+      });
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        { message: this.toMessageDto(message) },
+        { type: 'channel', id: channel.id },
+      );
+      if (taskId) {
+        await this.prisma.taskEvent.create({
+          data: {
+            id: await this.idGen.nextId(TASK_EVENT_ID_PREFIX),
+            taskId,
+            eventType: 'session.terminated',
+            fromStatus: null,
+            toStatus: null,
+            actorType: 'system',
+            actorId: null,
+            metadata: {
+              sessionId,
+              reason,
+              reasonType,
+              agentId,
+              teamMemberId,
+              teamId,
+            } as Prisma.InputJsonValue,
+          },
+        });
+      }
+      this.logger.warn(
+        `[dispatcher] 异常终止已通知群聊 message=${message.id} session=${sessionId} type=${reasonType} team=${teamId}`,
+      );
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      this.terminationNotices.delete(key);
+      this.logger.error(
+        `[dispatcher] 异常终止通知失败 session=${sessionId} type=${reasonType}: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /** 群聊内既有同 (sessionId, reasonType) 终止通知 → 返回其 messageId（幂等兜底；无则 null）。 */
+  private async findTerminationNotice(
+    channelId: string,
+    sessionId: string,
+    reasonType: string,
+  ): Promise<string | null> {
+    try {
+      const rows = await this.prisma.message.findMany({
+        where: {
+          channelId,
+          senderType: SENDER_TYPE.system,
+          createdAt: {
+            gte: new Date(Date.now() - TERMINATION_NOTICE_WINDOW_MS),
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: TERMINATION_NOTICE_SCAN_LIMIT,
+        select: { id: true, content: true },
+      });
+      for (const row of (rows ?? []) as Array<{
+        id: string;
+        content: unknown;
+      }>) {
+        const text = this.extractHistoryMessageText(
+          row.content as Prisma.JsonValue,
+        );
+        if (!text) continue;
+        if (
+          text.includes(`session ${sessionId}`) &&
+          text.includes(`终止类型 ${reasonType}`)
+        ) {
+          return row.id;
+        }
+      }
+      return null;
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      this.logger.warn(
+        `[dispatcher] 异常终止通知幂等探针读错（fail-open 继续发）: ${this.describeError(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /** 成员别名（teamMember.alias → agent.name → agentId 兜底）。 */
+  private async memberAlias(
+    teamMemberId: string,
+    agentId: string,
+  ): Promise<string> {
+    try {
+      const row = await (this.prisma as any).teamMember?.findUnique?.({
+        where: { id: teamMemberId },
+        select: { alias: true, agent: { select: { name: true } } },
+      });
+      return row?.alias ?? row?.agent?.name ?? agentId ?? teamMemberId;
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 查成员别名失败：降级用 agentId/teamMemberId（身份可追溯性下降但不中断通知）
+      return agentId || teamMemberId;
+    }
+  }
+
+  /** 会话行的任务归属（null = 团队会话无任务锚点；读错按 null 处理，不阻断通知）。 */
+  private async taskIdOfSession(sessionId: string): Promise<string | null> {
+    try {
+      const row = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { taskId: true },
+      });
+      return row?.taskId ?? null;
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 查会话归属失败：降级为无任务归属（不写 task_events）
+      return null;
     }
   }
 
@@ -3627,8 +3860,8 @@ export class WorkerDispatcher
   // ------------------------------------------------------------------
 
   /**
-   * F2 C1（CRITICAL）+ F3 MAJOR-1（增量检测）：自持轮询完成判定——promptAsync 后 server
-   * 侧每 500ms 拉取 GET /session/{id}/message，**只检测本轮 dispatch 之后新增的消息**中
+   * F2 C1（CRITICAL）+ F3 MAJOR-1（增量检测）：自持轮询完成判定——下发 prompt 后 server
+   * 侧每 500ms 拉取 worker GET /sessions/:id/messages，**只检测本轮 dispatch 之后新增的消息**中
    * 是否出现 step-finish(reason=stop)（pollCursors 记录已消费到的最新消息 id，复用会话
    * 时不误命中上一次会话的 step-finish）→ handlePolledCompletion 落库+广播+emitFinal。
    * 默认超时（dispatchTimeoutMs）→ failedSessions 标记防迟到回流；emitError 由 watchdog
@@ -3649,7 +3882,7 @@ export class WorkerDispatcher
     channelId?: string;
     startedAt?: number;
     /**
-     * F3 MAJOR-1 残留修复：promptAsync 前基线 cursor（dispatch 前置取定，此时 serve
+     * F3 MAJOR-1 残留修复：下发 prompt 前基线 cursor（dispatch 前置取定，此时驱动端
      * 尚未创建本次 assistant 占位消息，不会落在占位上）。null=无历史（首次会话，
      * messagesAfter(null) 返回全部）；undefined=未提供（前置取基线失败）→ 回退既有
      * 游标或兜底首轮自取。
@@ -3658,7 +3891,7 @@ export class WorkerDispatcher
   }): Promise<void> {
     const deadline = Date.now() + this.dispatchTimeoutMs;
     // F3 MAJOR-1：增量 poll 游标——上次已消费到的最新消息 id；复用会话第二次 dispatch
-    // 时从上次已消费位置继续。F3 残留修复：优先使用 dispatch 在 promptAsync 前取的
+    // 时从上次已消费位置继续。F3 残留修复：优先使用 dispatch 在下发 prompt 前取的
     // 基线（绝对正确，无占位污染）；未提供才回退 pollCursors 既有游标（跨轮续接）。
     let cursor: string | null | undefined;
     if (params.baselineCursor !== undefined) {
@@ -3679,6 +3912,23 @@ export class WorkerDispatcher
           params.opencodeSessionId,
         );
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
+        // 会话失效（worker 侧 404 + SESSION_NOT_FOUND）：会话在驱动端已不存在
+        // （serve 重启/容器重建）⇒ 重试没有意义，只会把超时窗口空转到头。
+        // ⇒ 走**会话重建路径**：解绑平台会话（清 instanceRef）→ 下一轮分派新建会话。
+        if (isWorkerSessionInvalid(err)) {
+          this.logger.warn(
+            `agent ${params.agentId} 轮询 getMessages：会话已失效（${params.opencodeSessionId}），解绑会话待重建: ${this.describeError(err)}`,
+          );
+          await this.sessionLifecycle
+            .unbindSession(params.sessionId)
+            .catch((unbindErr: unknown) =>
+              this.logger.error(
+                `会话失效解绑失败 session=${params.sessionId}: ${this.describeError(unbindErr)}`,
+              ),
+            );
+          return;
+        }
         // getMessages 失败（worker 暂时不可达）：超时窗口内继续重试
         this.logger.warn(
           `agent ${params.agentId} 轮询 getMessages 失败: ${this.describeError(err)}`,
@@ -3689,7 +3939,7 @@ export class WorkerDispatcher
       const lastId = this.lastMessageId(messages);
       if (!initialized) {
         // F3 MAJOR-1 残留修复：兜底首轮基线（前置基线失败/无既有游标场景）——用
-        // baselineId 跳过空 assistant 占位（promptAsync 后 serve 创建的本次回复占位，
+        // baselineId 跳过空 assistant 占位（下发 prompt 后驱动端创建的本次回复占位，
         // parts=[]），基线落在本次 user prompt 消息（或更早）上，防 messagesAfter
         // 永空（m_37 超时根因）；不检测本轮。
         cursor = this.baselineId(messages);
@@ -3975,6 +4225,7 @@ export class WorkerDispatcher
         `agent ${agentId} 群聊转发（对外结果）message=${groupMessage.id}（session=${sessionId ?? '-'}）`,
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `agent ${agentId} 群聊转发失败: ${this.describeError(err)}`,
       );
@@ -4001,6 +4252,7 @@ export class WorkerDispatcher
       })) as { overrideModelId: string | null } | null;
       return row?.overrideModelId ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
       this.logger.warn(
         `成员覆盖模型查询失败 teamMemberId=${teamMemberId}，回退 agent 默认模型：${this.describeError(err)}`,
@@ -4032,6 +4284,7 @@ export class WorkerDispatcher
       })) as { preferredWorkerId: string | null } | null;
       return row?.preferredWorkerId ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `成员首选 worker 查询失败 teamMemberId=${teamMemberId}，回退自动调度：${this.describeError(err)}`,
       );
@@ -4060,6 +4313,7 @@ export class WorkerDispatcher
       })) as { preferredWorkerId: string | null } | null;
       return row?.preferredWorkerId ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `团队首选 worker 查询失败 teamId=${teamId}，回退自动调度：${this.describeError(err)}`,
       );
@@ -4070,7 +4324,7 @@ export class WorkerDispatcher
   /**
    * 团队成员选择的 opencode 原生 agent 名（TeamMember.opencodeAgentName）。
    *
-   * 非空 → 分派时下发 prompt_async 的 `agent` 字段，由 opencode 内核按该 agent 的
+   * 非空 → 分派时下发 `agent` 字段，由 opencode 内核按该 agent 的
    * prompt/permission 执行（vteam 只做传递，不自造 agent 语义）；null → 不带该字段，
    * 行为与引入本特性前逐字节一致（零回归）。
    *
@@ -4090,6 +4344,7 @@ export class WorkerDispatcher
       })) as { opencodeAgentName: string | null } | null;
       return row?.opencodeAgentName ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `成员 opencode agent 名查询失败 teamMemberId=${teamMemberId}，回退 null：${this.describeError(err)}`,
       );
@@ -4137,6 +4392,7 @@ export class WorkerDispatcher
           };
         }
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         // 策略解析异常不阻断分派 → 回退常量派生
         this.logger.warn(
           `岗位策略解析失败 role=${role.key}，回退常量派生：${this.describeError(err)}`,
@@ -4424,7 +4680,7 @@ export class WorkerDispatcher
       this.pendingBySession.delete(sessionId);
       return;
     }
-    const fail = (error: string): void => {
+    const fail = async (error: string): Promise<void> => {
       if (key !== undefined) {
         this.pending.delete(key);
       }
@@ -4437,6 +4693,18 @@ export class WorkerDispatcher
       //（fire-and-forget；settleReceiptsOnDutyEnd 自吞异常，不重复 catch）。
       if (teamId) {
         void this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
+      }
+      // 异常终止通知（缺陷 5）：静默判败此前只有 SSE agent.error（不落库、用户看不到），
+      // 平台表面只剩一个静默的 failed 状态 → 主动落一条带原因与 sessionId 的群聊通知。
+      if (teamId) {
+        await this.publishTerminationNotice({
+          sessionId,
+          teamId,
+          teamMemberId,
+          agentId,
+          reason: error,
+          reasonType: 'silent_session_timeout',
+        });
       }
       this.logger.error(`agent ${agentId} ${error}`);
       this.emitError({ taskId: scope, agentId, error });
@@ -4458,6 +4726,7 @@ export class WorkerDispatcher
         select: { status: true },
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `worker ${workerId} 心跳状态查询失败（fail-open 按在线继续）: ${this.describeError(err)}`,
       );
@@ -4467,7 +4736,7 @@ export class WorkerDispatcher
       !workerLookupFailed &&
       (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE)
     ) {
-      fail(
+      await fail(
         `agent 无响应（${this.silentSessionWakeMs / 1000}s 无事件回流，worker 心跳已离线），不再唤醒直接失败，请检查 worker 状态`,
       );
       return;
@@ -4492,7 +4761,7 @@ export class WorkerDispatcher
       );
       return;
     }
-    fail(
+    await fail(
       `agent 无响应（${this.silentSessionWakeMs / 1000}s 无事件回流，worker 心跳正常），已尝试 ${MAX_SILENT_WAKE_ATTEMPTS} 次自动唤醒仍未恢复，请稍后重试或检查 worker 状态`,
     );
   }
@@ -4568,6 +4837,7 @@ export class WorkerDispatcher
         current.triggerDedupKey = dedupKey;
       }
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline durable 行落库失败（仅内存 watchdog 生效） session=${entry.sessionId}: ${this.describeError(err)}`,
       );
@@ -4584,6 +4854,7 @@ export class WorkerDispatcher
     try {
       await this.triggers.cancel(dedupKey);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline durable 行取消失败（忽略） ${dedupKey}: ${this.describeError(err)}`,
       );
@@ -4654,6 +4925,7 @@ export class WorkerDispatcher
         select: { status: true, lastActivityAt: true },
       })) as { status: unknown; lastActivityAt: unknown } | null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline 重启判定读会话失败（fail-open 跳过） session=${sessionId}: ${this.describeError(err)}`,
       );
@@ -4693,6 +4965,7 @@ export class WorkerDispatcher
             dedupKey,
           );
         } catch (err) {
+          void err; // 故意忽略：降级路径，错误原因不改变语义
           this.logger.warn(
             `静默 deadline 顺延行落库失败（fail-open 跳过） session=${sessionId}: ${this.describeError(err)}`,
           );
@@ -4723,6 +4996,7 @@ export class WorkerDispatcher
         data: { lastActivityAt: at ?? new Date() },
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `session ${sessionId} 活动时间回写失败（fail-open，DB 扫描继续）: ${this.describeError(err)}`,
       );
@@ -4821,6 +5095,7 @@ export class WorkerDispatcher
         stale.push(row.id);
       }
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `空闲判死 DB 检出失败（fail-open，扫描继续）: ${this.describeError(err)}`,
       );
@@ -4930,6 +5205,7 @@ export class WorkerDispatcher
             }
           }
         } catch (err) {
+          void err; // 故意忽略：降级路径，错误原因不改变语义
           this.logger.debug(
             `session ${sessionId} 错误尸检失败 worker=${row.workerId}，沿用默认错误类型：${this.describeError(err)}`,
           );
@@ -4962,9 +5238,19 @@ export class WorkerDispatcher
       // → settledHook → drain 重查自动复位主 Agent（置于 quota/transient 分支之前，
       // 判死口径统一；永不抛错，不阻断后续恢复链）。
       await this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
+      // 异常终止通知（缺陷 5）：空闲判死此前只有 SSE agent.error（不落库），平台表面
+      // 只剩一个静默的 idle/failed 状态 → 主动落一条带原因与 sessionId 的群聊通知。
       if (forensicsError && isQuotaError(forensicsType)) {
         const quotaMsg = `agent 额度不足已暂停（${forensicsError}），请补充额度或更换模型后重试`;
         this.logger.error(`session ${sessionId} ${quotaMsg}`);
+        await this.publishTerminationNotice({
+          sessionId,
+          teamId,
+          teamMemberId,
+          agentId,
+          reason: quotaMsg,
+          reasonType: 'quota_exceeded',
+        });
         this.emitError({ taskId: scope, agentId, error: quotaMsg });
         void this.broadcastAgentError({
           taskId: scope,
@@ -4979,6 +5265,14 @@ export class WorkerDispatcher
       if (forensicsError) {
         const transientMsg = `agent 意外中断（${forensicsError}），已自动重试`;
         this.logger.warn(`session ${sessionId} ${transientMsg}，尝试自动拉起`);
+        await this.publishTerminationNotice({
+          sessionId,
+          teamId,
+          teamMemberId,
+          agentId,
+          reason: transientMsg,
+          reasonType: 'session_error',
+        });
         this.emitError({ taskId: scope, agentId, error: transientMsg });
         void this.broadcastAgentError({
           taskId: scope,
@@ -4995,6 +5289,14 @@ export class WorkerDispatcher
       }
       const idleMsg = `agent 长时间无活动（超过 ${this.agentIdleTimeoutMs / 60000}min），已判死`;
       this.logger.error(`session ${sessionId} ${idleMsg}`);
+      await this.publishTerminationNotice({
+        sessionId,
+        teamId,
+        teamMemberId,
+        agentId,
+        reason: idleMsg,
+        reasonType: 'agent_idle_timeout',
+      });
       this.emitError({ taskId: scope, agentId, error: idleMsg });
       void this.broadcastAgentError({
         taskId: scope,
@@ -5008,6 +5310,7 @@ export class WorkerDispatcher
         this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `session ${sessionId} 空闲判死失败: ${this.describeError(err)}`,
       );
@@ -5026,6 +5329,7 @@ export class WorkerDispatcher
     try {
       await this.workerClient.abort(workerRef, instanceRef);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `session ${sessionId} 中止 worker 会话 ${instanceRef} 失败，按已失败继续恢复: ${this.describeError(err)}`,
       );
@@ -5157,7 +5461,7 @@ export class WorkerDispatcher
 
   /**
    * F3 MAJOR-1 残留修复：兜底基线消息 id——最后一条**非空 assistant 占位**消息 id。
-   * promptAsync 后 serve 为本次回复创建 assistant 占位消息（parts=[]，未填充）；若基线
+   * 下发 prompt 后驱动端为本次回复创建 assistant 占位消息（parts=[]，未填充）；若基线
    * 取到它 → messagesAfter(cursor) 永空 → 永不命中 step-finish（m_37 超时根因）。兜底
    * 路径（前置基线失败后首轮自取）跳过占位，基线落在本次 user prompt（或更早）上；
    * 无消息/全为占位 → null（messagesAfter(null) 返回全部）。
@@ -5193,6 +5497,7 @@ export class WorkerDispatcher
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `任务工作目录创建失败 dir=${dir}（best-effort，仍返回路径）: ${(err as Error)?.message ?? err}`,
       );
@@ -5206,6 +5511,7 @@ export class WorkerDispatcher
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `team-mode 工作目录创建失败 dir=${dir}（best-effort，仍返回路径）: ${(err as Error)?.message ?? err}`,
       );
@@ -5279,6 +5585,7 @@ export class WorkerDispatcher
         pointer: `【附件图片】用户附了一张图片（${filename}），已放入本次执行的上下文，请查看图片内容后再作答。`,
       };
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `触发消息 ${messageId} 附件查询失败，按纯文本分派: ${this.describeError(err)}`,
       );
@@ -5344,6 +5651,7 @@ export class WorkerDispatcher
           : { type: 'task', id: event.taskId },
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(`agent.error 广播失败: ${this.describeError(err)}`);
     }
   }

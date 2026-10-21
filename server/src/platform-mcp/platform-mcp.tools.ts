@@ -1057,6 +1057,18 @@ const SECRET_COMMAND_DESCRIPTION = [
 export function buildPlatformMcpTools(
   service: PlatformMcpService,
 ): PlatformMcpTool[] {
+  return buildToolList(service).map((tool) => ({
+    ...tool,
+    description: withEnumCatalogue(tool.description, tool.inputSchema),
+  }));
+}
+
+/**
+ * 工具清单本体（描述未经枚举清单加工）。
+ * 分离出来是为了让 `buildPlatformMcpTools` 只做一件事：把**由 schema 派生**的
+ * 枚举全集行贴到描述首行（缺陷 4），从而描述与 schema 不会漂移。
+ */
+function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
   return [
     {
       name: 'chat_history',
@@ -1253,7 +1265,7 @@ export function buildPlatformMcpTools(
     {
       name: 'channel_send',
       description:
-        'Agent-decided outbound notification: send text/markdown to a notification channel bound to the current task (webhook/wecom_group_robot). This is the SOLE way to trigger outbound webhook notifications — auto-push on task status/agent reply is disabled. Decide when to notify based on task context.',
+        'Agent-decided outbound notification: send text/markdown to a notification channel bound to the current task or team (webhook/wecom_group_robot; target 传渠道 id 或 name，可用渠道见报错里的「可用渠道」清单). This is the SOLE way to trigger outbound webhook notifications — auto-push on task status/agent reply is disabled. Decide when to notify based on task context.',
       inputSchema: channelSendSchema,
       handler: (ctx, args) => service.channelSend(ctx, args as ChannelSendArgs),
     },
@@ -1312,20 +1324,73 @@ export function buildPlatformMcpTools(
 }
 
 /**
+ * zod 字段的枚举取值（ZodEnum → 字符串数组；非枚举 → null）。
+ *
+ * **单一来源**：工具描述里的「枚举全集」行与 JSON Schema 的 `enum` 字段都从这里取，
+ * 二者同源于同一份 zod schema ⇒ 改 schema 即同时改描述，描述不会与 schema 漂移
+ * （缺陷 4：合法取值此前只能从运行时校验报错里得知）。
+ */
+export function enumValuesOf(field: z.ZodTypeAny): string[] | null {
+  let inner: unknown = field;
+  if (field instanceof z.ZodOptional) {
+    inner = (field as z.ZodOptional<z.ZodTypeAny>)._def.innerType;
+  }
+  if (inner instanceof z.ZodEnum) {
+    return [...(inner.options as string[])];
+  }
+  return null;
+}
+
+/**
+ * 工具描述的枚举清单行（缺陷 4）：从工具自身的 inputSchema 派生，
+ * 形如 `【参数枚举全集】type: answer | question | help；stage: process | end`。
+ *
+ * - 无枚举参数 → 返回 ''（描述原样，不加噪声行）。
+ * - 枚举参数 → 逐个列出**合法取值的全集**（模型在调用前即可见，不必靠报错反推）。
+ */
+export function describeToolEnums(schema: z.ZodTypeAny): string {
+  const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
+  if (!shape) return '';
+  const parts: string[] = [];
+  for (const [key, fieldSchema] of Object.entries(shape)) {
+    const values = enumValuesOf(fieldSchema as z.ZodTypeAny);
+    if (!values || values.length === 0) continue;
+    parts.push(`${key}: ${values.join(' | ')}`);
+  }
+  if (parts.length === 0) return '';
+  return `【参数枚举全集】${parts.join('；')}`;
+}
+
+/**
+ * 工具描述 = 枚举清单行 + 原描述（枚举清单置首行：模型读描述时先看到合法取值）。
+ * 幂等：原描述已含该行时不再重复叠加。
+ */
+export function withEnumCatalogue(
+  description: string,
+  schema: z.ZodTypeAny,
+): string {
+  const line = describeToolEnums(schema);
+  if (!line) return description;
+  if (description.startsWith(line)) return description;
+  return `${line}\n${description}`;
+}
+
+/**
  * 从 zod shape 派生 JSON Schema（tools/list 的 inputSchema 字段）：
  * `{type:'object', properties:{k:{type:'string'|'number'}}, required:[非 optional]}`
  * 仅覆盖本工具集用到的 string/number/boolean/enum 基础类型（ZodOptional 已解包；
- * ZodEnum 归为 string）。
+ * ZodEnum 归为 string 并**附带 enum 取值全集**——缺陷 4：schema 此前把枚举塌成
+ * 裸 string，客户端/模型在调用前看不到合法取值）。
  */
 export function zodObjectToJsonSchema(schema: z.ZodTypeAny): {
   type: 'object';
-  properties: Record<string, { type: string }>;
+  properties: Record<string, { type: string; enum?: string[] }>;
   required: string[];
 } {
   // zod v4 classic：z.object().refine() 返回仍是 ZodObject（refine 校验挂
   // _def.checks），shape 直接可访问，无需解包
   const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
-  const properties: Record<string, { type: string }> = {};
+  const properties: Record<string, { type: string; enum?: string[] }> = {};
   const required: string[] = [];
 
   for (const [key, fieldSchema] of Object.entries(shape)) {
@@ -1348,7 +1413,11 @@ export function zodObjectToJsonSchema(schema: z.ZodTypeAny): {
     } else {
       type = 'object';
     }
-    properties[key] = { type };
+    // 枚举字段附带合法取值全集（缺陷 4）：此前一律塌成裸 string，调用前无从得知
+    // 合法取值（只能靠运行时校验报错反推）。取值来源与描述里的枚举行同源。
+    const enumValues =
+      field instanceof z.ZodEnum ? [...(field.options as string[])] : null;
+    properties[key] = enumValues ? { type, enum: enumValues } : { type };
     if (!isOptional) {
       required.push(key);
     }

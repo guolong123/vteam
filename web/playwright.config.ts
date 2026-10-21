@@ -43,6 +43,13 @@ export default defineConfig({
       testMatch: /.*\.spec\.ts$/,
     },
     {
+      // web/app 下的纯单元 spec（与 lib-unit 同理：web 没有别的受检测试运行器，
+      // 挂进 Playwright 才会真的被执行；这些 spec 不碰浏览器）。
+      name: "app-unit",
+      testDir: "./app",
+      testMatch: /.*\.spec\.ts$/,
+    },
+    {
       // A1–A3 密度阈值门（chat-ux-hierarchy-and-streaming 复选框 2）：
       // e2e/chat-density.spec.ts 用 esbuild-wasm 打包真实组件到空白页渲染，
       // 不依赖 setup 登录态 / 后端 / dev server 路由，故不挂 dependencies。

@@ -1,11 +1,19 @@
 /**
- * T4c 重启协调器：无活跃会话才重启 + 有活跃会话则挂起等归零。
+ * 重启协调器：**只用于真正需要换进程的场景**（运维重启 / 二进制升级 / 崩溃恢复 /
+ * 热重载兜底）。
  *
- * 单 serve 实例（Metis 必改点 2：无 TaskGroupRegistry），任务组隔离重启无法兑现，
- * 故重启前必须确认无活跃会话——否则重启会中断进行中的 Agent 会话。
+ * ⚠️ **配置类变更不走这里**（opencode v2 原生支持热重载，无需重启 serve）：
+ * skills / tools / MCP servers / agent 策略 / 模型凭据的变更一律走
+ * `reload/config-reloader.ts`（`POST /api/location/reload` + 文件监听）——
+ * 重启的代价有三条：① 随机端口场景端口漂移 ⇒ 必须重新注册
+ * `capabilities.baseUrl/port`（失败 = 静默断线）；② 有活跃会话时必须**等会话排空**
+ * （无上界延迟）；③ 重启窗口内 serve 不可用。
+ *
+ * 这里的「挂起等会话归零」语义**只对真重启有意义**：热重载不需要等（它不动进程，
+ * 且有待答复项时会自动退让到文件监听路径——见 config-reloader.ts 的 pending 闸门）。
  *
  * 用法（index.ts）：
- *   1. onCommands reload-config 回调：注入落盘后调用 coordinator.requestRestart()
+ *   1. 运维 `RESTART` 命令 / `/config/restart` 端点：coordinator.requestRestart()
  *   2. 会话归零通知：instance-tracker.onActiveSessionsIdle(() => coordinator.checkPending())
  *
  * worker 独立进程铁律：restart/reRegister 由调用方注入（依赖倒置），本模块不 import server 代码。
@@ -54,9 +62,12 @@ export class RestartCoordinator {
   }
 
   /**
-   * 请求重启：无活跃会话 → 立即执行；有活跃会话 → 标记 pending（返回 'pending'），
+   * 请求**真重启**：无活跃会话 → 立即执行；有活跃会话 → 标记 pending（返回 'pending'），
    * 会话归零后由 checkPending() 执行。重启失败打日志不抛错（serve 不可用时心跳
-   * 上报 degraded，后续 reload-config 可再次触发修复）。
+   * 上报 degraded，后续可再次触发修复）。
+   *
+   * ⚠️ **配置类变更不要用这里**——用 `reload/config-reloader.ts` 的热重载路径
+   * （不重启进程 ⇒ 无端口漂移、无会话排空、无不可用窗口）。
    */
   async requestRestart(reason: string): Promise<RestartDecision> {
     const count = this.activeSessionCount();

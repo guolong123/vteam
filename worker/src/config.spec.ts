@@ -6,15 +6,27 @@
  * 部分 mock networkInterfaces，稳定探测结果避免真实网卡干扰缺省断言。
  */
 import * as os from 'os';
-import { detectLocalIPv4, loadConfig } from './config';
+import * as fs from 'fs';
+import * as path from 'path';
+import {
+  detectLocalIPv4,
+  ensureIsolationScope,
+  loadConfig,
+  resolveIsolationScope,
+} from './config';
 
 jest.mock('os', () => {
   const actual = jest.requireActual<typeof os>('os');
   // 默认返回空接口表：未显式 mock 的用例探测结果为 undefined（回落 127.0.0.1）
-  return { ...actual, networkInterfaces: jest.fn().mockReturnValue({}) };
+  return {
+    ...actual,
+    networkInterfaces: jest.fn().mockReturnValue({}),
+    homedir: jest.fn(actual.homedir),
+  };
 });
 
 const mockNetworkInterfaces = os.networkInterfaces as jest.Mock;
+const mockHomedir = os.homedir as jest.Mock;
 
 const BASE_ENV = {
   X_WORKER_TOKEN: 'tok',
@@ -178,6 +190,45 @@ describe('WORKER_STANDALONE（独立模式：跳过注册/心跳/资源拉取）
   });
 });
 
+describe('OPENCODE_V2_ENABLED（T18：vteam 侧驱动模式开关已单轨）', () => {
+  it('缺省/空串：默认 true（目标契约 v2）', () => {
+    expect(loadConfig(BASE_ENV).opencodeV2Enabled).toBe(true);
+    expect(loadConfig({ ...BASE_ENV, OPENCODE_V2_ENABLED: '' }).opencodeV2Enabled).toBe(true);
+    expect(loadConfig({ ...BASE_ENV, OPENCODE_V2_ENABLED: '   ' }).opencodeV2Enabled).toBe(true);
+  });
+
+  it('true 分支：true/1/yes/on（忽略大小写）→ true', () => {
+    for (const raw of ['true', 'TRUE', '1', 'yes', 'YES', 'on', ' true ']) {
+      expect(loadConfig({ ...BASE_ENV, OPENCODE_V2_ENABLED: raw }).opencodeV2Enabled).toBe(true);
+    }
+  });
+
+  it('T18：false 分支 → **响亮失败**（v1 驱动已删除；回退只能回滚镜像/代码到 v1.0.x）', () => {
+    for (const raw of ['false', 'FALSE', '0', 'no', 'NO', 'off']) {
+      expect(() => loadConfig({ ...BASE_ENV, OPENCODE_V2_ENABLED: raw })).toThrow(
+        /OPENCODE_V2_ENABLED=false 已不再支持/,
+      );
+      expect(() => loadConfig({ ...BASE_ENV, OPENCODE_V2_ENABLED: raw })).toThrow(
+        /v1 驱动已随 v2 切换移除/,
+      );
+      // 文案必须指向真正的回退手段（回滚镜像/代码 + 回滚数据卷）。
+      expect(() => loadConfig({ ...BASE_ENV, OPENCODE_V2_ENABLED: raw })).toThrow(
+        /v1\.0\.x/,
+      );
+    }
+  });
+
+  it('非法值（如 maybe）：打 warn 回落默认 true（不抛错，误配不阻断启动）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(loadConfig({ ...BASE_ENV, OPENCODE_V2_ENABLED: 'maybe' }).opencodeV2Enabled).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('OPENCODE_V2_ENABLED'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 describe('detectLocalIPv4（自动探测本机非回环 IPv4）', () => {
   afterEach(() => {
     jest.clearAllMocks();
@@ -213,5 +264,79 @@ describe('detectLocalIPv4（自动探测本机非回环 IPv4）', () => {
       ],
     });
     expect(detectLocalIPv4()).toBeUndefined();
+  });
+});
+
+describe('T16b：resolveIsolationScope（隔离配置域布局）', () => {
+  beforeEach(() => {
+    mockHomedir.mockReturnValue('/data/root');
+  });
+
+  afterEach(() => {
+    mockHomedir.mockRestore();
+  });
+
+  it('缺省根 = <HOME>/.opencode-iso，五个 XDG/HOME 落点全在根下', () => {
+    const scope = resolveIsolationScope({});
+    expect(scope.root).toBe(path.join('/data/root', '.opencode-iso'));
+    expect(scope.home).toBe(path.join(scope.root, 'home'));
+    expect(scope.configHome).toBe(path.join(scope.root, 'config'));
+    expect(scope.dataHome).toBe(path.join(scope.root, 'data'));
+    expect(scope.stateHome).toBe(path.join(scope.root, 'state'));
+    expect(scope.cacheHome).toBe(path.join(scope.root, 'cache'));
+  });
+
+  it('配置/凭据/日志/会话库的落点与 v2 的目录约定一致', () => {
+    const scope = resolveIsolationScope({});
+    expect(scope.configFile).toBe(
+      path.join(scope.root, 'config', 'opencode', 'opencode.json'),
+    );
+    expect(scope.authJsonFile).toBe(
+      path.join(scope.root, 'data', 'opencode', 'auth.json'),
+    );
+    expect(scope.logFile).toBe(
+      path.join(scope.root, 'data', 'opencode', 'log', 'opencode.log'),
+    );
+    expect(scope.dbFile).toBe(
+      path.join(scope.root, 'data', 'opencode', 'opencode.db'),
+    );
+  });
+
+  it('会话库与凭据同目录（D11：同一持久化卷，重启不丢会话历史）', () => {
+    const scope = resolveIsolationScope({});
+    expect(path.dirname(scope.dbFile)).toBe(path.dirname(scope.authJsonFile));
+  });
+
+  it('OPENCODE_ISOLATION_ROOT 可覆盖根目录（运维把隔离域挪到别的卷）', () => {
+    const scope = resolveIsolationScope({
+      OPENCODE_ISOLATION_ROOT: '/mnt/persist/opencode-iso',
+    });
+    expect(scope.root).toBe('/mnt/persist/opencode-iso');
+    expect(scope.dataHome).toBe(path.join('/mnt/persist/opencode-iso', 'data'));
+  });
+
+  it('loadConfig 带上隔离配置域（worker 启动即用同一块作用域）', () => {
+    const config = loadConfig({ X_WORKER_TOKEN: 'tok' });
+    expect(config.isolationScope.root).toBe(
+      path.join('/data/root', '.opencode-iso'),
+    );
+  });
+
+  it('ensureIsolationScope：五个落点目录都被建出来（serve 的 HOME/XDG_* 都要存在）', () => {
+    const root = path.join(os.tmpdir(), `vteam-iso-${process.pid}-${Date.now()}`);
+    const scope = resolveIsolationScope({ OPENCODE_ISOLATION_ROOT: root });
+    const created = ensureIsolationScope(scope);
+    expect(created.length).toBe(6);
+    for (const dir of [
+      scope.root,
+      scope.home,
+      scope.configHome,
+      scope.dataHome,
+      scope.stateHome,
+      scope.cacheHome,
+    ]) {
+      expect(fs.existsSync(dir)).toBe(true);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });

@@ -1,6 +1,7 @@
 /**
- * T8c 前端三态展示 E2E：访问 skills 页 MCP 工具子 Tab，
- * 断言 mcp-status 徽章的 data-status 为真实三态（connected / failed / needs_auth）。
+ * 前端 MCP 状态展示 E2E：访问 skills 页 MCP 工具子 Tab，
+ * 断言 mcp-status 徽章的 data-status 为 v2 的**五态**之一
+ * （connected / pending / disabled / failed / needs_auth）。
  *
  * ⚠️ 数据依赖：需要环境中有 source=mcp 的工具，且其 mcpServer 引用在
  * mcp_servers 表中存在并有 worker 心跳上报的 status。缺省数据下该行显示
@@ -9,7 +10,10 @@
  */
 import { test, expect } from "@playwright/test";
 
-test("skills 页 MCP 子 Tab 显示真实三态（T8c）", async ({ page }) => {
+/** v2 的 MCP 五态（与 serve 的 `GET /api/mcp` 1:1 对齐；pending/disabled 都不是 failed）。 */
+const MCP_FIVE_STATES = ["connected", "pending", "disabled", "failed", "needs_auth"];
+
+test("skills 页 MCP 子 Tab 显示真实五态（v2）", async ({ page }) => {
   await page.goto("/skills");
 
   // 切到工具 Tab → MCP 子 Tab
@@ -27,8 +31,8 @@ test("skills 页 MCP 子 Tab 显示真实三态（T8c）", async ({ page }) => {
 
   const status = await item.getAttribute("data-status");
   console.log("mcp-tool-item data-status =", status);
-  // 三态之一：connected / failed / needs_auth
-  expect(["connected", "failed", "needs_auth"]).toContain(status);
+  // 五态之一：connected / pending / disabled / failed / needs_auth
+  expect(MCP_FIVE_STATES).toContain(status);
 
   // 徽章主题渲染：data-status 与 mcpStatusTheme 键一致
   const badge = item.getByTestId("mcp-status");

@@ -114,6 +114,9 @@ fi
 # ---------------------------------------------------------------- helpers
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$EVIDENCE_DIR"
+# v2 注入配置的形状读取器（**唯一一份**，三个证明脚本共用）。
+VT_SHAPE_LIB="$REPO_ROOT/scripts"
+export VT_SHAPE_LIB
 
 docker_compose() { (cd "$REPO_ROOT" && docker compose "$@"); }
 have_docker() {
@@ -511,26 +514,26 @@ if [[ -n "${INJECTED_OPENCODE_JSON:-}" ]]; then
 fi
 [[ -f "$INJECTED" ]] || inconclusive "f" "injected $INJECTED not found on this host (worker WORK_DIR differs? set INJECTED_OPENCODE_JSON)"
 if ! python3 - "$INJECTED" <<'EOF'
-import json,sys
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 d = json.load(open(sys.argv[1]))
-agents = d.get("agent") or d.get("agents") or {}
-assert agents, "no agent section in injected opencode.json"
-# opencode.json agent section is keyed by agent name; entries carry
-# {description, mode, permission} with no `name` field.
-pairs = list(agents.items()) if isinstance(agents, dict) else [
-    ((a or {}).get("name"), a) for a in agents]
+# v2 段名 `agents`（v1 `agent` 已废弃）；权限是**有序数组** `permissions[]`；
+# v1 的 `task` action 在 v2 里叫 `subagent`。
+agents = v2.agent_section(d, required=True, where="injected opencode.json")
 n = 0
 allow = []
-for name, a in pairs:
-    perm = (a.get("permission") or {}) if isinstance(a, dict) else {}
-    if not perm: continue
+for name, a in agents.items():
+    if not isinstance(a, dict) or "permissions" not in a:
+        continue
+    rules = v2.permissions_of(a, where="agent %s" % name)
     n += 1
-    task = perm.get("task")
+    task = v2.effective_effect(rules, "subagent")
     if name == "vteam-plan":
-        assert task == "allow", "vteam-plan injected permission.task=%r (want allow)" % task
+        assert task == "allow", "vteam-plan injected permission.subagent (v1 task)=%r (want allow)" % task
         allow.append(name)
     else:
-        assert task == "deny", "agent %s injected permission.task=%r" % (name, task)
+        assert task == "deny", "agent %s injected permission.subagent (v1 task)=%r" % (name, task)
 assert n > 0, "no permission-bearing agents in injected opencode.json"
 assert allow == ["vteam-plan"], "want exactly vteam-plan injected task=allow, got %r" % allow
 print("opencode.json: %d agents, exactly vteam-plan task=allow, others deny" % n)
@@ -640,18 +643,22 @@ fetch_injected_opencode() {
   docker_compose cp "worker:$WORKER_WORK_DIR/opencode.json" "$out" >/dev/null 2>&1 \
     || docker_compose exec -T worker cat "$WORKER_WORK_DIR/opencode.json" >"$out"
 }
-# injected_role_bash <out> : print the edited role's permission.bash value.
+# injected_role_bash <out> : print the edited role's effective bash value.
 # Reads the edited role's field, not the whole file: the baseline already contains
 # `"bash": "deny"` for vteam-project_manager, so a file-wide grep would pass before
 # the restart finished injecting.
+# v2: `permission.bash` → action `shell`; effect = **最后一条命中**的规则（findLast）。
 injected_role_bash() {
   fetch_injected_opencode "$1" || return 1
   python3 - "$1" "$EDIT_POLICY_ID" <<'PY'
-import json,sys
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 oc=json.load(open(sys.argv[1])); pid=sys.argv[2]
 name="vteam-"+pid[len("ep_"):]
-entry=(oc.get("agent") or {}).get(name) or {}
-print((entry.get("permission") or {}).get("bash") or "")
+entry=v2.agent_section(oc, required=True, where="injected opencode.json").get(name) or {}
+rules=v2.permissions_of(entry, where="agent %s" % name)
+print(v2.effective_effect(rules, "shell") or "")
 PY
 }
 # wait_worker_restarted : true once the container has actually come up again, so a stale
@@ -689,7 +696,9 @@ fi
 # byte-identical to the frozen baseline; no guard artifact may reappear.
 if ! python3 - "$EVIDENCE_DIR/f2-injected-opencode.json" \
   "$BASELINE_POLICIES" "$EDIT_POLICY_ID" "$EVIDENCE_DIR/f2-injected-summary.txt" <<'EOF'
-import json,sys
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 oc = json.load(open(sys.argv[1]))
 base = json.load(open(sys.argv[2]))
 pid = sys.argv[3]
@@ -699,30 +708,38 @@ role_name = "vteam-" + pid[len("ep_"):]
 order = [a["name"] for a in base["agents"]]
 lines = []
 ok = True
-oc_agents = oc.get("agent") or {}
+# v2 段名 `agents`（v1 `agent` 已废弃）。
+oc_agents = v2.agent_section(oc, required=True, where="injected opencode.json")
+# 注入配置（v2 规则数组）↔ 基线（v1 权限对象）的可比形式：规则三元组集合
+# （action 名统一到 v2；worker 补的 external_directory 规则单独断言，不进基线比对）。
+def injected_triples(name):
+    rules = v2.permissions_of(oc_agents.get(name) or {}, where="agent %s" % name)
+    return v2.triples_v2(rules) - {("external_directory", "*", "ask")}
 # (i) edited role reflects the DB edit in its opencode.json agent entry.
-entry = oc_agents.get(role_name) or {}
-oc_bash = (entry.get("permission") or {}).get("bash")
+rules = v2.permissions_of(oc_agents.get(role_name) or {}, where="agent %s" % role_name)
+oc_bash = v2.effective_effect(rules, "shell")
 same = oc_bash == "deny"
-lines.append("opencode.agent[%s].permission.bash = %r (want 'deny'): %s" % (role_name, oc_bash, "OK" if same else "MISMATCH"))
+lines.append("opencode.agents[%s].permissions[shell] = %r (want 'deny'): %s" % (role_name, oc_bash, "OK" if same else "MISMATCH"))
 ok = ok and same
-# (ii) other 6 built-ins byte-identical to the frozen baseline agent entries (native-only).
+# (ii) other 6 built-ins identical to the frozen baseline agent entries (rule-set compare).
 base_agents = {a["name"]: a for a in base.get("agents") or []}
 for name in order:
     if name == role_name:
         continue
-    oc_perm = (oc_agents.get(name) or {}).get("permission")
-    base_perm = (base_agents.get(name) or {}).get("permission")
-    same_perm = canon(oc_perm) == canon(base_perm)
-    lines.append("opencode.agent[%s] permission vs baseline agent[%s]: %s" % (
+    base_triples = v2.triples_v1((base_agents.get(name) or {}).get("permission"))
+    same_perm = injected_triples(name) == base_triples
+    lines.append("opencode.agents[%s] rules vs baseline agent[%s]: %s" % (
         name, name, "IDENTICAL" if same_perm else "MISMATCH"))
+    if not same_perm:
+        lines.append("  only-in-injected: %r" % sorted(injected_triples(name) - base_triples))
+        lines.append("  only-in-baseline:  %r" % sorted(base_triples - injected_triples(name)))
     ok = ok and same_perm
-    vteam_leak = [k for k in (oc_perm or {}) if k.startswith("vteam_")]
-    lines.append("opencode.agent[%s] vteam_ leak: %r" % (name, vteam_leak))
+    vteam_leak = [a for a, _, _ in injected_triples(name) if a.startswith("vteam_")]
+    lines.append("opencode.agents[%s] vteam_ leak: %r" % (name, vteam_leak))
     ok = ok and not vteam_leak
 # (iii) todo 5: no role-guard artifact/registration anywhere in the injected config.
-plugin_entries = [p for p in (oc.get("plugin") or []) if isinstance(p, str) and "vteam-role-guard" in p]
-lines.append("opencode.plugin vteam-role-guard entries: %r" % plugin_entries)
+plugin_entries = [p for p in v2.plugin_entries(oc) if "vteam-role-guard" in p]
+lines.append("opencode.plugins vteam-role-guard entries: %r" % plugin_entries)
 ok = ok and not plugin_entries
 role_guard_section = [k for k in oc if "role-guard" in k]
 lines.append("opencode top-level role-guard keys: %r" % role_guard_section)

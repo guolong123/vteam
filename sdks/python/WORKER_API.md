@@ -96,14 +96,20 @@ curl -X POST -H 'X-Worker-Token: <token>' -H 'Content-Type: application/json' \
 | 方法 | 路径 | 请求体 | 落点 |
 |------|------|--------|------|
 | POST | `/config/skills` | `{skills:[{name,content}]}` | `<WORK_DIR>/.opencode/skills/<name>/SKILL.md` |
-| POST | `/config/tools` | `{tools:[{action,execution,name?,schema?}]}` | `<WORK_DIR>/.opencode/tools/<action>.ts` |
-| POST | `/config/mcp-servers` | `{mcpServers:[{name,type,url?\|command?}]}` | `<WORK_DIR>/opencode.json` 的 `mcp` 节 |
-| POST | `/config/agent-policies` | `{agents:[{name,description,mode,permission}]}` | `<WORK_DIR>/opencode.json` 的 `agent` 节 |
-| POST | `/config/model-credentials` | `{providerKeys:[{providerID,key}],providerConfigs?}` | `$HOME/.local/share/opencode/auth.json` + `$HOME/.config/opencode/opencode.json` provider 段 |
+| POST | `/config/tools` | `{tools:[{action,execution,name?,schema?}]}` | `<WORK_DIR>/.opencode/plugins/<action>.ts`（v2 插件形态，v1/v2 双形态模块） |
+| POST | `/config/mcp-servers` | `{mcpServers:[{name,type,url?\|command?}]}` | `<WORK_DIR>/opencode.json` 的 `mcp.servers` 节（**v2 形态**） |
+| POST | `/config/agent-policies` | `{agents:[{name,description,mode,permission}]}` | `<WORK_DIR>/opencode.json` 的 `agents` 节（**v2 形态**：worker 把 v1 形的 `permission` 对象翻译成 `permissions[]` 数组并改名 action） |
+| POST | `/config/model-credentials` | `{providerKeys:[{providerID,key}],providerConfigs?}` | 隔离域的 `data/opencode/auth.json` + `config/opencode/opencode.json` 的 `providers` 段（**含 `settings.apiKey`**） |
 | POST | `/config/git-credentials` | `{credentials:[{repoUrl,key,authType?,fingerprint?,permission?}]}` | `$HOME/.keta-git-creds.json`（600） |
 | POST | `/config/restart` | 无 | 触发 serve 重启（复用 RestartCoordinator） |
 
 响应示例：`{"written":{"skills":["my-skill"]},"restart":"required"}`
+
+> ⚠️ **opencode v2 适配后的落点订正（2026-10-20）**：
+> - **请求体契约没变**（仍是 v1 形的 `permission` 对象、`{name,type,url?\|command?}` 的 mcp 条目）；**变的是 worker 写进 `opencode.json` 的产物形态**：`mcp.servers` / `agents` / `plugins` 三节 + `permissions[]` 数组（`bash`→`shell`、`task`→`subagent`）。
+> - **配置域已隔离**：凭据与 provider 配置落在**隔离配置域**（缺省 `<HOME>/.opencode-iso`，可用 `OPENCODE_ISOLATION_ROOT` 指定），不再是宿主 `$HOME`。
+> - **工具产物路径**已从 `.opencode/tools/` 改为 `.opencode/plugins/`（v2 移除了 `.opencode/tools/*.ts` 的文件自动发现）。
+> - 依据：07 篇 §12.1 / §12.5 / §12.7、`.omo/plans/opencode-v2-adaptation.md` 的 T15 / T16b / T19。
 
 校验（非法 → `400`）：技能名仅字母数字开头（`[A-Za-z0-9][A-Za-z0-9_.-]*`，防路径穿越）；工具需
 `execution` + schema `x-execution`；agent 需 `description`、`mode ∈ {primary, all}`、`permission` 禁 `write` 键；
@@ -144,7 +150,7 @@ curl -H "$T" "$W/file?path=/data/vteam-worker/.opencode-worker-inject.json"
 | `type` | 载荷 | worker 行为 |
 |--------|------|-------------|
 | `reload-config` | — | 重拉全部资源并重注入；无活跃会话时重启 serve |
-| `model-credentials` | `{providerKeys:[{providerID,key}], providerConfigs?:{pid:{baseUrl,models}}}` | 写 `auth.json` + `opencode.json` provider 段 → 重启 serve |
+| `model-credentials` | `{providerKeys:[{providerID,key}], providerConfigs?:{pid:{baseUrl,models}}}` | 写 `auth.json` + `opencode.json` 的 `providers` 段（**并写 `settings.apiKey`**——v2.0.28 实测不读 `auth.json` 取 key）→ 重启 serve |
 | `git-credentials` | `{credentials:[{repoUrl,authType,key,fingerprint,permission?}]}` | 写 `.keta-git-creds.json`（不重启） |
 | `restart` / `shutdown` | — | 重启 serve / 优雅退出 |
 
@@ -191,8 +197,8 @@ worker 在启动与 `reload-config` 时拉取；SDK 侧用 `WorkerService.set_re
 | `SERVER_URL` | `http://localhost:3000` | 控制面基址（独立模式忽略） |
 | `WORKER_STANDALONE` | `false` | `true` = 独立模式（跳过注册/心跳/资源拉取，挂载 `/config/*`） |
 | `WORKER_EXEC_PORT` | `4198` | 执行端点端口 |
-| `OPENCODE_SERVE_PORT` / `_HOSTNAME` | `0`（随机）/ `127.0.0.1` | serve 端口与绑定（容器/跨机需 `0.0.0.0`） |
-| `WORKER_ADVERTISE_HOST` | 自动探测内网 IP | 上报给控制面的 serve 基址 |
+| `OPENCODE_SERVE_PORT` / `_HOSTNAME` | `0`（随机）/ `127.0.0.1` | serve 端口与绑定（**只对 worker 自身有意义**：控制面不直连 serve，只调执行端点 `:4198` ⇒ 留回环即可，容器/跨机也**不必**为控制面改成 `0.0.0.0`） |
+| `WORKER_ADVERTISE_HOST` | 自动探测内网 IP | 上报给控制面的基址（`capabilities.baseUrl`；控制面只取其**主机部分**，端口由 `capabilities.execPort` 决定 ⇒ 实际要求是控制面能到达该主机的 `:4198`） |
 | `WORK_DIR` | `/data/vteam-worker` | serve cwd + 资源注入落点 |
 | `WORKER_MAX_INSTANCES` | `5` | 并发会话上限 |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | `300000` | 首字超时 |

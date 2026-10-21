@@ -26,6 +26,15 @@ export const EVENT_TYPES = {
   // Phase 4 worker 回流事件（T1 契约基座，与 worker 协议 WORKER_EVENT_TYPES 值对齐，
   // 用于 server 落库后 SSE 广播 /chat.message.new 等既有事件同名语义）。
   SESSION_UPDATED: 'session.updated',
+  /**
+   * `message.part.delta` —— **事件名刻意保持不变**（opencode v2 适配 T12 的原提案是
+   * 改名以避开 opencode v1 的同名事件，该提案已取消）。
+   *
+   * 不改的三个理由：① v1 线已冻结待删，同名碰撞的风险随之归零；② web **不消费**
+   * 这些 worker 事件（会话页轮询 messages 表 + React Query，事件名对前端不可见）；
+   * ③ server 侧本就把它排除在 SSE 保留集外（`realtime/realtime.service.ts` 的
+   * `REALTIME_NON_RETAINED_TYPES`）⇒ 改名只是 churn 四个文件、零功能收益。
+   */
   MESSAGE_PART_DELTA: 'message.part.delta',
   TASK_COMPLETED: 'task.completed',
   AGENT_STATUS: 'agent.status',

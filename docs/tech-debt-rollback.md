@@ -49,7 +49,7 @@ mysqldump --single-transaction --routines --triggers --default-character-set=utf
 ls -lh .omo/evidence/ddl-<wave>-<date>.sql
 ```
 
-Defaults from `chart/vteam/values.yaml:48-54`: database `aiagents`, port `3306`
+Defaults from `chart/vteam/values.yaml` (`db.*` 段): database `aiagents`, port `3306`
 (`db.database: aiagents`, `db.port: 3306`, `db.enabled: true` = built-in MySQL 8
 StatefulSet). Compose likewise uses `mysql:8`. Use placeholders above — never
 paste real passwords; prefer compose variable names (e.g. `$MYSQL_ROOT_PASSWORD`)
@@ -89,10 +89,17 @@ bash scripts/gate.sh
 
 ## 4. Helm rollback (K8s release recovery)
 
-Sourced from `docs/deployment.md:224-241` (4.1 full-values baseline),
-`docs/deployment.md:485` (5.1 row 1), `docs/deployment.md:549` (6.1 REV17
-recovery), and `learnings.md:149-150` (REV14 fix path). Inline procedure —
-do not rely on a bare `helm rollback` without the surrounding steps:
+Sourced from `docs/deployment.md` **§4.1** (full-values baseline),
+**§5.1** row 1 (server `Authentication failed against database server`),
+**§6.1** (REV17 recovery row), and `learnings.md`'s entry titled
+**"2026-08-14：K8s server CrashLoopBackOff 根因=REV14 部分 upgrade 回退 values"**
+(root cause + fix path). Inline
+procedure — do not rely on a bare `helm rollback` without the surrounding
+steps:
+
+> **引用口径**：本 runbook 一律**按章节号**引用 `docs/deployment.md`（§4.1 / §5.1 /
+> §6.1 …），**不引用行号**——该文件会随部署内容增补而行号漂移，行号引用必然腐烂。
+> 章节号是稳定的（`docs/deployment.md` 的 `##` / `###` 标题）。
 
 ```bash
 # 1. Inspect history and diff the failed revision against the last good one.
@@ -117,13 +124,14 @@ kubectl rollout restart deploy/vteam-server -n vteam
 kubectl rollout restart deploy/vteam-web -n vteam
 kubectl rollout restart sts/vteam-worker -n vteam
 
-# 6. Verify (docs/deployment.md 5.2-5.3 baseline).
+# 6. Verify (docs/deployment.md §5.2 / §5.3 baseline).
 kubectl get configmap vteam-config -n vteam -o yaml | grep -i database_url
 helm history vteam -n vteam
 curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
 ```
 
-Troubleshooting pointers (5.1 row 1): if server CrashLoops with
+Troubleshooting pointers (`docs/deployment.md` §5.1 row 1): if server
+CrashLoops with
 `Authentication failed against database server`, compare
 `kubectl get configmap vteam-config -o yaml` DATABASE_URL against
 `kubectl get secret vteam-secret -o jsonpath='{.data.DB_PASSWORD}'`

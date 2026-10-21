@@ -80,6 +80,8 @@ description: 平台内置五类 Agent 角色（产品经理/项目经理/架构�
 
 > 全量 `toolAllows` 合计 **157**（= 157 allow 格；其余 102 格为 deny）。合计 **15 条新增授予**。未获授予的角色对相应工具得到显式 deny（`mcpDenies` = 全部 MCP 工具 − `toolAllows`，纯补集推导）；**持有主实例身份不等于持有工具**——权威来自角色授权。矩阵由 `server/src/execution-policies/agent-policies.matrix.spec.ts` / `platform-mcp.authority-matrix.spec.ts` 与 `agent.constants.spec.ts` 的硬编码快照锁定，证据见 `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json`。
 
+> **v2 引擎层的放宽（不影响本矩阵）**：上表是**服务端闸门**裁决的 role × tool 授权矩阵，opencode v2 迁移**不改变**它。但 v2 的**引擎层**对**未声明**的 action 一律放行（内置 catch-all `{action:"*",resource:"*",effect:"allow"}` + 配置规则追加其后 + `findLast`）——平台已**明确接受**该放宽（**不**补 catch-all ask、**不**加逐 action 默认表），记录见 07 篇 §3.2。⇒ 矩阵**之内**的 deny 仍由服务端闸门拦住；矩阵**之外**的原生工具（`webfetch` / `glob` / `grep` / `todowrite` / `skill` / `websearch`）在引擎层是放行的。
+
 ### 2.2 五角色协同关系图（mermaid）
 
 任务内五角色协作流：**产品经理拆需求与原型 → 架构师定方案 → 开发者实现 → 测试者验证支持**，项目经理在环节间做流程控制（拆解编排/进度/风险/阻塞协调）。产物沿箭头方向衔接：
@@ -483,7 +485,7 @@ flowchart LR
 | 层 | 载体 | 性质 | 作用 |
 |----|------|------|------|
 | 行为声明（软约束） | 提示词「权限」块 | 指导 Agent 自觉遵守，可被模型理解 | 声明「应该做什么/不应该做什么」，如「禁止越权验收」「不产出具体交付物」 |
-| 强制约束（硬约束）层① | `ExecutionPolicy.config.permission` → opencode 原生 `agent.<name>.permission` | 随配置生效（`--pure` 下仍生效） | `permission.edit` 路径 glob（`edit` 是 edit/write/apply_patch 的唯一闸门，无 `write` 键）做文件写约束；`permission.read` glob 约束读取；`permission.bash`；MCP/自定义工具 `permission.<真实名>:"deny"`（`mcpDenies` 纯补集镜像）；全角色 `permission.task:"deny"`（运行时拒绝子代理调用，非工具隐藏）。glob 用通用根无关形式 `**tasks/*/<subdir>/**` |
+| 强制约束（硬约束）层① | `ExecutionPolicy.config.permission` → opencode 原生 **`agents.<name>.permissions[]`**（**v2 形态**：有序数组 `{action, resource, effect}`；v1 是 `agent.<name>.permission` 对象；action 改名 `bash`→`shell`、`task`→`subagent`） | 随配置生效（**v2 无 `--pure`**；由**隔离配置域**保证全局插件/AGENTS.md 不进作用域，见 07 篇 §12.1） | `permission.edit` 路径 glob（`edit` 是 edit/write/apply_patch 的唯一闸门，无 `write` 键）做文件写约束；`permission.read` glob 约束读取；`permission.bash`；MCP/自定义工具 `permission.<真实名>:"deny"`（`mcpDenies` 纯补集镜像）；全角色 `permission.task:"deny"`（运行时拒绝子代理调用，非工具隐藏）。glob 用通用根无关形式 `**tasks/*/<subdir>/**` |
 | 强制约束（硬约束）层②（**工具授权唯一来源**） | worker guard 插件 `tool.execute.before`（`.vteam-role-guard/roles.json`，`{enabled, roles}`） | 对未知/自定义/MCP 工具的默认拒绝 + 工具级授权判定 | 分支优先级：`roles.json` 缺失/`enabled!==true`/解析失败 → pass-through；session 未映射/agent 未知 → pass-through；角色条目残缺 → fail-closed；read 类交层①；edit 类按 writeGlobs；bash 按 `ROLE_BASH_DENY_PATTERNS`（已下线，空数组）未命中交层①；`task`/`execute` deny；其余未知/自定义/MCP（真实名 `vteam_<action>`）按 `tools` allowlist，未列出即 deny；deny 回传纠正文案 `【越界拦截｜角色：X】…转交…` |
 | 遗留配置（非强制） | `agent_tool_effects` / `agents.permission_scope` | 仅落库，无运行时消费 | 不参与 enforcement；文档与代码中不得将其描述为生效约束 |
 
@@ -494,14 +496,14 @@ flowchart LR
 | 状态 | 层① 原生 permission | 层② guard |
 |---|---|---|
 | 正常（非 pure + guard 注入成功 + `roles.json.enabled=true` + session 已映射且角色条目完整） | 生效 | 生效（分支优先级见 §8.2） |
-| `--pure`（OPENCODE_PURE=1 或 OmO 关闭） | 仍生效（仅原生 edit/write 类） | 插件不加载：bash 绕过/自定义工具无守卫、无纠正；worker 阻断级告警 |
+| **v2 隔离配置域**（替代 v1 的 `--pure`；`OPENCODE_PURE=1` 在 v2 已失效，worker 只告警不拼 flag） | 仍生效（仅原生 edit/write 类） | 插件不加载：bash 绕过/自定义工具无守卫、无纠正；worker 阻断级告警 |
 | guard 加载但 `roles.json` 缺失或 `enabled!==true` | 生效 | pass-through + 告警 |
 | guard 加载、enabled、但 session 未映射或 agentName 不在 roles | 生效 | pass-through + 告警（非角色会话，避免误伤默认 agent） |
 | guard 加载、enabled、session 已映射但角色条目残缺 | 生效 | fail-closed：危险 bash、写类、`task`、`execute`、allowlist 外工具 deny + 纠正 |
 | `/agent-policies` 拉取失败或角色集为空 | 生效（旧 agent 节，但 server 不再选策略 agent） | 主动中性化：写 `roles.json{enabled:false}` + 移除插件文件与 `plugin` 条目 + 能力位置假 + 告警 |
 | worker 能力位假（未注入成功） | server 不下发策略 agent → 无角色强制（回退现状） | 按上一条已中性化 |
 
-回滚（回到无角色强制现状）：模板/custom agent 解绑 `policyId`（或显式清空）→ 删除 `<workDir>/opencode.json` 的 injector 托管 agent 节 → 删除 `.vteam-role-guard/`（`roles.json` + `sessions/`）→ 删除 guard 插件文件与 `opencode.json` 的 `plugin` 条目 → 重启 worker；验证 `GET /agents?directory=<taskDir>` 不再列出 `vteam-*` 且能力位 `agentPolicies.enabled=false`。
+回滚（回到无角色强制现状）：模板/custom agent 解绑 `policyId`（或显式清空）→ 删除 `<workDir>/opencode.json` 的 injector 托管 **`agents` 节**（**v2 段名**；v1 的 `agent` 节已被 v2 标为 deprecated）→ 删除 `.vteam-role-guard/`（`roles.json` + `sessions/`）→ 删除 guard 插件文件与 `opencode.json` 的 **`plugins` 条目**（**v2 段名**；v1 是 `plugin`）→ 重启 worker；验证 `GET /agents?directory=<taskDir>` 不再列出 `vteam-*` 且能力位 `agentPolicies.enabled=false`。
 
 ### 8.3 变量与占位符
 

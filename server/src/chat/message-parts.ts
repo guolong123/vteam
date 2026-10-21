@@ -8,16 +8,265 @@
  * task.completed 终态化路径不过滤）：
  * - ingress message.part.delta（worker-event.ingress.ts）——流式累积
  * - worker-dispatcher.handleTaskCompleted 终态化——最终落库
+ *
+ * 【存储形态边界】`normalizeParts` 是**唯一**的存储形态归一口径（opencode v2 适配
+ * T20）：把「v1 形 `parts[]`」与「v2 形 `content[]`」两种上游形态收敛到 vteam 的
+ * **一个内部渲染模型**（= web `msg-parts.tsx` 读的那一套字段）。详见该函数注释。
  */
 
-/** 归一化 parts：非数组 → []；剔除 null/非对象条目。 */
-export function normalizeParts(parts: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(parts)) {
+import { Logger } from '@nestjs/common';
+
+/** 形态异常告警通道（边界遇到不可识别输入时记一条 WARN，绝不抛错）。 */
+const partsLogger = new Logger('MessageParts');
+
+/**
+ * 存储形态边界（opencode v2 适配 T20）：把**任意**来源的消息内容归一成 vteam 的
+ * **唯一内部渲染模型**。
+ *
+ * 接受的输入形态（按判定顺序）：
+ * 1. **part 数组**（`unknown[]`）——v1 内部形态，以及 v2 驱动**已归一后**的形态
+ *    （worker 侧 `v2-driver.ts` 已把 v2 的 `content[]` 翻译成本模型后才上送）
+ *    → **原样透传**（仅剔除 null/非对象条目，**不改动任何字段**）。
+ * 2. **v1 形 content**：`{parts:[...]}`（vteam 的落库形态）→ 取 `parts` 按 (1) 处理。
+ * 3. **v2 形 content**：`{content:[...]}`（v2 消息对象）→ 逐项翻译成本模型。
+ *
+ * 总函数：**任何**输入都不抛错。不可识别的输入退化为**空 part 集**并记一条 WARN；
+ * `null`/`undefined` 视为「无内容」（正常缺省，静默返回 []，不告警）。
+ */
+export function normalizeParts(raw: unknown): Array<Record<string, unknown>> {
+  if (raw === null || raw === undefined) {
     return [];
   }
-  return parts.filter(
-    (p): p is Record<string, unknown> => p !== null && typeof p === 'object',
+  if (Array.isArray(raw)) {
+    return raw.filter(
+      (p): p is Record<string, unknown> => p !== null && typeof p === 'object',
+    );
+  }
+  if (typeof raw !== 'object') {
+    warnUnrecognizedParts(raw);
+    return [];
+  }
+  const record = raw as Record<string, unknown>;
+  if ('parts' in record) {
+    if (Array.isArray(record.parts)) {
+      return normalizeParts(record.parts);
+    }
+    warnUnrecognizedParts(record.parts);
+    return [];
+  }
+  if ('content' in record) {
+    if (Array.isArray(record.content)) {
+      return normalizeV2ContentItems(record.content, record);
+    }
+    warnUnrecognizedParts(record.content);
+    return [];
+  }
+  warnUnrecognizedParts(raw);
+  return [];
+}
+
+/** 形态不可识别 → 记一条 WARN（边界总函数：降级为空集，不抛错）。 */
+function warnUnrecognizedParts(raw: unknown): void {
+  partsLogger.warn(
+    `[message-parts] 存储形态不可识别，降级为空 part 集：${describeShape(raw)}`,
   );
+}
+
+/** 形状摘要（告警用；只报类型与键名，不打内容，避免日志膨胀）。 */
+function describeShape(raw: unknown): string {
+  if (raw === null) {
+    return 'null';
+  }
+  if (Array.isArray(raw)) {
+    return `array(len=${raw.length})`;
+  }
+  if (typeof raw === 'object') {
+    return `object(keys=${Object.keys(raw as object).join(',')})`;
+  }
+  return typeof raw;
+}
+
+/**
+ * v2 消息的 `content[]` 项（wire 形态，对照 opencode v2 OpenAPI 的
+ * `Session.Message.Assistant.Text / .Reasoning / .Tool`）。
+ */
+interface V2ContentItem {
+  type?: string;
+  /** tool 项的 provider 侧 call id（text/reasoning 无 id） */
+  id?: string;
+  /** tool 名（v2 用 `name`，vteam 内部模型用 `tool`） */
+  name?: string;
+  text?: string;
+  state?: unknown;
+  time?: { created?: number; ran?: number; completed?: number };
+}
+
+/**
+ * v2 `content[]` → vteam 内部渲染模型。
+ *
+ * 规则与 worker 侧 v2 驱动（`worker/src/driver/v2-driver.ts` 的 `mapMessage`）
+ * **保持一致**（两侧必须同规则，否则同一份内容经不同路径会渲染出两张不同的卡）：
+ * - part id = `${消息id}:${序号}`（消息 id 缺失 → 退回项自带 id / 无 id）
+ * - 工具名：v2 的 `name` → 内部模型的 `tool`
+ * - 工具输出：v2 的 `state.content[]`（数组）→ 内部模型的 `state.output`（字符串）
+ * - 工具错误：v2 的 `state.error`（`{type,message}` 对象）→ 内部模型的 `state.error`
+ *   （字符串），原对象另存 `state.errorDetail`（诊断用）
+ * - 工具状态：v2 的 `state.status` → 小写（`running`/`streaming`/`completed`/`error`）
+ * - 时间：v2 的 `time.{created,completed}` → 内部模型的 `time.{start,end}`
+ *
+ * 未知 `type` 的项**丢弃**（v2 的 `content[]` 只有 text/reasoning/tool 三种）。
+ */
+function normalizeV2ContentItems(
+  content: unknown[],
+  message: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const messageId =
+    typeof message.id === 'string' && message.id !== ''
+      ? message.id
+      : undefined;
+  const sessionId =
+    typeof message.sessionID === 'string' && message.sessionID !== ''
+      ? message.sessionID
+      : undefined;
+  const out: Array<Record<string, unknown>> = [];
+  content.forEach((raw, index) => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return;
+    }
+    const part = normalizeV2ContentItem(
+      raw as V2ContentItem,
+      index,
+      messageId,
+      sessionId,
+    );
+    if (part) {
+      out.push(part);
+    }
+  });
+  return out;
+}
+
+/** v2 `content[]` 单项 → 内部渲染模型（未知 type → undefined＝丢弃）。 */
+function normalizeV2ContentItem(
+  item: V2ContentItem,
+  index: number,
+  messageId: string | undefined,
+  sessionId: string | undefined,
+): Record<string, unknown> | undefined {
+  const type = typeof item.type === 'string' ? item.type : '';
+  const partId =
+    messageId !== undefined
+      ? `${messageId}:${index}`
+      : typeof item.id === 'string' && item.id !== ''
+        ? item.id
+        : undefined;
+  const common: Record<string, unknown> = {
+    ...(partId !== undefined ? { id: partId } : {}),
+    ...(messageId !== undefined ? { messageID: messageId } : {}),
+    ...(sessionId !== undefined ? { sessionID: sessionId } : {}),
+  };
+  const time = normalizeV2Time(item.time);
+  if (type === 'text' || type === 'reasoning') {
+    return {
+      ...common,
+      type,
+      ...(typeof item.text === 'string' ? { text: item.text } : {}),
+      ...(item.state !== undefined ? { state: item.state } : {}),
+      ...(time !== undefined ? { time } : {}),
+    };
+  }
+  if (type === 'tool') {
+    const state = normalizeV2ToolState(item.state);
+    return {
+      ...common,
+      type: 'tool',
+      tool: typeof item.name === 'string' ? item.name : '',
+      ...(typeof item.id === 'string' && item.id !== ''
+        ? { callID: item.id }
+        : {}),
+      ...(state !== undefined ? { state } : {}),
+      ...(time !== undefined ? { time } : {}),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * v2 工具 state → 内部模型的工具 state。
+ *
+ * v2 的 `state.content[]`（数组）→ 内部模型的 `state.output`（字符串）——**必需**：
+ * web（`msg-parts.tsx`）只读 `state.output` / `state.error` 两个字符串字段，
+ * 不归一则工具卡片永远空白、失败原因不显示。
+ * v2 的 `state.error`（`{type,message}` 对象）→ 内部模型的 `state.error`（字符串）。
+ */
+function normalizeV2ToolState(
+  state: unknown,
+): Record<string, unknown> | undefined {
+  if (state === null || typeof state !== 'object' || Array.isArray(state)) {
+    return undefined;
+  }
+  const source = state as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...source };
+  if (typeof out.status === 'string') {
+    out.status = out.status.toLowerCase();
+  }
+  if (Array.isArray(out.content)) {
+    out.output = v2ToolContentToText(out.content);
+  }
+  if (
+    out.error !== null &&
+    typeof out.error === 'object' &&
+    !Array.isArray(out.error)
+  ) {
+    const message = (out.error as { message?: unknown }).message;
+    if (typeof message === 'string') {
+      out.error = message;
+      out.errorDetail = source.error;
+    }
+  }
+  return out;
+}
+
+/** v2 的 `Tool.Content[]` → 文本（文本项取 text，文件项取占位描述）。 */
+function v2ToolContentToText(content: unknown[]): string {
+  const chunks: string[] = [];
+  for (const item of content) {
+    if (item === null || typeof item !== 'object') {
+      continue;
+    }
+    const record = item as {
+      type?: string;
+      text?: string;
+      uri?: string;
+      name?: string | null;
+    };
+    if (record.type === 'file') {
+      chunks.push(`[文件] ${record.name ?? record.uri ?? ''}`);
+      continue;
+    }
+    if (typeof record.text === 'string') {
+      chunks.push(record.text);
+    }
+  }
+  return chunks.join('\n');
+}
+
+/** v2 的 `time.{created,completed}` → 内部模型的 `time.{start,end}`。 */
+function normalizeV2Time(
+  time: unknown,
+): { start?: number; end?: number } | undefined {
+  if (time === null || typeof time !== 'object' || Array.isArray(time)) {
+    return undefined;
+  }
+  const source = time as { created?: unknown; completed?: unknown };
+  const out: { start?: number; end?: number } = {};
+  if (typeof source.created === 'number') {
+    out.start = source.created;
+  }
+  if (typeof source.completed === 'number') {
+    out.end = source.completed;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -253,9 +502,7 @@ export function isStaleToolOnlyContent(
   content: unknown,
   opts: { secretAwaiting?: boolean } = {},
 ): boolean {
-  const parts = normalizeParts(
-    (content as { parts?: unknown } | null | undefined)?.parts,
-  );
+  const parts = normalizeParts(content);
   if (parts.length === 0) return false;
   for (const p of parts) {
     if (p.type !== 'tool') return false;

@@ -2,12 +2,13 @@
  * OpencodeServer 单元测试（T3）。
  *
  * mock child_process.spawn / http.get / net.createServer，覆盖：
- * - spawn 参数（--port / --hostname / --pure 受 OPENCODE_PURE 控制 / detached:true / env 注入）
+ * - spawn 参数（--port / --hostname / detached:true / env 注入；**不含 --pure**：v2 无此 flag）
  * - start 成功 + 健康检查通过 → baseUrl
  * - 端口冲突重试（占用 → +1）、随机端口（port=0）
  * - stop 进程组 kill(-pid) + SIGKILL 兜底
  * - 健康检查超时 / serve 提前退出 / spawn 抛错
  * - 日志环形缓冲 / listening 端口不一致告警
+ * - v2 适配（T1/T2/T3）：版本规范化、--pure 移除、banner 密码解析、恒开鉴权 fail-fast
  * 真实 spawn 集成见 opencode-server.integration.spec.ts。
  */
 
@@ -26,7 +27,14 @@ jest.mock('child_process', () => ({
 jest.mock('http', () => ({ get: jest.fn() }));
 jest.mock('net', () => ({ createServer: jest.fn() }));
 
-import { OpencodeServer, Logger } from './opencode-server';
+import {
+  LISTENING_RE,
+  OpencodeServer,
+  Logger,
+  SERVER_PASSWORD_RE,
+  buildIsolatedServeEnv,
+} from './opencode-server';
+import { resolveIsolationScope } from '../config';
 
 const mockedSpawn = spawn as unknown as jest.Mock;
 const mockedSpawnSync = spawnSync as unknown as jest.Mock;
@@ -78,12 +86,14 @@ let fakeProc: FakeChild;
 
 beforeEach(() => {
   jest.clearAllMocks();
-  // OPENCODE_PURE 默认不设 → spawn 不带 --pure（让内置插件 omo 生效）。
+  // OPENCODE_PURE 默认不设 → spawn 不带 --pure（v2 已无此 flag，见 T2）。
   // 显式清空避免宿主环境变量泄漏进用例断言（case 里按需临时设置）。
   // OPENCODE_SERVER_PASSWORD 同理：spawn 继承整个 process.env，宿主导出该变量时
   // （连真实 serve 是常规操作）会污染「为空时不注入」这条断言。
+  // OPENCODE_ALLOW_GENERATED_PASSWORD：v2 恒开鉴权的逃生开关，默认关闭。
   delete process.env.OPENCODE_PURE;
   delete process.env.OPENCODE_SERVER_PASSWORD;
+  delete process.env.OPENCODE_ALLOW_GENERATED_PASSWORD;
   netBehaviors = [];
   httpBehavior = 'ok';
   killSpy = jest
@@ -162,6 +172,7 @@ afterEach(() => {
 interface NewServerOpts {
   port: number;
   serverPassword?: string;
+  allowGeneratedPassword?: boolean;
   command?: string;
   healthCheckTimeoutMs?: number;
   healthCheckIntervalMs?: number;
@@ -169,13 +180,16 @@ interface NewServerOpts {
   portRetryCount?: number;
   serveHostname?: string;
   serveLogFilePath?: string;
+  isolationScope?: ReturnType<typeof resolveIsolationScope>;
   logger?: Logger;
 }
 
 function newServer(opts: NewServerOpts): OpencodeServer {
   return new OpencodeServer({
     port: opts.port,
-    serverPassword: opts.serverPassword,
+    // v2 恒开鉴权：默认给一个密码（不配密码时 worker 会 fail-fast，见 T3 用例）
+    serverPassword: opts.serverPassword ?? 'test-pw',
+    allowGeneratedPassword: opts.allowGeneratedPassword,
     command: opts.command ?? 'opencode',
     healthCheckTimeoutMs: opts.healthCheckTimeoutMs ?? 1000,
     healthCheckIntervalMs: opts.healthCheckIntervalMs ?? 20,
@@ -184,6 +198,7 @@ function newServer(opts: NewServerOpts): OpencodeServer {
     serveHostname: opts.serveHostname,
     // 测试默认指向不存在路径：文件次级源必须静默降级，绝不读真实开发机日志（隔离）
     serveLogFilePath: opts.serveLogFilePath ?? path.join(os.tmpdir(), `absent-opencode-log-${process.pid}`),
+    isolationScope: opts.isolationScope ?? resolveIsolationScope({ HOME: '/tmp/vteam-test-home' }),
     logger: opts.logger,
   });
 }
@@ -221,31 +236,52 @@ describe('OpencodeServer', () => {
     expect(mockedHttpGet).toHaveBeenCalled();
   });
 
-  it('OPENCODE_PURE=1 → spawn 带 --pure（可切回纯净基线做 token 对照）', async () => {
+  it('T2：OPENCODE_PURE=1 → **不再**拼 --pure（v2 传该 flag 会 exit 1），只记一条失效告警', async () => {
     for (const truthy of ['1', 'true', 'yes', 'on', 'y', 'TRUE', ' Yes ']) {
       jest.clearAllMocks();
       process.env.OPENCODE_PURE = truthy;
       await newServer({ port: 4199 }).start();
-      expect(mockedSpawn.mock.calls[0][1]).toContain('--pure');
+      expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
     }
   });
 
-  it('OPENCODE_PURE=1 → spawn 带 --pure 且外部插件降级告警；非 pure 无告警', async () => {
+  it('T2：OPENCODE_PURE=1 → 告警说明该开关在 v2 已失效（插件抑制机制待落地）', async () => {
     const logger = makeLogger();
     process.env.OPENCODE_PURE = '1';
     await newServer({ port: 4199, logger }).start();
-    expect(mockedSpawn.mock.calls[0][1]).toContain('--pure');
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('外部插件不加载'));
+    expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('原生 permission.edit / agent 节仍生效'),
+      expect.stringContaining('OPENCODE_PURE / OmO 开关在 v2 上已失效'),
     );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('不再拼 --pure'));
 
     jest.clearAllMocks();
     delete process.env.OPENCODE_PURE;
     const logger2 = makeLogger();
     await newServer({ port: 4199, logger: logger2 }).start();
     expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
-    expect(logger2.warn).not.toHaveBeenCalledWith(expect.stringContaining('外部插件不加载'));
+    expect(logger2.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('OPENCODE_PURE / OmO 开关在 v2 上已失效'),
+    );
+  });
+
+  it('T2：OmO 开关关闭（omoEnabled=false）同样不再拼 --pure，只告警', async () => {
+    const logger = makeLogger();
+    const server = new OpencodeServer({
+      port: 4199,
+      serverPassword: 'test-pw',
+      command: 'opencode',
+      healthCheckTimeoutMs: 1000,
+      healthCheckIntervalMs: 20,
+      serveLogFilePath: path.join(os.tmpdir(), `absent-opencode-log-${process.pid}`),
+      logger,
+      omoEnabled: () => false,
+    });
+    await server.start();
+    expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('OPENCODE_PURE / OmO 开关在 v2 上已失效'),
+    );
   });
 
   it('OPENCODE_PURE 为 0/false/no/未设 → 不带 --pure（只有显式真值才切纯净）', async () => {
@@ -270,15 +306,64 @@ describe('OpencodeServer', () => {
     }
   });
 
-  it('serverPassword 注入 env 的 OPENCODE_SERVER_PASSWORD；为空时不注入', async () => {
+  it('serverPassword 注入 env 的 OPENCODE_SERVER_PASSWORD；显式空密码时不注入', async () => {
     await newServer({ port: 4199, serverPassword: 's3cret' }).start();
     const env = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;
     expect(env.OPENCODE_SERVER_PASSWORD).toBe('s3cret');
 
     jest.clearAllMocks();
-    await newServer({ port: 4199 }).start();
+    // 显式空密码 + 逃生开关 → 走「捕获 v2 自动生成密码」路径（不注入 env）
+    await newServer({ port: 4199, serverPassword: '', allowGeneratedPassword: true }).start();
     const env2 = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;
     expect(env2.OPENCODE_SERVER_PASSWORD).toBeUndefined();
+  });
+
+  it('T1：version 原始串与规范化 semver 同时可得（上报用 semver）', async () => {
+    mockedSpawnSync.mockImplementation(() => ({ stdout: 'opencode v2.0.28\n', stderr: '' }));
+    const server = newServer({ port: 4199 });
+    await server.start();
+    expect(server.version).toBe('opencode v2.0.28');
+    expect(server.versionSemver).toBe('2.0.28');
+  });
+
+  it('T2：v2 banner `server listening on http://127.0.0.1:4199` → LISTENING_RE 仍匹配并取到端口', () => {
+    const match = LISTENING_RE.exec('server listening on http://127.0.0.1:4199');
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe('4199');
+  });
+
+  it('T2：v2 banner `server password AbC123` → SERVER_PASSWORD_RE 取到密码', () => {
+    const match = SERVER_PASSWORD_RE.exec('server password AbC123');
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe('AbC123');
+  });
+
+  it('T3：密码为空且未开逃生开关 → 启动 fail-fast（可操作错误，指出该设哪个 env）', async () => {
+    const server = newServer({ port: 4199, serverPassword: '', allowGeneratedPassword: false });
+    await expect(server.start()).rejects.toThrow(/v2 恒开鉴权/);
+    await expect(server.start()).rejects.toThrow(/OPENCODE_SERVER_PASSWORD/);
+    await expect(server.start()).rejects.toThrow(/OPENCODE_ALLOW_GENERATED_PASSWORD/);
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('T3：逃生开关开启 → 从 serve stdout 捕获自动生成密码并用于鉴权（明文不落日志）', async () => {
+    const logger = makeLogger();
+    const server = newServer({ port: 4199, serverPassword: '', allowGeneratedPassword: true, logger });
+    await server.start();
+    fakeProc.stdout.emit('data', Buffer.from('server password AbC123xyz\n'));
+    expect(server.effectiveServerPassword).toBe('AbC123xyz');
+    // 明文密码绝不进日志（环形缓冲会经 recentLogTail() 外泄到错误信息）
+    expect(server.recentLogs.join('\n')).not.toContain('AbC123xyz');
+    expect(server.recentLogs.join('\n')).toContain('server password ***');
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('已从 stdout 捕获自动生成密码（明文不落日志）'),
+    );
+  });
+
+  it('T3：健康检查打 /api/info（v2 的 GET / 未鉴权也返回 200，探不到鉴权状态）', async () => {
+    await newServer({ port: 4199, serverPassword: 'pw' }).start();
+    const [url] = mockedHttpGet.mock.calls[0] as [string];
+    expect(url).toBe('http://127.0.0.1:4199/api/info');
   });
 
   it('健康检查带 Basic Auth header（username=opencode）', async () => {
@@ -681,5 +766,103 @@ describe('OpencodeServer', () => {
     expect(server.isRunning).toBe(true);
     expect(mockedSpawn).toHaveBeenCalledTimes(1);
     expect(killSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('T16b：隔离配置域（spawn env 不继承宿主 HOME / XDG_*）', () => {
+  const SCOPE = resolveIsolationScope({ HOME: '/tmp/vteam-iso-home' });
+
+  it('子进程 env：HOME / XDG_* 全部指向隔离域，且**不是**宿主的 HOME', async () => {
+    const prevHome = process.env.HOME;
+    process.env.HOME = '/host/home';
+    try {
+      await newServer({ port: 4199, isolationScope: SCOPE }).start();
+      const env = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;
+      expect(env.HOME).toBe(SCOPE.home);
+      expect(env.XDG_CONFIG_HOME).toBe(SCOPE.configHome);
+      expect(env.XDG_DATA_HOME).toBe(SCOPE.dataHome);
+      expect(env.XDG_STATE_HOME).toBe(SCOPE.stateHome);
+      expect(env.XDG_CACHE_HOME).toBe(SCOPE.cacheHome);
+      expect(env.HOME).not.toBe('/host/home');
+    } finally {
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
+    }
+  });
+
+  it('子进程 env：宿主残留的配置发现入口被清掉（否则全局配置会被追加回来）', async () => {
+    const prev = {
+      config: process.env.OPENCODE_CONFIG,
+      content: process.env.OPENCODE_CONFIG_CONTENT,
+      disable: process.env.OPENCODE_DISABLE_PROJECT_CONFIG,
+    };
+    process.env.OPENCODE_CONFIG = '/host/global.json';
+    process.env.OPENCODE_CONFIG_CONTENT = '{"plugin":["host-plugin"]}';
+    process.env.OPENCODE_DISABLE_PROJECT_CONFIG = '1';
+    try {
+      await newServer({ port: 4199, isolationScope: SCOPE }).start();
+      const env = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;
+      expect(env.OPENCODE_CONFIG).toBeUndefined();
+      expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+      expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined();
+    } finally {
+      for (const [key, value] of [
+        ['OPENCODE_CONFIG', prev.config],
+        ['OPENCODE_CONFIG_CONTENT', prev.content],
+        ['OPENCODE_DISABLE_PROJECT_CONFIG', prev.disable],
+      ] as const) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
+  it('密码注入不受隔离影响（OPENCODE_SERVER_PASSWORD 照旧进 env）', async () => {
+    await newServer({ port: 4199, serverPassword: 's3cret', isolationScope: SCOPE }).start();
+    const env = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;
+    expect(env.OPENCODE_SERVER_PASSWORD).toBe('s3cret');
+  });
+
+  it('启动日志打印隔离根目录（不含任何密文）', async () => {
+    const logger = makeLogger();
+    await newServer({ port: 4199, isolationScope: SCOPE, logger }).start();
+    const logged = logger.info.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logged).toContain(SCOPE.root);
+    expect(logged).toContain('隔离配置域');
+    expect(logged).not.toContain('test-pw');
+  });
+
+  it('未显式传隔离域时也用默认隔离域（不会退回继承宿主 HOME）', async () => {
+    const server = new OpencodeServer({
+      port: 4199,
+      serverPassword: 'pw',
+      command: 'opencode',
+      healthCheckTimeoutMs: 1000,
+      healthCheckIntervalMs: 20,
+      serveLogFilePath: path.join(os.tmpdir(), `absent-${process.pid}`),
+    });
+    await server.start();
+    const env = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;
+    expect(env.HOME).toBe(resolveIsolationScope().home);
+    expect(env.HOME).not.toBe(process.env.HOME);
+  });
+
+  it('buildIsolatedServeEnv：纯函数——只改 HOME/XDG_*，其余 env 原样保留', () => {
+    const env = buildIsolatedServeEnv(SCOPE, {
+      PATH: '/usr/bin',
+      MY_CUSTOM: 'keep-me',
+      HOME: '/host/home',
+      XDG_CONFIG_HOME: '/host/.config',
+    });
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.MY_CUSTOM).toBe('keep-me');
+    expect(env.HOME).toBe(SCOPE.home);
+    expect(env.XDG_CONFIG_HOME).toBe(SCOPE.configHome);
   });
 });

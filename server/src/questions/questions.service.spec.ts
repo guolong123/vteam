@@ -309,6 +309,47 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         response: { code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY },
       });
     });
+
+    it('response=reject → 落库带**可读原因**（被拒的动作/资源），拒绝不静默', async () => {
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        aqRow({
+          id: 'aq_3',
+          requestId: 'per_2',
+          kind: 'permission',
+          content: {
+            title: 'external_directory',
+            pattern: '/tmp/*',
+            type: 'external_directory',
+          },
+        }),
+      );
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({ id: 'aq_3', status: 'resolved' }),
+      );
+
+      await service.reply('aq_3', { response: 'reject' } as ReplyQuestionDto);
+
+      expect(workerClient.permissionReply).toHaveBeenCalledWith(
+        { id: 'w_1', capabilities: {} },
+        { sessionId: 'ses_abc', permissionId: 'per_2', response: 'reject' },
+      );
+      const updateArg = prisma.agentQuestion.update.mock.calls[0][0] as {
+        data: { answers: { response: string; reason?: string } };
+      };
+      expect(updateArg.data.answers.response).toBe('reject');
+      expect(typeof updateArg.data.answers.reason).toBe('string');
+      expect(updateArg.data.answers.reason).toContain('external_directory');
+      expect(updateArg.data.answers.reason).toContain('/tmp/*');
+      expect(updateArg.data.answers.reason).toContain('被拒绝');
+    });
   });
 
   describe('reply 错误路径', () => {

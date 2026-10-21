@@ -1,6 +1,8 @@
 # worker Headless Service（clusterIP: None）— StatefulSet spec.serviceName 必填。
 # 提供稳定 DNS（<pod>.<headless-service>.<namespace>.svc），每副本独立解析
-# （server 直连副本用 <sts 名>-<ordinal>.<headless>）。无共享 ClusterIP Service：
+# （控制面取上报基址 `capabilities.baseUrl` 的主机部分 + `capabilities.execPort`（缺省 4198）
+#   直连执行端点——`<sts 名>-<ordinal>.<headless>` 即该主机；serve 端口不参与拨号）。
+#   无共享 ClusterIP Service：
 # serve 调试入口用 kubectl port-forward sts/<release>-worker 14000:4000（转发到 ordinal 0）。
 apiVersion: v1
 kind: Service

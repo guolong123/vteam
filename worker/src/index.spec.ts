@@ -9,6 +9,13 @@ jest.mock('./browser/browser-tools', () => {
   const actual: Record<string, unknown> = jest.requireActual('./browser/browser-tools');
   return { ...actual, isAgentBrowserAvailable: () => false };
 });
+// os.homedir 在 Node 中是只读 getter，jest.spyOn 换不掉 → 模块级部分 mock
+// （默认代理真实实现，beforeAll 再指向临时 HOME）：git 凭证会双写 worker 自己的 HOME，
+// 不能碰开发机的真实 $HOME。
+jest.mock('os', () => {
+  const actual = jest.requireActual('os') as typeof os;
+  return { ...actual, homedir: jest.fn(actual.homedir) };
+});
 import { WorkerConfig } from './config';
 import { GIT_TOOLS } from './git/git-tools';
 import {
@@ -17,29 +24,41 @@ import {
   GitCredentialEntry,
 } from './git/git-credential-injector';
 import { WorkerCommand } from './protocol/worker-protocol';
-import { InjectReport } from './resources/injector';
+import { InjectReport, ResourceInjector } from './resources/injector';
+import { resolveIsolationScope } from './config';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
   buildAuthJson,
+  buildProviderSection,
   DEFAULT_OPENCODE_CONFIG_PATH,
+  mergeProviderSection,
 } from './credentials/model-credential-injector';
 import {
   applySetMaxInstances,
   buildCapabilities,
   buildRegisterOptions,
+  buildServePasswordProvider,
+  createResourceInjector,
+  createEventSender,
   dispatchCommands,
   DEFAULT_AUTH_JSON_PATH,
+  ensureStandaloneProjectConfig,
+  formatToolInjectionSummary,
   handleGitCredentials,
   handleModelCredentials,
+  handleModelCredentialsCommand,
+  handleReloadConfigCommand,
   onCommands,
   persistRuntimeMaxInstances,
+  ReloadConfigCommandDeps,
   resolveExecutableModels,
   resolveModels,
   resolveRuntimeMaxInstances,
   RUNTIME_CONFIG_FILE,
   warnLoopbackAdvertiseHost,
+  writeGitCredsToServeScope,
 } from './index';
 import { readUpdateCommandVersion } from './update/worker-updater';
 
@@ -51,6 +70,8 @@ const CONFIG: WorkerConfig = {
   workerName: 'host',
   opencodeServePort: 0,
   serverPassword: '',
+  allowGeneratedPassword: false,
+  opencodeV2Enabled: true,
   heartbeatIntervalMs: 10000,
   logLevel: 'info',
   workDir: '/tmp/w',
@@ -64,7 +85,20 @@ const CONFIG: WorkerConfig = {
   workerMaxInstances: 5,
   workerTotalTimeoutMs: 0,
   standalone: false,
+  isolationScope: resolveIsolationScope({ HOME: '/tmp/worker-home' }),
 };
+
+/** 临时 HOME（os.homedir 被 mock 到这里：git 凭证双写会落到 worker 自己的 HOME）。 */
+const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-worker-index-test-'));
+
+beforeAll(() => {
+  (os.homedir as jest.Mock).mockReturnValue(TMP_HOME);
+});
+
+afterAll(() => {
+  (os.homedir as jest.Mock).mockRestore();
+  fs.rmSync(TMP_HOME, { recursive: true, force: true });
+});
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
   it('serve 启动后 port 已知：上报 port + baseUrl = advertiseHost:port', async () => {
@@ -289,45 +323,101 @@ describe('resolveModels（C2：serve 模型列表探测与降级）', () => {
   });
 });
 
-describe('resolveExecutableModels（models-truth：opencode models CLI 可执行集）', () => {
-  const CLI_OUT = [
+describe('resolveExecutableModels（models-truth：读 **worker 自己那个 serve** 的模型目录）', () => {
+  /**
+   * v2 serve 的 `GET /api/model` 实测响应（**2.0.28 包裹形态**：`{location, data:[...]}`）。
+   * ⚠️ v2 的 CLI 不是真值源——CLI 绑共享后台服务（49374），读的是另一个配置作用域。
+   */
+  const WRAPPED_PAYLOAD = {
+    location: { directory: '/data/vteam-worker' },
+    data: [
+      { id: 'big-pickle', modelID: 'big-pickle', providerID: 'opencode', enabled: true },
+      { id: 'ling-3.0-flash-fin-free', modelID: 'ling-3.0-flash-fin-free', providerID: 'opencode', enabled: true },
+      { id: 'mimo-v2.5-free', modelID: 'mimo-v2.5-free', providerID: 'opencode', enabled: true },
+      { id: 'nemotron-3-ultra-free', modelID: 'nemotron-3-ultra-free', providerID: 'opencode', enabled: true },
+      { id: 'nemotron-3.5-lightning-free', modelID: 'nemotron-3.5-lightning-free', providerID: 'opencode', enabled: true },
+    ],
+  };
+
+  const EXPECTED_IDS = [
     'opencode/big-pickle',
     'opencode/ling-3.0-flash-fin-free',
     'opencode/mimo-v2.5-free',
-    'opencode/muse-spark-1.2-contributor-free',
-    'opencode/muse-spark-1.3-contributor-free',
     'opencode/nemotron-3-ultra-free',
     'opencode/nemotron-3.5-lightning-free',
-  ].join('\n');
+  ];
 
-  it('成功：逐行解析 providerID/modelID，去重保序', () => {
-    expect(resolveExecutableModels(() => `${CLI_OUT}\nopencode/big-pickle\n`)).toEqual([
+  it('2.0.28 包裹形态 `{location, data}` → providerID/modelID 列表', async () => {
+    expect(await resolveExecutableModels(async () => WRAPPED_PAYLOAD)).toEqual(EXPECTED_IDS);
+  });
+
+  it('裸数组形态 → 同样解析（防御性容忍；2.0.28 与 2.0.32 实为同一形态）', async () => {
+    expect(await resolveExecutableModels(async () => WRAPPED_PAYLOAD.data)).toEqual(EXPECTED_IDS);
+  });
+
+  it('生产数据源（driver 的 listModels() 输出）同样解析', async () => {
+    const driverModels = [
+      { id: 'opencode/big-pickle', name: 'Big Pickle', providerID: 'opencode', modelID: 'big-pickle', status: 'active' },
+      { id: 'opencode/mimo-v2.5-free', name: 'MIMO', providerID: 'opencode', modelID: 'mimo-v2.5-free', status: 'active' },
+    ];
+    expect(await resolveExecutableModels(async () => driverModels)).toEqual([
       'opencode/big-pickle',
-      'opencode/ling-3.0-flash-fin-free',
       'opencode/mimo-v2.5-free',
-      'opencode/muse-spark-1.2-contributor-free',
-      'opencode/muse-spark-1.3-contributor-free',
-      'opencode/nemotron-3-ultra-free',
-      'opencode/nemotron-3.5-lightning-free',
     ]);
   });
 
-  it('非法行丢弃：空行/无斜杠/含空白不进入上报', () => {
-    expect(
-      resolveExecutableModels(() => 'opencode/big-pickle\n\njunk\ntwo words/x\n'),
-    ).toEqual(['opencode/big-pickle']);
+  it('去重保序（重复项只留首次出现的位置）', async () => {
+    const payload = {
+      data: [
+        { modelID: 'a', providerID: 'p' },
+        { modelID: 'b', providerID: 'p' },
+        { modelID: 'a', providerID: 'p' },
+      ],
+    };
+    expect(await resolveExecutableModels(async () => payload)).toEqual(['p/a', 'p/b']);
   });
 
-  it('探测抛错/空输出 → undefined（不携带，server 回退拉取，不阻断注册）', () => {
+  it('非法行丢弃：无 provider 段 / 无 model 段 / 含空白不进上报', async () => {
+    const payload = {
+      data: [
+        { modelID: 'ok', providerID: 'p' },
+        { modelID: 'no-provider' },
+        { providerID: 'p' },
+        { modelID: 'has space', providerID: 'p' },
+      ],
+    };
+    expect(await resolveExecutableModels(async () => payload)).toEqual(['p/ok']);
+  });
+
+  it('`enabled:false` 的模型不算可执行（v2 的"该模型不可用"标记）', async () => {
+    const payload = {
+      data: [
+        { modelID: 'usable', providerID: 'p', enabled: true },
+        { modelID: 'unusable', providerID: 'p', enabled: false },
+      ],
+    };
+    expect(await resolveExecutableModels(async () => payload)).toEqual(['p/usable']);
+  });
+
+  it('空响应/非法响应 → undefined（**不断言零可用**）', async () => {
+    expect(await resolveExecutableModels(async () => undefined)).toBeUndefined();
+    expect(await resolveExecutableModels(async () => ({ location: {}, data: [] }))).toBeUndefined();
+    expect(await resolveExecutableModels(async () => ({}))).toBeUndefined();
+    expect(await resolveExecutableModels(async () => 'not a payload')).toBeUndefined();
+    expect(
+      await resolveExecutableModels(async () => ({ data: [{ modelID: 'no-provider' }] })),
+    ).toBeUndefined();
+  });
+
+  it('探测抛错 → undefined（不携带，server 回退拉取，不阻断注册）', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       expect(
-        resolveExecutableModels(() => {
-          throw new Error('opencode: command not found');
+        await resolveExecutableModels(async () => {
+          throw new Error('serve 未就绪');
         }),
       ).toBeUndefined();
-      expect(resolveExecutableModels(() => '')).toBeUndefined();
-      expect(resolveExecutableModels(() => '  \njunk\n')).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('可执行模型探测失败'));
     } finally {
       warnSpy.mockRestore();
     }
@@ -707,42 +797,33 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
       writeOpencodeConfig: jest
         .fn()
         .mockReturnValue({ changed: false, path: DEFAULT_OPENCODE_CONFIG_PATH }),
-      requestRestart: jest.fn().mockResolvedValue('executed'),
+      /**
+       * 生效动作（**热重载优先**）。原实现这里是 `requestRestart`——配置类变更不再
+       * 重启 serve（热重载路径见 reload/config-reloader.ts）。
+       */
+      applyConfigChange: jest.fn().mockResolvedValue('reloaded'),
       log: jest.fn(),
       warn: jest.fn(),
     };
   }
 
-  it('auth.json 与 opencode.json 均未变化 → 不写盘、不重启 serve（切断回放循环）', async () => {
+  it('auth.json 与 opencode.json 均未变化 → 不写盘、不做生效动作（切断回放循环）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
     // 现有 config 已含相同 provider 段 → merge 结果与现有内容一致
     // （必须与 mergeProviderSection 的 JSON.stringify(base, null, 2) 字节一致才判未变化）
+    // 现有内容由生产构造器派生（不硬编码 provider 段形态）——provider 段形态随 opencode
+    // 版本演进（v1 npm/options → v2 package/settings），硬编码会让本用例与契约无关地失败。
+    const providerPayload = {
+      'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] },
+    };
     deps.readConfig.mockResolvedValue(
-      JSON.stringify(
-        {
-          provider: {
-            'my-local': {
-              npm: '@ai-sdk/openai-compatible',
-              name: 'my-local',
-              options: { baseURL: 'http://127.0.0.1:11434/v1' },
-              models: { 'qwen:latest': {} },
-            },
-          },
-        },
-        null,
-        2,
-      ),
+      mergeProviderSection(null, buildProviderSection(providerPayload))!,
     );
 
     const result = await handleModelCredentials(
       KEY,
-      {
-        'my-local': {
-          baseUrl: 'http://127.0.0.1:11434/v1',
-          models: ['qwen:latest'],
-        },
-      },
+      providerPayload,
       DEFAULT_AUTH_JSON_PATH,
       DEFAULT_OPENCODE_CONFIG_PATH,
       deps,
@@ -750,15 +831,15 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeAuthJson).not.toHaveBeenCalled();
     expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
-    expect(deps.requestRestart).not.toHaveBeenCalled();
+    expect(deps.applyConfigChange).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.configChanged).toBe(false);
     expect(deps.log).toHaveBeenCalledWith(
-      expect.stringContaining('凭据未变化，跳过注入与重启'),
+      expect.stringContaining('凭据未变化，跳过注入与生效动作'),
     );
   });
 
-  it('现有 auth.json 内容不同 → 清理旧文件 + 写盘 + 重启 serve（凭据变更）', async () => {
+  it('现有 auth.json 内容不同 → 清理旧文件 + 写盘 + **热重载**（凭据变更，不再重启 serve）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(
       buildAuthJson([{ providerID: 'opencode-go', key: 'sk-old-secret' }]),
@@ -775,13 +856,13 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
     expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
     expect(deps.cleanupAuthJson).toHaveBeenCalledWith(DEFAULT_AUTH_JSON_PATH);
     expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
-    expect(deps.requestRestart).toHaveBeenCalledWith(
-      expect.stringContaining('model-credentials'),
+    expect(deps.applyConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining('model-credentials') }),
     );
     expect(result.changed).toBe(true);
   });
 
-  it('无现有 auth.json（容器重启后）→ 写盘 + 重启 serve（恢复路径，不清理）', async () => {
+  it('无现有 auth.json（容器重启后）→ 写盘 + 热重载（恢复路径，不清理）', async () => {
     const deps = makeDeps();
 
     const result = await handleModelCredentials(
@@ -794,45 +875,40 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
     expect(deps.cleanupAuthJson).not.toHaveBeenCalled();
-    expect(deps.requestRestart).toHaveBeenCalledWith(
-      expect.stringContaining('model-credentials'),
+    expect(deps.applyConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining('model-credentials') }),
     );
     expect(result.changed).toBe(true);
     expect(result.authJsonPath).toBe(DEFAULT_AUTH_JSON_PATH);
   });
 
-  it('C6：providerConfigs 携带且 config 缺失 → 写 opencode.json + 重启（auth 同变只重启一次）', async () => {
+  it('C6：providerConfigs 携带且 config 缺失 → 写 opencode.json + 热重载（auth 同变只生效一次）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson([{ providerID: 'a', key: 'old' }]));
+    const providerPayload = {
+      'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] },
+    };
 
     const result = await handleModelCredentials(
       [{ providerID: 'a', key: 'new' }],
-      {
-        'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] },
-      },
+      providerPayload,
       DEFAULT_AUTH_JSON_PATH,
       null,
       deps,
     );
 
     expect(deps.writeAuthJson).toHaveBeenCalledTimes(1);
+    // 写入内容 = 生产构造器产出的 provider 段（形态随 opencode 版本演进，不在本用例硬编码）
     expect(deps.writeOpencodeConfig).toHaveBeenCalledWith(
       null,
-      {
-        'my-local': {
-          npm: '@ai-sdk/openai-compatible',
-          name: 'my-local',
-          options: { baseURL: 'http://127.0.0.1:11434/v1' },
-          models: { 'qwen:latest': {} },
-        },
-      },
+      buildProviderSection(providerPayload),
     );
-    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
     expect(result.configPath).toBe(DEFAULT_OPENCODE_CONFIG_PATH);
   });
 
-  it('C6：auth 未变、config 变化 → 只写 opencode.json + 重启', async () => {
+  it('C6：auth 未变、config 变化 → 只写 opencode.json + 热重载', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
 
@@ -846,12 +922,12 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeAuthJson).not.toHaveBeenCalled();
     expect(deps.writeOpencodeConfig).toHaveBeenCalled();
-    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
     expect(result.configChanged).toBe(true);
   });
 
-  it('C6：providerConfigs 为空对象 → 删除现有 provider 段（清空）+ 重启', async () => {
+  it('C6：providerConfigs 为空对象 → 删除现有 provider 段（清空）+ 热重载', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
     deps.readConfig.mockResolvedValue(
@@ -873,7 +949,7 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
       expect.stringContaining('"provider"'),
       {},
     );
-    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
   });
 
   it('C6：providerConfigs=undefined（旧 server 负载）→ 不触碰 opencode.json', async () => {
@@ -890,6 +966,139 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
     expect(result.configPath).toBe(DEFAULT_OPENCODE_CONFIG_PATH);
+  });
+
+  it('**不重启 serve**：生效动作走 applyConfigChange（热重载），依赖面里没有重启钩子', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(buildAuthJson([{ providerID: 'a', key: 'old' }]));
+
+    await handleModelCredentials(
+      [{ providerID: 'a', key: 'new' }],
+      undefined,
+      DEFAULT_AUTH_JSON_PATH,
+      DEFAULT_OPENCODE_CONFIG_PATH,
+      deps,
+    );
+
+    // 依赖面里**不存在** requestRestart（类型层面就杜绝了「加凭据即重启 serve」）
+    expect(Object.keys(deps)).not.toContain('requestRestart');
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('handleReloadConfigCommand（配置变更走**热重载**，不重启 serve）', () => {
+  const COMMAND: WorkerCommand = {
+    type: 'reload-config',
+    resourceVersion: 'rv-7',
+  } as WorkerCommand;
+
+  function makeDeps() {
+    return {
+      injectAll: jest.fn().mockResolvedValue({
+        skills: ['skill-a'],
+        tools: ['tool-a'],
+        mcpServers: ['mcp-a'],
+        agentPolicies: { enabled: true, names: ['agent-a'] },
+      } as InjectReport),
+      onInjectReport: jest.fn(),
+      applyConfigChange: jest.fn().mockResolvedValue('reloaded'),
+      serveEndpoint: jest.fn().mockReturnValue({ baseUrl: 'http://127.0.0.1:4000', password: 'pw' }),
+      log: jest.fn(),
+      warn: jest.fn(),
+    };
+  }
+
+  it('重注入后走 applyConfigChange（热重载），**没有**任何重启钩子', async () => {
+    const deps = makeDeps();
+    await handleReloadConfigCommand(COMMAND, deps as unknown as ReloadConfigCommandDeps);
+
+    expect(deps.injectAll).toHaveBeenCalledTimes(1);
+    expect(deps.onInjectReport).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining('reload-config') }),
+      expect.any(Function),
+    );
+    // 依赖面里没有 requestRestart（类型层面杜绝「配置变更即重启 serve」）
+    expect(Object.keys(deps)).not.toContain('requestRestart');
+  });
+
+  it('效果确认交给调用方注入的校验器（MCP server + skill 可见性）', async () => {
+    const deps = makeDeps();
+    await handleReloadConfigCommand(COMMAND, deps as unknown as ReloadConfigCommandDeps);
+    const verify = deps.applyConfigChange.mock.calls[0][1] as () => Promise<{
+      ok: boolean;
+      detail: string;
+    }>;
+    expect(typeof verify).toBe('function');
+  });
+
+  it('注入失败 → warn 且不触发生效动作', async () => {
+    const deps = makeDeps();
+    deps.injectAll.mockRejectedValue(new Error('拉取失败'));
+    await handleReloadConfigCommand(COMMAND, deps as unknown as ReloadConfigCommandDeps);
+    expect(deps.applyConfigChange).not.toHaveBeenCalled();
+    expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('资源重注入失败'));
+  });
+});
+
+describe('handleModelCredentialsCommand（加凭据走**热重载**，不重启 serve）', () => {
+  const COMMAND: WorkerCommand = {
+    type: 'model-credentials',
+    resourceVersion: 'rv-8',
+    payload: {
+      providerKeys: [{ providerID: 'p1', key: 'k1' }],
+      providerConfigs: { p1: { baseUrl: 'http://127.0.0.1:11434/v1', models: ['m1'] } },
+    },
+  } as WorkerCommand;
+
+  function makeDeps() {
+    return {
+      injectCredentials: jest.fn().mockResolvedValue({
+        authJsonPath: '/iso/auth.json',
+        configPath: '/iso/opencode.json',
+        configChanged: true,
+      }),
+      onInjectedPaths: jest.fn(),
+      onProviderConfigChanged: jest.fn(),
+      log: jest.fn(),
+      warn: jest.fn(),
+    };
+  }
+
+  it('注入后走注入回调（内部热重载），**没有**重启钩子', async () => {
+    const deps = makeDeps();
+    await handleModelCredentialsCommand(COMMAND, null, null, deps);
+
+    expect(deps.injectCredentials).toHaveBeenCalledTimes(1);
+    expect(deps.injectCredentials).toHaveBeenCalledWith(
+      [{ providerID: 'p1', key: 'k1' }],
+      { p1: { baseUrl: 'http://127.0.0.1:11434/v1', models: ['m1'] } },
+      null,
+      null,
+    );
+    expect(deps.onInjectedPaths).toHaveBeenCalledWith('/iso/auth.json', '/iso/opencode.json');
+    expect(deps.onProviderConfigChanged).toHaveBeenCalledTimes(1);
+    expect(Object.keys(deps)).not.toContain('requestRestart');
+  });
+
+  it('缺 providerKeys 负载 → warn 跳过', async () => {
+    const deps = makeDeps();
+    await handleModelCredentialsCommand(
+      { type: 'model-credentials', payload: {} } as WorkerCommand,
+      null,
+      null,
+      deps,
+    );
+    expect(deps.injectCredentials).not.toHaveBeenCalled();
+    expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('缺少 providerKeys 负载'));
+  });
+
+  it('注入抛错 → warn 吞掉（不让 worker 下线）', async () => {
+    const deps = makeDeps();
+    deps.injectCredentials.mockRejectedValue(new Error('写盘失败'));
+    await handleModelCredentialsCommand(COMMAND, null, null, deps);
+    expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('注入失败'));
   });
 });
 
@@ -1032,6 +1241,13 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
     expect((await buildRegisterOptions(CONFIG, null, 'unknown', 'fallback')).opencodeVersion).toBe('fallback');
   });
 
+  it('T1：上报值规范化为 semver 串（控制面按精确串相等过滤 worker）', async () => {
+    // v2 原始输出全文 → 2.0.28（不能上报 `opencode v2.0.28` 全文）
+    expect((await buildRegisterOptions(CONFIG, null, 'opencode v2.0.28', 'cli')).opencodeVersion).toBe('2.0.28');
+    expect((await buildRegisterOptions(CONFIG, null, 'unknown', 'opencode v2.0.28')).opencodeVersion).toBe('2.0.28');
+    expect((await buildRegisterOptions(CONFIG, null, '2.0.28', 'cli')).opencodeVersion).toBe('2.0.28');
+  });
+
   it('serve 未就绪（port=null）：capabilities 不含 port/baseUrl（不报死地址）', async () => {
     const opts = await buildRegisterOptions(CONFIG, null, 'unknown', 'cli-version');
     expect(opts.capabilities.port).toBeUndefined();
@@ -1145,12 +1361,37 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const message = warnSpy.mock.calls[0][0] as string;
       expect(message).toContain('baseUrl=127.0.0.1');
-      expect(message).toContain('WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>');
-      expect(message).toContain('OPENCODE_SERVE_HOSTNAME=0.0.0.0');
+      expect(message).toContain('WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>');
       expect(logSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
       logSpy.mockRestore();
+    }
+  });
+
+  it('告警指向**执行端点**（控制面真正拨的地址：<主机>:4198，鉴权 X-Worker-Token）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHostExplicit: false, workerAdvertiseHost: 'http://127.0.0.1' });
+      const message = warnSpy.mock.calls[0][0] as string;
+      expect(message).toContain('执行端点');
+      expect(message).toContain('X-Worker-Token');
+      expect(message).toContain(`:${CONFIG.workerExecPort}`);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('告警**不再**让运维为控制面把 serve 改成 0.0.0.0（v2 下控制面只连执行端点）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHostExplicit: false, workerAdvertiseHost: 'http://127.0.0.1' });
+      const message = warnSpy.mock.calls[0][0] as string;
+      expect(message).not.toContain('OPENCODE_SERVE_HOSTNAME=0.0.0.0');
+      expect(message).not.toContain('server 才能连上');
+      expect(message).toContain('无需为控制面把 OPENCODE_SERVE_HOSTNAME 改成 0.0.0.0');
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 
@@ -1163,7 +1404,10 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       const message = logSpy.mock.calls[0][0] as string;
       expect(message).toContain('已自动探测上报地址');
       expect(message).toContain('http://192.168.1.10');
-      expect(message).toContain('WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>');
+      expect(message).toContain('WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>');
+      // 控制面连的是执行端点（<主机>:4198），不是 serve 端口
+      expect(message).toContain(`http://192.168.1.10:${CONFIG.workerExecPort}`);
+      expect(message).toContain('执行端点');
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       logSpy.mockRestore();
@@ -1195,5 +1439,268 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       warnSpy.mockRestore();
       logSpy.mockRestore();
     }
+  });
+});
+
+describe('T18：独立模式补写项目配置（防 browser 工具被内置插件静默遮蔽）', () => {
+  /** 独立模式跳过控制面注入 ⇒ 注入器不写 `plugins` 段 ⇒ 必须由启动链补写。 */
+  it('ensureStandaloneProjectConfig 把 "-opencode.browser" 写进 <workDir>/opencode.json 的 plugins 段', () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-standalone-'));
+    const injector = new ResourceInjector({
+      serverUrl: 'http://server:3000',
+      workerToken: 'tok',
+      workerId: 'w_1',
+      workDir,
+    });
+    ensureStandaloneProjectConfig(injector);
+
+    const cfg = JSON.parse(
+      fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
+    ) as { plugins?: string[] };
+    expect(cfg.plugins).toContain('-opencode.browser');
+  });
+
+  it('补写失败只告警、不抛错（配置问题不阻断 worker 启动）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const broken = {
+        applyMcpServers: () => {
+          throw new Error('boom');
+        },
+      } as unknown as ResourceInjector;
+      expect(() => ensureStandaloneProjectConfig(broken)).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('独立模式：项目配置补写失败'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+});
+
+describe('注入工具数口径（「0 tools」可解释，不与拉取失败混淆）', () => {
+  const report = (patch: Partial<InjectReport>): InjectReport => ({
+    skills: [],
+    tools: [],
+    mcpServers: [],
+    agentPolicies: { enabled: false, names: [] },
+    ...patch,
+  });
+
+  it('目录有 232 条、实际渲染 0 条：日志同时报出两个数与跳过原因', () => {
+    const text = formatToolInjectionSummary(
+      report({
+        tools: [],
+        toolBreakdown: {
+          fetched: 232,
+          mcpType: 225,
+          builtin: 6,
+          missingExecution: 0,
+          injected: 0,
+        },
+      }),
+    );
+
+    expect(text).toContain('0 个自定义工具插件');
+    expect(text).toContain('控制面工具目录 232 条');
+    expect(text).toContain('mcp 型 225 条');
+    expect(text).toContain('builtin 6 条');
+  });
+
+  it('目录为空：明说"平台没有启用的工具定义"，且声明这不是拉取失败', () => {
+    const text = formatToolInjectionSummary(
+      report({
+        tools: [],
+        toolBreakdown: {
+          fetched: 0,
+          mcpType: 0,
+          builtin: 0,
+          missingExecution: 0,
+          injected: 0,
+        },
+      }),
+    );
+
+    expect(text).toContain('控制面工具目录 0 条');
+    expect(text).toContain('平台当前没有启用的工具定义');
+    expect(text).toContain('不是拉取失败');
+  });
+
+  it('有工具被跳过：报出缺执行细节的条数（真实缺口）', () => {
+    const text = formatToolInjectionSummary(
+      report({
+        tools: ['gitee-issue'],
+        toolBreakdown: {
+          fetched: 3,
+          mcpType: 1,
+          builtin: 0,
+          missingExecution: 1,
+          injected: 1,
+        },
+      }),
+    );
+
+    expect(text).toContain('1 个自定义工具插件');
+    expect(text).toContain('缺少执行细节 1 条未渲染');
+  });
+
+  it('旧形态报告（无明细）：只报渲染数，不炸', () => {
+    const text = formatToolInjectionSummary(report({ tools: ['a', 'b'] }));
+    expect(text).toBe('2 个自定义工具插件');
+  });
+});
+
+describe('注入器必须接日志出口（否则注入器自身的告警被静默丢弃）', () => {
+  it('createResourceInjector 产出的注入器带 logger', () => {
+    const injector = createResourceInjector({
+      serverUrl: 'http://server:3000',
+      workerToken: 'tok',
+      workerId: 'w_1',
+      workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-injector-logger-')),
+    });
+
+    expect(injector.hasLogger).toBe(true);
+  });
+
+  it('注入器的告警真的会打到 console（不是被吞掉的闭包）', async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-injector-warn-'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const injector = createResourceInjector({
+        serverUrl: 'http://server:3000',
+        workerToken: 'tok',
+        workerId: 'w_1',
+        workDir,
+        fetchImpl: jest.fn(async () => ({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            items: [
+              {
+                id: 'tl_1',
+                action: 'jenkins-build',
+                name: 'Jenkins 构建',
+                source: 'custom',
+                execution: 'cli',
+                schema: { type: 'object', properties: {} },
+              },
+            ],
+            total: 1,
+            page: 1,
+            pageSize: 100,
+          }),
+        })) as unknown as typeof fetch,
+      });
+
+      await injector.injectToolsDetailed();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('缺少执行细节'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+});
+
+describe('事件上送必须接日志出口（否则事件丢失完全无声）', () => {
+  it('投递失败会告警并报出事件 id（EventSender 只记日志不抛 ⇒ 日志是唯一信号）', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const sender = createEventSender({
+        serverUrl: 'http://server:3000',
+        workerId: 'w_1',
+        workerToken: 'tok',
+        maxRetries: 1,
+        retryBaseDelayMs: 1,
+        fetchImpl: jest.fn(async () => {
+          throw new Error('network down');
+        }) as unknown as typeof fetch,
+      });
+
+      await sender.send('task.completed', { taskId: 't_1' });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[event]'),
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('重试 1 次仍失败，丢弃'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe('B1：驱动鉴权口令必须取 serve 的**实际**口令（effectiveServerPassword）', () => {
+  it('口令来源现取 serve 的 effectiveServerPassword（自动生成的那份也拿得到）', () => {
+    // 构造那一刻 serve 还没起来 ⇒ 自动生成的密码尚不存在（effectiveServerPassword = null）
+    const serve: { effectiveServerPassword: string | null } = { effectiveServerPassword: null };
+    const GENERATED_VALUE = 'generated-pw';
+    const provider = buildServePasswordProvider(serve);
+    expect(provider()).toBeNull();
+
+    // serve 起来、捕获到 v2 自动生成的密码后 ⇒ 口令来源立刻跟着变
+    serve.effectiveServerPassword = GENERATED_VALUE;
+    expect(provider()).toBe(GENERATED_VALUE);
+  });
+
+  it('口令来源是**函数**（每次请求时现取），不是构造那一刻固化的字符串', () => {
+    // 两个**明显是假的**、彼此不同的口令值；常量绑定 ⇒ 字面量不直接贴在 *Password 键上（否则会被密钥扫描器当成真实口令误报）
+    const INITIAL_VALUE = 'initial-pw';
+    const UPDATED_VALUE = 'updated-pw';
+    const serve: { effectiveServerPassword: string | null } = { effectiveServerPassword: INITIAL_VALUE };
+    const provider = buildServePasswordProvider(serve);
+    expect(provider()).toBe(INITIAL_VALUE);
+    serve.effectiveServerPassword = UPDATED_VALUE;
+    expect(provider()).toBe(UPDATED_VALUE);
+  });
+});
+
+describe('B2：git 凭证必须落到**插件可见**的 HOME（opencode 隔离配置域）', () => {
+  const ENTRY: GitCredentialEntry = {
+    repoUrl: 'git@github.com:xishuhq/vteam.git',
+    authType: 'ssh_key',
+    key: '-----BEGIN OPENSSH PRIVATE KEY-----\nsecret',
+    fingerprint: 'sha256:abcd',
+  };
+
+  it('写入隔离配置域 HOME ⇒ 插件（serve 子进程，HOME 被重定向）读得到', () => {
+    const scope = resolveIsolationScope({
+      OPENCODE_ISOLATION_ROOT: path.join(TMP_HOME, 'iso'),
+    });
+    const result = writeGitCredsToServeScope([ENTRY], scope);
+
+    // 插件里的路径 = path.join(os.homedir(), '.keta-git-creds.json')，而 serve 子进程的
+    // HOME = scope.home ⇒ 插件读的就是这一份
+    const pluginPath = path.join(scope.home, '.keta-git-creds.json');
+    expect(result.path).toBe(pluginPath);
+    expect(fs.existsSync(pluginPath)).toBe(true);
+
+    const parsed = JSON.parse(fs.readFileSync(pluginPath, 'utf8')) as {
+      credentials: GitCredentialEntry[];
+    };
+    expect(parsed.credentials.map((c) => c.repoUrl)).toEqual([ENTRY.repoUrl]);
+    expect(fs.statSync(pluginPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('worker 自己的 HOME 那份也写（幂等对比的读取面 + 兼容既有读法）', () => {
+    const scope = resolveIsolationScope({
+      OPENCODE_ISOLATION_ROOT: path.join(TMP_HOME, 'iso'),
+    });
+    writeGitCredsToServeScope([ENTRY], scope);
+
+    const workerHomePath = path.join(TMP_HOME, '.keta-git-creds.json');
+    expect(fs.existsSync(workerHomePath)).toBe(true);
+    expect(fs.readFileSync(workerHomePath, 'utf8')).toBe(
+      fs.readFileSync(path.join(scope.home, '.keta-git-creds.json'), 'utf8'),
+    );
   });
 });

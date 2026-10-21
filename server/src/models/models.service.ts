@@ -733,11 +733,16 @@ export class ModelsService implements OnModuleInit {
   /**
    * Live 同步：worker 可执行集与目录校正（models-truth 真值源）。
    * - 无在线 worker → 不做剪枝，仅返回空结果（避免 offline 时误删）
-   * - 真值优先级：worker 上报的 capabilities.executableModels（`opencode models`
-   *   CLI 输出 = Provider.list() 鉴权过滤后的真实可用集，fresh 进程每次加载当前
-   *   offering）> serve /api/model 拉取（serve 启动时加载的注册表快照，免费轮换
-   *   后变 stale——旧逻辑唯一真值，致 5 个退市免费模型驻留 dropdown）。
-   *   未上报 executableModels 的旧 worker 仍走 /api/model 拉取（兼容），与上报集 union。
+   * - 真值优先级：worker 上报的 capabilities.executableModels（= **worker 自己 spawn 的
+   *   serve** 的 `GET /api/model` 结果，鉴权过滤后的真实可用集）> worker 执行端点的
+   *   `GET /models`（worker 直接问驱动端；T18 起
+   *   控制面不再直连 opencode 的模型目录端点）。
+   *   未上报 executableModels 的旧 worker 走 worker 端点回报（兼容），与上报集 union。
+   * - ⚠️ **v2 下 `opencode models` CLI 不是 serve 的探针**（真栈实测）：CLI 子命令绑的是
+   *   **共享托管后台服务**（默认端口 49374），读的是**它自己那套配置作用域**，不是 worker
+   *   拉起的那个 serve ⇒ 它可能报出**不含 vteam 自配模型**的清单（实测甚至 exit 1：
+   *   `ServiceUnavailableError: Location plugins did not finish activating`），让 worker
+   *   注册时**降级不带 executableModels**。⇒ 真值源只能是 worker 的 serve。
    * - 可见性唯一归 sync：upsertAndEnable 授予 + 孤儿禁用；快照路径仍只做 enabled:false
    *   候选登记（不复活 stale 行）。
    */
@@ -774,44 +779,15 @@ export class ModelsService implements OnModuleInit {
       }
     }
     for (const w of legacyWorkers) {
-      const caps = (w.capabilities as { baseUrl?: string } | null) ?? null;
-      const baseUrl = caps?.baseUrl ?? null;
-      if (!baseUrl) continue;
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/model`, {
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-        if (!res.ok) continue;
-        const body = (await res.json()) as {
-          data?: Array<{
-            id?: string;
-            providerID?: string;
-            status?: string;
-            enabled?: boolean;
-          }>;
-        };
-        for (const m of body.data ?? []) {
-          if (
-            m?.id &&
-            m?.providerID &&
-            m.enabled !== false &&
-            (m.status ?? 'active') === 'active'
-          )
-            liveSet.add(`${m.providerID}/${m.id}`);
-        }
-      } catch {
-        try {
-          const models = await this.workerClient.listModels(
-            w as unknown as { id: string; capabilities: unknown },
-          );
-          for (const m of models) {
-            if (m?.id) liveSet.add(m.id);
-          }
-        } catch {
-          continue;
+      // T18：控制面**不再直连 opencode** 取模型目录——统一走 worker 的 `GET /models`
+      // （vteam 自有形状；决策 D3）。旧 worker 未上报 executableModels 时，其模型集
+      // 由 worker 侧回报（worker 直接问驱动端，比 serve 的注册表快照更「活」）。
+      const models = await this.workerClient.listModels(
+        w as unknown as { id: string; capabilities: unknown },
+      );
+      for (const m of models) {
+        if (m?.id && (m.status ?? 'active') === 'active') {
+          liveSet.add(m.id);
         }
       }
     }
@@ -1340,7 +1316,7 @@ export class ModelsService implements OnModuleInit {
   /**
    * 根因诊断（opencode-go 凭据未吊销但 36 行 enabled=false 且零 availability 行）：
    * 剪枝先于凭据保存执行——syncLiveModels 的 live 集来自 worker executableModels /
-   * /api/model（仅含 live 可执行模型，不含凭据付费模型），剪枝把不在 live 集中的
+   * worker 执行端点的模型目录（仅含 live 可执行模型，不含凭据付费模型），剪枝把不在 live 集中的
    * opencode-go 行置 enabled=false 并删其 availability；configuredSet 守卫只保护
    * 剪枝时刻已配凭据的 enabled 行。凭据保存后的 resync 仍以同一 live 集为准，
    * 从不把凭据模型加回 live 集；已禁用的行既不在 orphans 查询（where enabled:true）

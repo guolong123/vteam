@@ -76,7 +76,8 @@ def start_container(image: str, control_port: int, token: str, work_dir: str) ->
         "-e", f"X_WORKER_TOKEN={token}",
         "-e", f"SERVER_URL=http://host.docker.internal:{control_port}",
         "-e", "WORKER_ID=w_delivery_e2e",
-        "-e", "OPENCODE_SERVE_HOSTNAME=0.0.0.0",
+        # v2 serve 恒开鉴权：OPENCODE_SERVER_PASSWORD 为空 → worker 启动 fail-fast
+        "-e", "OPENCODE_SERVER_PASSWORD=change-me-serve-password",
         "-e", "OPENCODE_SERVE_PORT=4200",
         "-e", "WORKER_EXEC_PORT=4198",
         "-e", "WORKER_ADVERTISE_HOST=http://host.docker.internal",

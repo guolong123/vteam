@@ -1,0 +1,12 @@
+=== markers ===
+  D3_C1_SETUP.txt: setup called
+  D3_C2_SETUP.txt: setup called
+  D3_D1_SETUP.txt: setup called
+  D3_D2_SETUP.txt: setup called
+  D3_C1_SETUP.txt
+  D3_C2_SETUP.txt
+  D3_D1_SETUP.txt
+  D3_D2_SETUP.txt
+=== /api/plugin non-builtin ===
+[('c1-static', 'local'), ('c2-dynamic', 'local'), ('d1-dual', 'local'), ('d2-dual', 'local')]
+=== errors ===

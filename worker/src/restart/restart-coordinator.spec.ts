@@ -1,5 +1,11 @@
 /**
- * T4c RestartCoordinator 单元测试：
+ * RestartCoordinator 单元测试。
+ *
+ * 角色已收窄：**只用于真正需要换进程的场景**（运维重启 / 二进制升级 / 崩溃恢复 /
+ * 热重载兜底）——配置类变更（skills/tools/MCP/agent 策略/模型凭据）走
+ * `reload/config-reloader.ts` 的热重载路径（**不重启 serve**）。
+ *
+ * 覆盖：
  * - 无活跃会话 → 立即重启 + 重新注册
  * - 有活跃会话 → pending，不执行；会话归零后 checkPending 自动执行
  * - pending 期间新请求不重复执行 / checkPending 无 pending 不动作
@@ -115,5 +121,16 @@ describe('RestartCoordinator（T4c：无活跃会话才重启）', () => {
 
     await coordinator.requestRestart('reload-config');
     expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it('仍是「真重启」：restart 回调被调用（热重载路径不走这里）', async () => {
+    const restart = jest.fn().mockResolvedValue('http://127.0.0.1:53006');
+    const reRegister = jest.fn().mockResolvedValue(undefined);
+    const coordinator = new RestartCoordinator({ restart, reRegister });
+
+    await coordinator.requestRestart('运维重启');
+
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(reRegister).toHaveBeenCalledTimes(1);
   });
 });

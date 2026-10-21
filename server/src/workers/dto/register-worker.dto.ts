@@ -59,7 +59,7 @@ export class WorkerCapabilitiesDto {
 
   @ApiPropertyOptional({
     description:
-      'serve 实际监听端口（F2 C2：随机端口上报，供 WorkerClient.resolveBaseUrl 直连）',
+      'serve 实际监听端口（F2 C2：随机端口上报；**v2 控制面不直连 serve**，该端口不参与拨号——控制面只用 baseUrl 的主机部分 + capabilities.execPort 拼执行端点）',
   })
   @IsOptional()
   @IsInt()
@@ -68,7 +68,7 @@ export class WorkerCapabilitiesDto {
 
   @ApiPropertyOptional({
     description:
-      'serve 对 server 公布的基址（D2：WORKER_ADVERTISE_HOST:port，容器内 http://worker:port；resolveBaseUrl 优先读取）',
+      'worker 对控制面公布的基址（D2：WORKER_ADVERTISE_HOST:port，容器内 http://worker:port；**控制面只取其中的主机部分**——serve 端口不再被使用，执行端点端口取 capabilities.execPort）',
   })
   @IsOptional()
   @IsString()
@@ -86,7 +86,7 @@ export class WorkerCapabilitiesDto {
 
   @ApiPropertyOptional({
     description:
-      'models-truth：worker 可执行模型 id 列表（`opencode models` CLI 输出，鉴权过滤后的真实可用集；缺省时 sync 回退 /api/model 拉取）',
+      'models-truth：worker 可执行模型 id 列表（**worker 自己 serve 的 `GET /api/model`** —— v2 下 `opencode models` CLI 绑的是共享后台服务、读的是另一个作用域，不能用作真值源；缺省时 sync 回退 worker 执行端点的模型目录）',
     type: [String],
   })
   @IsOptional()
@@ -96,7 +96,7 @@ export class WorkerCapabilitiesDto {
 
   @ApiPropertyOptional({
     description:
-      'T10：worker 执行端点端口（方案 A POST /execute；server 据此发现执行端点下发 prompt，缺省回退 serve origin + 4198）',
+      'T10：worker 执行端点端口（方案 A POST /execute；server 据此发现执行端点下发 prompt，缺省回退「上报 baseUrl 的主机部分 + 默认执行端口 4198」——**控制面不使用 serve 端口**）',
   })
   @IsOptional()
   @IsInt()

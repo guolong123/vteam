@@ -1,0 +1,24 @@
+######## T6-N isolated XDG + plugins:['-*','opencode.*',own plugin] + project AGENTS.md present
+  plugins: total=88 non-builtin=[]
+    system(len=8579): VTEAM_PLUGIN=False PROJECT_AGENTS=True GLOBAL_AGENTS=False
+
+######## T6-O isolated XDG + plugins:['-*','opencode.*',own plugin] + NO project AGENTS.md
+  plugins: total=88 non-builtin=[]
+    system(len=8424): VTEAM_PLUGIN=False PROJECT_AGENTS=False GLOBAL_AGENTS=False
+
+######## T6-Q plugins:['-*','opencode.*','./vteam-plugin.ts'] (plugin NOT auto-discovered)
+  plugins: total=88 non-builtin=[]
+    system(len=8579): VTEAM_PLUGIN=False PROJECT_AGENTS=True GLOBAL_AGENTS=False
+
+######## T6-R plugins:['./vteam-plugin.ts','-*','opencode.*'] (order: own first)
+  plugins: total=88 non-builtin=[]
+    system(len=8579): VTEAM_PLUGIN=False PROJECT_AGENTS=True GLOBAL_AGENTS=False
+
+######## T6-S plugins:['opencode.*','-*'] (auto-discovered own plugin)
+  plugins: total=2 non-builtin=[]
+    (no model request)
+
+######## T6-P isolated XDG, no plugins key at all, project AGENTS.md present
+  plugins: total=89 non-builtin=[('vteam-plugin', 'local')]
+    system(len=8624): VTEAM_PLUGIN=True PROJECT_AGENTS=True GLOBAL_AGENTS=False
+

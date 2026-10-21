@@ -205,21 +205,71 @@ export class FileStorageService {
   }
 
   /**
-   * read_file：从 uploads 目录读取已落盘文件内容（归档 contentRef 为 /uploads/<name> 形式，
-   * 与 saveBufferFile/saveTextFile 对称的读方法）。仅支持控制面落盘文件（/uploads/ 前缀）；
-   * basename 经 split 提取后与 uploads 根目录拼接，杜绝路径穿越。磁盘缺失 / 非 /uploads/
-   * 引用 → 抛错（platform-mcp read_file 调用方统一转 404 业务错误）。
+   * 归档内容读取（read_file 的归档路径）：控制面落盘文件（/uploads/<name>）或**内联正文**。
+   * - /uploads/<name>：与 saveBufferFile/saveTextFile 对称的读法；basename 经 split 提取后
+   *   与 uploads 根目录拼接，杜绝路径穿越；磁盘缺失 → 抛错（platform-mcp read_file 调用方
+   *   统一转 404 业务错误）。
+   * - **内联正文**（text 类产出物）：见下方说明。
+   *
+   * ⚠️ **内联正文例外**（缺陷 1）：`text` 类产出物的 `contentRef` **存的就是正文**
+   * （见 ArtifactsService.append：`contentRef = type === 'text' ? content : …`）——
+   * 它在**平台产出物库**里，从来没有对应的工作区文件。按老口径把它当「非 /uploads/
+   * 引用」抛错 ⇒ agent 读 text 产出物永远是「文件不存在」，而正文明明就在库里。
+   * ⇒ 非文件引用形态的 contentRef 按**内联正文**返回字节（判定见 isInlineContentRef）。
    */
   static async readUploadedFile(fileUrl: string): Promise<Buffer> {
-    const url = FileStorageService.normalizeFileRef(fileUrl);
-    if (!url.startsWith('/uploads/')) {
-      throw new BadRequestException({
-        code: UPLOAD_ERRORS.FILE_NOT_READABLE,
-        message: '仅支持读取已归档落盘的 /uploads/ 文件',
-      });
+    // ⚠️ 顺序要紧：**先判内联正文**，再走文件路径。
+    // normalizeFileRef 会把「末段像文件名」的引用一律映射成 /uploads/<basename>
+    // （正文里出现 "… 见 issue.update …" 这类片段时同样会被映射），若先归一化，
+    // 内联正文会被误当成 uploads 文件去读磁盘 → 又变成「文件不存在」。
+    if (FileStorageService.isInlineContentRef(fileUrl)) {
+      return Buffer.from(fileUrl, 'utf8');
     }
-    const base = url.split(/[\\/]/).pop() ?? '';
-    return fsp.readFile(join(resolveUploadDir(), base));
+    const url = FileStorageService.normalizeFileRef(fileUrl);
+    if (url.startsWith('/uploads/')) {
+      const base = url.split(/[\\/]/).pop() ?? '';
+      return fsp.readFile(join(resolveUploadDir(), base));
+    }
+    throw new BadRequestException({
+      code: UPLOAD_ERRORS.FILE_NOT_READABLE,
+      message: '仅支持读取已归档落盘的 /uploads/ 文件',
+    });
+  }
+
+  /**
+   * contentRef 是「内联正文」还是「文件引用」？
+   *
+   * 归档表里两种形态并存（**同一列**）：
+   * - `doc`/`file` 类：`contentRef` = 文件引用（`/uploads/<uuid>.<ext>`，或内容没抓到时
+   *   的 worker 工作区原始路径）；
+   * - `text` 类：`contentRef` = 正文本身（多行 markdown / 短句）。
+   *
+   * 判定（**按引用形态**，因为 read_file 这条链路上拿不到产出物类型——它只转发
+   * contentRef）：
+   * - 绝对路径（`/…`）、Windows 盘符、URL → **文件引用**；
+   * - basename 形如 `name.ext`（含相对路径 `docs/a.md`）→ **文件引用**；
+   * - 其余 → **内联正文**。
+   *
+   * ⚠️ 已知歧义（保守取舍）：doc/file 产出物若内容没抓到、且 fileRef 是个**无扩展名
+   * 的裸名**（如 `notes`），会被当成内联正文返回（返回的是那个名字本身）。
+   * 取「宁可当成文件引用报 404」会把 text 产出物的**短正文**（如 `已完成`）也判死，
+   * 取当前口径最多影响这种极罕见的归档行。
+   */
+  static isInlineContentRef(ref: string): boolean {
+    if (!ref) {
+      return false;
+    }
+    if (ref.startsWith('/') || ref.startsWith('\\')) {
+      return false;
+    }
+    if (/^[A-Za-z]:[\\/]/.test(ref)) {
+      return false;
+    }
+    if (/^(https?|file):\/\//i.test(ref)) {
+      return false;
+    }
+    const base = ref.split(/[\\/]/).pop() ?? '';
+    return !/\.[A-Za-z0-9]{1,10}$/.test(base);
   }
 
   /** 从已归一化的 fileRef 派生展示元数据（文件名 / 扩展名 / 磁盘大小，FILE-02 前端徽章）。 */

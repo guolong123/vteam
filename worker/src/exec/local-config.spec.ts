@@ -95,7 +95,7 @@ describe('applySkills', () => {
 });
 
 describe('applyTools', () => {
-  it('cli + x-execution 渲染为 .opencode/tools/<action>.ts', () => {
+  it('cli + x-execution 渲染为 .opencode/plugins/<action>.ts（T19：v2 的插件落点）', () => {
     const result = applier.applyTools({
       tools: [
         {
@@ -111,13 +111,13 @@ describe('applyTools', () => {
       ],
     });
     expect(result.written).toEqual({ tools: ['demo-echo'] });
-    expect(fs.existsSync(path.join(workDir, '.opencode/tools/demo-echo.ts'))).toBe(true);
+    expect(fs.existsSync(path.join(workDir, '.opencode/plugins/demo-echo.ts'))).toBe(true);
   });
 
   it('缺执行细节（无 x-execution）→ 跳过不落盘（不报错）', () => {
     const result = applier.applyTools({ tools: [{ action: 'noexec', execution: 'cli' }] });
     expect(result.written).toEqual({ tools: [] });
-    expect(fs.existsSync(path.join(workDir, '.opencode/tools/noexec.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(workDir, '.opencode/plugins/noexec.ts'))).toBe(false);
   });
 
   it('缺 action → LocalConfigError', () => {
@@ -134,9 +134,12 @@ describe('applyMcpServers / applyAgentPolicies（互不覆盖）', () => {
       mcpServers: [{ id: 'm1', name: 'mcp-1', type: 'remote', url: 'http://x/mcp' }],
     });
 
+    // T15：注入器写的是 v2 原生段名（`mcp.servers` / `agents`）
     const config = readJson(path.join(workDir, 'opencode.json'));
-    expect(Object.keys(config.mcp as Record<string, unknown>)).toContain('mcp-1');
-    expect(Object.keys(config.agent as Record<string, unknown>)).toContain('ag-1');
+    expect(Object.keys((config.mcp as { servers: Record<string, unknown> }).servers)).toContain(
+      'mcp-1',
+    );
+    expect(Object.keys(config.agents as Record<string, unknown>)).toContain('ag-1');
   });
 
   it('agent 定义非法（缺 description）→ LocalConfigError', () => {

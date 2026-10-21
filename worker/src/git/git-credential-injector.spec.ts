@@ -186,3 +186,47 @@ describe('cleanupGitCredsFile（幂等删除）', () => {
 export function _typeGuard(result: GitCredsResult): void {
   void result.path;
 }
+
+describe('writeGitCredsFile（传 targetHome：写到**插件可见**的那份）', () => {
+  /** 隔离配置域的 HOME（serve 子进程的 HOME 被重定向到那里）。 */
+  const SCOPE_HOME = path.join(TMP_HOME, 'iso', 'home');
+
+  afterEach(() => {
+    fs.rmSync(path.join(TMP_HOME, 'iso'), { recursive: true, force: true });
+  });
+
+  it('插件可见路径（<targetHome>/.keta-git-creds.json）落盘，权限 600', () => {
+    const result = writeGitCredsFile([SSH_ENTRY], SCOPE_HOME);
+
+    const pluginPath = path.join(SCOPE_HOME, '.keta-git-creds.json');
+    expect(result.path).toBe(pluginPath);
+    expect(fs.existsSync(pluginPath)).toBe(true);
+    expect(fs.statSync(pluginPath).mode & 0o777).toBe(GIT_CREDS_FILE_MODE);
+    const parsed = JSON.parse(fs.readFileSync(pluginPath, 'utf8')) as {
+      credentials: GitCredentialEntry[];
+    };
+    expect(parsed.credentials).toEqual([SSH_ENTRY]);
+  });
+
+  it('双写：worker 自己 HOME 那份也在，且两份内容完全相同', () => {
+    writeGitCredsFile([SSH_ENTRY], SCOPE_HOME);
+
+    const pluginPath = path.join(SCOPE_HOME, '.keta-git-creds.json');
+    expect(fs.existsSync(CREDS_PATH)).toBe(true);
+    expect(fs.readFileSync(CREDS_PATH, 'utf8')).toBe(
+      fs.readFileSync(pluginPath, 'utf8'),
+    );
+  });
+
+  it('不传 targetHome → 只写 worker 自己 HOME（既有行为不变）', () => {
+    const result = writeGitCredsFile([SSH_ENTRY]);
+    expect(result.path).toBe(CREDS_PATH);
+    expect(fs.existsSync(path.join(SCOPE_HOME, '.keta-git-creds.json'))).toBe(false);
+  });
+
+  it('targetHome = worker 自己 HOME → 只写一份（不重复写）', () => {
+    const result = writeGitCredsFile([SSH_ENTRY], TMP_HOME);
+    expect(result.path).toBe(CREDS_PATH);
+    expect(result.paths).toEqual([CREDS_PATH]);
+  });
+});

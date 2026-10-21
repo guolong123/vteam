@@ -2,25 +2,56 @@
  * T3 V1Runtime：opencode serve 子进程管理。
  *
  * 职责（对齐计划 D2 铁律，Oracle 实测）：
- * 1. spawn `opencode serve --port <p> --hostname 127.0.0.1 [--pure]`
- *    —— `--pure`（不加载外部插件）由 OPENCODE_PURE 控制：默认**不加**，让 workDir/opencode.json
- *    里 plugin 节声明的内置插件（omo）生效；设 OPENCODE_PURE=1 可切回纯净基线做 token 对照
- *    （历史实测 --pure 约 1900 input tokens，非 --pure 约 7601）。
- *    env 注入 OPENCODE_SERVER_PASSWORD（Basic Auth，username=opencode，空则不设）。
+ * 1. spawn `opencode serve --port <p> --hostname 127.0.0.1 [--print-logs]`
+ *    env 注入 OPENCODE_SERVER_PASSWORD（Basic Auth，username=opencode）。
  * 2. 端口管理：start 前用 net.createServer 探测空闲端口，占用则 +1 重试（最多 5 次）；
  *    port=0 时由 OS 分配随机空闲端口（已实测 `opencode serve --help` 默认 --port 0 即随机）。
  * 3. 进程组清理：spawn `detached: true` + `process.kill(-pid)`（负 pid = 进程组组长），
  *    3s 未退出则 SIGKILL 兜底（实测无残留）。
- * 4. 健康检查：启动后轮询 `GET http://127.0.0.1:{port}/` 直到 2xx（带 Basic Auth），
+ * 4. 健康检查：启动后轮询 `GET http://127.0.0.1:{port}/api/info` 直到 2xx（带 Basic Auth），
  *    超时 30s；serve 提前退出（exitCode 非 null）即报错。
  * 5. stdout/stderr pipe 收集日志到环形缓冲（保留最近 N 行供 debug）。
  *
- * **`--print-logs`（T17 修复，2026-09-17 实测）**：opencode serve 默认把诊断日志写
- * `$HOME/.local/share/opencode/log/opencode.log`（**文件，不是 stderr**），stdout/stderr
- * 只有启动 banner（`listening on ...` 在 stdout）。因此原实现 `this.logs` 几乎收不到
- * serve 诊断行 → `recentErrors()` 恒空 → 模型 API 错误（Rate limit/Free usage）无法被
- * 感知，只能空等首字超时 120s 并记成笼统「模型无任何输出」。修复 = spawn 加
- * `--print-logs`（`opencode serve --help`：print logs to stderr），诊断行随之进 stderr。
+ * ── OpenCode v2 适配（计划 T1/T2/T3 / D2 / D9 / D10）────────────────────────
+ * 实测基线：`opencode v2.0.28`（`/Users/mac/.opencode/bin/opencode`）。
+ *
+ * a) **不再传 `--pure`**：v2 删掉了这个 flag，`opencode serve --pure` 直接 **exit 1**
+ *    （`ERROR Unrecognized flag: --pure in command opencode serve`）——照旧传会让
+ *    **每个 worker 启动即失败**。v1 的 `--pure` 语义（不加载外部插件）由 **T16b 的隔离
+ *    配置域**承接（见下 e）；`OPENCODE_PURE` / OmO 开关降级为**只做告警**。
+ * b) **banner 形态变化**：v2 打印 `server listening on http://HOST:PORT`，未配置密码时
+ *    追加一行 `server password <PASSWORD>`（`LISTENING_RE` 非锚定，仍然匹配 ✅）。
+ * c) **恒开鉴权**（D10）：v2 serve **总是**要求鉴权。密码为空时 v2 自动生成随机密码并
+ *    打到 stdout——若不解析，worker 自己的所有请求都会 401 且错误信息不会告诉运维
+ *    密码在哪。故：**密码为空 → 启动 fail-fast**（可操作错误）；显式逃生开关
+ *    `OPENCODE_ALLOW_GENERATED_PASSWORD=1` 时改为从 serve stdout 捕获该密码
+ *    （**明文密码绝不进日志**，日志只记「已从 stdout 捕获自动生成密码」）。
+ *    Basic 用户名仍是 `opencode`（实测不变）。
+ * d) **健康检查改打 `/api/info`**：v2 的 `GET /` 返回 **web SPA 的 200**（未鉴权也能过），
+ *    探不到鉴权状态；`GET /api/info` 未鉴权 401 / 鉴权 200 —— 用它才能在启动期就发现
+ *    「密码不对」（否则表现为运行期一串 401，排查成本高）。
+ *
+ * e) **隔离配置域（T16b / T6 结论落地）**：spawn 时**不继承宿主的 `HOME`**，改为注入
+ *    自己的 `HOME` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
+ *    `XDG_CACHE_HOME`（全部指向隔离根，见 `config.ts` 的 `resolveIsolationScope`）。
+ *    实测（opencode v2.0.28）：v2 **没有 `--pure` 的等价物**——`plugins: []` /
+ *    `instructions: []` / `experimental` / `OPENCODE_CONFIG*` 全部 no-op（`plugins` 是
+ *    **跨配置合并**语义、`instructions` 只能**追加**），`OPENCODE_DISABLE_PROJECT_CONFIG=1`
+ *    会连**项目 `opencode.json`** 一起杀掉（vteam 不能用），`plugins: ["-*"]` 会把内置
+ *    agent/provider 一起关掉（`Agent not found: "build"`）⇒ **隔离配置发现路径是唯一
+ *    可靠手段**：宿主的全局配置、全局插件、全局 `AGENTS.md` 全部不在作用域内。
+ *    同时清掉 `OPENCODE_CONFIG` / `OPENCODE_CONFIG_CONTENT` /
+ *    `OPENCODE_DISABLE_PROJECT_CONFIG`（宿主残留会把全局配置重新拉回作用域）。
+ *    ⚠️ **残留**：受管/系统配置目录（macOS `/Library/Application Support/opencode`、
+ *    Linux `/etc/opencode`）**不受 XDG 控制**，v2 serve 会 watch 它——被 MDM 托管的机器上
+ *    机器级插件仍可能进作用域，只有 `policies` 能压（计划 §10 U9，**本任务无法修复**）。
+ *
+ * **`--print-logs`（T17 修复，2026-09-17 实测；v2.0.28 复验仍有效）**：opencode serve 默认
+ * 把诊断日志写 `$HOME/.local/share/opencode/log/opencode.log`（**文件，不是 stderr**），
+ * stdout/stderr 只有启动 banner。因此原实现 `this.logs` 几乎收不到 serve 诊断行 →
+ * `recentErrors()` 恒空 → 模型 API 错误（Rate limit/Free usage）无法被感知，只能空等
+ * 首字超时 120s 并记成笼统「模型无任何输出」。修复 = spawn 加 `--print-logs`
+ * （v2 仍接受该全局 flag，实测 server 的 logfmt 行照旧进 stderr、banner 仍在 stdout）。
  * 同时保留日志文件作为**次级**数据源（`serveLogFilePath`，可配；缺失静默降级），
  * 使捕获不依赖单一传输通道。
  *
@@ -29,7 +60,6 @@
 
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import {
-  defaultServeLogFilePath,
   isAnyLine,
   isServeErrorLine,
   lineBelongsToSession,
@@ -37,7 +67,11 @@ import {
   readFileTailLines,
 } from './serve-log';
 import { getRandomFreePort, httpGetStatus, isPortFree } from './port-probe';
+import { formatOpencodeVersion, parseOpencodeVersion, OpencodeVersionInfo } from './opencode-version';
+import { OpencodeIsolationScope, resolveIsolationScope } from '../config';
 export { defaultServeLogFilePath, readFileTailLines } from './serve-log';
+export { parseOpencodeVersion, formatOpencodeVersion, normalizeOpencodeVersion } from './opencode-version';
+export type { OpencodeVersionInfo } from './opencode-version';
 
 /** 最小日志接口（默认 console）。 */
 export interface Logger {
@@ -49,8 +83,18 @@ export interface Logger {
 export interface OpencodeServerOptions {
   /** serve 端口；>0 从该端口开始探测（占用 +1 重试），0 = OS 随机空闲端口 */
   port: number;
-  /** serve 认证密码（OPENCODE_SERVER_PASSWORD，Basic Auth username=opencode）；空 = 不设鉴权 */
+  /**
+   * serve 认证密码（OPENCODE_SERVER_PASSWORD，Basic Auth username=opencode）。
+   * v2 **恒开鉴权**：为空即启动 fail-fast（除非开 `allowGeneratedPassword` 逃生开关）。
+   */
   serverPassword?: string;
+  /**
+   * 逃生开关：允许在**未配置**密码时，从 serve stdout 的 `server password <pw>` 行
+   * 捕获 v2 自动生成的随机密码并采用（v2 恒开鉴权，密码为空必然 401）。
+   * 缺省读 env `OPENCODE_ALLOW_GENERATED_PASSWORD`（真值词表同 opencode 布尔解析）。
+   * 明文密码绝不进日志。
+   */
+  allowGeneratedPassword?: boolean;
   /** opencode CLI 二进制路径；默认 'opencode'（测试可指向假 serve 脚本） */
   command?: string;
   /** serve 工作目录；默认 process.cwd() */
@@ -70,14 +114,51 @@ export interface OpencodeServerOptions {
   portRetryCount?: number;
   /** serve 绑定地址（D2：默认 env OPENCODE_SERVE_HOSTNAME ?? '127.0.0.1' 保住本地铁律；容器内设 0.0.0.0） */
   serveHostname?: string;
+  /**
+   * 隔离配置域（T16b）：serve 子进程的 `HOME` / `XDG_*` 全部指向它，
+   * 宿主机的全局配置/插件/`AGENTS.md` 不在作用域内。
+   * 缺省 = `resolveIsolationScope()`（= `<HOME>/.opencode-iso`）——**始终隔离**，
+   * 调用方漏传也不会退回"继承宿主机 HOME"。
+   */
+  isolationScope?: OpencodeIsolationScope;
   /** 日志输出；默认 console */
   logger?: Logger;
   /**
    * OmO 启用开关的读取回调（index.ts 注入 readOmoEnabled(workDir)）。
-   * 返回 false → serve 以 `--pure` 启动（不加载插件）。
+   * ⚠️ v2 已无 `--pure` flag → 该开关**不再影响启动参数**，仅用于告警
+   * （插件抑制由 T16b 的隔离配置域承接）。
    * 缺省不注入 = 恒为启用（保持既有行为）。
    */
   omoEnabled?: () => boolean;
+}
+
+/**
+ * 构造 serve 子进程的环境变量（**隔离配置域**，T16b）。
+ *
+ * 做的事：
+ * 1. `HOME` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` / `XDG_CACHE_HOME`
+ *    全部指向隔离域 → 宿主的全局配置、全局插件、全局 `AGENTS.md`、会话库、凭据
+ *    **一律不在作用域内**（实测：v2.0.28 认这 5 个变量，见 `opencode debug paths`）。
+ * 2. 删掉 `OPENCODE_CONFIG` / `OPENCODE_CONFIG_CONTENT` / `OPENCODE_DISABLE_PROJECT_CONFIG`
+ *    ——它们是"额外的配置发现入口"：前两者能把宿主配置**追加**进来（不是替换），
+ *    第三者会连**项目 `opencode.json`** 一起禁掉（vteam 自己的 agents/mcp/plugins 就没了）。
+ *
+ * 纯函数（不读全局 env，除 `baseEnv` 缺省外），单测直接断言。
+ */
+export function buildIsolatedServeEnv(
+  scope: OpencodeIsolationScope,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  env.HOME = scope.home;
+  env.XDG_CONFIG_HOME = scope.configHome;
+  env.XDG_DATA_HOME = scope.dataHome;
+  env.XDG_STATE_HOME = scope.stateHome;
+  env.XDG_CACHE_HOME = scope.cacheHome;
+  delete env.OPENCODE_CONFIG;
+  delete env.OPENCODE_CONFIG_CONTENT;
+  delete env.OPENCODE_DISABLE_PROJECT_CONFIG;
+  return env;
 }
 
 const DEFAULT_COMMAND = 'opencode';
@@ -95,8 +176,21 @@ const DEFAULT_PORT_RETRY_COUNT = 5;
 const DEFAULT_SERVE_HOSTNAME = '127.0.0.1';
 /** worker 内部访问 serve 的稳定地址：恒回环（serve 绑定 0.0.0.0 时同容器回环仍可达） */
 const LOOPBACK_HOSTNAME = '127.0.0.1';
-/** serve 日志中实际监听地址的正则（`opencode server listening on http://<host>:<port>`，host 不限定） */
-const LISTENING_RE = /listening on http:\/\/[^:\s/]+:(\d+)/;
+/**
+ * serve 实际监听地址的正则。v1 banner `listening on http://<host>:<port>`；
+ * v2 banner `server listening on http://<host>:<port>`（多 `server ` 前缀）。
+ * 正则**非锚定** → 两种形态都匹配（勿加锚点，否则 v2 失配）。
+ */
+export const LISTENING_RE = /listening on http:\/\/[^:\s/]+:(\d+)/;
+/**
+ * v2 banner 中自动生成密码所在行：`server password <PASSWORD>`（仅未配置
+ * OPENCODE_SERVER_PASSWORD 时出现）。捕获到的明文密码**绝不进日志**（入缓冲前脱敏）。
+ */
+export const SERVER_PASSWORD_RE = /server password (\S+)/;
+/** 逃生开关 env 名（vteam 侧开关，**不是** opencode CLI flag）。 */
+export const ALLOW_GENERATED_PASSWORD_ENV = 'OPENCODE_ALLOW_GENERATED_PASSWORD';
+/** 真值词表（与 opencode 自己的布尔解析保持一致）。 */
+const TRUTHY_ENV_VALUES = ['1', 'true', 'yes', 'on', 'y'];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -104,20 +198,26 @@ function sleep(ms: number): Promise<void> {
 
 export class OpencodeServer {
   readonly options: OpencodeServerOptions;
+  /** 隔离配置域（spawn env 的 HOME / XDG_* 全部指向它） */
+  private readonly isolationScope: OpencodeIsolationScope;
   /** 当前 spawn 的 serve 子进程（未启动/已停止为 null） */
   private process: ChildProcess | null = null;
   /** 实际监听端口（启动成功后有值；端口冲突重试后可能与 options.port 不同） */
   private actualPort: number | null = null;
   private baseUrlValue: string | null = null;
   private versionCache: string | null = null;
+  private versionInfoCache: OpencodeVersionInfo | null = null;
   private logs: string[] = [];
   /** F2 M3：spawn 异步失败（如 ENOENT）记录的错误；waitForHealthy 感知后立即失败不空转 */
   private spawnErrorValue: Error | null = null;
+  /** 从 serve stdout 捕获的 v2 自动生成密码（逃生开关路径）；null = 未捕获 */
+  private generatedPassword: string | null = null;
 
   constructor(options: OpencodeServerOptions) {
     if (!Number.isInteger(options.port) || options.port < 0) {
       throw new Error(`[opencode-server] port 必须是非负整数，收到: ${options.port}`);
     }
+    this.isolationScope = options.isolationScope ?? resolveIsolationScope();
     this.options = {
       command: DEFAULT_COMMAND,
       cwd: process.cwd(),
@@ -127,7 +227,9 @@ export class OpencodeServer {
       portRetryCount: DEFAULT_PORT_RETRY_COUNT,
       logger: console,
       ...options,
-      serveLogFilePath: options.serveLogFilePath ?? defaultServeLogFilePath(),
+      // 隔离域内的 serve 日志文件（次级错误源）：不再指向宿主的
+      // `$HOME/.local/share/opencode/log/opencode.log`（隔离后 serve 根本不再写那儿）。
+      serveLogFilePath: options.serveLogFilePath ?? this.isolationScope.logFile,
       serveHostname: options.serveHostname ?? process.env.OPENCODE_SERVE_HOSTNAME ?? DEFAULT_SERVE_HOSTNAME,
     };
   }
@@ -150,6 +252,23 @@ export class OpencodeServer {
 
   get version(): string {
     return this.versionCache ?? 'unknown';
+  }
+
+  /**
+   * 规范化 semver 版本串（`2.0.28`）——上报给控制面的**唯一**形态
+   * （调度器按精确串相等过滤 worker，见 `workers.service.ts` 的 opencodeVersion 比较）。
+   * 解析失败返回 `'unknown'`。
+   */
+  get versionSemver(): string {
+    return this.versionInfoCache ? formatOpencodeVersion(this.versionInfoCache) : 'unknown';
+  }
+
+  /**
+   * 实际用于 Basic Auth 的密码：优先用配置的 OPENCODE_SERVER_PASSWORD；
+   * 未配置且开了逃生开关时，用从 serve stdout 捕获的 v2 自动生成密码。
+   */
+  get effectiveServerPassword(): string | null {
+    return this.options.serverPassword || this.generatedPassword;
   }
 
   /** 最近日志（环形缓冲副本），供启动失败/调试查看。 */
@@ -223,7 +342,18 @@ export class OpencodeServer {
     // 否则新会话失败原因会引用到旧会话的日志行。
     this.logs = [];
     this.spawnErrorValue = null;
+    this.generatedPassword = null;
     this.versionCache = this.detectVersion();
+    this.versionInfoCache = parseOpencodeVersion(this.versionCache);
+    this.assertServerPasswordConfigured();
+    // 隔离配置域（启动即打印）：worker 行为异常时，第一眼就能确认"serve 看到的配置域是哪一块"。
+    // 路径里**不含任何密文**（凭据在 <data>/opencode/auth.json，不在路径里）。
+    this.options.logger?.info(
+      `[opencode-server] 隔离配置域: root=${this.isolationScope.root} ` +
+        `HOME=${this.isolationScope.home} ` +
+        `XDG_CONFIG_HOME=${this.isolationScope.configHome} ` +
+        `XDG_DATA_HOME=${this.isolationScope.dataHome}（宿主机的全局配置/插件/AGENTS.md 不在作用域内）`,
+    );
     const port = await this.resolvePort();
     let proc: ChildProcess;
     try {
@@ -286,7 +416,7 @@ export class OpencodeServer {
     }
   }
 
-  /** 探测 opencode CLI 版本（start 时调用，失败不阻断启动）。 */
+  /** 探测 opencode CLI 版本（start 时调用，失败不阻断启动）；返回**原始**输出。 */
   private detectVersion(): string {
     try {
       const result = spawnSync(this.options.command!, ['--version'], {
@@ -297,6 +427,46 @@ export class OpencodeServer {
     } catch {
       return 'unknown';
     }
+  }
+
+  /**
+   * 逃生开关是否开启：显式选项优先，否则读 env `OPENCODE_ALLOW_GENERATED_PASSWORD`。
+   */
+  private isAllowGeneratedPassword(): boolean {
+    if (this.options.allowGeneratedPassword !== undefined) {
+      return this.options.allowGeneratedPassword;
+    }
+    const raw = process.env[ALLOW_GENERATED_PASSWORD_ENV];
+    if (raw === undefined || raw.trim() === '') {
+      return false;
+    }
+    return TRUTHY_ENV_VALUES.includes(raw.trim().toLowerCase());
+  }
+
+  /**
+   * v2 恒开鉴权（D10）→ 密码为空即 fail-fast。
+   *
+   * 为什么必须 fail-fast：v2 未配置 OPENCODE_SERVER_PASSWORD 时会**自动生成**随机密码
+   * 并打到 stdout。若 worker 不解析它，worker 自己的每个请求都会 401，而错误信息
+   * 不会告诉运维密码在哪——排查成本极高（计划 D10）。
+   *
+   * 逃生开关：显式设 `OPENCODE_ALLOW_GENERATED_PASSWORD=1` 时改为从 stdout 捕获该密码。
+   */
+  private assertServerPasswordConfigured(): void {
+    if (this.options.serverPassword) {
+      return;
+    }
+    if (this.isAllowGeneratedPassword()) {
+      this.options.logger?.warn(
+        `[opencode-server] 未配置 OPENCODE_SERVER_PASSWORD：已开启 ${ALLOW_GENERATED_PASSWORD_ENV}，` +
+          '将从 serve stdout 捕获 v2 自动生成的密码（明文不落日志）',
+      );
+      return;
+    }
+    throw new Error(
+      '[opencode-server] v2 恒开鉴权：请设置环境变量 OPENCODE_SERVER_PASSWORD（Basic Auth，用户名固定为 opencode）；' +
+        `若坚持让 opencode 自动生成密码，请显式设置 ${ALLOW_GENERATED_PASSWORD_ENV}=1（worker 将从 serve stdout 捕获）`,
+    );
   }
 
   /**
@@ -324,13 +494,16 @@ export class OpencodeServer {
   }
 
   /**
-   * 是否以 `--pure` 启动（不加载外部插件）。
+   * 是否请求了「纯净基线」（v1 语义：不加载外部插件）。
    *
-   * 两个来源，任一为「关」即不加载插件：
+   * 两个来源，任一为「关」即请求纯净基线：
    *   1. `OPENCODE_PURE` 环境变量为真值 —— 运维级一刀切（对照 token 开销/排障用）；
    *   2. `omoEnabledProvider()` 返回 false —— 用户在 worker 详情页关掉了 OmO 开关。
    *
-   * 两者取或：运维没设 pure 且用户开着开关时，插件才真正加载。
+   * ⚠️ **v2 已无 `--pure` flag**（`opencode serve --pure` 直接 exit 1）→ 本方法**不再拼
+   * flag**，只用于告警：等价的「抑制第三方插件 / AGENTS.md 注入」语义由 **T16b 的隔离
+   * 配置域**承接（子进程拿不到宿主的 HOME/XDG_CONFIG_HOME → 宿主全局插件/AGENTS.md
+   * 不在作用域内；T6 已关闭：没有配置层的等价物，隔离是唯一可靠手段）。
    *
    * ⚠️ OPENCODE_PURE 同时是 **opencode 自己**解析的布尔环境变量，且它不接受空串
    * （SchemaError: Expected "true"|...|"false"..., got ""）→ serve 直接启动失败。
@@ -343,7 +516,7 @@ export class OpencodeServer {
       delete process.env.OPENCODE_PURE;
     } else {
       const normalized = (raw ?? '').trim().toLowerCase();
-      if (['1', 'true', 'yes', 'on', 'y'].includes(normalized)) {
+      if (TRUTHY_ENV_VALUES.includes(normalized)) {
         return true;
       }
     }
@@ -351,7 +524,7 @@ export class OpencodeServer {
     return this.options.omoEnabled ? !this.options.omoEnabled() : false;
   }
 
-  /** spawn serve 子进程；detached + stdio pipe；env 注入 OPENCODE_SERVER_PASSWORD。 */
+  /** spawn serve 子进程；detached + stdio pipe；env 注入 OPENCODE_SERVER_PASSWORD + 隔离配置域。 */
   private spawnServe(port: number): ChildProcess {
     const args = [
       'serve',
@@ -359,25 +532,28 @@ export class OpencodeServer {
       String(port),
       '--hostname',
       this.options.serveHostname!,
-      // T17 修复（2026-09-17 实测）：诊断日志默认写 ~/.local/share/opencode/log/opencode.log
-      // （文件，不是 stderr）→ this.logs 收不到 → recentErrors() 恒空。该参数令其同时写 stderr
-      // （`opencode serve --help`: print logs to stderr），启动 banner（listening on …）仍在 stdout。
+      // T17 修复（2026-09-17 实测；v2.0.28 复验仍有效）：诊断日志默认写
+      // ~/.local/share/opencode/log/opencode.log（文件，不是 stderr）→ this.logs 收不到 →
+      // recentErrors() 恒空。该参数令其同时写 stderr，启动 banner（listening on …）仍在 stdout。
       '--print-logs',
     ];
-    // --pure = 不加载外部插件。/data/vteam-worker/opencode.json 的 plugin 节（omo）与之互斥：
-    // 带 --pure 时 omo 静默不生效。默认不加（让内置插件生效），需要"纯净基线"时用
-    // OPENCODE_PURE=1 切回——保留该开关是为了能对照插件对 input tokens 的影响
-    // （历史实测 --pure 约 1900 tokens，非 --pure 约 7601）。
-    // 原生 permission.edit 与 agent 节不依赖插件，--pure 下照常生效。
+    // ⚠️ v2 删掉了 `--pure`：`opencode serve --pure` 直接 exit 1（Unrecognized flag），
+    // 照旧拼会让**每个 worker 启动即失败**。v1 的「不加载外部插件」语义由 **T16b 的隔离
+    // 配置域**承接（子进程拿不到宿主的 HOME/XDG_CONFIG_HOME → 全局插件不在作用域内）。
     if (this.isPureMode()) {
-      args.push('--pure');
       this.options.logger?.warn(
-        '[opencode-server] --pure：外部插件不加载（omo 不生效）；原生 permission.edit / agent 节仍生效',
+        '[opencode-server] OPENCODE_PURE / OmO 开关在 v2 上已失效（v2 无 --pure flag，传入会 exit 1）：' +
+          '本 worker 不再拼 --pure；插件抑制由隔离配置域（spawn env 的 HOME/XDG_*）承接',
       );
     }
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    // 隔离配置域：子进程不继承宿主的 HOME / XDG_*（T16b）。
+    const env = buildIsolatedServeEnv(this.isolationScope, process.env);
     if (this.options.serverPassword) {
       env.OPENCODE_SERVER_PASSWORD = this.options.serverPassword;
+    } else {
+      // 未配置密码 → 显式清掉，避免宿主环境的残留值让 v2 误以为「已配置」（那会让
+      // 逃生开关捕获不到 banner 里的自动生成密码）。
+      delete env.OPENCODE_SERVER_PASSWORD;
     }
     const proc = spawn(this.options.command!, args, {
       cwd: this.options.cwd,
@@ -397,12 +573,16 @@ export class OpencodeServer {
     return proc;
   }
 
-  /** 轮询 GET / 直到 2xx；serve 提前退出或超时即抛错（附最近日志）。 */
+  /**
+   * 轮询 `GET /api/info` 直到 2xx；serve 提前退出或超时即抛错（附最近日志）。
+   *
+   * 为什么打 `/api/info` 而不是 `/`：v2 的 `GET /` 返回 web SPA 的 200（**未鉴权也过**），
+   * 探不到鉴权状态；`/api/info` 未鉴权 401 / 鉴权 200 —— 用它才能在启动期发现密码不对。
+   */
   private async waitForHealthy(port: number): Promise<void> {
     const timeoutMs = this.options.healthCheckTimeoutMs!;
     const intervalMs = this.options.healthCheckIntervalMs!;
-    const url = `http://${LOOPBACK_HOSTNAME}:${port}/`;
-    const authHeader = this.buildAuthHeader();
+    const url = `http://${LOOPBACK_HOSTNAME}:${port}/api/info`;
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown = null;
 
@@ -419,40 +599,58 @@ export class OpencodeServer {
           `[opencode-server] serve 提前退出（exitCode=${proc.exitCode}），最近日志:\n${this.logs.join('\n')}`,
         );
       }
+      let status: number;
       try {
-        const status = await httpGetStatus(url, authHeader);
-        if (status >= 200 && status < 300) {
-          this.options.logger?.info(`[opencode-server] 健康检查通过 (HTTP ${status})`);
-          return;
-        }
-        lastError = new Error(`HTTP ${status}`);
+        status = await httpGetStatus(url, this.buildAuthHeader());
       } catch (err) {
         lastError = err;
+        await sleep(intervalMs);
+        continue;
       }
+      if (status >= 200 && status < 300) {
+        this.options.logger?.info(`[opencode-server] 健康检查通过 (HTTP ${status})`);
+        return;
+      }
+      if (status === 401 && this.effectiveServerPassword) {
+        throw new Error(
+          '[opencode-server] 健康检查鉴权失败（HTTP 401）：serve 恒开鉴权，但当前密码不匹配；' +
+            '请核对 OPENCODE_SERVER_PASSWORD 与 serve 实际使用的密码是否一致\n' +
+            `最近日志:\n${this.logs.join('\n')}`,
+        );
+      }
+      lastError = new Error(`HTTP ${status}`);
       await sleep(intervalMs);
     }
     throw new Error(
-      `[opencode-server] 健康检查超时（${timeoutMs}ms），最后一次: ${lastError ? String(lastError) : '无请求'}\n最近日志:\n${this.logs.join('\n')}`,
+      `[opencode-server] 健康检查超时（${timeoutMs}ms），最后一次: ${lastError ? String(lastError) : '无请求'}` +
+        `${this.options.serverPassword ? '' : '；未配置 OPENCODE_SERVER_PASSWORD 且未捕获到 v2 自动生成密码'}` +
+        `\n最近日志:\n${this.logs.join('\n')}`,
     );
   }
 
   private buildAuthHeader(): string | undefined {
-    const password = this.options.serverPassword;
+    const password = this.effectiveServerPassword;
     if (!password) {
       return undefined;
     }
-    // D2 铁律：Basic Auth username=opencode，密码即 OPENCODE_SERVER_PASSWORD
+    // D2 铁律：Basic Auth username=opencode（v2 实测不变），密码即 OPENCODE_SERVER_PASSWORD
     return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
   }
 
-  /** 收集 serve 日志到环形缓冲；顺带解析实际监听端口做防御性校验。 */
+  /** 收集 serve 日志到环形缓冲；顺带解析实际监听端口与（v2）自动生成密码。 */
   private pushLog(text: string): void {
     for (const line of text.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
-      this.logs.push(trimmed);
+      const passwordMatch = SERVER_PASSWORD_RE.exec(trimmed);
+      if (passwordMatch && !this.options.serverPassword) {
+        this.generatedPassword = passwordMatch[1];
+        this.options.logger?.info('[opencode-server] 已从 stdout 捕获自动生成密码（明文不落日志）');
+      }
+      // 明文密码绝不进环形缓冲（环形缓冲会经 recentLogTail() 附进错误信息外泄）
+      this.logs.push(passwordMatch ? trimmed.replace(SERVER_PASSWORD_RE, 'server password ***') : trimmed);
       const match = LISTENING_RE.exec(trimmed);
       if (match && this.actualPort !== null && Number(match[1]) !== this.actualPort) {
         this.options.logger?.warn(

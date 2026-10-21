@@ -422,8 +422,16 @@ export function buildRolePermission(
     task: resolveTaskEffect(name),
     // MCP 工具执行权限默认 allow（含全部 vteam_*）：vteam 工具由 platform-mcp
     // 服务端权限门（岗位 capabilities + resolveExecContext 绑定校验）兜底，
-    // 引擎层不再 deny；否则未出现在 permission 中的工具会按引擎默认 ask/deny，
-    // 导致 MCP 工具执行权限默认全关。
+    // 引擎层不再 deny。
+    // ⚠️ v2 口径（2026-10-20；决策记录见 07 篇 §3.2）：opencode v2 每个 agent 的
+    // **内置**规则集首条是 catch-all `{action:"*",resource:"*",effect:"allow"}`，
+    // 配置里的规则**追加在其后**、规则集按 `findLast` 求值 ⇒ **未声明**的 action
+    // 在引擎层本来就**放行**（v1 下才落到引擎的逐 action ask/deny 默认）。
+    // ⇒ 下面这批 `vteam_*` allow 条目的**结果不变**（仍放行），但**理由已变**：它不再
+    // 是「否则未出现在 permission 中的工具会按引擎默认 ask/deny、导致 MCP 工具默认
+    // 全关」的兜底，而是对平台允许这批工具的**显式声明**。
+    // **不要**据此补 catch-all ask 或逐 action 默认表——那是 07 篇 §3.2 已采纳决策
+    // 明确拒绝的收紧（未声明 action 放行的代价已被平台负责人接受）。
     ...Object.fromEntries(
       VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
     ),

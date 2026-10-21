@@ -45,9 +45,9 @@ docker build -t vteam-worker:local ./worker
 ```bash
 docker run -d --name vteam-worker \
   -e X_WORKER_TOKEN=dev-token \
+  -e OPENCODE_SERVER_PASSWORD=change-me-serve-password \
   -e SERVER_URL=http://<控制面地址>:13999 \
   -e WORKER_ID=w_demo_1 \
-  -e OPENCODE_SERVE_HOSTNAME=0.0.0.0 \
   -e OPENCODE_SERVE_PORT=4000 \
   -e WORKER_ADVERTISE_HOST=http://<server 可达的 worker 地址> \
   -e WORKER_EXEC_PORT=4198 \
@@ -60,14 +60,18 @@ docker run -d --name vteam-worker \
 
 worker 启动后会向 `SERVER_URL` 注册（失败指数退避重试，重试耗尽退出）。
 
+⚠️ `OPENCODE_SERVER_PASSWORD` **必填**（服务模式与独立模式都需要）：v2 的 `opencode serve` 恒开
+Basic Auth（用户名固定 `opencode`），为空时 opencode 自动生成随机密码打到 stdout、worker 不解析
+→ worker 启动 fail-fast。
+
 ### 3.3 独立模式（无控制面）
 
 ```bash
 docker run -d --name vteam-worker-standalone \
   -e X_WORKER_TOKEN=dev-token \
+  -e OPENCODE_SERVER_PASSWORD=change-me-serve-password \
   -e WORKER_STANDALONE=true \
   -e WORKER_ID=w_demo_standalone \
-  -e OPENCODE_SERVE_HOSTNAME=0.0.0.0 \
   -e OPENCODE_SERVE_PORT=4100 \
   -e WORKER_EXEC_PORT=4198 \
   -e WORK_DIR=/data/vteam-worker \
@@ -82,18 +86,35 @@ docker run -d --name vteam-worker-standalone \
 | 变量 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `X_WORKER_TOKEN` | 是 | 无 | 与 SDK/控制面一致的共享 token |
+| `OPENCODE_SERVER_PASSWORD` | **是**（v2 serve 恒开鉴权） | 无 | opencode serve 认证密码（Basic Auth，用户名固定 `opencode`）；为空 → worker 启动 fail-fast |
 | `SERVER_URL` | 服务模式必填 | `http://localhost:3000` | 控制面基址（注册/心跳/事件） |
 | `WORKER_STANDALONE` | 否 | `false` | `true` = 独立模式（跳过注册/心跳/资源拉取） |
 | `WORKER_ID` | 否 | `w_<hostname>` | worker 唯一 id |
-| `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | serve 绑定地址；容器/跨机必须 `0.0.0.0` |
-| `OPENCODE_SERVE_PORT` | 否 | `0`（随机） | serve 端口 |
-| `WORKER_ADVERTISE_HOST` | 否 | 自动探测本机内网 IP | 上报给控制面的 serve 基址（`capabilities.baseUrl`） |
+| `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | serve 绑定地址（**v2 控制面不直连 serve**，只调 worker 执行端点 `:4198` ⇒ 留回环即可；容器/跨机也**不必**为控制面改成 `0.0.0.0`） |
+| `OPENCODE_SERVE_PORT` | 否 | `0`（随机） | serve 端口（**只对 worker 自身有意义**，控制面不拨号） |
+| `WORKER_ADVERTISE_HOST` | 否 | 自动探测本机内网 IP | 上报给控制面的基址（`capabilities.baseUrl`；控制面只取其**主机部分**，端口由 `capabilities.execPort` 决定 ⇒ 实际要求是控制面能到达该主机的 `:4198`） |
 | `WORKER_EXEC_PORT` | 否 | `4198` | 执行端点端口（SDK 直连目标） |
 | `WORK_DIR` | 否 | `/data/vteam-worker` | serve 工作目录 + 资源注入落点 |
 | `WORKER_MAX_INSTANCES` | 否 | `5` | 并发会话上限 |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `300000` | 首字超时 |
 
 数据持久化建议挂载：`/data/vteam-worker`（工作区与注入）、`/root`（`opencode.db` 会话库、`auth.json` 模型凭据）。
+
+### 3.5 物理机安装（install-worker.sh，opencode 缺省跟 npm latest）
+
+不用容器时，可用控制面安装向导页（`/workers/install`）生成的 curl 命令在目标机器上跑
+`install-worker.sh`：脚本自动装 node / opencode CLI、下载 worker 发布包、写好 `.env`
+（`X_WORKER_TOKEN` / v2 恒开鉴权的 `OPENCODE_SERVER_PASSWORD` / `WORKER_EXEC_PORT=4198`），
+并注册 systemd 服务（`EnvironmentFile=<dir>/worker/.env`）。
+
+- **opencode 版本缺省 = npm 的 `latest` 标签**（`@opencode/cli@latest` = 最新已发布的 v2）：
+  裸机安装跟随上游发布；需要可复现时加 `--opencode 2.0.32` **钉版**。
+- ⚠️ **镜像路径（§3.1–§3.3）单独锁版 2.0.32**（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——
+  镜像里的 opencode 在构建期定死，与脚本的 `latest` 缺省互不影响 ⇒ 两条路径可能落在不同
+  opencode 版本上（但都满足 worker 的「主版本 ≥ 2」闸门）。
+- ⚠️ **脚本拒绝 v3+ 的 opencode**：装出来的 opencode 主版本 ≥ 3 时**硬失败退出**——worker 驱动
+  只对着 v2 验证过，而 worker 自身的版本闸门只拦 `< 2` ⇒ v3 会被放行、到运行期才以难排查的方式
+  失败（契约漂移）⇒ 请钉一个 v2 版本，如 `--opencode 2.0.32`。
 
 ## 4. 启动方式 A：SDK 服务模式（SDK 即控制面）
 
@@ -148,11 +169,11 @@ worker 侧落点（便于排障/验收）：
 | 下发项 | 通道 | worker 落点 |
 |--------|------|-------------|
 | skills | 拉取（`GET /skills`） | `<WORK_DIR>/.opencode/skills/<name>/SKILL.md` |
-| tools | 拉取（`GET /tools`） | `<WORK_DIR>/.opencode/tools/<action>.ts` |
-| mcp-servers | 拉取（`GET /mcp-servers`） | `<WORK_DIR>/opencode.json` 的 `mcp` 节 |
-| agent-policies | 拉取（`GET /agent-policies`） | `<WORK_DIR>/opencode.json` 的 `agent` 节 |
-| model-credentials（providerKeys） | 命令 | `$HOME/.local/share/opencode/auth.json` |
-| model-credentials（providerConfigs） | 命令 | `$HOME/.config/opencode/opencode.json` 的 `provider` 段 |
+| tools | 拉取（`GET /tools`） | `<WORK_DIR>/.opencode/plugins/<action>.ts`（v2 插件形态，v1/v2 双形态模块） |
+| mcp-servers | 拉取（`GET /mcp-servers`） | `<WORK_DIR>/opencode.json` 的 `mcp.servers` 节（**v2 形态**） |
+| agent-policies | 拉取（`GET /agent-policies`） | `<WORK_DIR>/opencode.json` 的 `agents` 节（**v2 形态**） |
+| model-credentials（providerKeys） | 命令 | 隔离域的 `data/opencode/auth.json` |
+| model-credentials（providerConfigs） | 命令 | 隔离域的 `config/opencode/opencode.json` 的 `providers` 段（**含 `settings.apiKey`**） |
 | git-credentials | 命令 | `$HOME/.keta-git-creds.json`（600） |
 
 注意：模型凭据/配置变更会触发 worker 重启 serve 生效；git 凭据写盘即生效（不重启）。
@@ -204,8 +225,15 @@ curl -X POST -H "$T" $W/config/restart
 | 鉴权 | 必须 `X-Worker-Token`；注册模式下这些路径返回 **404 + 引导** |
 | 安全 | 会写入明文凭据（auth.json / git-creds）；执行端点绑 `0.0.0.0`，须网络隔离或仅内网可达 |
 
-落点：`<WORK_DIR>/.opencode/skills|tools`、`<WORK_DIR>/opencode.json`（mcp/agent 节）、
-`$HOME/.local/share/opencode/auth.json`、`$HOME/.config/opencode/opencode.json`（provider 段）、`$HOME/.keta-git-creds.json`。
+落点：`<WORK_DIR>/.opencode/skills|plugins`、`<WORK_DIR>/opencode.json`（**v2 形态：`mcp.servers` / `agents` / `plugins` 三节**）、
+隔离配置域的 `data/opencode/auth.json`、隔离配置域的 `config/opencode/opencode.json`（`providers` 段）、`$HOME/.keta-git-creds.json`。
+
+> ⚠️ **opencode v2 适配后的落点订正（2026-10-20）**：
+> - **配置域已隔离**：worker 的 opencode 数据不再落在宿主的 `$HOME` 下，而是在**隔离配置域**（缺省 `<HOME>/.opencode-iso`，可用 `OPENCODE_ISOLATION_ROOT` 指定）下的 `config/` 与 `data/`。上面的绝对路径因此是**隔离域内的相对位置**，不是宿主的 `$HOME`。
+> - **工具产物路径**已从 `.opencode/tools/` 改为 `.opencode/plugins/`（v2 移除了 `.opencode/tools/*.ts` 的文件自动发现）。
+> - **段名**已 v2 化：`mcp.servers` / `agents` / `plugins` / `providers`。
+> - **凭据双写**：`auth.json` 照写，但 **v2.0.28 不会从 `auth.json` 取 provider 的 API key**（实测 legacy 导入迁移是 no-op）——真正生效的是 `providers.<id>.settings.apiKey`，worker 会双写。
+> - 依据：07 篇 §12.1 / §12.5 / §12.7、`.omo/plans/opencode-v2-adaptation.md` 的 T15 / T16b / T19。
 
 ## 6. 可选：独立 stub 控制面进程
 

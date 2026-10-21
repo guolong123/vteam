@@ -101,7 +101,7 @@ describe('ResourceInjector.injectSkills', () => {
 });
 
 describe('ResourceInjector.injectTools', () => {
-  it('cli 工具（x-execution 命令）→ 写 <workDir>/.opencode/tools/<action>.ts（默认导出）', async () => {
+  it('cli 工具（x-execution 命令）→ 写 <workDir>/.opencode/plugins/<action>.ts（v2 插件形态）', async () => {
     const workDir = workDirFor();
     const fetchImpl = makeFetch({
       '/api/v1/tools': () => ({
@@ -144,14 +144,168 @@ describe('ResourceInjector.injectTools', () => {
     // mcp 型跳过，仅注入 cli
     expect(actions).toEqual(['jira-query']);
 
-    const filePath = path.join(workDir, '.opencode', 'tools', 'jira-query.ts');
+    const filePath = path.join(workDir, '.opencode', 'plugins', 'jira-query.ts');
     expect(fs.existsSync(filePath)).toBe(true);
     const content = fs.readFileSync(filePath, 'utf8');
-    expect(content).toContain('export default tool({');
+    // T19：产物形态 = v1/v2 双形态插件模块
+    expect(content).toContain('Plugin.define');
+    expect(content).toContain('ctx.tool.transform');
+    expect(content).toContain('options: { codemode: false },');
+    expect(content).toContain('if (!ctx?.tool?.transform) return');
+    expect(content).toContain('name: "jira-query",');
     expect(content).toContain('spawnSync("jcli", ["issue", "get", ...cmdArgs], { encoding: "utf8" })');
     expect(content).toContain('jobName: tool.schema.string().describe("任务名")');
     // mcp 工具不写文件
-    expect(fs.existsSync(path.join(workDir, '.opencode', 'tools', 'github-create-issue.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'github-create-issue.ts'))).toBe(false);
+  });
+
+  it('manifest 记录工具插件落点（toolPlugins），且不再声称写过 .opencode/tools/', async () => {
+    const workDir = workDirFor();
+    const fetchImpl = makeFetch({
+      '/api/v1/tools': () => ({
+        items: [
+          {
+            id: 'tl_1',
+            action: 'jira-query',
+            name: 'Jira 查询',
+            execution: 'cli',
+            schema: {
+              type: 'object',
+              properties: { jobName: { type: 'string' } },
+              'x-execution': { command: ['jcli', 'issue', 'get'] },
+            },
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 100,
+      }),
+    });
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl,
+    });
+    await injector.injectTools();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(workDir, '.opencode-worker-inject.json'), 'utf8'),
+    );
+    expect(manifest.toolPlugins).toEqual(['jira-query.ts']);
+    expect(manifest.tools).toBeUndefined();
+    expect(manifest.legacyTools).toEqual([]);
+  });
+
+  it('逐消息 system blob 的**插件交接产物**：写 <workDir>/.opencode/plugins/ 且 manifest 单列记账', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({}),
+    });
+    const filePath = injector.applySystemHandoffPlugin();
+    expect(filePath).toBe(
+      path.join(workDir, '.opencode', 'plugins', 'vteam-system-handoff.ts'),
+    );
+    const content = fs.readFileSync(filePath, 'utf8');
+    expect(content).toContain('Plugin.define({');
+    expect(content).toContain('ctx.session.hook("context"');
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(workDir, '.opencode-worker-inject.json'), 'utf8'),
+    );
+    expect(manifest.systemHandoffPlugin).toBe('vteam-system-handoff.ts');
+    // ⚠️ **不进** toolPlugins：那个键的清理语义会把"本次不在集合"的文件删掉 ⇒ 常驻插件会被误删
+    expect(manifest.toolPlugins ?? []).not.toContain('vteam-system-handoff.ts');
+  });
+
+  it('工具插件清理**不误删**交接插件（它常驻，不在 toolPlugins 集合里）', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({ '/api/v1/tools': () => ({ items: [], total: 0, page: 1, pageSize: 100 }) }),
+    });
+    injector.applySystemHandoffPlugin();
+    await injector.injectTools();
+    expect(
+      fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'vteam-system-handoff.ts')),
+    ).toBe(true);
+  });
+
+  it('升级前的 v1 形态工具文件（.opencode/tools/）被清掉，用户手写文件保留', async () => {
+    const workDir = workDirFor();
+    const legacyDir = path.join(workDir, '.opencode', 'tools');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'old-tool.ts'), '// legacy v1 tool\n', 'utf8');
+    fs.writeFileSync(path.join(legacyDir, 'manual-tool.ts'), '// user\n', 'utf8');
+    fs.writeFileSync(
+      path.join(workDir, '.opencode-worker-inject.json'),
+      JSON.stringify({ tools: ['old-tool.ts'] }),
+      'utf8',
+    );
+
+    const fetchImpl = makeFetch({
+      '/api/v1/tools': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+    });
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl,
+    });
+    await injector.injectTools();
+
+    expect(fs.existsSync(path.join(legacyDir, 'old-tool.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(legacyDir, 'manual-tool.ts'))).toBe(true);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(workDir, '.opencode-worker-inject.json'), 'utf8'),
+    );
+    expect(manifest.tools).toBeUndefined();
+    expect(manifest.legacyTools).toEqual([]);
+  });
+
+  it('停用的工具：上次注入、本次不在集合 → 对应插件文件被删', async () => {
+    const workDir = workDirFor();
+    const toolItem = (action: string): unknown => ({
+      id: `tl_${action}`,
+      action,
+      name: action,
+      execution: 'cli',
+      schema: {
+        type: 'object',
+        properties: {},
+        'x-execution': { command: ['jcli', 'issue', 'get'] },
+      },
+    });
+    const makeInjector = (actions: string[]): ResourceInjector =>
+      new ResourceInjector({
+        serverUrl: 'http://localhost:3000',
+        workerToken: 'tok',
+        workerId: 'w_test',
+        workDir,
+        fetchImpl: makeFetch({
+          '/api/v1/tools': () => ({
+            items: actions.map(toolItem),
+            total: actions.length,
+            page: 1,
+            pageSize: 100,
+          }),
+        }),
+      });
+
+    await makeInjector(['a-tool', 'b-tool']).injectTools();
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'a-tool.ts'))).toBe(true);
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'b-tool.ts'))).toBe(true);
+
+    await makeInjector(['a-tool']).injectTools();
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'a-tool.ts'))).toBe(true);
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'b-tool.ts'))).toBe(false);
   });
 
   it('缺执行细节的工具跳过注入（不写文件）', async () => {
@@ -183,12 +337,203 @@ describe('ResourceInjector.injectTools', () => {
 
     const actions = await injector.injectTools();
     expect(actions).toEqual([]);
-    expect(fs.existsSync(path.join(workDir, '.opencode', 'tools', 'ghost.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'ghost.ts'))).toBe(false);
+  });
+});
+
+describe('ResourceInjector 工具注入明细（「0 tools」可解释）', () => {
+  /** 控制面工具目录的四种典型条目（与真实 `tools` 表的分布一致）。 */
+  const TOOL_CATALOGUE = {
+    items: [
+      {
+        id: 'tl_builtin_bash',
+        action: 'bash',
+        name: 'Bash 命令',
+        source: 'builtin',
+        execution: 'code',
+        schema: null,
+      },
+      {
+        id: 'tl_mcp_1',
+        action: 'jira-search',
+        name: 'Jira 搜索',
+        source: 'mcp',
+        execution: 'mcp',
+        schema: null,
+      },
+      {
+        id: 'tl_custom_gap',
+        action: 'jenkins-build',
+        name: 'Jenkins 构建',
+        source: 'custom',
+        execution: 'cli',
+        schema: { type: 'object', properties: {} },
+      },
+      {
+        id: 'tl_custom_ok',
+        action: 'gitee-issue',
+        name: 'Gitee Issue',
+        source: 'custom',
+        execution: 'cli',
+        schema: {
+          type: 'object',
+          properties: { repo: { type: 'string' } },
+          'x-execution': { command: ['gitee', 'issue'] },
+        },
+      },
+    ],
+    total: 4,
+    page: 1,
+    pageSize: 100,
+  };
+
+  it('明细区分 mcp 型 / builtin / 缺执行细节 / 实际渲染（目录条数 ≠ 插件条数）', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({ '/api/v1/tools': () => TOOL_CATALOGUE }),
+    });
+
+    const { actions, breakdown } = await injector.injectToolsDetailed();
+
+    expect(actions).toEqual(['gitee-issue']);
+    expect(breakdown).toEqual({
+      fetched: 4,
+      mcpType: 1,
+      builtin: 1,
+      missingExecution: 1,
+      injected: 1,
+    });
+  });
+
+  it('缺执行细节的**自定义**工具必须留下可见告警（否则真实缺口被静默吞掉）', async () => {
+    const workDir = workDirFor();
+    const warnings: string[] = [];
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({ '/api/v1/tools': () => TOOL_CATALOGUE }),
+      logger: {
+        info: () => undefined,
+        warn: (message: string) => {
+          warnings.push(message);
+        },
+      },
+    });
+
+    await injector.injectToolsDetailed();
+
+    expect(warnings.join('\n')).toContain('jenkins-build');
+    expect(warnings.join('\n')).toContain('缺少执行细节');
+  });
+
+  it('builtin 条目不告警（opencode 原生工具目录项，本就不该渲染成平台插件）', async () => {
+    const workDir = workDirFor();
+    const warnings: string[] = [];
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({ '/api/v1/tools': () => TOOL_CATALOGUE }),
+      logger: {
+        info: () => undefined,
+        warn: (message: string) => {
+          warnings.push(message);
+        },
+      },
+    });
+
+    await injector.injectToolsDetailed();
+
+    expect(warnings.join('\n')).not.toContain('bash');
+  });
+
+  it('工具目录为空：明确说"平台没有启用的工具定义"，且与拉取失败可区分', async () => {
+    const workDir = workDirFor();
+    const infos: string[] = [];
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({
+        '/api/v1/tools': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+      }),
+      logger: {
+        info: (message: string) => {
+          infos.push(message);
+        },
+        warn: () => undefined,
+      },
+    });
+
+    const { actions, breakdown } = await injector.injectToolsDetailed();
+
+    expect(actions).toEqual([]);
+    expect(breakdown.fetched).toBe(0);
+    expect(infos.join('\n')).toContain('控制面当前没有启用的工具定义');
+    expect(infos.join('\n')).toContain('不是拉取失败');
+  });
+
+  it('拉取失败：抛错（而不是静默返回 0 条）', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: jest.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: async () => ({}),
+      })) as unknown as typeof fetch,
+    });
+
+    await expect(injector.injectToolsDetailed()).rejects.toThrow(/资源拉取失败/);
+  });
+
+  it('injectAll 报告带明细（消费方据此解释工具数）', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({
+        '/api/v1/tools': () => TOOL_CATALOGUE,
+        '/api/v1/skills': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+        '/api/v1/mcp-servers': () => ({
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: 100,
+        }),
+        '/api/v1/agent-policies': () => ({ agents: [] }),
+      }),
+    });
+
+    const report = await injector.injectAll();
+
+    expect(report.tools).toEqual(['gitee-issue']);
+    expect(report.toolBreakdown).toEqual({
+      fetched: 4,
+      mcpType: 1,
+      builtin: 1,
+      missingExecution: 1,
+      injected: 1,
+    });
   });
 });
 
 describe('ResourceInjector.injectMcp', () => {
-  it('生成 opencode.json mcp 节（合并保留其他配置节 + local/remote 两型）', async () => {
+  it('生成 opencode.json **mcp.servers** 节（v2 原生形；合并保留其他配置节 + local/remote 两型）', async () => {
     const workDir = workDirFor();
     fs.mkdirSync(workDir, { recursive: true });
     fs.writeFileSync(
@@ -236,22 +581,25 @@ describe('ResourceInjector.injectMcp', () => {
 
     const config = JSON.parse(
       fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
-    ) as { model?: string; mcp?: Record<string, unknown> };
+    ) as { model?: string; mcp?: { servers?: Record<string, Record<string, unknown>> } };
     // 其他节保留
     expect(config.model).toBe('gpt-4o');
-    // mcp 节格式（11 篇 §5.1）：local/remote 两型，服务器名作 key（含连字符）
-    expect(config.mcp?.filesystem).toEqual({
+    // v2 原生：服务器在 mcp.servers 下；启用极性是 **disabled:false**（v1 是 enabled:true）
+    expect(config.mcp?.servers?.filesystem).toEqual({
       type: 'local',
       command: ['npx', '-y', '@modelcontextprotocol/server-filesystem', '/data'],
-      enabled: true,
+      disabled: false,
     });
-    expect(config.mcp?.['gitee-remote']).toEqual({
+    expect(config.mcp?.servers?.['gitee-remote']).toEqual({
       type: 'remote',
       url: 'https://mcp.example.com/gitee',
       headers: { Authorization: 'Bearer {env:GITEE_TOKEN}' },
-      oauth: { clientId: 'cid', scope: 'tools:read' },
-      enabled: true,
+      // OAuth 字段 v2 是 snake_case（camelCase 会被 v2 忽略）
+      oauth: { client_id: 'cid', scope: 'tools:read' },
+      disabled: false,
     });
+    // v1 扁平形不得残留（残留 = 归一化 + 双份定义）
+    expect((config.mcp as Record<string, unknown>)['filesystem']).toBeUndefined();
   });
 
   it('remote 型 headers 的 {env:WORKER_ID}/{env:X_WORKER_TOKEN} 替换为实际值（未知变量保留）', async () => {
@@ -290,8 +638,8 @@ describe('ResourceInjector.injectMcp', () => {
     await injector.injectMcp();
     const config = JSON.parse(
       fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
-    ) as { mcp?: Record<string, unknown> };
-    expect(config.mcp?.vteam).toMatchObject({
+    ) as { mcp?: { servers?: Record<string, Record<string, unknown>> } };
+    expect(config.mcp?.servers?.vteam).toMatchObject({
       type: 'remote',
       url: 'https://vteam.example.com/api/v1/platform-mcp',
       headers: {
@@ -299,11 +647,11 @@ describe('ResourceInjector.injectMcp', () => {
         'x-worker-token': 'tok-secret',
         Authorization: 'Bearer {env:UNKNOWN_VAR}',
       },
-      enabled: true,
+      disabled: false,
     });
   });
 
-  it('local 型透传 cwd/environment/timeout（enabled 恒 true 因已过滤启用集）', async () => {
+  it('local 型透传 cwd/environment/timeout（**timeout 是 v2 三段**；disabled 恒 false 因已过滤启用集）', async () => {
     const workDir = workDirFor();
     const fetchImpl = makeFetch({
       '/api/v1/mcp-servers': () => ({
@@ -342,14 +690,15 @@ describe('ResourceInjector.injectMcp', () => {
     expect(names).toEqual(['rich-local']);
     const config = JSON.parse(
       fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
-    ) as { mcp?: Record<string, unknown> };
-    expect(config.mcp?.richLocal ?? config.mcp?.['rich-local']).toEqual({
+    ) as { mcp?: { servers?: Record<string, Record<string, unknown>> } };
+    expect(config.mcp?.servers?.['rich-local']).toEqual({
       type: 'local',
       command: ['node', 'server.js'],
       cwd: '/opt/mcp',
       environment: { MY_ENV: 'v1' },
-      timeout: 5000,
-      enabled: true,
+      // v2 三段 timeout：startup 段不得缺失（v1 单值归一化会丢它）
+      timeout: { startup: 5000, catalog: 5000, execution: 5000 },
+      disabled: false,
     });
   });
 
@@ -386,9 +735,9 @@ describe('ResourceInjector.injectMcp', () => {
     // 用户在 opencode.json 手动追加 manual-server（非注入器管理）
     const configPath = path.join(workDir, 'opencode.json');
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
-      mcp: Record<string, unknown>;
+      mcp: { servers: Record<string, unknown> };
     };
-    config.mcp['manual-server'] = { type: 'remote', url: 'https://user.example.com' };
+    config.mcp.servers['manual-server'] = { type: 'remote', url: 'https://user.example.com' };
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     // 再次注入：filesystem 已停用（只返回 manual-server 之外的服务器，这里返回空）
@@ -405,12 +754,12 @@ describe('ResourceInjector.injectMcp', () => {
     await injectorB.injectMcp();
 
     const after = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
-      mcp: Record<string, unknown>;
+      mcp: { servers: Record<string, unknown> };
     };
     // 停用清理：filesystem 移除
-    expect(after.mcp.filesystem).toBeUndefined();
+    expect(after.mcp.servers.filesystem).toBeUndefined();
     // 用户手动配置保留
-    expect(after.mcp['manual-server']).toEqual({
+    expect(after.mcp.servers['manual-server']).toEqual({
       type: 'remote',
       url: 'https://user.example.com',
     });
@@ -475,14 +824,14 @@ describe('ResourceInjector.injectMcp', () => {
     await injector.injectMcp();
     const config = JSON.parse(
       fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
-    ) as { mcp?: Record<string, unknown> };
-    expect(config.mcp?.['gitee-remote']).toEqual({
+    ) as { mcp?: { servers?: Record<string, Record<string, unknown>> } };
+    expect(config.mcp?.servers?.['gitee-remote']).toEqual({
       type: 'remote',
       url: 'https://mcp.example.com/gitee',
       headers: { Authorization: 'Bearer {env:GITEE_TOKEN}' },
-      oauth: { clientId: 'cid', scope: 'tools:read' },
-      timeout: 8000,
-      enabled: true,
+      oauth: { client_id: 'cid', scope: 'tools:read' },
+      timeout: { startup: 8000, catalog: 8000, execution: 8000 },
+      disabled: false,
     });
   });
 
@@ -540,36 +889,41 @@ describe('ResourceInjector.injectMcp', () => {
       }
       const config = JSON.parse(
         fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
-      ) as { mcp?: Record<string, Record<string, unknown>> };
-      return config.mcp?.vteam;
+      ) as { mcp?: { servers?: Record<string, Record<string, unknown>> } };
+      return config.mcp?.servers?.vteam;
     };
 
     it('缺省注入 timeout >= 900000（覆盖 855s 最坏总预算，不依赖 OpenCode 默认值）', async () => {
       const entry = await injectVteam({});
       expect(entry).toBeDefined();
-      const timeout = Number(entry?.timeout);
-      expect(Number.isFinite(timeout)).toBe(true);
-      expect(timeout).toBeGreaterThanOrEqual(900_000);
+      // v2 三段 timeout：每段都取同一个下限值（startup 段不得缺失）
+      expect(entry?.timeout).toEqual({
+        startup: 900_000,
+        catalog: 900_000,
+        execution: 900_000,
+      });
       expect(entry).toMatchObject({
         type: 'remote',
         url: 'https://vteam.example.com/api/v1/platform-mcp',
-        enabled: true,
+        disabled: false,
       });
     });
 
     it('服务端已给 timeout 时仍 clamp 到下限（服务端 30000 → 900000）', async () => {
       const entry = await injectVteam({ timeout: 30_000 });
-      expect(Number(entry?.timeout)).toBeGreaterThanOrEqual(900_000);
+      expect(entry?.timeout).toMatchObject({ execution: 900_000 });
     });
 
     it('VTEAM_MCP_TIMEOUT_MS 覆盖且 clamp：1200000 原样生效、1000 抬到 900000、垃圾值回落缺省 900000', async () => {
-      expect(Number((await injectVteam({}, '1200000'))?.timeout)).toBe(
-        1_200_000,
-      );
-      expect(Number((await injectVteam({}, '1000'))?.timeout)).toBe(900_000);
-      expect(Number((await injectVteam({}, 'not-a-number'))?.timeout)).toBe(
-        900_000,
-      );
+      expect((await injectVteam({}, '1200000'))?.timeout).toMatchObject({
+        execution: 1_200_000,
+      });
+      expect((await injectVteam({}, '1000'))?.timeout).toMatchObject({
+        execution: 900_000,
+      });
+      expect((await injectVteam({}, 'not-a-number'))?.timeout).toMatchObject({
+        execution: 900_000,
+      });
     });
 
     it('非 vteam 远端条目不受下限影响（服务端 timeout 原样 / 缺省不写）', async () => {
@@ -603,8 +957,10 @@ describe('ResourceInjector.injectMcp', () => {
       await injector.injectMcp();
       const config = JSON.parse(
         fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
-      ) as { mcp?: Record<string, unknown> };
-      expect(config.mcp?.['gitee-remote']).toMatchObject({ timeout: 8000 });
+      ) as { mcp?: { servers?: Record<string, Record<string, unknown>> } };
+      expect(config.mcp?.servers?.['gitee-remote']).toMatchObject({
+        timeout: { startup: 8000, catalog: 8000, execution: 8000 },
+      });
     });
   });
 
@@ -659,10 +1015,10 @@ describe('ResourceInjector.injectMcp', () => {
     expect(names).toEqual(['ok-local']);
     const config = JSON.parse(
       fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
-    ) as { mcp?: Record<string, unknown> };
-    expect(config.mcp?.['broken-local']).toBeUndefined();
-    expect(config.mcp?.['broken-remote']).toBeUndefined();
-    expect(config.mcp?.['ok-local']).toBeDefined();
+    ) as { mcp?: { servers?: Record<string, unknown> } };
+    expect(config.mcp?.servers?.['broken-local']).toBeUndefined();
+    expect(config.mcp?.servers?.['broken-remote']).toBeUndefined();
+    expect(config.mcp?.servers?.['ok-local']).toBeDefined();
   });
 });
 
@@ -744,13 +1100,23 @@ describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
     return JSON.parse(fs.readFileSync(path.join(workDir, rel), 'utf8'));
   }
 
-  describe('plugin 节（opencode.json）', () => {
+  describe('plugins 节（opencode.json，v2 原生段名）', () => {
     it('写入 oh-my-openagent 条目', async () => {
       const workDir = workDirFor();
       await injectorFor(workDir).injectMcp();
-      expect(readJson(workDir, 'opencode.json').plugin).toEqual([
+      expect(readJson(workDir, 'opencode.json').plugins).toEqual([
         'oh-my-openagent@latest',
+        '-opencode.browser',
       ]);
+    });
+
+    it('禁用 v2 内置浏览器插件（否则平台的 browser 工具被同名内置工具**静默遮蔽**）', async () => {
+      const workDir = workDirFor();
+      await injectorFor(workDir).injectMcp();
+      // 内置 opencode.browser 插件注册了一个名为 `browser` 的工具 → 与平台自己的
+      // browser 工具（agent-browser）同名冲突：平台工具进注册表但**不进模型的 tools[]**
+      // → 模型永远调不到，且全程无报错。精确 id 禁用是 T6 验证过的安全手段。
+      expect(readJson(workDir, 'opencode.json').plugins).toContain('-opencode.browser');
     });
 
     it('重复注入不追加重复条目（幂等）', async () => {
@@ -758,8 +1124,9 @@ describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
       const injector = injectorFor(workDir);
       await injector.injectMcp();
       await injector.injectMcp();
-      expect(readJson(workDir, 'opencode.json').plugin).toEqual([
+      expect(readJson(workDir, 'opencode.json').plugins).toEqual([
         'oh-my-openagent@latest',
+        '-opencode.browser',
       ]);
     });
 
@@ -776,7 +1143,10 @@ describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
           JSON.stringify({ plugin: [entry] }),
         );
         await injectorFor(workDir).injectMcp();
-        expect(readJson(workDir, 'opencode.json').plugin).toEqual([entry]);
+        expect(readJson(workDir, 'opencode.json').plugins).toEqual([
+          entry,
+          '-opencode.browser',
+        ]);
       }
     });
 
@@ -787,9 +1157,10 @@ describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
         JSON.stringify({ plugin: ['./my-local-plugin.js'] }),
       );
       await injectorFor(workDir).injectMcp();
-      expect(readJson(workDir, 'opencode.json').plugin).toEqual([
+      expect(readJson(workDir, 'opencode.json').plugins).toEqual([
         './my-local-plugin.js',
         'oh-my-openagent@latest',
+        '-opencode.browser',
       ]);
     });
   });
@@ -1001,8 +1372,8 @@ describe('ResourceInjector：从 slim fork 迁移到 OmO', () => {
     );
     await injectorFor(workDir).injectMcp();
     const cfg = JSON.parse(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'));
-    expect(cfg.plugin).toEqual(['oh-my-openagent@latest']);
-    expect(JSON.stringify(cfg.plugin)).not.toContain('slim');
+    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(JSON.stringify(cfg.plugins)).not.toContain('slim');
   });
 
   it('slim 与 OmO 并存时只保留 OmO，且顺序稳定', async () => {
@@ -1015,11 +1386,11 @@ describe('ResourceInjector：从 slim fork 迁移到 OmO', () => {
     );
     await injectorFor(workDir).injectMcp();
     const cfg = JSON.parse(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'));
-    expect(cfg.plugin).toEqual(['oh-my-openagent@latest', './mine.js']);
+    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', './mine.js', '-opencode.browser']);
   });
 });
 
-describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard 制品）', () => {
+describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无 guard 制品）', () => {
   const POLICIES = {
     agents: [
       {
@@ -1034,6 +1405,17 @@ describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard �
         mode: 'primary',
         permission: { edit: { '*': 'deny' }, task: 'deny' },
       },
+    ],
+  };
+
+  /** v2 原生的 agent 条目（权限是**数组**）。 */
+  const V2_ENTRY = {
+    description: 'dev scope',
+    mode: 'primary',
+    permissions: [
+      { action: 'edit', resource: '*', effect: 'deny' },
+      { action: 'subagent', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: '*', effect: 'ask' },
     ],
   };
 
@@ -1085,7 +1467,7 @@ describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard �
     );
   }
 
-  it('(a) 一次运行：mcp + plugin + 原生 agent 三节，无 guard 制品写入', async () => {
+  it('(a) 一次运行：mcp.servers + plugins + **agents** 三节，无 guard 制品写入', async () => {
     const workDir = workDirFor();
     fs.writeFileSync(
       path.join(workDir, 'opencode.json'),
@@ -1101,15 +1483,15 @@ describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard �
       names: ['vteam-developer', 'vteam-tester'],
     });
     const cfg = readConfig(workDir);
-    expect(cfg.mcp?.vteam).toBeDefined();
-    expect(cfg.plugin).toEqual(['oh-my-openagent@latest']);
-    expect(cfg.agent['vteam-developer']).toEqual({
-      description: 'dev scope',
-      mode: 'primary',
-      permission: { edit: { '*': 'deny' }, task: 'deny' },
-    });
-    expect(cfg.agent['vteam-tester']).toBeDefined();
-    expect(cfg.agent['my-agent']).toBeDefined();
+    expect(cfg.mcp?.servers?.vteam).toBeDefined();
+    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(cfg.agents['vteam-developer']).toEqual(V2_ENTRY);
+    expect(cfg.agents['vteam-tester']).toBeDefined();
+    // 用户手写的 v1 `agent:` 节被**迁移**进 `agents:`（用户条目保留）
+    expect(cfg.agents['my-agent']).toBeDefined();
+    // v1 段名不得残留（残留 = 双份定义 + 静默归一化）
+    expect(cfg.agent).toBeUndefined();
+    expect(cfg.plugin).toBeUndefined();
     expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
     expect(fs.existsSync(path.join(workDir, '.opencode', 'plugin', 'vteam-role-guard.ts'))).toBe(
       false,
@@ -1136,24 +1518,24 @@ describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard �
     const first = fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8');
     await injector.injectAll();
     expect(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8')).toBe(first);
-    expect(readConfig(workDir).plugin).toEqual(['oh-my-openagent@latest']);
+    expect(readConfig(workDir).plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
     expect(readManifest(workDir).agentNames).toEqual(['vteam-developer', 'vteam-tester']);
   });
 
   it('(c) 空 agent 集 → 中性化：受管 agent 键移除，用户文件与 plugin 条目不受影响', async () => {
     const workDir = workDirFor();
     await injectorForPolicies(workDir, POLICIES).injectAll();
-    fs.mkdirSync(path.join(workDir, '.opencode', 'tools'), { recursive: true });
-    fs.writeFileSync(path.join(workDir, '.opencode', 'tools', 'manual-tool.ts'), '// user\n', 'utf8');
+    fs.mkdirSync(path.join(workDir, '.opencode', 'plugins'), { recursive: true });
+    fs.writeFileSync(path.join(workDir, '.opencode', 'plugins', 'manual-tool.ts'), '// user\n', 'utf8');
 
     const report = await injectorForPolicies(workDir, { agents: [] }).injectAll();
     expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
 
     const cfg = readConfig(workDir);
-    expect(cfg.agent?.['vteam-developer']).toBeUndefined();
-    expect(cfg.agent?.['vteam-tester']).toBeUndefined();
-    expect(cfg.plugin).toEqual(['oh-my-openagent@latest']);
-    expect(fs.existsSync(path.join(workDir, '.opencode', 'tools', 'manual-tool.ts'))).toBe(true);
+    expect(cfg.agents?.['vteam-developer']).toBeUndefined();
+    expect(cfg.agents?.['vteam-tester']).toBeUndefined();
+    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'manual-tool.ts'))).toBe(true);
     expect(readManifest(workDir).agentNames).toEqual([]);
   });
 
@@ -1171,7 +1553,7 @@ describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard �
     });
     const report = await injectorForPolicies(workDir, POLICIES, failingFetch).injectAll();
     expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
-    expect(readConfig(workDir).agent?.['vteam-developer']).toBeUndefined();
+    expect(readConfig(workDir).agents?.['vteam-developer']).toBeUndefined();
 
     const again = await injectorForPolicies(workDir, POLICIES).injectAll();
     expect(again.agentPolicies).toEqual({
@@ -1216,11 +1598,187 @@ describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard �
     expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
     expect(fs.existsSync(path.join(workDir, pluginRel))).toBe(false);
     const cfg = readConfig(workDir);
-    expect(cfg.plugin).toEqual(['oh-my-openagent@latest', './mine.js']);
+    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', './mine.js', '-opencode.browser']);
     const manifest = readManifest(workDir);
     expect(manifest.guardRolesFile).toBeUndefined();
     expect(manifest.guardSessionsDir).toBeUndefined();
     expect(manifest.guardPluginFile).toBeUndefined();
     expect(manifest.agentNames).toEqual(['vteam-developer', 'vteam-tester']);
+  });
+});
+
+describe('ResourceInjector：T15 —— 写出的 opencode.json 必须是 **v2 原生形状**', () => {
+  const POLICIES_WITH_PROMPT = {
+    agents: [
+      {
+        name: 'vteam-developer',
+        description: 'dev scope',
+        mode: 'primary',
+        permission: { edit: { '*': 'deny' }, bash: 'ask' },
+        prompt: '你是 vteam-developer',
+      },
+    ],
+  };
+
+  function routesWith(policies: unknown): Record<string, (url: URL) => unknown> {
+    return {
+      '/api/v1/skills': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+      '/api/v1/tools': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+      '/api/v1/mcp-servers': () => ({
+        items: [
+          {
+            id: 'ms_1',
+            name: 'vteam',
+            type: 'remote',
+            command: null,
+            url: 'https://vteam.example.com/api/v1/platform-mcp',
+            headers: null,
+            oauth: null,
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 100,
+      }),
+      '/api/v1/agent-policies': () => policies,
+    };
+  }
+
+  function injectorFor(workDir: string, policies: unknown = POLICIES_WITH_PROMPT): ResourceInjector {
+    return new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch(routesWith(policies)),
+    });
+  }
+
+  function readConfig(workDir: string): any {
+    return JSON.parse(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'));
+  }
+
+  it('**回归闸门**：最终 opencode.json 的 agents 节里**没有 prompt 键**（v2 会静默丢弃它）', async () => {
+    const workDir = workDirFor();
+    await injectorFor(workDir).injectAll();
+    const cfg = readConfig(workDir);
+    for (const entry of Object.values<any>(cfg.agents)) {
+      expect(Object.keys(entry)).not.toContain('prompt');
+    }
+    // 角色提示落在 v2 原生键 system 上
+    expect(cfg.agents['vteam-developer'].system).toBe('你是 vteam-developer');
+    expect(JSON.stringify(cfg)).not.toContain('"prompt"');
+  });
+
+  it('**回归闸门**：最终 opencode.json 里**没有 v1 段名**（agent / plugin / 扁平 mcp）', async () => {
+    const workDir = workDirFor();
+    await injectorFor(workDir).injectAll();
+    const cfg = readConfig(workDir);
+    expect(cfg.agent).toBeUndefined();
+    expect(cfg.plugin).toBeUndefined();
+    expect(Object.keys(cfg.mcp)).toEqual(['servers']);
+    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+  });
+
+  it('mcp 条目是 v2 原生形：disabled 极性 + 三段 timeout + snake_case OAuth', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({
+        '/api/v1/mcp-servers': () => ({
+          items: [
+            {
+              id: 'ms_1',
+              name: 'vteam',
+              type: 'remote',
+              command: null,
+              url: 'https://vteam.example.com/api/v1/platform-mcp',
+              headers: null,
+              oauth: { clientId: 'cid', clientSecret: 'sec', callbackPort: 19876 },
+              enabled: true,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 100,
+        }),
+      }),
+    });
+    await injector.injectMcp();
+    const entry = readConfig(workDir).mcp.servers.vteam;
+    expect(entry.disabled).toBe(false);
+    expect(entry.timeout).toEqual({
+      startup: 900_000,
+      catalog: 900_000,
+      execution: 900_000,
+    });
+    expect(entry.oauth).toEqual({
+      client_id: 'cid',
+      client_secret: 'sec',
+      callback_port: 19876,
+    });
+  });
+
+  it('**一次性迁移**：持久卷上的 v1 形配置被迁到 v2 段名（不留 v1 段、不留 `agents.<n>.prompt`）', async () => {
+    const workDir = workDirFor();
+    fs.writeFileSync(
+      path.join(workDir, 'opencode.json'),
+      JSON.stringify({
+        plugin: ['oh-my-openagent@latest'],
+        agent: {
+          'legacy-agent': {
+            description: 'legacy',
+            mode: 'primary',
+            permission: { edit: { '*': 'deny' } },
+            prompt: 'LEGACY_ROLE_PROMPT',
+          },
+        },
+        mcp: {
+          'legacy-server': { type: 'remote', url: 'https://legacy.example.com', enabled: true },
+        },
+      }),
+      'utf8',
+    );
+    await injectorFor(workDir).injectAll();
+    const cfg = readConfig(workDir);
+    // v1 段名全部迁走
+    expect(cfg.agent).toBeUndefined();
+    expect(cfg.plugin).toBeUndefined();
+    expect(cfg.mcp['legacy-server']).toBeUndefined();
+    // v1 `prompt` 键被搬进 v2 的 `system`（不丢角色提示）
+    expect(cfg.agents['legacy-agent'].system).toBe('LEGACY_ROLE_PROMPT');
+    expect(cfg.agents['legacy-agent'].prompt).toBeUndefined();
+    // v1 permission 对象 → v2 permissions[]
+    expect(cfg.agents['legacy-agent'].permissions).toContainEqual({
+      action: 'edit',
+      resource: '*',
+      effect: 'deny',
+    });
+    // v1 扁平 mcp → v2 mcp.servers（enabled → disabled 极性反转、timeout 三段）
+    expect(cfg.mcp.servers['legacy-server']).toEqual({
+      type: 'remote',
+      url: 'https://legacy.example.com',
+      disabled: false,
+    });
+  });
+
+  it('**迁移幂等**：第二次注入不改变文件字节（迁移不重复叠加）', async () => {
+    const workDir = workDirFor();
+    fs.writeFileSync(
+      path.join(workDir, 'opencode.json'),
+      JSON.stringify({
+        agent: { 'legacy-agent': { description: 'legacy', mode: 'primary', permission: {} } },
+        mcp: { 'legacy-server': { type: 'remote', url: 'https://legacy.example.com' } },
+      }),
+      'utf8',
+    );
+    const injector = injectorFor(workDir);
+    await injector.injectAll();
+    const first = fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8');
+    await injector.injectAll();
+    expect(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8')).toBe(first);
   });
 });

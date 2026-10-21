@@ -33,7 +33,7 @@ description: 三类资源（工具/Skills/MCP）从「定义→注册→发现�
 | 维度 | 工具（Tools） | Skills | MCP |
 |------|--------------|--------|-----|
 | 定义形式 | TypeScript/JavaScript 函数（`tool()` 工厂或插件 `tool` 对象） | `SKILL.md` Markdown 文件（YAML frontmatter + 指令正文） | 外部 MCP 服务器（local 子进程 / remote HTTP 服务），opencode 只写配置 |
-| 注册方式 | 内置：registry 批量注册（`Tool.define`）；自定义：`.opencode/tools/*.ts` 目录扫描 + 插件 `tool` 工厂 | 文件系统发现：按固定目录约定扫描 `skills/*/SKILL.md`（§4.2 六处路径）；另支持 `skills: {paths, urls}` 配置 | 配置声明：opencode.json 顶层 `mcp` 节，local/remote 两型（§5.1） |
+| 注册方式 | 内置：registry 批量注册（`Tool.define`）；自定义：⚠️ **v2 下 `.opencode/tools/*.ts` 的文件自动发现已移除**（实测：文件连 import 都不发生）→ 只能经**插件注册**（`ctx.tool.transform`），插件文件放 `.opencode/plugins/*.ts` | 文件系统发现：按固定目录约定扫描 `skills/*/SKILL.md`（§4.2 六处路径）；另支持 `skills: {paths, urls}` 配置 | 配置声明：opencode.json 顶层 `mcp` 节（**v2 形态：服务器在 `mcp.servers` 下**），local/remote 两型（§5.1） |
 | 发现路径 | 内置工具编译期注册；自定义工具启动扫描工具目录 | 启动时 `discoverSkills` 扫描 6 处路径 + 配置扩展路径（v1 无 watch，07 篇 §10.3） | 启动时按配置连接服务器拉取工具列表（tools/list）；支持 ToolListChanged 动态刷新（§5.5） |
 | 暴露形态 | 独立工具名，模型可直接调用 | 单一 `skill` 工具 + `<available_skills>` 列表注入系统提示，按名路由 | 每个 MCP 工具独立暴露，工具名带服务器前缀 `<server>_<tool>` |
 | 权限 action | 工具名本身（如 `bash`、`jenkins-build`） | `skill`（参数为 skill 名，模式匹配） | 工具全名 `<server>_<tool>`（如 `github_create_issue`） |
@@ -57,6 +57,8 @@ opencode 内置工具在注册表（`registry.ts`）中通过 `Tool.define(id, i
 
 ### 3.2 自定义工具：两条路径
 
+> ⚠️ **opencode v2 适配后的订正（2026-10-20）**：本节描述的是 **v1 的两条路径**。**v2 下路径①（工具目录扫描）已被移除**，路径②的插件 API 也换了形态。平台（worker 注入器）走的是 **v2 形态**：产物落在 **`.opencode/plugins/*.ts`**，以 `Plugin.define({id, setup})` + `ctx.tool.transform(...)` 注册。逐条实测见 07 篇 §12.7 与 `docs/agent-platform/opencode-v2-spike-results.md` §3。
+
 **路径①：工具目录扫描。** 工具定义为 TypeScript/JavaScript 文件，放置于项目 `.opencode/tools/` 或全局 `~/.config/opencode/tools/`（官方 custom-tools 文档）：
 
 | 导出形式 | 工具名规则 | 示例 |
@@ -66,20 +68,24 @@ opencode 内置工具在注册表（`registry.ts`）中通过 `Tool.define(id, i
 
 定义使用 `tool()` 工厂（来自 `@opencode-ai/plugin`），参数用 `tool.schema`（即 Zod）声明，`execute` 接收 `(args, context)`，context 提供 `agent/sessionID/messageID/directory/worktree` 等会话上下文。工具定义文件是 TS/JS，但 `execute` 内可调用任意语言脚本（官方示例：Python 子进程）。
 
+> ⚠️ **v2 形态（平台实际使用）**：入参从 Zod 改 **JSON Schema**，返回值从 `string` 改 **`{ content }`**（`content` 接受 `string | Content[]`，事件侧是数组），**必须显式写 `options:{codemode:false}`**（否则工具只出现在 system 的 Code Mode 目录里，模型无法直接 `tool_calls`），且 `ToolContext` **没有 `directory`**（实测键集合 = `{sessionID, agent, messageID, id, signal, progress}`）⇒ 目录取 `ctx.location.directory`。
+
 **同名冲突规则**：自定义工具按工具名 keyed，**同名覆盖内置工具**（官方文档：`.opencode/tools/bash.ts` 可替换内置 `bash`）。官方建议优先使用唯一命名；若只想禁用内置工具而不覆盖，应使用 permissions 配置而非定义同名工具。
 
 **路径②：插件 `tool` 工厂。** 插件（plugin）内通过 `tool({ description, args(Zod), execute })` 注册工具（v1 插件 API，`server()` 返回的 Hooks 对象中可携带工具定义）。插件工具与目录扫描工具注册到同一工具表，同样受权限控制。
 
 ### 3.3 v2 演进：`Tool.make` + `tools.register`
 
+> ⚠️ **订正（2026-10-20）**：本节写的是 **2026-08 从 v2 源码读到的设计**。**活二进制实测的形态不同**（07 篇 §12.7 / `docs/agent-platform/opencode-v2-spike-results.md` §3）：v2 插件侧的工具注册 API 是 **`ctx.tool.transform(editor => editor.add({ name, description, input: <JSON Schema>, options?, execute(input, ctx) => ({content}) }))`**，且**必须显式 `options:{codemode:false}`**（否则模型只能经 Code Mode 调用）。`Tool.make` / `tools.register` / `withPermission` / `materialize(permissions)` 这组名字**未在实测中复现**。下表保留原调研记录，右侧一列标注实测结论。
+
 v2 将工具注册重构为显式声明 + 注册 API（07 篇调研的 v2 源码事实）：
 
-| v1 | v2 |
-|----|----|
-| `Tool.define(id, init)`（registry 批量注册） | `Tool.make({ description, input Schema, output, execute })` 声明工具定义 |
-| — | `tools.register` 显式注册到运行时 |
-| 权限为配置侧 `permission` 键 | `withPermission` 内联声明默认权限 |
-| 工具名即 action（隐式） | `materialize(permissions)` 按权限规则过滤后暴露，工具名校验正则约束命名 |
+| v1 | v2（源码读到的设计） | v2（**实测**，平台采用） |
+|----|----|----|
+| `Tool.define(id, init)`（registry 批量注册） | `Tool.make({ description, input Schema, output, execute })` 声明工具定义 | `editor.add({ name, description, input: <JSON Schema>, options, execute })`（**JSON Schema**，非 Zod） |
+| — | `tools.register` 显式注册到运行时 | `ctx.tool.transform(editor => ...)`（**热重载入口**） |
+| 权限为配置侧 `permission` 键 | `withPermission` 内联声明默认权限 | 权限仍是**配置侧** `permissions[]` 数组（见 §4.4） |
+| 工具名即 action（隐式） | `materialize(permissions)` 按权限规则过滤后暴露，工具名校验正则约束命名 | 工具名即 action 不变；**"可见性"由 `options.codemode` 决定**（不写 ⇒ 只进 Code Mode 目录） |
 
 v2 的 `materialize(permissions)` 是"注册 → 暴露"之间的显式过滤环节：权限为 `deny` 的工具不进入模型可见集合，`ask` 的工具在调用时进入 request → reply 确认流（07 篇 §3.1 权限链路第三步）。这与 07 篇 §3.1「权限点是开放命名空间」一致：v2 中工具名仍然即权限 action，注册即入命名空间。
 
@@ -91,19 +97,19 @@ v2 的 `materialize(permissions)` 是"注册 → 暴露"之间的显式过滤环
 平台 agent 配置（04 篇 FR-35/FR-48）
   │  工具白名单（启用/停用）＋ 逐工具 effect（allow/ask/deny）
   ▼
-控制面生成 opencode 配置文件（permission 节 + 自定义工具文件/插件）
+控制面生成 opencode 配置文件（permissions 节 + 自定义工具插件）
   │  经 Worker 控制协议下发（07 篇 11.3）
   ▼
 Worker 节点写入该任务组 opencode 实例的配置目录
   │  v1：写文件 + 重启实例（07 篇 §10.3 四步流程）
   ▼
-opencode 启动：内置工具注册 + 扫描 .opencode/tools/*.ts + 加载插件工具
+opencode 启动：内置工具注册 + 加载 .opencode/plugins/*.ts 插件工具
   ▼
 permission 过滤（FR-48 落点）：deny 隐藏、ask 进确认流、allow 直接执行
 ```
 
 - **FR-48 工具权限落点在 permission 过滤环节**：平台按 Agent 配置生成的 `permission` 规则（含通配符如 `jenkins-*`）与 opencode 运行时过滤/确认机制一一对应，平台侧不重复实现权限判定。
-- **自定义工具的注入路径**：平台把团队注册的工具（08 篇 SkillsToolsModule）转写为 `.opencode/tools/*.ts` 文件或插件，随实例启动注册；工具名与 `tools` 表 `action` 列保持一致（08 篇 §6.1）。
+- **自定义工具的注入路径**：平台把团队注册的工具（08 篇 SkillsToolsModule）转写为 **`.opencode/plugins/*.ts` 插件**（v2 形态；v1 的 `.opencode/tools/*.ts` 文件自动发现在 v2 已被移除），随实例启动注册；工具名与 `tools` 表 `action` 列保持一致（08 篇 §6.1）。
 - **v1 生效方式**：工具变更 = 写文件 + 重启该任务组实例（07 篇 §10.3）；**v2 生效方式**：`ctx.tool.transform` 运行时热更新（07 篇 §10.4）。
 
 ## 4. Skills 机制
@@ -165,7 +171,7 @@ Skills 不以独立工具暴露，而是收敛为**一个 `skill` 工具** + 系
 |---------|--------|------|
 | `permission.skill`（opencode.json） | 全局默认 | 所有 agent 生效，可被 agent 级覆盖 |
 | agent frontmatter `permission: { skill: {...} }` | 自定义 agent | 该 agent 内覆盖全局（官方 skills 文档） |
-| `agent: { <builtin>: { permission: { skill: {...} } } }` | 内置 agent | opencode.json 内覆盖（官方示例：plan agent 放行 `documents-*`） |
+| ⚠️ **v2 形态**：顶层 **`permissions[]` 数组**（`{action, resource, effect}`）+ **`agents` 节**（不是 v1 的 `agent` 节 / `permission` 对象） | 内置 agent | opencode.json 内覆盖（官方示例：plan agent 放行 `documents-*`）。⚠️ v2 的 `agents` 节里**没有** `prompt` 键（角色提示落 `system`），且 `permission` 键是**未知键 → 静默丢弃**——详见 07 篇 §12.2 |
 | `tools: { skill: false }`（全局或 agent 级） | 禁用 | 完全禁用 skill 工具，`<available_skills>` 整体省略 |
 
 ### 4.5 平台映射：平台技能库 → worker 写入 → 生效
@@ -189,6 +195,8 @@ opencode 启动/热更新：discoverSkills 扫描 → <available_skills> 注入 
 ## 5. MCP 机制
 
 ### 5.1 配置：opencode.json 顶层 `mcp` 节
+
+> ⚠️ **opencode v2 形态订正（2026-10-20）**：v2 把服务器收进 **`mcp.servers`** 下（v1 的扁平 `mcp: {name:{…}}` 已被 v2 标为 deprecated，v2 仍能解析并归一化）；**开关键从 `enabled` 变成 `disabled`（极性相反）**——v1 形的 `"enabled": true` 被归一化为 `"disabled": false`（= 仍然启用），所以**沿用 v1 的 `enabled` 键本身不危险**；**`timeout` 从单值变成三段**（`{startup, catalog, execution}`），v1 的单值 timeout 归一化后**`startup` 段丢失**（不是被默认值补齐）。平台注入器写的是 **v2 形态**。逐条实测见 07 篇 §12 与 `.omo/plans/opencode-v2-adaptation.md` 的 §2.7 / T15。
 
 MCP 服务器在 opencode.json 的 `mcp` 节点下按**唯一名称**声明（官方 mcp-servers 文档），每台服务器可全局 `enabled` 开关：
 
@@ -312,7 +320,7 @@ sequenceDiagram
     P->>W: 下发资源配置<br/>（tools 白名单 + permission / skills 目录 / mcp 配置）
     W->>W: 组装 opencode 配置<br/>（合并 agent 权限：allow/ask/deny + 通配符）
     W->>O: v1：写文件 + spawn 实例（重启生效）<br/>v2：OpenCode.create() + transform 热更新
-    O->>O: 启动注册：内置工具 Tool.define<br/>+ 扫描 .opencode/tools/*.ts + 插件工具
+    O->>O: 启动注册：内置工具 Tool.define<br/>+ 加载 .opencode/plugins/*.ts 插件工具（v2）
     O->>O: 技能发现：discoverSkills 扫描 6 处路径
     O->>O: MCP 连接：tools/list 拉取 → <server>_<tool> 注册
     O->>O: materialize(permissions) 权限过滤<br/>（deny 隐藏；ask 标记待确认；allow 放行）
@@ -348,10 +356,10 @@ sequenceDiagram
 
 | 资源类型 | 平台侧管理位置（08 篇 §3.1） | worker 生效路径 | v1 生效方式 | v2 生效方式 |
 |---------|---------------------------|----------------|------------|------------|
-| 工具（内置） | AgentsModule：逐工具 effect 配置（FR-35/48） | 生成 `permission` 配置节注入实例 | 重启实例 | `ctx.tool.transform` / 权限热更新 |
-| 工具（自定义） | SkillsToolsModule：注册（代码/CLI/HTTP/MCP + schema，FR-27） | 转写 `.opencode/tools/*.ts` 或插件写入实例 | 写文件 + 重启实例（07 篇 §10.3 四步） | `ctx.tool.transform` 热更新 |
+| 工具（内置） | AgentsModule：逐工具 effect 配置（FR-35/48） | 生成 **`permissions[]`** 配置节注入实例（v2 形态） | 重启实例 | `ctx.tool.transform` / 权限热更新 |
+| 工具（自定义） | SkillsToolsModule：注册（代码/CLI/HTTP/MCP + schema，FR-27） | 转写 `.opencode/plugins/*.ts` 插件写入实例（**v2 形态**） | 写文件 + 重启实例（07 篇 §10.3 四步） | `ctx.tool.transform` 热更新 |
 | Skills | SkillsToolsModule：上传/停用（FR-27）；AgentsModule：Agent 勾选（FR-34） | SKILL.md 写入该任务组 skills 目录；按 Agent 生成 `permission.skill` | 写文件 + 重启实例（discoverSkills 启动时一次性发现） | `ctx.skill.transform` 热更新 |
-| MCP | SkillsToolsModule：服务器 CRUD、可用性监控（三态） | 生成 opencode `mcp` 配置节 + headers/oauth 注入 | 写配置 + 重启实例（连接 + tools/list 拉取） | **待验证**（v2 MCP 适配未实现，§5.7） |
+| MCP | SkillsToolsModule：服务器 CRUD、可用性监控（三态） | 生成 opencode **`mcp.servers`** 配置节（v2 形态）+ headers/oauth 注入 | 写配置 + 重启实例（连接 + tools/list 拉取） | **待验证**（v2 MCP 适配未实现，§5.7） |
 
 ### 7.2 v1 变更流程（写文件 + 重启） vs v2 热更新
 
@@ -376,7 +384,7 @@ sequenceDiagram
 | 维度 | v1（当前基线） | v2（迁移目标） | 平台影响 |
 |------|--------------|---------------|---------|
 | 工具定义 | `Tool.define(id, init)`（registry 批量注册）| `Tool.make({description, input Schema, output, execute})` | WorkerRuntime 内注册逻辑替换 |
-| 工具注册 | 内置 registry + `.opencode/tools/*.ts` 扫描 + 插件 `tool` 工厂 | `tools.register` 显式注册 + `withPermission` | 配置生成侧 v2 写法 |
+| 工具注册 | 内置 registry + `.opencode/tools/*.ts` 扫描 + 插件 `tool` 工厂 | ⚠️ **实测**：`.opencode/tools/*.ts` 的文件自动发现**已移除** → 只能经插件 `ctx.tool.transform(editor => editor.add({…}))` 注册，且**必须** `options:{codemode:false}` | 配置生成侧 v2 写法 |
 | 权限 | `permission` 键 + 模式（pattern）匹配 + 工具名即 action | action + resource + effect 结构化规则（PermissionV2） | 平台生成的权限配置格式切换（OpenCodeDriver 内收敛） |
 | 工具暴露 | 注册即暴露，权限过滤在调用时 | `materialize(permissions)` 注册后显式过滤 | 暴露面控制更显式 |
 | skills 配置 | `skills: { paths, urls }`（对象） | `skills: string[]`（路径数组） | 配置生成格式切换 |

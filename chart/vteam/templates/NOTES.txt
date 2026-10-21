@@ -16,6 +16,7 @@ vteam（虚拟团队 AI 协作平台）已部署。
    - 后端 API / Swagger：http://localhost:13000/api/v1 ， http://localhost:13000/api/v1/docs
    - 调试 opencode serve：kubectl port-forward sts/{{ include "vteam.worker.name" . }} 14000:4000
      （worker 无共享 ClusterIP Service，serve 仅经 headless DNS/pod 名访问；sts 转发到 ordinal 0）
+     ⚠️ v2 恒开鉴权：serve 走 Basic Auth（用户名固定 opencode，密码见第 5 项）
 
 {{- if not .Values.secret.existingSecret }}
 4. 敏感配置：本 chart 已自动生成随机 Secret（{{ include "vteam.secret.name" . }}）。
@@ -27,11 +28,41 @@ vteam（虚拟团队 AI 协作平台）已部署。
      --set secret.dbPassword=$(openssl rand -hex 16)
 {{- end }}
 
-5. 镜像构建（未推送 registry 时先构建并推送）：
+5. worker 的 opencode serve 密码（OpenCode v2 **恒开鉴权**，worker 必需）：
+   - 已由 chart 自动生成随机密码，写入 Secret 的 OPENCODE_SERVER_PASSWORD key；
+     worker 容器经 secretKeyRef 注入 OPENCODE_SERVER_PASSWORD。
+     ⚠️ **server 容器不再注入 SERVER_PASSWORD**：控制面自 v2 适配起不再直连 serve
+     （只调 worker 执行端点，鉴权用 X-Worker-Token）⇒ 两个值不需要同值。
+   - 查看密码（Basic Auth 用户名固定为 opencode，仅 worker 自己访问 serve 时用）：
+     kubectl get secret {{ include "vteam.secretName" . }} -n {{ .Release.Namespace }} \
+       -o jsonpath='{.data.OPENCODE_SERVER_PASSWORD}' | base64 -d; echo
+   - 自控密码：用 secret.existingSecret 指向自己的 Secret（data 须含同名 key
+     OPENCODE_SERVER_PASSWORD，及 JWT_SECRET / WORKER_TOKEN / MODEL_CREDENTIAL_KEY /
+     DB_PASSWORD）。
+   - 紧急/调试：经 extraEnv 下发 OPENCODE_ALLOW_GENERATED_PASSWORD=1，允许 worker 改为
+     捕获 opencode 自动生成的密码（仅在未设 OPENCODE_SERVER_PASSWORD 时生效；明文不落日志）。
+
+6. 镜像构建（未推送 registry 时先构建并推送）：
    docker build --build-arg API_PROXY_TARGET=http://{{ include "vteam.server.name" . }}:3000 \
      -t <registry>/vteam-web:latest ./web && docker push <registry>/vteam-web:latest
    docker build -t <registry>/vteam-server:latest ./server && docker push <registry>/vteam-server:latest
    docker build -t <registry>/vteam-worker:latest ./worker && docker push <registry>/vteam-worker:latest
    再以 --set server.image.repository=<registry>/vteam-server 等覆盖 values。
 
-6. worker 默认模型：通过 --set worker.env.defaultModel=<model-id> 指定（空 = 不指定）。
+7. worker 默认模型：通过 --set worker.env.defaultModel=<model-id> 指定（空 = 不指定）。
+
+8. ⚠️ 从 OpenCode v1 线切到 v2 线（换协议 / 换 CLI 版本 / 换数据存储形态）：
+   完整的灰度顺序、闸门、观察项与**回滚步骤**见 docs/deployment.md 的
+   「八、OpenCode v2 灰度与回滚」——**没有代码级开关能退回 v1**
+   （OPENCODE_V2_ENABLED=false 会让 worker 启动即抛错），回滚 = 回滚镜像到 v1.0.4
+   **+ 恢复数据卷**（**数据卷快照强烈建议**；⚠️ 只有把隔离根指回 v1 数据目录时，恢复卷才是
+   **硬前置**——默认隔离根下 v2 不就地迁移 v1 的库，回滚不必恢复卷，损失有界于 v2 窗口期）。
+   另：v2 线按「OmO 关闭」上线（镜像内置的是 v1 形态插件入口，v2 不加载）。
+
+9. ⚠️ **升级顺序是硬约束：先 server、后 worker**（不是"顺手先升 server"）：
+   v2 的 MCP 状态是**五态**（connected / pending / disabled / failed / needs_auth），
+   worker 心跳原样上报、server 侧用 @IsIn 逐字校验。**server 必须先接受这五个值**，
+   否则新 worker 一旦上报 pending / disabled，**整条心跳被 400 拒绝**
+   （mcpStatus 是 ValidateNested 逐条校验）⇒ worker 心跳全丢 ⇒ **30s 内被判离线**。
+   ⇒ **滚动更新 worker 只有在 server 已是新版之后才安全**；反过来做会表现成
+   "worker 刚起来就离线"。详见 docs/deployment.md §八.0 事实 5 / §八.1 / §八.2 阶段 1。

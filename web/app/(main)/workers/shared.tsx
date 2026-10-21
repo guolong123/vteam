@@ -7,8 +7,8 @@
  * - worker 三态（在线/离线/维护中）标签与主题、负载档位色、相对时间格式化、
  *   脉冲动画 CSS、状态徽章组件——两页语义必须一致，避免复制漂移。
  * - API 数据模型：WorkerItem（列表条目）+ WorkerDetail（详情，含 mcpStatus）。
- * - MCP 三态主题（connected/failed/needs_auth）：对齐 skills 页 mcpStatusTheme
- *   （T8c 11 篇 §5.8 三态），语义独立于 worker 三态。
+ * - MCP 五态主题（connected/pending/disabled/failed/needs_auth）：对齐 skills 页
+ *   mcpStatusTheme，语义独立于 worker 三态。
  * - 内置 git 工具清单（git_clone/git_pull/git_fetch/git_status/git_diff/git_log/
  *   git_push，17 篇 §4.1 七工具）：详情页区分「内置 git 工具 / 自定义工具」。
  * 这些均为 worker 域专属语义，遵循"扩展 token"范式不写 tokens.ts 基线。
@@ -86,9 +86,9 @@ export interface WorkerItem {
      */
     models?: string[];
     /**
-     * C7：**真正可执行**的模型 id 列表（providerID/modelID），由 worker 侧 CLI
-     * （`opencode models`，带鉴权过滤）探测，只含当前凭据实际能用、且已启用的模型。
-     * 这是"可用模型"的权威来源，与 agent 配置的模型下拉口径一致。
+     * C7：**真正可执行**的模型 id 列表（providerID/modelID），由 worker 侧探测
+     * （= worker 自己 spawn 的 serve 的 `GET /api/model`，带鉴权过滤），只含当前凭据实际能用、
+     * 且已启用的模型。这是"可用模型"的权威来源，与 agent 配置的模型下拉口径一致。
      */
     executableModels?: string[];
   };
@@ -119,10 +119,17 @@ export const WORKER_UPDATE_STATE_LABEL: Record<string, string> = {
   rolledback: "已回滚（新版本异常）",
 };
 
-/** 心跳载荷中的单条 MCP 服务器状态（server McpStatusEntryDto，11 篇 §5.8 三态）。 */
+/**
+ * 心跳载荷中的单条 MCP 服务器状态（server McpStatusEntryDto）。
+ *
+ * ⚠️ **v2 是五态**：与 v2 的 `GET /api/mcp`（`Mcp.Server.status`）1:1 对齐、不折叠——
+ * `pending`（还在连）与 `disabled`（配了但关着）**都不是 `failed`**。线契约两端同步扩展
+ * （worker `McpServerStatus` ↔ server `MCP_STATUS` + `@IsIn`）；**退回三态会让下方主题表
+ * 查表得 `undefined` ⇒ 详情页渲染报错**。
+ */
 export interface McpStatusEntry {
   serverName: string;
-  status: "connected" | "failed" | "needs_auth";
+  status: "connected" | "pending" | "disabled" | "failed" | "needs_auth";
 }
 
 /** GET /workers/:id 详情（T9：合并该 worker 最近上报的 mcpStatus，每次心跳刷新）。 */
@@ -145,16 +152,21 @@ export function formatRelativeTime(iso: string | null, now: number): string {
   return `${Math.floor(h / 24)} 天前`;
 }
 
-/* ------------------------------ MCP 三态主题（对齐 skills 页 mcpStatusTheme） ------------------------------
- * worker 心跳探测上报的三态（11 篇 §5.8）：connected=已连接（绿）/ failed=连接失败（红）/
- * needs_auth=待授权（琥珀）。未上报 → 详情页空态提示（无 disconnected 过渡态，区别于
- * skills 页 MCP 工具五态——worker 详情只有探测真实结果）。
+/* ------------------------------ MCP 五态主题（对齐 skills 页 mcpStatusTheme） ------------------------------
+ * worker 心跳探测上报的五态：connected=已连接（绿）/ pending=连接中（青，瞬态）/
+ * disabled=已停用（灰，配了但关着）/ failed=连接失败（红）/ needs_auth=待授权（琥珀）。
+ * 未上报 → 详情页空态提示（无 disconnected 过渡态，区别于 skills 页）。
+ *
+ * ⚠️ 本表是 `McpStatusEntry["status"]` 的 `Record` ⇒ **联合加一个态，这里必须同时加一个键**，
+ * 否则该状态的徽章查表得 `undefined` ⇒ 详情页渲染报错。
  */
 export const MCP_STATUS_THEME: Record<
   McpStatusEntry["status"],
   { label: string; mark: string; color: string; bg: string; border: string }
 > = {
   connected: { label: "已连接", mark: "✅", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  pending: { label: "连接中", mark: "◐", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  disabled: { label: "已停用", mark: "○", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
   failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
   needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
 };

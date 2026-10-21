@@ -89,7 +89,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
   let workersService: { assignWorker: jest.Mock };
   let workerClient: {
     createSession: jest.Mock;
-    promptAsync: jest.Mock;
+    promptSession: jest.Mock;
     getMessages: jest.Mock;
     execute: jest.Mock;
   };
@@ -225,7 +225,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     };
     workerClient = {
       createSession: jest.fn(),
-      promptAsync: jest.fn().mockResolvedValue(undefined),
+      promptSession: jest.fn().mockResolvedValue(undefined),
       getMessages: jest.fn().mockResolvedValue([]),
       execute: jest.fn().mockResolvedValue(undefined),
     };

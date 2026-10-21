@@ -12,6 +12,9 @@ description: AgentRole 实体 / 提示词三段拆分 / 外部 Agent 只读展�
 > 平台自身工具的权限门落在服务端（`tools/call` 时 403），`agents[].permission`
 > 只含引擎原生键。凡下文与旧安排冲突之处，以本轮描述为准。
 
+> ⚠️ **opencode v2 适配后的形态订正（2026-10-20）**：**控制面契约没变**——`GET /agent-policies` 仍下发 **v1 形**的 `agents[].permission` 对象（`edit` / `read` / `bash` / `task`）。但 **worker 注入到 `opencode.json` 的产物已是 v2 形态**：`agents` 节（不是 `agent` 节）+ `permissions[]` **有序数组**（`{action, resource, effect}`，不是对象）+ action 改名（`bash`→**`shell`**、`task`→**`subagent`**）+ 角色提示落 `agents[].system`（不是 `prompt` 键）+ 追加 `external_directory` 询问规则。**读注入产物时按 v2 形态断言**（见 TC-POL-007）；**读控制面载荷时按 v1 形态断言**（见 TC-POL-001）。
+> 依据：07 篇 §3.2 / §12.2、`.omo/plans/opencode-v2-adaptation.md` 的 T15。
+
 ## 1. 模块范围与环境
 
 本文档覆盖五个连续改造计划落地后的用户可见行为：
@@ -210,9 +213,9 @@ R8  角色单槽位：defaultAgentId 与 defaultOpencodeAgentName 至多一个�
 | 用例编号 | 用例名称 | 用例类型 | 优先级 | 前置条件 | 操作步骤 | 预期结果 |
 |---------|---------|---------|-------|---------|---------|---------|
 | TC-POL-004 | 历史冻结基线文件未被修改 | 反向 | P0 | 仓库可读 | 1. `shasum -a 256 .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json` | 1. 输出 = `3b8c5d4b…af87`（历史值，仅作历史锚点）<br>2. 该文件不在本轮改动的提交范围内（本轮基线另见 TC-POL-001） |
-| TC-POL-005 | `worker/**` 无手写拦截残留（`role-guard` 已删） | 反向 | P0 | 仓库可读 | 1. `grep -rn "role-guard\|vteam-role-guard" worker/src`（生产代码） | 1. 命中为空（注释除外）<br>2. 注入的 `opencode.json` 无 guard 插件项；无 `.vteam-role-guard/roles.json` 写入 |
+| TC-POL-005 | `worker/**` 无手写拦截残留（`role-guard` 已删） | 反向 | P0 | 仓库可读 | 1. `grep -rn "role-guard\|vteam-role-guard" worker/src`（生产代码） | 1. 命中为空（注释除外）<br>2. 注入的 `opencode.json` 无 guard 插件项（v2 段名是 `plugins`）；无 `.vteam-role-guard/roles.json` 写入 |
 | TC-POL-006 | 代码中无残留 `Agent.role` 读取 | 反向 | P0 | 仓库可读 | 1. `grep -rn "agent\.role" server/src server/prisma --include=*.ts \| grep -v spec` | 1. 命中仅为注释/文档<br>2. 无任何生产读取路径 |
-| TC-POL-007 | 注入产物不含外部名、不含 `vteam_*` 权限键 | 反向 | P1 | 可读 worker 工作目录 | 1. 结构化读取 worker 侧注入的 `opencode.json`<br>2. 检查 `agents[].permission` 与 agent 名槽位 | 1. agent 名槽位**无**外部名；键集等于受治理集合<br>2. `agents[].permission` 键集 = 原生键（`edit/read/bash/task`），**零** `vteam_` 前缀键<br>（注意：`plan` 会作为合法的 handoff 映射键出现，须按 JSON 路径判别，**不可**裸 grep） |
+| TC-POL-007 | 注入产物不含外部名、不含 `vteam_*` 权限键 | 反向 | P1 | 可读 worker 工作目录 | 1. 结构化读取 worker 侧注入的 `opencode.json`（**v2 形态**：顶层是 **`agents`** 节，不是 v1 的 `agent` 节）<br>2. 检查 `agents[].permissions[]` 的 `action` 集合与 agent 名槽位 | 1. agent 名槽位**无**外部名；键集等于受治理集合<br>2. `agents[].permissions[]` 的 `action` 集合 = **v2 原生键**（`edit` / `read` / **`shell`** / **`subagent`**）**+** `external_directory`（worker 为对齐 v1"项目目录外需询问"语义补的规则），**零** `vteam_` 前缀 action<br>3. 条目形态是**有序数组**（每项 `{action, resource, effect}`），**不是** v1 的 `permission` 对象；条目上**不存在** `permission` 键、**不存在** `prompt` 键（角色提示落 `agents[].system`）<br>4. **未声明的 action 在引擎层默认放行**（v2 内置 catch-all allow + `findLast` 求值）——平台**已明确接受**该放宽 ⇒ 本用例**不得**断言"未声明 action 会被引擎拦下"（决策记录见 07 篇 §3.2）<br>（注意：`plan` 会作为合法的 handoff 映射键出现在**控制面**下发的 `GET /agent-policies` 载荷里——那是 **v1 形的 `permission` 对象**，控制面契约未变；须按 JSON 路径判别，**不可**裸 grep） |
 
 ---
 

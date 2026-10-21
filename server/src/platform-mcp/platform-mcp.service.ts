@@ -83,7 +83,11 @@ import {
   secretCommandLayerTag,
   validateTsxPrototype,
 } from './platform-mcp.constants';
-import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
+import {
+  NotificationChannelNotBoundError,
+  NotificationChannelNotFoundError,
+  NotificationDispatcherService,
+} from '../notifications/notification-dispatcher.service';
 import { SkillsService } from '../skills/skills.service';
 import { GitReposService, GitRepoView } from '../git-repos/git-repos.service';
 import { parseSkillMarkdown } from '../skills/skill-frontmatter.util';
@@ -529,6 +533,26 @@ const CHAT_HISTORY_TRUNCATED_MARKER =
 
 /** skill_create 常量：SKILL.md 全文服务端强制上限 100KB（与 skills.controller multipart 上限对齐）。 */
 const SKILL_CREATE_MAX_BYTES = 100 * 1024;
+
+/**
+ * 唤醒正文预算（字符，缺陷 3）：唤醒主 Agent 的正文只取回执增量头部
+ * （平台铁律「只发增量」——回执原文完整留在群聊，故此处**不提高**预算）。
+ */
+export const WAKE_TEXT_BODY_MAX_CHARS = 200;
+
+/**
+ * 唤醒正文（缺陷 3）：超预算截断时**附原始 messageId + 详见群聊**，
+ * 让接收方仍能定位完整回执（此前硬截断在 200 字符处，接收方无从找原文）。
+ */
+export function formatWakeBody(
+  text: string,
+  messageId?: string | null,
+): string {
+  const truncated = text.length > WAKE_TEXT_BODY_MAX_CHARS;
+  const body = truncated ? `${text.slice(0, WAKE_TEXT_BODY_MAX_CHARS)}…` : text;
+  if (!messageId) return body;
+  return `${body}（${truncated ? '已截断，' : ''}详见群聊消息 ${messageId}）`;
+}
 
 /** hook_register 缺省生命周期：expiresInMs 未传时 hook 自注册起 24h 过期（无无限 hook）。 */
 const HOOK_DEFAULT_EXPIRES_MS = 24 * 60 * 60 * 1000;
@@ -2115,6 +2139,7 @@ export class PlatformMcpService implements OnModuleInit {
         reporterInstanceId: args.selfInstanceId,
         text,
         kind,
+        messageId: message.id,
       });
     }
 
@@ -2163,6 +2188,8 @@ export class PlatformMcpService implements OnModuleInit {
     reporterInstanceId: string;
     text: string;
     kind: DispatchExecutionKind;
+    /** 回执落库后的群聊消息 id（截断时据此定位全文，缺陷 3）。 */
+    messageId?: string | null;
   }): Promise<void> {
     // question/help → 立即唤醒主 Agent（不计入 fan-out 计数）
     if (
@@ -2176,6 +2203,7 @@ export class PlatformMcpService implements OnModuleInit {
         callerInstanceId: input.reporterInstanceId,
         reason: input.notifyType === NOTIFY_TYPE.question ? 'question' : 'help',
         text: input.text,
+        messageId: input.messageId,
       });
       return;
     }
@@ -2189,6 +2217,7 @@ export class PlatformMcpService implements OnModuleInit {
         mainMemberId: input.mainMemberId,
         reporterInstanceId: input.reporterInstanceId,
         text: input.text,
+        messageId: input.messageId,
       });
     }
     // question/help 已在上方立即唤醒返回；answer 的持久化由调用方完成，此处无额外动作
@@ -2207,6 +2236,8 @@ export class PlatformMcpService implements OnModuleInit {
     mainMemberId: string;
     reporterInstanceId: string;
     text: string;
+    /** 回执落库后的群聊消息 id（截断时据此定位全文，缺陷 3）。 */
+    messageId?: string | null;
   }): Promise<void> {
     if (!input.teamId || !this.receipts) {
       return;
@@ -2226,6 +2257,7 @@ export class PlatformMcpService implements OnModuleInit {
       teamId: input.teamId,
       mainMemberId: input.mainMemberId,
       text: input.text,
+      messageId: input.messageId,
     });
   }
 
@@ -2253,6 +2285,8 @@ export class PlatformMcpService implements OnModuleInit {
     teamId: string;
     mainMemberId: string;
     text: string;
+    /** 回执落库后的群聊消息 id（截断时据此定位全文，缺陷 3）。 */
+    messageId?: string | null;
   }): Promise<void> {
     const teamId = input.teamId;
     const existing = this.drainTimers.get(teamId);
@@ -2261,12 +2295,24 @@ export class PlatformMcpService implements OnModuleInit {
       existing.generation += 1;
       const gen = existing.generation;
       existing.timer = setTimeout(() => {
-        void this.executeDrainWake(teamId, input.mainMemberId, input.text, gen);
+        void this.executeDrainWake(
+          teamId,
+          input.mainMemberId,
+          input.text,
+          gen,
+          input.messageId,
+        );
       }, this.DRAIN_DEBOUNCE_MS);
     } else {
       const gen = 1;
       const timer = setTimeout(() => {
-        void this.executeDrainWake(teamId, input.mainMemberId, input.text, gen);
+        void this.executeDrainWake(
+          teamId,
+          input.mainMemberId,
+          input.text,
+          gen,
+          input.messageId,
+        );
       }, this.DRAIN_DEBOUNCE_MS);
       this.drainTimers.set(teamId, { timer, generation: gen });
     }
@@ -2277,6 +2323,7 @@ export class PlatformMcpService implements OnModuleInit {
     mainMemberId: string,
     text: string,
     generation: number,
+    messageId?: string | null,
   ): Promise<void> {
     // 清理 timer 记录（无论成功与否，防止内存泄漏）
     const entry = this.drainTimers.get(teamId);
@@ -2316,11 +2363,11 @@ export class PlatformMcpService implements OnModuleInit {
       });
       if (mainSession) {
         if (mainSession.status === 'running') {
-          this.armDrainRecheck(teamId, mainMemberId, text);
+          this.armDrainRecheck(teamId, mainMemberId, text, messageId);
           return;
         }
         if (this.workerDispatcher.isSessionPending(mainSession.id)) {
-          this.armDrainRecheck(teamId, mainMemberId, text);
+          this.armDrainRecheck(teamId, mainMemberId, text, messageId);
           return;
         }
         if (
@@ -2329,7 +2376,7 @@ export class PlatformMcpService implements OnModuleInit {
             .isAgentExecuting(mainSession.workerId, `team:${teamId}`)
             ?.has(mainMemberId)
         ) {
-          this.armDrainRecheck(teamId, mainMemberId, text);
+          this.armDrainRecheck(teamId, mainMemberId, text, messageId);
           return;
         }
       }
@@ -2340,6 +2387,7 @@ export class PlatformMcpService implements OnModuleInit {
         callerInstanceId: mainMemberId,
         reason: 'drain',
         text,
+        messageId,
       });
       // 成功唤醒 → 撤销该团队挂起的重查（防重查与后续 ack 重复触发）
       this.cancelDrainRecheck(teamId);
@@ -2376,6 +2424,7 @@ export class PlatformMcpService implements OnModuleInit {
     teamId: string,
     mainMemberId: string,
     text: string,
+    messageId?: string | null,
   ): void {
     const existing = this.drainRecheckTimers.get(teamId);
     const vetoes = (existing?.vetoes ?? 0) + 1;
@@ -2396,7 +2445,12 @@ export class PlatformMcpService implements OnModuleInit {
       // 只重跑既有 drain 全链（debounce 200ms）；结果三分支（pending>0 取消 / 再 veto
       // 续排并在 armDrainRecheck 内累加计数 / 唤醒取消）全部在 executeDrainWake 内收敛，
       // 此处不清 entry——veto 计数须跨轮存活才能命中超限放弃。
-      void this.checkAndDrainFanOut({ teamId, mainMemberId, text });
+      void this.checkAndDrainFanOut({
+        teamId,
+        mainMemberId,
+        text,
+        messageId,
+      });
     }, this.DRAIN_RECHECK_MS);
     this.drainRecheckTimers.set(teamId, { timer, vetoes, mainMemberId, text });
   }
@@ -2414,6 +2468,9 @@ export class PlatformMcpService implements OnModuleInit {
    * 唤醒主 Agent（interrupt 语义）：dispatchAgentMention kind:'wake'。
    * 走 private 频道（按成员）优先，回退群聊。
    * 复用 dispatchToMainAgent 同定位逻辑（但独立方法，避免巡检/ harvest 耦合）。
+   *
+   * 正文截断（缺陷 3）：唤醒正文预算 200 字符（只发增量，回执原文留群聊），
+   * 但截断后必须**附原始 messageId + 详见群聊**——否则接收方无从定位全文。
    */
   private async wakeMainAgent(input: {
     isTeam: boolean;
@@ -2422,6 +2479,8 @@ export class PlatformMcpService implements OnModuleInit {
     callerInstanceId: string;
     reason: string;
     text: string;
+    /** 回执在群聊里的原始消息 id（截断后据此定位全文）。 */
+    messageId?: string | null;
   }): Promise<void> {
     if (!input.teamId) {
       return;
@@ -2454,7 +2513,7 @@ export class PlatformMcpService implements OnModuleInit {
     }
     const wakeText =
       `【子 Agent ${input.reason === 'question' ? '提问' : input.reason === 'help' ? '求助' : 'fan-out 完成'}】` +
-      `来自 ${input.callerInstanceId}：${input.text.slice(0, 200)}`;
+      `来自 ${input.callerInstanceId}：${formatWakeBody(input.text, input.messageId)}`;
     if (input.isTeam) {
       await this.workerDispatcher.dispatchAgentMention({
         teamId: input.teamId,
@@ -7232,13 +7291,19 @@ export class PlatformMcpService implements OnModuleInit {
 
   /**
    * channel_send：向当前团队绑定的通知渠道发送文本（webhook / wecom_group_robot）。
-   * - 入参仅 target(id/name, nc_ 前缀) + text(≤4000)，taskId 从 worker 会话上下文解析（当前任务边界）。
+   * - 入参仅 target(id/name, nc_ 前缀) + text(≤4000)，作用域从 worker 会话上下文解析。
    * - text 越界 → 返回结构化错误文本（不抛断会话）。
    * - outboundDispatcher.sendToChannelByIdOrName 按任务所属团队查询 NotificationChannel (nc_) + TeamNotificationChannel 绑定；
    *   失败返回错误文本 + isError:true——UI/客户端据此正确判失败（历史误解：曾认为
    *   isError:true 会 abort agent session，2026-10-13 值班群事故实证不会：MCP -32602
    *   错误（part status=error）后 agent 照常继续整轮）。错误文本仍作为 content 返回，
    *   模型可自行重试或改道。
+   *
+   * 作用域解析（缺陷 2）：渠道绑定是**团队级**概念，故先按任务解析、无任务时**退团队**
+   * （团队会话无任务时此前直接报「无法解析当前任务上下文」，把模型引向查任务上下文
+   * 而不是查渠道绑定）。两种失败条件分开表达并列出可用渠道：
+   * ① 团队未绑定任何通知渠道 → 明确报「未绑定」；
+   * ② 渠道名不存在 → 报「不存在/未绑定」+ 该团队**可用渠道清单**。
    */
   async channelSend(
     ctx: PlatformMcpContext,
@@ -7274,22 +7339,36 @@ export class PlatformMcpService implements OnModuleInit {
       };
     }
     let taskId: string | null = null;
+    let teamId: string | null = null;
     try {
       const session = await (this.prisma as any).session.findFirst({
         where: { workerId: ctx.workerId },
         orderBy: { createdAt: 'desc' },
-        select: { taskId: true },
+        select: { taskId: true, teamId: true },
       });
       taskId = session?.taskId ?? null;
+      teamId = session?.teamId ?? null;
     } catch {}
-    if (!taskId) {
+    if (!taskId && !teamId) {
       return {
-        content: [{ type: 'text', text: '发送失败: 无法解析当前任务上下文' }],
+        content: [
+          {
+            type: 'text',
+            text:
+              '发送失败: 无法解析当前任务上下文（本次调用既不在任务会话也不在团队会话内：' +
+              'channel_send 需要任务/团队上下文来定位已绑定的通知渠道；' +
+              '请在有任务或团队的会话中调用，或改用 group_post/notify_agent 发到群聊）',
+          },
+        ],
         isError: true,
       };
     }
     try {
-      await this.assertWorkerTask(ctx, taskId);
+      if (taskId) {
+        await this.assertWorkerTask(ctx, taskId);
+      } else {
+        await this.assertWorkerTeam(ctx, teamId as string);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
@@ -7302,6 +7381,7 @@ export class PlatformMcpService implements OnModuleInit {
         taskId,
         target,
         text,
+        { teamId },
       );
       const preview = text.slice(0, 100);
       return {
@@ -7309,6 +7389,34 @@ export class PlatformMcpService implements OnModuleInit {
         isError: false,
       };
     } catch (err: unknown) {
+      // 渠道域的可辨失败（缺陷 2）：分开表达「未绑定」与「渠道名不存在」，后者附可用渠道清单。
+      if (err instanceof NotificationChannelNotBoundError) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                `发送失败: ${err.message}（渠道未绑定：无法定位发送目标）` +
+                `；可用渠道：${err.available.length > 0 ? err.available.join('、') : '无'}` +
+                `；请先在平台「通知渠道」为团队 ${err.teamId} 绑定渠道后再调用 channel_send`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      if (err instanceof NotificationChannelNotFoundError) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                `发送失败: ${err.message}（渠道名不存在或未绑定到该团队）` +
+                `；可用渠道：${err.available.length > 0 ? err.available.join('、') : '无'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
       let msg: string;
       if (err instanceof Error) {
         msg = err.message;

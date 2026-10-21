@@ -1,5 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
+  NotificationChannelNotBoundError,
+  NotificationChannelNotFoundError,
   NotificationDispatcherService,
   formatTaskStatusMarkdown,
 } from './notification-dispatcher.service';
@@ -252,6 +254,55 @@ describe('NotificationDispatcherService', () => {
       await expect(
         service.sendToChannelByIdOrName('t_1', 'nc_missing', 'hi'),
       ).rejects.toThrow('未绑定任何通知渠道');
+    });
+
+    // 缺陷 2：两种失败条件必须可辨——「团队未绑定任何渠道」与「渠道名不存在」，
+    // 且后者要带上该团队的可用渠道清单（否则调用方只能笼统报错）。
+    it('未绑定任何渠道 → NotificationChannelNotBoundError（可辨）', async () => {
+      prisma.teamNotificationChannel.findMany.mockResolvedValue([]);
+      await expect(
+        service.sendToChannelByIdOrName(null, 'nc_1', 'hi', {
+          teamId: 'tm_0000000001',
+        }),
+      ).rejects.toBeInstanceOf(NotificationChannelNotBoundError);
+    });
+
+    it('渠道名不存在 → NotificationChannelNotFoundError 且带可用渠道清单', async () => {
+      prisma.teamNotificationChannel.findMany.mockResolvedValue([
+        { notificationChannelId: 'nc_1' },
+        { notificationChannelId: 'nc_2' },
+      ]);
+      prisma.notificationChannel.findMany.mockResolvedValue([
+        notificationChannel({ id: 'nc_1', name: '运维群' }),
+        notificationChannel({ id: 'nc_2', name: '告警群' }),
+      ]);
+
+      const err = await service
+        .sendToChannelByIdOrName(null, 'nc_missing', 'hi', {
+          teamId: 'tm_0000000001',
+        })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(NotificationChannelNotFoundError);
+      expect((err as NotificationChannelNotFoundError).available).toEqual([
+        'nc_1(运维群)',
+        'nc_2(告警群)',
+      ]);
+    });
+
+    it('显式团队作用域（无任务）→ 仍能命中该团队绑定的渠道', async () => {
+      const ch = notificationChannel({ id: 'nc_1', name: 'ch-1' });
+      prisma.teamNotificationChannel.findMany.mockResolvedValue([
+        { notificationChannelId: 'nc_1' },
+      ]);
+      prisma.notificationChannel.findMany.mockResolvedValue([ch]);
+
+      await service.sendToChannelByIdOrName(null, 'ch-1', 'hello via MCP', {
+        teamId: 'tm_0000000001',
+      });
+      expect(adapterSendOutbound).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'nc_1' }),
+        expect.objectContaining({ kind: 'markdown', text: 'hello via MCP' }),
+      );
     });
 
     it('adapter error logged via finish failed and does not block other channels', async () => {

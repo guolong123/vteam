@@ -54,6 +54,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     fingerprint: jest.Mock;
   };
   let workers: { dispatchModelCredentials: jest.Mock };
+  let workerClient: { listModels: jest.Mock };
 
   const modelRow = {
     id: 'md_0000000001',
@@ -139,6 +140,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     workers = {
       dispatchModelCredentials: jest.fn().mockResolvedValue(1),
     };
+    // T18：控制面不再直连 opencode 的模型目录端点——模型目录统一走 worker 执行端点
+    // （WorkerClient.listModels → worker `GET /models`）。
+    workerClient = {
+      listModels: jest.fn().mockResolvedValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -147,10 +153,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         { provide: IdGeneratorService, useValue: idGen },
         { provide: CredentialCryptoService, useValue: crypto },
         { provide: WorkersService, useValue: workers },
-        {
-          provide: WorkerClient,
-          useValue: { listModels: jest.fn().mockResolvedValue([]) },
-        },
+        { provide: WorkerClient, useValue: workerClient },
       ],
     }).compile();
 
@@ -1118,7 +1121,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
 
     it('CONF-01：上报最新 8 个真实模型时，删除该 worker 不再上报的假模型 availability', async () => {
-      // worker 实测真实模型（opencode models 权威列表）
+      // worker 实测真实模型（worker 自己 serve 的 GET /api/model；v2 下 `opencode models` CLI 读的是另一个作用域，不作真值源）
       const realModelRefs = [
         'big-pickle/big-pickle',
         'opencode-go/deepseek-v4-flash-free',
@@ -1338,19 +1341,15 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       prisma.worker.findMany.mockResolvedValue([
         { id: 'w_0000000001', capabilities: { baseUrl: 'http://worker:4199' } },
       ]);
-      (globalThis as any).fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          data: [
-            {
-              id: 'big-pickle',
-              providerID: 'opencode',
-              status: 'active',
-              enabled: true,
-            },
-          ],
-        }),
-      });
+      workerClient.listModels.mockResolvedValue([
+        {
+          id: 'opencode/big-pickle',
+          name: 'big-pickle',
+          providerID: 'opencode',
+          modelID: 'big-pickle',
+          status: 'active',
+        },
+      ]);
       prisma.model.findUnique.mockResolvedValue(null);
       prisma.model.create.mockResolvedValue({
         ...modelRowFull,
@@ -1392,7 +1391,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.workerModelAvailability.deleteMany).not.toHaveBeenCalled();
     });
 
-    it('models-truth：worker 上报 executableModels（opencode models CLI 真值）→ sync 优先采用，不再拉取 stale /api/model', async () => {
+    it('models-truth：worker 上报 executableModels（worker 自己 serve 的 GET /api/model 真值）→ sync 优先采用，不再拉取 worker 端点的模型目录', async () => {
       const executableModels = [
         'opencode/big-pickle',
         'opencode/ling-3.0-flash-fin-free',
@@ -1414,12 +1413,13 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       const fetchMock = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          data: [
+          models: [
             {
-              id: 'ling-3.0-tiny-free',
+              id: 'opencode/ling-3.0-tiny-free',
+              name: 'ling-3.0-tiny-free',
               providerID: 'opencode',
+              modelID: 'ling-3.0-tiny-free',
               status: 'active',
-              enabled: true,
             },
           ],
         }),
@@ -1482,23 +1482,19 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(result.liveModels).toEqual(['opencode/big-pickle']);
     });
 
-    it('models-truth：旧 worker 未上报 executableModels → 回退 /api/model 拉取（兼容）', async () => {
+    it('models-truth：旧 worker 未上报 executableModels → 回退 worker 执行端点的模型目录（兼容）', async () => {
       prisma.worker.findMany.mockResolvedValue([
         { id: 'w_0000000001', capabilities: { baseUrl: 'http://worker:4199' } },
       ]);
-      (globalThis as any).fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          data: [
-            {
-              id: 'big-pickle',
-              providerID: 'opencode',
-              status: 'active',
-              enabled: true,
-            },
-          ],
-        }),
-      });
+      workerClient.listModels.mockResolvedValue([
+        {
+          id: 'opencode/big-pickle',
+          name: 'big-pickle',
+          providerID: 'opencode',
+          modelID: 'big-pickle',
+          status: 'active',
+        },
+      ]);
       prisma.model.findUnique.mockResolvedValue(null);
       prisma.model.create.mockResolvedValue({
         ...modelRowFull,

@@ -6,15 +6,49 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DEFAULT_WORKER_TOKEN } from './workers.constants';
+import type {
+  CreateSessionRequestPayload,
+  CreateSessionResponsePayload,
+  SessionAbortResponsePayload,
+  SessionMessage,
+  SessionMessagesQuery,
+  SessionMessagesResponsePayload,
+  SessionPromptRequestPayload,
+  SessionPromptResponsePayload,
+  WorkerDeliveryMode,
+  WorkerModelsResponsePayload,
+} from './worker-session-protocol';
 
 /**
- * WorkerClient 错误码（T8，server→worker 的 HTTP 客户端）。
+ * WorkerClient 错误码（T8，server→worker 的 HTTP 客户端；T18 增补会话/限流两码）。
  * 统一 WORKER_UNAVAILABLE（503 语义）：worker 离线/连接失败/HTTP 非 2xx 均视为
  * 该 worker 当前不可用，供 T10「无可用 worker 报错」catch 后直接读 workerId。
+ *
+ * - SESSION_NOT_FOUND：worker 侧 404 + `code:'SESSION_NOT_FOUND'` ⇒ **会话已失效**
+ *   （被驱动端重启/会话被删）⇒ 调用方走「重建会话」路径，而不是把它当「worker 挂了」。
+ * - RATE_LIMITED：worker 侧 429 + `code:'RATE_LIMITED'` ⇒ **上游限流** ⇒ 调用方退避重试。
+ * - FILE_NOT_FOUND：worker 侧 `GET /file` 的 404 ⇒ **该 worker 工作区没有这个文件**
+ *   （worker 好好地回答了「我没有」）。它**不是**「worker 不可用」——两者混同会让
+ *   调用方（与 agent）去查节点状态，而不是查引用本身。
  */
 export const WORKER_CLIENT_ERRORS = {
   WORKER_UNAVAILABLE: 'WORKER_UNAVAILABLE',
+  SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
+  RATE_LIMITED: 'RATE_LIMITED',
+  FILE_NOT_FOUND: 'FILE_NOT_FOUND',
 } as const;
+
+/** 错误码 → 异常 message 前缀（各码的语义不同，不能一律说「不可用」）。 */
+const WORKER_ERROR_MESSAGES: Record<string, (workerId: string) => string> = {
+  [WORKER_CLIENT_ERRORS.WORKER_UNAVAILABLE]: (workerId) =>
+    `worker ${workerId} 不可用：`,
+  [WORKER_CLIENT_ERRORS.SESSION_NOT_FOUND]: (workerId) =>
+    `worker ${workerId} 会话已失效：`,
+  [WORKER_CLIENT_ERRORS.RATE_LIMITED]: (workerId) =>
+    `worker ${workerId} 上游限流：`,
+  [WORKER_CLIENT_ERRORS.FILE_NOT_FOUND]: (workerId) =>
+    `worker ${workerId} 上未找到该文件：`,
+};
 
 /**
  * worker 离线/请求失败异常（503，携带 workerId）。
@@ -22,30 +56,90 @@ export const WORKER_CLIENT_ERRORS = {
  *
  * `httpStatus`：worker 有响应但非 2xx 时携带该状态码（网络失败/超时缺省 undefined）。
  * 调用方据此区分「404 路径不存在，可换候选路径重试」与「worker 真不可用」。
+ *
+ * `code`：错误码（WORKER_UNAVAILABLE / SESSION_NOT_FOUND / RATE_LIMITED）——
+ * 会话失效与限流**不是**「worker 不可用」，必须能被调用方区分（前者重建会话、后者退避）。
  */
 export class WorkerUnavailableException extends ServiceUnavailableException {
   readonly workerId: string;
   readonly httpStatus?: number;
+  readonly code: string;
 
-  constructor(workerId: string, detail: string, httpStatus?: number) {
-    super({
-      code: WORKER_CLIENT_ERRORS.WORKER_UNAVAILABLE,
-      message: `worker ${workerId} 不可用：${detail}`,
-      workerId,
-    });
+  constructor(
+    workerId: string,
+    detail: string,
+    httpStatus?: number,
+    code: string = WORKER_CLIENT_ERRORS.WORKER_UNAVAILABLE,
+  ) {
+    const prefix =
+      WORKER_ERROR_MESSAGES[code]?.(workerId) ?? `worker ${workerId} 不可用：`;
+    super({ code, message: `${prefix}${detail}`, workerId });
     this.workerId = workerId;
     this.httpStatus = httpStatus;
+    this.code = code;
   }
 }
 
-/** opencode serve 默认地址（计划 D2：随机端口，`--port 0` 时未知 → 约定默认 4199）。 */
-export const DEFAULT_WORKER_BASE_URL = 'http://localhost:4199';
 /**
- * 方案 A：worker 执行端点默认端口（对齐 worker config WORKER_EXEC_PORT=4198）。
- * 执行端点是独立于 serve 的 node:http 端口（POST /execute），server 侧在
- * capabilities.execBaseUrl 缺失时以 serve 基址 origin + ':' + execPort 拼接发现。
+ * 判断一个异常是不是「会话已失效」（worker 侧 404 + code:SESSION_NOT_FOUND）。
+ *
+ * 调用方据此走**会话重建**路径（解绑 → 下一轮分派新建会话），而不是把会话失效
+ * 当成「worker 离线」空转到超时。
+ */
+export function isWorkerSessionInvalid(err: unknown): boolean {
+  return (
+    err instanceof WorkerUnavailableException &&
+    err.code === WORKER_CLIENT_ERRORS.SESSION_NOT_FOUND
+  );
+}
+
+/**
+ * 判断一个异常是不是「上游限流」（worker 侧 429 + code:RATE_LIMITED）。
+ *
+ * 限流是**可重试**的瞬时状态（退避后重试即可），与「worker 不可用」不同。
+ */
+export function isWorkerRateLimited(err: unknown): boolean {
+  return (
+    err instanceof WorkerUnavailableException &&
+    err.code === WORKER_CLIENT_ERRORS.RATE_LIMITED
+  );
+}
+
+/**
+ * worker 侧「文件不存在」（`GET /file` 的 404）。
+ *
+ * 与「worker 不可用」严格分开：worker 好好地回答了「这个文件我没有」，
+ * 把它说成「worker 不可用」会让调用方（与 agent）去查节点状态，而不是查引用本身
+ * （缺陷 1 的错误语义冲突：id 不存在 ⇒ 报「worker 不可用」）。
+ *
+ * ⚠️ 仍继承 WorkerUnavailableException：调用方（platform-mcp 的多候选路径回退）
+ * 按 `instanceof WorkerUnavailableException && httpStatus === 404` 判定「换下一个候选
+ * 路径」——继承关系不能断，否则相对路径只试第一个候选。
+ * 但 HTTP 状态覆写为 404 ⇒ 上层（MCP 协议层）把它映射成「找不到」而不是「内部错误」。
+ */
+export class WorkerFileNotFoundException extends WorkerUnavailableException {
+  constructor(workerId: string, detail: string) {
+    super(workerId, detail, 404, WORKER_CLIENT_ERRORS.FILE_NOT_FOUND);
+  }
+
+  override getStatus(): number {
+    return 404;
+  }
+}
+
+/**
+ * worker 执行端点默认端口（对齐 worker config WORKER_EXEC_PORT=4198）。
+ * 执行端点是独立于 opencode serve 的 node:http 端口（POST /execute 等），server 侧在
+ * capabilities.execBaseUrl 缺失时以「worker 对外公布的主机」+ ':' + execPort 拼接发现。
  */
 export const DEFAULT_EXEC_PORT = 4198;
+/**
+ * worker 对外公布主机缺省时的回退基址（env WORKER_BASE_URL，默认 http://localhost:4199）。
+ *
+ * ⚠️ T18：控制面**只**用它推导 worker 执行端点的**主机**（端口恒取 capabilities.execPort），
+ * 不再拿它去连 opencode serve（决策 D3：控制面彻底不直连 opencode）。
+ */
+export const DEFAULT_WORKER_BASE_URL = 'http://localhost:4199';
 /** 单次 HTTP 请求超时：已从 15s 调整为 60s，适配长命令/思考执行 */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 /** FR-41：GET /file 文件拉取超时（较大文件/网络慢） */
@@ -63,32 +157,53 @@ export const SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 /**
  * worker 行最小契约（Prisma Worker 的 id + capabilities Json；T10 传 findUnique 结果）。
- * capabilities 无 baseUrl 列（schema.prisma L365-381），约定从 capabilities Json 读
- * `baseUrl`/`port`，缺失时回退 WORKER_BASE_URL 配置。
+ *
+ * capabilities 无 baseUrl 列（schema.prisma L365-381）：执行端点基址按
+ * `execBaseUrl` → `execPort` + worker 公布主机 → `WORKER_BASE_URL` 回退解析。
  */
 export interface WorkerEndpointRef {
   id: string;
   capabilities?: unknown;
 }
 
-/** promptAsync 请求体（对齐 opencode serve POST /session/{id}/prompt_async body + directory query）。 */
-export interface PromptAsyncOptions {
-  /** 模型选择（opencode serve 格式 { providerID, modelID }，对齐计划 D7：defaultModelId 存 provider/model）。 */
+/**
+ * 会话提示下发入参（worker `POST /sessions/:id/prompt` 的请求体 + 一个便捷标志）。
+ *
+ * ⚠️ T18：请求体形状由**worker 侧**定义（`SessionPromptRequestPayload`），控制面只负责
+ * 把它组装出来——**不再**自行拼 opencode 的 `{model?, agent?, parts}`（那是控制面与
+ * worker 各拼一份 prompt body 的分叉根源）。
+ */
+export interface SessionPromptOptions {
+  /** 提示内容：字符串（worker 归一为单条文本内容单元）或内容单元数组。 */
+  prompt: string | unknown[];
+  /** 模型选择（vteam 口径 `{providerID, modelID}`）。 */
   model?: { providerID: string; modelID: string } | null;
-  /** opencode agent 名（可选，缺省 serve 默认 agent）。 */
+  /** agent 名（可选，缺省用被驱动端默认 agent）。 */
   agent?: string;
-  /** 消息 parts（必填，如 [{type:'text', text}]，对齐 /doc parts:array required）。 */
-  parts: unknown[];
-  /** 工作目录（query 参数，对齐计划 D2：directory 是 prompt_async 的 query 参数）。 */
+  /** 会话工作目录（可选）。 */
   directory?: string;
+  /** 顶层系统提示（产出物协议/@机制等；可选）。 */
+  system?: string;
+  /**
+   * 投递策略（可选）。**默认显式取 `steer`**——不依赖被驱动端的默认值
+   * （默认值一变，行为就静默漂移）。
+   */
+  delivery?: WorkerDeliveryMode;
+  /**
+   * 在飞注入标志（同会话已有运行 → 插队注入当前轮）。
+   * ⇒ 强制 `delivery:'steer'`（插队语义），忽略本字段以外的分叉。
+   */
+  inFlight?: boolean;
 }
 
-/** 模型列表项（T11 替换 STATIC_AVAILABLE_MODELS 的 {id,name} 结构；id=providerID/modelID）。 */
+/** 模型列表项（worker `GET /models` 的返回项；id=providerID/modelID）。 */
 export interface WorkerModel {
   id: string;
   name: string;
   providerID: string;
   modelID: string;
+  /** 可用状态（worker 侧回报；缺失视为可用）。 */
+  status?: string;
 }
 
 /**
@@ -99,7 +214,7 @@ export interface WorkerModel {
  * vteam 仅做「同步 + 展示 + 切换」，agent 的 prompt/permission 语义完全由 opencode 侧定义。
  */
 export interface WorkerAgentInfo {
-  /** agent 名（下发 prompt_async 的 agent 字段取值）。 */
+  /** agent 名（下发提示时的 agent 字段取值）。 */
   name: string;
   description?: string;
   /** primary=可作为会话主 agent；subagent=仅由主 agent 派生；all=两者皆可。 */
@@ -115,7 +230,7 @@ export interface WorkerAgentInfo {
 }
 
 /**
- * opencode todo 执行步骤项（worker `GET /todos` → serve `GET /session/{id}/todo` 透传）。
+ * opencode todo 执行步骤项（worker `GET /todos` → 驱动端的会话步骤接口 透传）。
  * 对齐 SDK `Todo` 类型：content/status/priority/id；
  * status ∈ pending | in_progress | completed | cancelled（计划 Tab checklist 映射依据）。
  * vteam 只读展示，状态由 agent 经 opencode todo 工具推进。
@@ -255,22 +370,25 @@ export interface SecretCommandResult {
  *
  * - **不用 @opencode-ai/sdk**：SDK path key bug（声明 {sessionID} 实际 {id}）只影响 SDK，
  *   server 侧裸 fetch 规避（计划 D2 铁律）。
- * - **端点**（实测 opencode 1.18.15 serve，见 learnings）：POST /session、POST
- *   /session/{id}/prompt_async?directory=、POST /session/{id}/abort、GET /session/{id}/message、
- *   GET /api/model（模型列表）、GET / 健康检查。
- * - **鉴权**：serve Basic Auth（username=opencode，password=worker 侧 OPENCODE_SERVER_PASSWORD）；
- *   server 侧经 SERVER_PASSWORD 配置读取该密码，为空=不鉴权。
- * - **baseUrl**：Worker 表无 baseUrl 列，从 capabilities Json 读 `baseUrl`/`port`，否则回退
- *   WORKER_BASE_URL（默认 http://localhost:4199）。
- * - **错误**：fetch 网络错误/超时/HTTP 非 2xx → WorkerUnavailableException（503，带 workerId）。
+ * - **端点**（T18 收口）：控制面**只**调 worker 的执行端点——建会话 `POST /sessions`、
+ *   下发提示 `POST /sessions/:id/prompt`、中断 `POST /sessions/:id/abort`、
+ *   读消息 `GET /sessions/:id/messages`、模型目录 `GET /models`，外加既有的
+ *   `POST /execute` / `GET /file` / `GET /agents` / `GET /todos` / 计划与 OmO 配置端点。
+ *   ⚠️ **不再直连 opencode**（决策 D3）：控制面不持有任何 opencode 的 wire 形状
+ *   （opencode 的会话创建 / 提示下发 / 中断 / 模型目录端点，一律不认识）。
+ * - **鉴权**：执行端点统一带 `X-Worker-Token`（env WORKER_TOKEN，默认 dev-worker-token），
+ *   与 worker 端 X_WORKER_TOKEN（compose 同一值）对齐。
+ *   ⚠️ opencode serve 的 Basic Auth（`SERVER_PASSWORD`）已删除——控制面不再连 serve。
+ * - **baseUrl**：执行端点基址按 `capabilities.execBaseUrl` → `capabilities.execPort`
+ *   + worker 公布主机 → `WORKER_BASE_URL` 回退解析；**serve 端口不再被使用**。
+ * - **错误**：fetch 网络错误/超时/HTTP 非 2xx → WorkerUnavailableException（503，带 workerId）；
+ *   404 + `SESSION_NOT_FOUND`（会话失效）与 429 + `RATE_LIMITED`（限流）保留各自语义。
  */
 @Injectable()
 export class WorkerClient {
   private readonly logger = new Logger(WorkerClient.name);
-  /** baseUrl 回退值（env WORKER_BASE_URL，默认 http://localhost:4199）；公开字段便于测试覆盖。 */
+  /** worker 公布主机缺省时的回退基址（env WORKER_BASE_URL）；公开字段便于测试覆盖。 */
   public baseUrlFallback: string;
-  /** serve Basic Auth 密码（env SERVER_PASSWORD，默认空=不鉴权）；公开字段便于测试覆盖。 */
-  public serverPassword: string;
   /**
    * FR-41：exec 文件端点鉴权 token（env WORKER_TOKEN，默认 dev-worker-token），
    * 经 X-Worker-Token header 下发，与 worker 端 X_WORKER_TOKEN（compose 同一值）对齐。
@@ -282,78 +400,96 @@ export class WorkerClient {
       'WORKER_BASE_URL',
       DEFAULT_WORKER_BASE_URL,
     );
-    this.serverPassword = config.get('SERVER_PASSWORD', '');
     this.workerToken = config.get('WORKER_TOKEN', DEFAULT_WORKER_TOKEN);
   }
 
   /**
-   * POST /session：创建 opencode 会话。
-   * serve 实际返回 `{ id: "ses_..." }`（SDK 声明 {sessionID} 是错的），此处映射为
-   * `{ sessionID }` 契约，T10/T12 存 instanceRef 直接用。
-   * ⚠️ serve 契约（实测 opencode 1.18.15）：POST /session **拒收 model 字段**
-   * （带 model → 400，空 body → 200）——模型选择经 promptAsync 的 opts.model 指定。
-   * 签名保留 `model?` 参数仅为兼容历史调用方，请求体恒为 {}。
+   * POST /sessions：创建被驱动端会话（**经 worker 执行端点**；T18：控制面不再直连 opencode）。
+   *
+   * - 请求体：`{model?}`（缺省用被驱动端默认模型）。
+   * - 响应体：`{sessionId}`（vteam 协议拼写）——**归一后对外只暴露 `sessionId`**：
+   *   opencode 时代的 `{id}` / `{sessionID}` 两种拼写都在 worker 侧收敛掉了，
+   *   控制面若再混用两种拼写，迟早读错字段（读不到 = 会话 id 丢失 = 全链路崩）。
    */
   async createSession(
     worker: WorkerEndpointRef,
     model?: { providerID: string; modelID: string } | null,
-  ): Promise<{ sessionID: string }> {
-    const res = await this.request(worker, '/session', {
+  ): Promise<{ sessionId: string }> {
+    const body: CreateSessionRequestPayload = model
+      ? { model: { ...model } }
+      : {};
+    const res = await this.requestExec(worker, '/sessions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // serve 1.18.15 拒收 model → 空 body（模型经 promptAsync 的 opts.model 指定）
-      body: JSON.stringify({}),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Worker-Token': this.workerToken,
+      },
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
+      await this.failFromResponse(worker, res, 'createSession');
+    }
+    const parsed = (await res.json()) as Partial<CreateSessionResponsePayload>;
+    const sessionId = parsed.sessionId;
+    if (!sessionId) {
       throw new WorkerUnavailableException(
         worker.id,
-        `createSession HTTP ${res.status}`,
+        `createSession 响应缺少 sessionId：${JSON.stringify(parsed)}`,
       );
     }
-    const body = (await res.json()) as { id?: string; sessionID?: string };
-    const sessionID = body.id ?? body.sessionID;
-    if (!sessionID) {
-      throw new WorkerUnavailableException(
-        worker.id,
-        `createSession 响应缺少 session id：${JSON.stringify(body)}`,
-      );
-    }
-    return { sessionID };
+    return { sessionId };
   }
 
   /**
-   * POST /session/{id}/prompt_async?directory=...：下发提示（异步，立即 204 返回）。
-   * 204 视为成功；部分版本返回 200，统一按 2xx 接受。
+   * POST /sessions/:id/prompt：向会话下发一条提示（**经 worker 执行端点**）。
+   *
+   * ⚠️ **语义**：本端点是「**持久化入队**」，**不是**「同步执行」——响应只表示
+   * 「已被收件箱收下」，**不代表 agent 已答复**。终态只能看事件或再读消息端点。
+   *
+   * - 请求体（vteam 形状）：`{prompt, model?, agent?, directory?, system?, delivery?}`；
+   * - `delivery` **显式**给出：在飞注入（`inFlight`）= `steer`（插队打断当前轮）；
+   *   常规下发同样显式 `steer`（v2 的默认投递策略本就是 steer，但**不依赖默认**——
+   *   默认值一变行为就静默漂移）；
+   * - 响应体：回带**收件条目 id**（`messageId`）与**实际生效**的投递策略。
    */
-  async promptAsync(
+  async promptSession(
     worker: WorkerEndpointRef,
-    sessionID: string,
-    opts: PromptAsyncOptions,
-  ): Promise<void> {
-    const query = new URLSearchParams();
-    if (opts.directory) {
-      query.set('directory', opts.directory);
-    }
-    const qs = query.toString();
-    const res = await this.request(
+    sessionId: string,
+    opts: SessionPromptOptions,
+  ): Promise<SessionPromptResponsePayload> {
+    const delivery: WorkerDeliveryMode = opts.inFlight
+      ? 'steer'
+      : (opts.delivery ?? 'steer');
+    const body: SessionPromptRequestPayload = {
+      prompt: opts.prompt,
+      ...(opts.model ? { model: { ...opts.model } } : {}),
+      ...(opts.agent ? { agent: opts.agent } : {}),
+      ...(opts.directory ? { directory: opts.directory } : {}),
+      ...(opts.system ? { system: opts.system } : {}),
+      delivery,
+    };
+    const res = await this.requestExec(
       worker,
-      `/session/${encodeURIComponent(sessionID)}/prompt_async${qs ? `?${qs}` : ''}`,
+      `/sessions/${encodeURIComponent(sessionId)}/prompt`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...(opts.model ? { model: { ...opts.model } } : {}),
-          ...(opts.agent ? { agent: opts.agent } : {}),
-          parts: opts.parts,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Worker-Token': this.workerToken,
+        },
+        body: JSON.stringify(body),
       },
     );
     if (!res.ok) {
-      throw new WorkerUnavailableException(
-        worker.id,
-        `prompt_async HTTP ${res.status}`,
-      );
+      await this.failFromResponse(worker, res, 'promptSession');
     }
+    const parsed = (await res.json()) as Partial<SessionPromptResponsePayload>;
+    return {
+      sessionId: parsed.sessionId ?? sessionId,
+      ...(parsed.messageId ? { messageId: parsed.messageId } : {}),
+      ...(parsed.delivery ? { delivery: parsed.delivery } : {}),
+      admitted: parsed.admitted === true,
+    };
   }
 
   /**
@@ -400,7 +536,11 @@ export class WorkerClient {
    * FR-41：GET /file?path=<绝对路径>——从 worker 工作区拉取文件内容（二进制安全）。
    * 走 exec 端点（resolveExecBaseUrl），带 X-Worker-Token 鉴权（worker 端校验）。
    * 网络错误/超时 → WorkerUnavailableException（requestToUrl 归一）；HTTP 非 2xx
-   * （401/404/413/400）→ WorkerUnavailableException（fetchFile 内判断，调用方降级）。
+   * （401/413/400）→ WorkerUnavailableException（fetchFile 内判断，调用方降级）。
+   *
+   * ⚠️ **404 单独成类**（`WorkerFileNotFoundException`）：worker 说「这个文件我没有」
+   * 与「worker 不可用」是两件事——前者是引用/产出物不存在（404），后者是节点故障
+   * （503）。混同成「worker 不可用」会让调用方与 agent 去查节点状态（缺陷 1）。
    */
   async fetchFile(
     worker: WorkerEndpointRef,
@@ -416,6 +556,12 @@ export class WorkerClient {
       DEFAULT_FILE_FETCH_TIMEOUT_MS,
     );
     if (!res.ok) {
+      if (res.status === 404) {
+        throw new WorkerFileNotFoundException(
+          worker.id,
+          `${filePath}（${await this.readErrorDetail(res)}）`,
+        );
+      }
       throw new WorkerUnavailableException(
         worker.id,
         `file fetch HTTP ${res.status}`,
@@ -423,6 +569,26 @@ export class WorkerClient {
       );
     }
     return Buffer.from(await res.arrayBuffer());
+  }
+
+  /** 非 2xx 响应体的可读细节（JSON {error} 优先；非 JSON 保留原文；读失败不抛错）。 */
+  private async readErrorDetail(res: Response): Promise<string> {
+    let raw = '';
+    try {
+      raw = await res.text();
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 读取响应体失败：取不到更细的原因，退回状态码兜底（不抛——调用方按文案处理）
+      return 'HTTP 404';
+    }
+    try {
+      const parsed = JSON.parse(raw) as { error?: string };
+      return parsed.error || raw || 'HTTP 404';
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 响应体非 JSON：解析失败不影响降级语义，保留原文作为可读细节
+      return raw || 'HTTP 404';
+    }
   }
 
   /**
@@ -583,35 +749,41 @@ export class WorkerClient {
   }
 
   /**
-   * GET /api/model：动态模型列表（实测 opencode 1.18.x 端点，返回
-   * `{ location, data: [{id, providerID, family, name, ...}] }`）。
-   * 旧版 serve 无该端点（404）→ 回退 capabilities.models（T11 之前由 worker 上报）或空数组。
+   * GET /models：模型目录（**经 worker 执行端点**；vteam 自有形状）。
+   *
+   * ⚠️ 控制面**不再**知道被驱动端的模型列表包装（v2 是 `{location,data}`、v1 是 `{data}`）
+   * ——worker 在驱动接缝处归一成 `{models: WorkerModelInfo[]}`（决策 D3）。
+   *
+   * 降级策略：网络错/worker 离线/旧版无该端点/空结果 → 回退 capabilities 声明的模型
+   * （列表类端点失败不阻断页面）。
    */
   async listModels(worker: WorkerEndpointRef): Promise<WorkerModel[]> {
     try {
-      const res = await this.request(worker, '/api/model');
+      const res = await this.requestExec(worker, '/models', {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
-      const body = (await res.json()) as {
-        data?: Array<{ id?: string; providerID?: string; name?: string }>;
-      };
-      const data = body.data ?? [];
-      if (data.length === 0) {
+      const body = (await res.json()) as Partial<WorkerModelsResponsePayload>;
+      const models = Array.isArray(body.models) ? body.models : [];
+      if (models.length === 0) {
         throw new Error('empty model data');
       }
-      // F2 MINOR：id 拼接与 worker 侧 v1-driver.ts listModels 统一（?? '' 兜底缺省字段）
-      return data.map((m) => ({
-        id: `${m.providerID ?? ''}/${m.id ?? ''}`,
-        name: m.name ?? m.id ?? '',
+      return models.map((m) => ({
+        id: m.id ?? `${m.providerID ?? ''}/${m.modelID ?? ''}`,
+        name: m.name ?? m.modelID ?? '',
         providerID: m.providerID ?? '',
-        modelID: m.id ?? '',
+        modelID: m.modelID ?? '',
+        ...(m.status !== undefined ? { status: m.status } : {}),
       }));
     } catch (err) {
-      // 网络失败/旧版无 /api/model/空数据 → 降级 capabilities 声明（T11 动态化前占位）。
-      // 可观测性：记录 worker id + resolveBaseUrl 实际解析出的 URL，并在消息中区分
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 网络失败/旧版无该端点/空数据 → 降级 capabilities 声明（T11 动态化前占位）。
+      // 可观测性：记录 worker id + 解析出的执行端点 URL，并在消息中区分
       // 「worker 不可达/请求失败」与「worker 可达但返回空模型列表」。
-      const baseUrl = this.resolveBaseUrl(worker);
+      const baseUrl = this.resolveExecBaseUrl(worker);
       const reason = this.describeError(err);
       const unreachable = reason !== 'empty model data';
       this.logger.warn(
@@ -626,12 +798,12 @@ export class WorkerClient {
   /**
    * GET /agents（worker 执行端点）：列出该目录可见的 opencode 原生 agent。
    *
-   * 用于 vteam 页面展示与切换 opencode agent。`directory` 必须与执行期 prompt_async 的
+   * 用于 vteam 页面展示与切换 opencode agent。`directory` 必须与执行期下发提示时的
    * directory 同值（serve 按 directory 发现 opencode.json 的 agent 节，per-directory 隔离）。
    *
    * 降级策略**对齐 listModels**：列表类端点失败不阻断页面——网络错/worker 离线/旧版无该
    * 端点/空结果一律返回 `[]`，由调用方以 degraded 标记提示前端。故本方法不抛
-   * WorkerUnavailableException（与 execute/abort 等写路径的失败语义相反）。
+   * WorkerUnavailableException（与 execute/中断 等写路径的失败语义相反）。
    */
   async listAgents(
     worker: WorkerEndpointRef,
@@ -651,6 +823,7 @@ export class WorkerClient {
       };
       return Array.isArray(body.agents) ? body.agents : [];
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `listAgents: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)}），降级返回 []（空≠worker 真无 agent）`,
@@ -663,7 +836,7 @@ export class WorkerClient {
    * GET /todos（worker 执行端点）：读取 opencode 会话的 todo 执行步骤。
    *
    * 用于计划 Tab 步骤区展示。sessionId 必填（opencode ses_ 会话 id）；
-   * directory 可选（与执行期 prompt_async 同值，serve 按目录定位会话上下文）。
+   * directory 可选（与执行期下发提示时同值，驱动端按目录定位会话上下文）。
    *
    * 降级策略**对齐 listAgents**：列表类端点失败不阻断页面——网络错/worker 离线/
    * 会话不存在/旧版无该端点/空结果一律返回 `[]`。
@@ -694,6 +867,7 @@ export class WorkerClient {
       };
       return Array.isArray(body.todos) ? body.todos : [];
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `listTodos: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)} sessionId=${sessionId}），降级返回 []（空≠会话真无 todo）`,
@@ -727,6 +901,7 @@ export class WorkerClient {
       const body = (await res.json()) as { files?: WorkerPlanFileInfo[] };
       return Array.isArray(body.files) ? body.files : [];
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `listPlanFiles: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)}），降级返回 []（空≠目录真无计划）`,
@@ -854,6 +1029,7 @@ export class WorkerClient {
         degraded: false,
       };
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `getOmoConfig: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)}），降级返回 degraded:true（空≠尚未配置覆盖）`,
@@ -986,75 +1162,141 @@ export class WorkerClient {
     };
   }
 
-  /** POST /session/{id}/abort：中止会话（计划 D2：abort 后无 step-finish，轮询判定需配套）。 */
-  async abort(worker: WorkerEndpointRef, sessionID: string): Promise<void> {
-    const res = await this.request(
+  /**
+   * POST /sessions/:id/abort：中断会话当前这一轮（**经 worker 执行端点**）。
+   *
+   * 幂等：对未知/已结束的会话，worker 一律回 200（`interrupted:false`）——
+   * 「没什么可中断的」不是错误。
+   */
+  async abort(
+    worker: WorkerEndpointRef,
+    sessionId: string,
+  ): Promise<SessionAbortResponsePayload> {
+    const res = await this.requestExec(
       worker,
-      `/session/${encodeURIComponent(sessionID)}/abort`,
+      `/sessions/${encodeURIComponent(sessionId)}/abort`,
       {
         method: 'POST',
+        headers: { 'X-Worker-Token': this.workerToken },
       },
     );
     if (!res.ok) {
-      throw new WorkerUnavailableException(
-        worker.id,
-        `abort HTTP ${res.status}`,
-      );
+      await this.failFromResponse(worker, res, 'abort');
     }
+    const parsed = (await this.readJsonSafe(
+      res,
+    )) as Partial<SessionAbortResponsePayload>;
+    return {
+      sessionId: parsed.sessionId ?? sessionId,
+      interrupted: parsed.interrupted === true,
+    };
   }
 
   /**
-   * GET /session/{id}/message：拉取会话消息列表（T10 轮询用，500ms 间隔直到含
-   * step-finish(reason=stop) 的 assistant 消息）。
+   * GET /sessions/:id/messages：读会话消息（**经 worker 执行端点**；可分页）。
+   *
+   * 返回 vteam 渲染模型形状的消息数组（`{info, parts}`），不是被驱动端的原始包装。
    */
   async getMessages(
     worker: WorkerEndpointRef,
-    sessionID: string,
-  ): Promise<unknown[]> {
-    const res = await this.request(
+    sessionId: string,
+    query?: SessionMessagesQuery,
+  ): Promise<SessionMessage[]> {
+    const params = new URLSearchParams();
+    if (query?.limit !== undefined) {
+      params.set('limit', String(query.limit));
+    }
+    if (query?.order) {
+      params.set('order', query.order);
+    }
+    if (query?.cursor) {
+      params.set('cursor', query.cursor);
+    }
+    const qs = params.toString();
+    const res = await this.requestExec(
       worker,
-      `/session/${encodeURIComponent(sessionID)}/message`,
+      `/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`,
+      {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      },
     );
     if (!res.ok) {
-      throw new WorkerUnavailableException(
-        worker.id,
-        `getMessages HTTP ${res.status}`,
-      );
+      await this.failFromResponse(worker, res, 'getMessages');
     }
-    const body = (await res.json()) as unknown[] | { data?: unknown[] };
-    if (Array.isArray(body)) {
-      return body;
-    }
-    return body.data ?? [];
+    const body = (await res.json()) as Partial<SessionMessagesResponsePayload>;
+    return Array.isArray(body.messages) ? body.messages : [];
   }
 
-  /** GET /：健康检查（200 → 在线；非 200/fetch 抛错 → 离线，不抛异常）。 */
+  /**
+   * worker 执行端点健康检查（GET /models：200 → 在线）。
+   *
+   * ⚠️ T18：**不再**探活 opencode serve 的 `GET /`——v2 的该端点不鉴权也回 200
+   * （body 是 web SPA 的 HTML），拿它当健康检查会**因错误的原因通过**。
+   * 改为探活 worker 自己的执行端点（带 token，顺带验证鉴权配置）。
+   */
   async isHealthy(worker: WorkerEndpointRef): Promise<boolean> {
     try {
-      const res = await this.request(worker, '/');
+      const res = await this.requestExec(worker, '/models', {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      });
       return res.ok;
     } catch {
       return false;
     }
   }
 
-  /** 统一请求入口：拼 serve baseUrl、注入 Basic Auth、超时控制、错误归类。 */
-  private async request(
+  /**
+   * 非 2xx 响应 → 归一成异常（保留 worker 侧错误码与状态码）。
+   *
+   * - 404 且 body 带 `code:'SESSION_NOT_FOUND'` → **会话失效**（调用方重建会话）；
+   * - 429 且 body 带 `code:'RATE_LIMITED'` → **上游限流**（调用方退避重试）；
+   * - 其余（含「旧版 worker 没有该端点」的 404）→ worker 不可用（503）。
+   *
+   * ⚠️ 必须看 body 的 `code` 才能区分：执行端点的「路径不存在」也是 404，
+   * 把它误判成「会话失效」会让控制面反复重建会话（重建也失败 → 无限循环）。
+   */
+  private async failFromResponse(
     worker: WorkerEndpointRef,
-    path: string,
-    init: RequestInit = {},
-    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
-  ): Promise<Response> {
-    return this.requestToUrl(
-      this.resolveBaseUrl(worker),
+    res: Response,
+    label: string,
+  ): Promise<never> {
+    const raw = await res.text();
+    let detail = raw;
+    let code: string = WORKER_CLIENT_ERRORS.WORKER_UNAVAILABLE;
+    try {
+      const parsed = JSON.parse(raw) as { error?: string; code?: string };
+      detail = parsed.error ?? raw;
+      if (res.status === 404 && parsed.code === 'SESSION_NOT_FOUND') {
+        code = WORKER_CLIENT_ERRORS.SESSION_NOT_FOUND;
+      } else if (res.status === 429 && parsed.code === 'RATE_LIMITED') {
+        code = WORKER_CLIENT_ERRORS.RATE_LIMITED;
+      }
+    } catch (err) {
+      void err; // 故意忽略：非 JSON 是已知的降级路径，解析失败原因不改变语义
+      /* 非 JSON 响应体：保留原文 */
+    }
+    throw new WorkerUnavailableException(
       worker.id,
-      path,
-      init,
-      timeoutMs,
+      `${label} HTTP ${res.status}: ${detail}`,
+      res.status,
+      code,
     );
   }
 
-  /** 执行端点请求入口（方案 A：与 serve 不同端口，独立解析执行端点基址）。 */
+  /** 读 JSON 响应体（非 JSON 时返回空对象，不抛错——调用方按缺省字段兜底）。 */
+  private async readJsonSafe(res: Response): Promise<unknown> {
+    try {
+      return await res.json();
+    } catch (err) {
+      void err; // 故意忽略：空/非 JSON 响应体是已知的降级路径
+      // 非 JSON 响应体：返回空对象，由调用方按缺省字段兜底（不抛）
+      return {};
+    }
+  }
+
+  /** 执行端点请求入口（worker 执行端点与 opencode serve 是不同端口，独立解析基址）。 */
   private async requestExec(
     worker: WorkerEndpointRef,
     path: string,
@@ -1070,7 +1312,7 @@ export class WorkerClient {
     );
   }
 
-  /** 核心请求：指定 baseUrl + 注入 Basic Auth + 超时控制 + 错误归一（503 带 workerId）。 */
+  /** 核心请求：指定 baseUrl + 超时控制 + 错误归一（503 带 workerId）。 */
   private async requestToUrl(
     baseUrl: string,
     workerId: string,
@@ -1079,10 +1321,6 @@ export class WorkerClient {
     timeoutMs: number,
   ): Promise<Response> {
     const headers = new Headers(init.headers);
-    const auth = this.buildAuthHeader();
-    if (auth) {
-      headers.set('Authorization', auth);
-    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -1092,6 +1330,7 @@ export class WorkerClient {
         signal: controller.signal,
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       throw new WorkerUnavailableException(
         workerId,
         this.describeError(err, timeoutMs),
@@ -1101,23 +1340,12 @@ export class WorkerClient {
     }
   }
 
-  /** baseUrl 解析：capabilities.baseUrl → capabilities.port → WORKER_BASE_URL 回退。 */
-  private resolveBaseUrl(worker: WorkerEndpointRef): string {
-    const caps = (worker.capabilities ?? {}) as Record<string, unknown>;
-    if (typeof caps.baseUrl === 'string' && caps.baseUrl) {
-      return caps.baseUrl;
-    }
-    if (typeof caps.port === 'number') {
-      return `http://localhost:${caps.port}`;
-    }
-    return this.baseUrlFallback;
-  }
-
   /**
-   * 执行端点基址解析（方案 A）：capabilities.execBaseUrl（完整基址，如
-   * `http://worker:4198`）优先 → 否则 serve 基址 origin + ':' + capabilities.execPort
-   * （缺省 DEFAULT_EXEC_PORT=4198）拼接。执行端点与 serve 是不同端口（worker 独立
-   * node:http 监听），不能复用 serve baseUrl 直连。
+   * 执行端点基址解析（T18：控制面只连 worker 执行端点，不再连 opencode serve）。
+   *
+   * - `capabilities.execBaseUrl`（完整基址，如 `http://worker:4198`）优先；
+   * - 否则 `capabilities.execPort` + **worker 对外公布的主机**；
+   * - 都没有 → `WORKER_BASE_URL` 回退基址的主机 + 缺省执行端口。
    */
   private resolveExecBaseUrl(worker: WorkerEndpointRef): string {
     const caps = (worker.capabilities ?? {}) as Record<string, unknown>;
@@ -1128,18 +1356,22 @@ export class WorkerClient {
       typeof caps.execPort === 'number' && caps.execPort > 0
         ? caps.execPort
         : DEFAULT_EXEC_PORT;
-    return `${this.resolveServeOrigin(worker)}:${execPort}`;
+    return `${this.resolveAdvertiseOrigin(worker)}:${execPort}`;
   }
 
-  /** serve 基址 origin（protocol://host，不含端口）：baseUrl → capabilities.port → 回退。 */
-  private resolveServeOrigin(worker: WorkerEndpointRef): string {
+  /**
+   * worker 对外公布的**主机**（protocol://host，不含端口）。
+   *
+   * 来源：`capabilities.baseUrl` 的 origin（worker 上报 `${WORKER_ADVERTISE_HOST}:${serve 端口}`，
+   * 此处**只取主机部分**——serve 端口不再被使用：控制面不与 opencode serve 通信，
+   * 决策 D3 要求它只认 worker 自己的执行端点）；缺省 → `WORKER_BASE_URL` 回退基址。
+   */
+  private resolveAdvertiseOrigin(worker: WorkerEndpointRef): string {
     const caps = (worker.capabilities ?? {}) as Record<string, unknown>;
     const raw =
       typeof caps.baseUrl === 'string' && caps.baseUrl
         ? caps.baseUrl
-        : typeof caps.port === 'number'
-          ? `http://localhost:${caps.port}`
-          : this.baseUrlFallback;
+        : this.baseUrlFallback;
     try {
       const url = new URL(raw);
       if (url.hostname) {
@@ -1151,14 +1383,6 @@ export class WorkerClient {
     const noScheme = raw.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '');
     const host = noScheme.split('/')[0].split(':')[0];
     return `http://${host}`;
-  }
-
-  /** Basic Auth 头：password 为空（默认）→ 不鉴权；否则 `Basic base64(opencode:<password>)`。 */
-  private buildAuthHeader(): string | undefined {
-    if (!this.serverPassword) {
-      return undefined;
-    }
-    return `Basic ${Buffer.from(`opencode:${this.serverPassword}`, 'utf8').toString('base64')}`;
   }
 
   /** capabilities.models 降级解析：数组 → 逐项；对象（modelId→{name}）→ 键列表。 */

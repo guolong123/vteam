@@ -13,6 +13,14 @@
 # runner is the reproducible command for the live half. Every assertion is on a DECISION VALUE
 # (allow/deny, status, error code) — never on a log line.
 #
+# ⚠️ **v2 口径（2026-10-20；已采纳决策见 07 篇 §3.2）**：本脚本证明的是**服务端闸门**
+# （`ROLE_BOUNDARIES[*].toolAllows` → `assertToolAllowed`）的裁决，与 opencode 引擎的
+# 默认取值**无关**：opencode v2 的每个 agent 内置 catch-all
+# `{action:"*",resource:"*",effect:"allow"}`（配置规则追加其后、`findLast` 求值）⇒
+# **未声明**的 action 在**引擎层放行**（v1 下落到引擎的逐 action ask/deny 默认），
+# 平台已**明确接受**该放宽（**不**补 catch-all ask、**不**加逐 action 默认表）。
+# ⇒ 本脚本的断言口径**不因此改变**：MCP 工具能否被调用始终由服务端闸门裁决。
+#
 # Run (from repo root):
 #   bash scripts/prove-authority-matrix.sh
 #

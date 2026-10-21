@@ -1,9 +1,10 @@
 /**
- * worker 独立入口（T2 最小骨架 + T3 serve 挂载 + T4 V1Driver 暴露 + T6 注册/心跳/事件通道）。
+ * worker 独立入口（T2 最小骨架 + T3 serve 挂载 + T8 驱动接缝 + T6 注册/心跳/事件通道）。
  *
  * 职责：加载配置 → 打印启动信息（workerId / serverUrl / opencode 版本探测）→
- * 启动 OpencodeServer（spawn opencode serve，T3）→ 创建 V1Driver（T4，封装 serve
- * REST API，serve 就绪后注入 baseUrl，供 T6/T10 会话执行）→ 注册（T6：X-Worker-Token，
+ * 启动 OpencodeServer（spawn opencode serve，T3）→ 创建驱动（T8：经工厂构造，
+ * T18 起**单轨**只有 v2 实现；只依赖 OpenCodeDriver 接缝；封装 serve REST API，
+ * serve 就绪后注入 baseUrl，供 T6/T10 会话执行）→ 注册（T6：X-Worker-Token，
  * 失败指数退避重试，仍失败即退出）→ 按 server 返回的 heartbeatIntervalMs 定时心跳
  * （顺带上报 serve 健康）→ SIGTERM/SIGINT 优雅退出（先停心跳 → flush 待发事件 →
  * stop serve 进程组 → exit）。
@@ -14,9 +15,8 @@
 
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import { loadConfig, WorkerConfig } from './config';
+import { loadConfig, WorkerConfig, OpencodeIsolationScope, ensureIsolationScope } from './config';
 import { EventSender } from './client/event-client';
 import {
   RegisterResponse,
@@ -24,7 +24,10 @@ import {
   sendHeartbeat,
   RegistryClientOptions,
 } from './client/registry-client';
-import { V1Driver, DriverModelInfo } from './driver/v1-driver';
+import { createOpencodeDriver, resolveOpencodeDriverMode } from './driver';
+import { unwrapV2List } from './driver/v2-driver';
+import { SystemHandoffStore } from './driver/v2-system-handoff';
+import { DriverModelInfo } from './driver/opencode-driver';
 import { GIT_TOOLS, installGitTools } from './git/git-tools';
 import { BROWSER_TOOLS, installBrowserTools, isAgentBrowserAvailable } from './browser/browser-tools';
 import {
@@ -51,14 +54,27 @@ import {
   WORKER_COMMAND_TYPES,
 } from './protocol/worker-protocol';
 import { OpencodeServer } from './runtime/opencode-server';
+import {
+  assertOpencodeVersionSupported,
+  formatOpencodeVersion,
+  normalizeOpencodeVersion,
+  parseOpencodeVersion,
+  OpencodeVersionInfo,
+} from './runtime/opencode-version';
 import { ExecServer } from './exec/exec-server';
 import { InjectReport, ResourceInjector } from './resources/injector';
 import { readOmoEnabled } from './resources/omo-enabled';
 import { seedOmoAgentModels } from './resources/omo-config';
+import { RestartCoordinator } from './restart/restart-coordinator';
 import {
-  RestartCoordinator,
-  RestartDecision,
-} from './restart/restart-coordinator';
+  ConfigReloadOutcome,
+  ConfigReloader,
+  ConfigVerification,
+  combineVerifiers,
+  verifyMcpServersVisible,
+  verifyProvidersVisible,
+  verifySkillsVisible,
+} from './reload/config-reloader';
 import { readUpdateCommandVersion, WorkerUpdater } from './update/worker-updater';
 import { resolveCodeVersion } from './code-version';
 import {
@@ -66,6 +82,7 @@ import {
   buildAuthJson,
   buildProviderSection,
   cleanupAuthJson,
+  DEFAULT_AUTH_JSON_PATH as INJECTOR_DEFAULT_AUTH_JSON_PATH,
   DEFAULT_OPENCODE_CONFIG_PATH,
   mergeProviderSection,
   ModelCredentialEntry,
@@ -81,8 +98,91 @@ const EMPTY_INJECT_REPORT: InjectReport = {
   agentPolicies: { enabled: false, names: [] },
 };
 
-/** 探测 opencode CLI 版本（T3 前仅用于启动信息展示；失败不阻断启动）。 */
-export function detectOpencodeVersion(): string {
+/**
+ * 构造资源注入器（**接线日志出口**）。
+ *
+ * ⚠️ 注入器自己的诊断（资源拉取失败、跳过原因、`/agent-policies` 中性化）**全部**走
+ * 它的 `logger`；不接线 ⇒ 这些告警一条都不会打印 ⇒ 平台只看到「注入完成：0 tools」，
+ * 分不清"平台本来就没有自定义工具"与"拉取炸了/注入被跳过"——这正是**静默失败**的典型形态。
+ * 故本工厂是注入器的**唯一**构造入口。
+ */
+export function createResourceInjector(options: {
+  serverUrl: string;
+  workerToken: string;
+  workerId: string;
+  workDir: string;
+  fetchImpl?: typeof fetch;
+}): ResourceInjector {
+  return new ResourceInjector({
+    ...options,
+    logger: {
+      info: (message: string) => console.log(message),
+      warn: (message: string) => console.warn(message),
+    },
+  });
+}
+
+/**
+ * 构造事件上送客户端（**接线日志出口**）。
+ *
+ * ⚠️ `EventSender.deliver` 的契约是「重试耗尽 ⇒ **记日志不抛**」（事件可丢，靠 server 侧
+ * 去重兜底）——不接线日志 ⇒ **事件丢失完全无声**，控制面收不到 `task.completed` /
+ * 正文增量 / 工具 part，页面只显示"还在跑"。故本工厂是 EventSender 的**唯一**构造入口。
+ */
+export function createEventSender(options: {
+  serverUrl: string;
+  workerId: string;
+  workerToken: string;
+  fetchImpl?: typeof fetch;
+  maxRetries?: number;
+  retryBaseDelayMs?: number;
+}): EventSender {
+  return new EventSender({
+    ...options,
+    logger: {
+      warn: (message: string) => console.warn(message),
+      error: (message: string) => console.error(message),
+    },
+  });
+}
+
+/**
+ * 注入报告里的「工具」口径渲染（**让 0 可解释**）。
+ *
+ * ⚠️ 控制面 `GET /tools` 返回的是**工具目录**（= 能力/权限点目录：opencode 原生工具 +
+ * MCP 服务器的工具条目 + 平台自定义工具），而 worker 注入的是**自定义工具插件**
+ * （落 `<workDir>/.opencode/plugins/<action>.ts`）——**两个数不是同一个类别**
+ * （目录里的条目数 ≠ 插件数）。这里把两个数都报出来，读者才能分清：
+ * - 「平台没有可注入的自定义工具」；
+ * - 「拉取失败」（拉取失败会抛错并中止本轮注入，日志里是「注入失败」那条）；
+ * - 「有工具定义但都不可注入」（缺执行细节 ⇒ 真实缺口，注入器另有逐条告警）。
+ */
+export function formatToolInjectionSummary(report: InjectReport): string {
+  const injected = report.tools.length;
+  const breakdown = report.toolBreakdown;
+  if (!breakdown) {
+    return `${injected} 个自定义工具插件`;
+  }
+  if (breakdown.fetched === 0) {
+    return (
+      `${injected} 个自定义工具插件（控制面工具目录 0 条：平台当前没有启用的工具定义；` +
+      '这不是拉取失败——拉取失败会中止本轮注入并打印失败原因）'
+    );
+  }
+  return (
+    `${injected} 个自定义工具插件（控制面工具目录 ${breakdown.fetched} 条：` +
+    `mcp 型 ${breakdown.mcpType} 条由 mcp 配置节承载、builtin ${breakdown.builtin} 条是 opencode 原生工具目录项，` +
+    `均不渲染为插件；缺少执行细节 ${breakdown.missingExecution} 条未渲染）`
+  );
+}
+
+/**
+ * 探测 opencode CLI 版本（T1：与 `runtime/opencode-server.ts` 共用同一个解析器，
+ * 避免两处对版本串格式的认知分叉）。
+ *
+ * 返回**原始**输出（`opencode v2.0.28` / `opencode 1.19.0` / `unknown`）。
+ */
+export function detectOpencodeVersionRaw(): string {
   try {
     const result = spawnSync('opencode', ['--version'], {
       encoding: 'utf8',
@@ -93,6 +193,22 @@ export function detectOpencodeVersion(): string {
   } catch {
     return 'unknown';
   }
+}
+
+/**
+ * 探测并解析 opencode CLI 版本（T1）。
+ *
+ * 返回规范化 semver 串（`2.0.28`）——**上报给控制面的唯一形态**：调度器按精确串相等
+ * 过滤 worker（`workers.service.ts` 的 opencodeVersion 比较），格式必须两端一致。
+ * 解析失败 → `'unknown'`（不抛错；控制面按串过滤会天然挡掉该 worker）。
+ */
+export function detectOpencodeVersion(): string {
+  return formatOpencodeVersion(parseOpencodeVersion(detectOpencodeVersionRaw()));
+}
+
+/** 探测并解析 opencode CLI 版本（T1：启动期版本闸门用）。 */
+export function detectOpencodeVersionInfo(): OpencodeVersionInfo {
+  return parseOpencodeVersion(detectOpencodeVersionRaw());
 }
 
 /** T4b 注入执行器通过 onCommands 注册的命令处理回调（处理心跳携带的下行命令）。 */
@@ -108,7 +224,7 @@ export function onCommands(handler: CommandHandler): void {
   commandHandler = handler;
 }
 
-/** T4a：命令分派——reload-config/model-credentials 打入口日志 + 透传注册回调（T4b 注入 + T4c 重启执行）。 */
+/** T4a：命令分派——reload-config/model-credentials 打入口日志 + 透传注册回调（注入 + **热重载**，不重启 serve）。 */
 export function dispatchCommands(commands: WorkerCommand[]): void {
   if (!commands || commands.length === 0) {
     return;
@@ -116,7 +232,7 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
   for (const command of commands) {
     if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
       console.log(
-        `[worker] 收到命令 reload-config（resourceVersion=${command.resourceVersion}），分派注入+重启`,
+        `[worker] 收到命令 reload-config（resourceVersion=${command.resourceVersion}），分派注入+热重载`,
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
@@ -130,7 +246,7 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
           ? `，providerConfigs=[${Object.keys(modelPayload.providerConfigs).join(', ')}]`
           : '';
       console.log(
-        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]${cfgIDs}），分派 auth.json/opencode.json 注入+重启`,
+        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]${cfgIDs}），分派 auth.json/opencode.json 注入+热重载`,
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
@@ -256,19 +372,37 @@ export interface ModelCredentialsHandlingDeps {
     existingRaw: string | null,
     section: Record<string, unknown> | undefined,
   ) => { changed: boolean; path: string };
-  requestRestart: (reason: string) => Promise<RestartDecision>;
+  /**
+   * T16b：隔离配置域（凭据与 provider 配置的落点）。
+   * 缺省 = 默认隔离域（`<HOME>/.opencode-iso`）——与 serve 的作用域一致。
+   */
+  scope?: OpencodeIsolationScope;
+  /**
+   * 让已落盘的凭据配置在 serve 里**生效**（**热重载优先**：无进程重启、无端口漂移、
+   * 无会话排空）。实现方负责：热重载 → 失败/未确认时**回退到真实重启**并记日志。
+   * 返回值 = 热重载结局（'reloaded' / 'deferred' / 'failed' / 'unverified'）。
+   */
+  applyConfigChange: (request: ConfigChangeRequest) => Promise<ConfigReloadOutcome>;
   log: (message: string) => void;
   warn: (message: string) => void;
 }
 
-/** 兜底读取路径：opencode 1.18.16 固定读 $HOME/.local/share/opencode/auth.json。 */
-export const DEFAULT_AUTH_JSON_PATH = path.join(
-  os.homedir(),
-  '.local',
-  'share',
-  'opencode',
-  'auth.json',
-);
+/**
+ * 一次「让配置生效」的请求。
+ *
+ * - `reason`：人类可读原因（进日志）。
+ * - `providerIDs`：期望在 serve 侧**可见**的 provider id（效果确认用；空 = 不确认）。
+ */
+export interface ConfigChangeRequest {
+  reason: string;
+  providerIDs?: string[];
+}
+
+/**
+ * 兜底读取路径：T16b 起凭据落在**隔离配置域**的 `<data>/opencode/auth.json`
+ * （= serve 的 `XDG_DATA_HOME` 作用域；v2.0.28 实测认 XDG_DATA_HOME，不认宿主 HOME）。
+ */
+export const DEFAULT_AUTH_JSON_PATH = INJECTOR_DEFAULT_AUTH_JSON_PATH;
 
 /**
  * F3 防循环 + C6：model-credentials 命令幂等注入（auth.json 与 opencode.json 双文件）。
@@ -277,9 +411,11 @@ export const DEFAULT_AUTH_JSON_PATH = path.join(
  *   cleanup 旧文件 → 写新。
  * - opencode.json：provider 段（C6，仅 payload 携带 providerConfigs 时）合并进
  *   现有内容，相同不写；section 为空对象 → 删除 provider key（清空）。
- * - 两文件均未变化 → 跳过写盘 + 不重启 serve（server 无条件回放场景下切断
- *   “重启 → reRegister → 回放 → 心跳 → 再重启”无限循环）
- * - 任一变化 → 写变化项 → 重启 serve 一次（凭据/配置变更/容器重启后恢复）
+ * - 两文件均未变化 → 跳过写盘 + 不做生效动作（server 无条件回放场景下切断
+ *   “生效 → 回放 → 心跳 → 再生效”无限循环）
+ * - 任一变化 → 写变化项 → 交由 `applyConfigChange` 让 serve 生效
+ *   （**热重载优先**：不重启 serve ⇒ 无端口漂移、无会话排空、无不可用窗口；
+ *    热重载失败/未确认时由该回调回退到真实重启）。
  * 返回 { changed, authJsonPath, configPath }（两个路径均供调用方记录下次对比）。
  */
 export async function handleModelCredentials(
@@ -294,10 +430,11 @@ export async function handleModelCredentials(
   authJsonPath: string;
   configPath: string;
 }> {
-  // 优先已记录注入路径，兜底默认路径（容器重启后记录为 null，但文件可能仍在
+  // 优先已记录注入路径，兜底隔离配置域的默认路径（容器重启后记录为 null，但文件可能仍在
   // 默认路径 → 靠内容对比判幂等）。
-  const authPath = injectedAuthJsonPath ?? DEFAULT_AUTH_JSON_PATH;
-  const configPath = injectedConfigPath ?? DEFAULT_OPENCODE_CONFIG_PATH;
+  const scope = deps.scope;
+  const authPath = injectedAuthJsonPath ?? scope?.authJsonFile ?? DEFAULT_AUTH_JSON_PATH;
+  const configPath = injectedConfigPath ?? scope?.configFile ?? DEFAULT_OPENCODE_CONFIG_PATH;
   const existingAuth = await deps.readContent(authPath);
   const existingConfig = await deps.readConfig(configPath);
 
@@ -306,15 +443,17 @@ export async function handleModelCredentials(
 
   // providerConfigs=undefined（旧 server 负载）→ section=undefined → merge 原样返回
   // → 不触碰 opencode.json（向后兼容）。
+  // ⚠️ T16b：providerKeys 一并传入——v2.0.28 只从 provider 段的 `settings.apiKey`
+  // 取 API key（auth.json 实测不被采用），不带 key 就会"注入成功但模型无凭据"。
   const section =
     providerConfigs === undefined
       ? undefined
-      : buildProviderSection(providerConfigs);
+      : buildProviderSection(providerConfigs, providerKeys);
   const newConfig = mergeProviderSection(existingConfig, section);
   const configChanged = newConfig !== existingConfig;
 
   if (!authChanged && !configChanged) {
-    deps.log('[worker] model-credentials：凭据未变化，跳过注入与重启');
+    deps.log('[worker] model-credentials：凭据未变化，跳过注入与生效动作');
     return {
       changed: false,
       configChanged: false,
@@ -341,11 +480,13 @@ export async function handleModelCredentials(
       ).join(', ')}]，baseUrl 明细见 ${configPath}）`,
     );
   }
-  // 任一文件变化 → 重启 serve 一次生效（auth 与 config 同时变也只重启一次）。
-  const decision = await deps.requestRestart('model-credentials（凭据注入）');
-  if (decision === 'pending') {
-    deps.log('[worker] model-credentials：存在活跃会话，重启挂起（会话归零后自动执行）');
-  }
+  // 文件已落盘 ⇒ 让 serve 生效：**热重载**（不重启进程）。热重载失败或效果未确认时，
+  // 由 applyConfigChange 的实现回退到真实重启（并记日志）——静默失败会让 worker
+  // 声称一份 serve 从未加载的配置。
+  await deps.applyConfigChange({
+    reason: 'model-credentials（凭据注入）',
+    providerIDs: Object.keys(section ?? {}),
+  });
   return { changed: true, configChanged, authJsonPath: authPath, configPath };
 }
 
@@ -402,6 +543,113 @@ export async function handleGitCredentials(
   return { changed: true, path: result.path };
 }
 
+/** reload-config 命令的依赖面（单测可整体 mock）。 */
+export interface ReloadConfigCommandDeps {
+  /** 资源重注入（拉控制面资源 → 落盘）。 */
+  injectAll: () => Promise<InjectReport>;
+  /** 注入报告回写（更新上报用的 skills/tools 清单）。 */
+  onInjectReport: (report: InjectReport) => void;
+  /** 让配置在 serve 里生效（热重载优先；失败/未确认时回退真实重启）。 */
+  applyConfigChange: (
+    request: ConfigChangeRequest,
+    extraVerify?: () => Promise<ConfigVerification>,
+  ) => Promise<ConfigReloadOutcome>;
+  /** serve 端点（效果确认读 /api/mcp 与 /api/skill 用）。 */
+  serveEndpoint: () => { baseUrl: string; password: string | null };
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+/**
+ * reload-config 命令：重拉资源 → 落盘 → **热重载**（**不重启 serve**）。
+ *
+ * ⚠️ 这条路径**不再**请求重启：重启会带来端口漂移（要重新注册）、活跃会话排空
+ * （无上界延迟）、serve 不可用窗口——而 v2 的文件监听 + `location/reload` 两条路
+ * 都能让新配置生效，且**不动 serve 进程**。
+ *
+ * 效果确认：注入的 MCP server 与 skill 必须在 serve 侧可见；确认失败由
+ * `applyConfigChange` 回退到真实重启（静默失败 = worker 声称的配置 serve 从未加载）。
+ */
+export async function handleReloadConfigCommand(
+  command: WorkerCommand,
+  deps: ReloadConfigCommandDeps,
+): Promise<void> {
+  try {
+    const report = await deps.injectAll();
+    deps.onInjectReport(report);
+    deps.log(
+      `[worker] reload-config：资源重注入完成（${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers）`,
+    );
+    await deps.applyConfigChange(
+      { reason: `reload-config（resourceVersion=${command.resourceVersion}）` },
+      async () => {
+        const mcp = await verifyMcpServersVisible(deps.serveEndpoint(), report.mcpServers);
+        if (!mcp.ok) {
+          return mcp;
+        }
+        return verifySkillsVisible(deps.serveEndpoint(), report.skills);
+      },
+    );
+  } catch (err) {
+    deps.warn(`[worker] reload-config 资源重注入失败: ${(err as Error).message}`);
+  }
+}
+
+/** model-credentials 命令的依赖面（单测可整体 mock）。 */
+export interface ModelCredentialsCommandDeps {
+  /** 注入凭据（auth.json + opencode.json，幂等）；返回落盘路径与变更标记。 */
+  injectCredentials: (
+    providerKeys: ModelCredentialEntry[],
+    providerConfigs: Record<string, ModelProviderConfigEntry> | undefined,
+    injectedAuthJsonPath: string | null,
+    injectedConfigPath: string | null,
+  ) => Promise<{
+    authJsonPath: string;
+    configPath: string;
+    configChanged: boolean;
+  }>;
+  /** 记录本次注入的落盘路径（下次写入前 cleanup 明文凭据）。 */
+  onInjectedPaths: (authJsonPath: string, configPath: string) => void;
+  /** provider 配置段实际变更（下次**真重启**后的 reRegister 需全量重探）。 */
+  onProviderConfigChanged: () => void;
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+/**
+ * model-credentials 命令：注入凭据文件 → **热重载**（**不重启 serve**）。
+ *
+ * ⚠️ 这条路径**不再**请求重启（原来每次加凭据都重启整个 serve：端口可能漂移、
+ * 活跃会话必须先排空、serve 有不可用窗口）。生效动作由 `injectCredentials` 内部的
+ * `applyConfigChange` 承担（热重载 → 失败/未确认时回退真重启）。
+ */
+export async function handleModelCredentialsCommand(
+  command: WorkerCommand,
+  injectedAuthJsonPath: string | null,
+  injectedConfigPath: string | null,
+  deps: ModelCredentialsCommandDeps,
+): Promise<void> {
+  const payload = command.payload as ModelCredentialsPayload | undefined;
+  if (!payload?.providerKeys) {
+    deps.warn('[worker] model-credentials 命令缺少 providerKeys 负载，跳过注入');
+    return;
+  }
+  try {
+    const result = await deps.injectCredentials(
+      payload.providerKeys,
+      payload.providerConfigs,
+      injectedAuthJsonPath,
+      injectedConfigPath,
+    );
+    deps.onInjectedPaths(result.authJsonPath, result.configPath);
+    if (result.configChanged) {
+      deps.onProviderConfigChanged();
+    }
+  } catch (err) {
+    deps.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
+  }
+}
+
 function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   let browserInfo = '未安装';
   try {
@@ -411,14 +659,24 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   } catch {
     browserInfo = '未安装';
   }
+  // v2 恒开鉴权：密码为空不再是"不设鉴权"，而是"serve 启动时 fail-fast"（T3）
+  // ⚠️ 这里读的是**配置**的密码（不是 serve 的 effectiveServerPassword）：本函数在 serve
+  // 启动**之前**跑（打印的是配置态），v2 自动生成的密码此刻还不存在——换成
+  // effectiveServerPassword 会把"开了逃生开关"误报成"未设密码 ⇒ fail-fast"。
+  const serveAuth = config.serverPassword
+    ? 'Basic Auth（已设 OPENCODE_SERVER_PASSWORD）'
+    : config.allowGeneratedPassword
+      ? 'Basic Auth（v2 恒开鉴权：未设密码，将从 serve stdout 捕获自动生成密码）'
+      : '未设（v2 恒开鉴权：serve 启动时 fail-fast，请设置 OPENCODE_SERVER_PASSWORD）';
   console.log(`[worker] 启动中:
   workerId            = ${config.workerId}
   workerName          = ${config.workerName}
   serverUrl           = ${config.serverUrl}
   standalone          = ${config.standalone ? 'true（跳过注册/心跳/资源拉取）' : 'false'}
   opencodeServePort   = ${config.opencodeServePort === 0 ? '0（OS 随机空闲端口）' : config.opencodeServePort}
-  opencodeServeAuth   = ${config.serverPassword ? 'Basic Auth（已设 OPENCODE_SERVER_PASSWORD）' : '无（serve 不设鉴权）'}
+  opencodeServeAuth   = ${serveAuth}
   opencodeServeHost   = ${config.opencodeServeHostname}
+  opencodeIsolation   = ${config.isolationScope.root}（隔离配置域：宿主机全局配置/插件/AGENTS.md 不在作用域内）
   workerAdvertiseHost = ${config.workerAdvertiseHost}
   heartbeatIntervalMs = ${config.heartbeatIntervalMs}
   workerMaxInstances  = ${config.workerMaxInstances}
@@ -434,30 +692,63 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
  * - 探测成功（baseUrl 非 127.0.0.1）→ console.log 输出「已自动探测上报地址」引导提示，
  *   提示多网卡/VPN 场景可显式覆盖。
  * - 探测失败回退 http://127.0.0.1（仅本机可访问）→ console.warn 输出可达地址告警，
- *   worker 与 server 不在同一主机时 server 连不上 → worker 显示不可用。
+ *   控制面与 worker 不在同一主机时控制面连不上 → worker 显示不可用。
  * 已显式设置（即使值恰好为 http://127.0.0.1 的本地开发场景）不提示，避免误报。
  * 独立导出便于单测。
+ *
+ * ⚠️ **v2：控制面只连 worker 的执行端点，从不直连 opencode serve**
+ * （`capabilities.baseUrl` 只被取**主机**部分——见 server 侧 `resolveAdvertiseOrigin`）。
+ * ⇒ 提示必须指向「控制面能到达 `<主机>:<执行端点端口>`」（鉴权 X-Worker-Token），
+ * **不能**再让运维为控制面把 serve 改成监听非回环（serve 只在 worker 进程内部使用）。
  */
 export function warnLoopbackAdvertiseHost(config: WorkerConfig): void {
   if (config.workerAdvertiseHostExplicit) {
     return;
   }
+  const advertiseHost = config.workerAdvertiseHost.replace(/\/+$/, '');
   if (config.workerAdvertiseHost === 'http://127.0.0.1') {
     // 自动探测失败回退：保留原 127.0.0.1 可达性告警
     console.warn(
       `[worker] ⚠️  baseUrl=127.0.0.1 仅本机可访问（未设置 WORKER_ADVERTISE_HOST，自动探测本机 IP 失败）\n` +
-        `  若 worker 与 server 不在同一主机，server 将无法连接本 worker → worker 显示不可用。\n` +
-        `  请设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>（如 http://<worker 局域网 IP>），\n` +
-        `  并设置 OPENCODE_SERVE_HOSTNAME=0.0.0.0（serve 监听非回环，server 才能连上）。`,
+        `  若控制面与 worker 不在同一主机，控制面将无法连接本 worker → worker 显示不可用。\n` +
+        `  请设置 WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>（如 http://<worker 局域网 IP>）——\n` +
+        `  控制面据此访问 ${advertiseHost}:${config.workerExecPort}（执行端点，鉴权走 X-Worker-Token；端口随 capabilities.execPort 上报）。\n` +
+        `  无需为控制面把 OPENCODE_SERVE_HOSTNAME 改成 0.0.0.0：v2 下控制面只连执行端点，opencode serve 仅在 worker 进程内部使用（留在回环更安全）。`,
     );
     return;
   }
   // 自动探测成功：输出引导提示（探测到的地址即上报基址，端口随 serve 启动确定后拼接）
   console.log(
     `[worker] ✓ 已自动探测上报地址 ${config.workerAdvertiseHost}（未设置 WORKER_ADVERTISE_HOST）\n` +
-      `  最终上报 baseUrl = ${config.workerAdvertiseHost}:<serve 端口>（端口随 serve 启动确定）。\n` +
-      `  若 server 无法访问该地址（多网卡/VPN 等），请显式设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>。`,
+      `  最终上报 baseUrl = ${advertiseHost}:<serve 端口>（端口随 serve 启动确定；控制面只取其中的主机部分）。\n` +
+      `  控制面据此访问 ${advertiseHost}:${config.workerExecPort}（执行端点，鉴权走 X-Worker-Token）。\n` +
+      `  若控制面无法访问该地址（多网卡/VPN 等），请显式设置 WORKER_ADVERTISE_HOST=<控制面可达的 worker 地址>。`,
   );
+}
+
+/**
+ * 独立模式（WORKER_STANDALONE=true）补写项目配置的 `plugins` 段（T18）。
+ *
+ * 为什么必须补：独立模式**跳过控制面资源注入**（无 server 可达）⇒ 注入器不会写
+ * `<workDir>/opencode.json` 的 `plugins` 段 ⇒ v2 内置插件 `opencode.browser` 不被禁用 ⇒
+ * 它占着 `browser` 这个工具名，把平台自己的 browser 工具**静默遮蔽**（工具在注册表里，
+ * 但模型的 `tools[]` 里没有它，**全程无报错**——最典型的静默失败）。
+ *
+ * 做法：复用注入器的**本地写**入口（`applyMcpServers([])`）——它与控制面注入走同一条
+ * read-modify-write 路径（同写者），并保证 `plugins` 段带上 `-opencode.browser`。
+ * 失败只告警、不阻断启动（配置问题不该让 worker 起不来）。
+ */
+export function ensureStandaloneProjectConfig(injector: ResourceInjector): void {
+  try {
+    injector.applyMcpServers([]);
+    console.log(
+      '[worker] 独立模式：项目配置 plugins 段已补写（已禁用内置 opencode.browser，避免遮蔽平台 browser 工具）',
+    );
+  } catch (err) {
+    console.warn(
+      `[worker] 独立模式：项目配置补写失败（不阻断启动，browser 工具可能被内置插件遮蔽）: ${(err as Error).message}`,
+    );
+  }
 }
 
 /** C2 模型探测重试选项（B2：空列表重试参数，options.delay 供单测注入跳过真实等待）。 */
@@ -552,61 +843,108 @@ export async function resolveModels(
   return undefined;
 }
 
-/** `opencode models` CLI 探测超时 ms（184MB Bun 二进制冷启动 ~1-2s，15s 兜底防悬挂）。 */
-export const EXECUTABLE_MODELS_PROBE_TIMEOUT_MS = 15_000;
+/**
+ * 可执行模型探测的**数据源**：worker 自己那个 serve 的模型目录响应体（原始 JSON）。
+ *
+ * ⚠️ **v2 下 CLI 不是真值源（v2 事实，本轮修复的根因）**：v2 的 CLI 子命令
+ * **不连 worker 拉起的那个 serve**——`opencode models` / `opencode mcp list` 绑的是
+ * **共享后台服务**（默认端口 **49374**），读的是**它自己那套配置作用域**。
+ * 实测：worker 启动时 `opencode models` 退出码 1（`ServiceUnavailableError: Location plugins
+ * did not finish activating`）⇒ 注册**降级不带 executableModels**；`opencode models --standalone`
+ * 能跑但读的是 CLI 自己的作用域（**不含 vteam 自配的模型**）。
+ * ⇒ 「用 CLI 观测 serve」在 v2 + 隔离方案下**原理上就是错的**（观测的是另一个作用域
+ * ⇒ 静默的错误答案）。**真值源 = worker 自己那个 serve 的 `GET /api/model`**（serve 作用域，
+ * 与 agent 实际执行时用的是同一份配置）。
+ */
+export type ExecutableModelsProbe = () => Promise<unknown> | unknown;
 
 /**
- * 可执行模型探测：运行 `opencode models`（裸命令 = 全 provider 鉴权过滤后的可用集，
- * 即 Provider.list() 真值，与 agent 实际执行时可用模型一致）并解析为 id 列表。
- * models-sync 真值源：serve /api/model 是启动时加载的注册表快照（免费轮换后变 stale），
- * CLI 进程每次 fresh 加载当前 offering，故以此为准。
- * - 探测失败（二进制缺失/超时/非零退出）→ undefined（不携带，server 回退 /api/model 拉取）
- * - 输出为空/无合法行 → undefined（不断言“零可用”，避免误导 sync 剪枝全部）
- * - 非法行（无 `/` 分隔）丢弃；去重保序
- * probe 可注入便于单测；默认 spawnSync 同步执行（注册路径本就同步组装）。
+ * serve 模型目录项（v2 `Model.Info` 的子集；driver 的 `listModels()` 也产出同形字段）。
  */
-export function resolveExecutableModels(
-  probe: () => string | undefined = defaultExecutableModelsProbe,
-): string[] | undefined {
-  let stdout: string | undefined;
+interface ServeModelInfo {
+  id?: string;
+  modelID?: string;
+  providerID?: string;
+  enabled?: boolean;
+}
+
+/**
+ * 解析 serve 的模型目录响应 → vteam 口径的 `providerID/modelID` id 列表。
+ *
+ * - **响应形态两种都认**：`{location, data:[...]}`（**2.0.28 与 2.0.32 都是这个形态**——
+ *   2.0.32 见**发布的 `@opencode/client@2.0.32`** `ModelListOutput = { location, data }`）
+ *   与**裸数组**（**防御性容忍**：针对假想的未来形态，**并非已知的版本差异**）——复用驱动的
+ *   `unwrapV2List`（解包逻辑的单一收敛点，不另写一份）。
+ * - **id 口径**：`providerID/modelID`（控制面的过滤按这个格式判定）。
+ * - **非法行丢弃**：无 provider 段 / 无 model 段 / 含空白 → 不进上报
+ *   （与控制面 `models.service.ts` 的 `indexOf('/') > 0 && !/\s/` 口径一致）。
+ * - **`enabled:false` 不算可执行**：v2 独有的"该模型不可用"标记（等价 v1「只列有凭据的
+ *   provider」的口径）——与 driver 的 `listModels()` 过滤规则一致。
+ * - **去重保序**；结果为空 → `undefined`（**不断言"零可用"**，避免误导 sync 剪枝全部）。
+ */
+export function parseExecutableModels(payload: unknown): string[] | undefined {
+  const models = unwrapV2List<ServeModelInfo>(payload);
+  const ids: string[] = [];
+  for (const model of models) {
+    if (model === null || typeof model !== 'object') {
+      continue;
+    }
+    if (model.enabled === false) {
+      continue;
+    }
+    const providerID = typeof model.providerID === 'string' ? model.providerID : '';
+    const modelID =
+      typeof model.modelID === 'string' && model.modelID !== ''
+        ? model.modelID
+        : typeof model.id === 'string'
+          ? model.id
+          : '';
+    if (providerID === '' || modelID === '') {
+      continue;
+    }
+    const id = `${providerID}/${modelID}`;
+    if (id.indexOf('/') > 0 && !/\s/.test(id)) {
+      ids.push(id);
+    }
+  }
+  const unique = [...new Set(ids)];
+  return unique.length > 0 ? unique : undefined;
+}
+
+/**
+ * 可执行模型探测（**serve 作用域**）：读 worker 自己那个 serve 的模型目录，
+ * 解析为 vteam 口径的 id 列表（`providerID/modelID`）。
+ *
+ * ⚠️ **数据源不是 opencode CLI**：v2 的 CLI 绑共享后台服务（49374），**另一个配置作用域**
+ * ⇒ 它的答案既不含 vteam 自配模型，也与 serve 的真实状态不一致。详见
+ * `ExecutableModelsProbe` 的注释。
+ *
+ * - 探测失败（serve 未就绪 / 端点不支持 / 网络错）→ `undefined`
+ *   （**不携带** executableModels，server 回退 `/api/model` 拉取；不阻断注册）
+ * - 响应为空/无合法行 → `undefined`（不断言"零可用"）
+ * - 非法行丢弃；去重保序
+ * - probe **可注入**（单测注入假数据源）；生产路径必须注入 serve 作用域的探测函数。
+ */
+export async function resolveExecutableModels(
+  probe: ExecutableModelsProbe,
+): Promise<string[] | undefined> {
+  let payload: unknown;
   try {
-    stdout = probe();
+    payload = await probe();
   } catch (err) {
     console.warn(`[worker] 可执行模型探测失败（注册降级不带 executableModels）: ${(err as Error).message}`);
     return undefined;
   }
-  if (!stdout) {
-    return undefined;
-  }
-  const ids = [...new Set(
-    stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.indexOf('/') > 0 && !/\s/.test(line)),
-  )];
-  return ids.length > 0 ? ids : undefined;
-}
-
-function defaultExecutableModelsProbe(): string | undefined {
-  const result = spawnSync('opencode', ['models'], {
-    encoding: 'utf8',
-    timeout: EXECUTABLE_MODELS_PROBE_TIMEOUT_MS,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`opencode models 退出码 ${result.status}: ${(result.stderr ?? '').trim()}`);
-  }
-  return result.stdout ?? undefined;
+  return parseExecutableModels(payload);
 }
 
 /**
  * T6：注册能力声明（T10 细化并发上限/技能清单；当前单实例 + 已注入的 git 工具族）。
- * F2 C2：serve 实际监听端口必须随注册上报——随机端口（OPENCODE_SERVE_PORT=0）场景下
- * server 侧 WorkerClient.resolveBaseUrl 读 capabilities.port，缺失会回退死端口 4199。
+ * F2 C2：serve 实际监听端口随注册上报——随机端口（OPENCODE_SERVE_PORT=0）场景。
+ * ⚠️ v2：控制面**不**用它拨号（只连执行端点），上报它只为展示与排障。
  * D2：另上报 capabilities.baseUrl = ${advertiseHost}:${port}（容器内 compose 设
- * WORKER_ADVERTISE_HOST=http://worker，server resolveBaseUrl 优先读 baseUrl 直连）。
+ * WORKER_ADVERTISE_HOST=http://worker；⚠️ v2 起控制面**只取 baseUrl 的主机部分**
+ * （`resolveAdvertiseOrigin`：serve 端口不再被使用——控制面只连 worker 执行端点））。
  * T9：接入注入器清单——skills 上报注入器实际注入的 skill 名，tools 合并内置 git 工具族
  * 与注入的自定义工具（去重）。
  * C2：models 为 serve 真实模型 id 列表（resolveModels 结果）；undefined（探测失败）不携带。
@@ -652,7 +990,8 @@ export async function buildCapabilities(
 
 /**
  * T4c/T6：组装注册选项。T4c 重启后 serve 端口可能变化（随机端口），reRegister 用当前
- * serveServer.port 重新组装 → capabilities.baseUrl/port 随心跳后注册更新，server 才能连上新端口。
+ * serveServer.port 重新组装 → capabilities.baseUrl/port 随心跳后注册更新（控制面据此刷新
+ * 执行端点的主机；serve 端口本身不再被控制面使用）。
  * T9：injected 为最近一次注入报告（启动注入 + reload-config 重注入后更新），
  * 注册/reRegister 携带真实 skills/tools 清单，保证 worker 详情页数据非陈旧。
  * C2：models 透传 buildCapabilities（resolveModels 结果，失败 undefined 不带）；
@@ -685,19 +1024,67 @@ export async function buildRegisterOptions(
     workerToken: config.workerToken,
     workerId: config.workerId,
     workerName: config.workerName,
-    opencodeVersion: serveVersion !== 'unknown' ? serveVersion : cliVersion,
+    // T1：上报值必须是**规范化 semver 串**（`2.0.28`）——控制面调度器按精确串相等过滤
+    // worker（`workers.service.ts` 的 opencodeVersion 比较），两端格式必须一致，
+    // 不能上报 `opencode v2.0.28` 全文。无法解析的值原样透传（'unknown' 等既有语义）。
+    opencodeVersion:
+      serveVersion !== 'unknown' ? normalizeOpencodeVersion(serveVersion) : normalizeOpencodeVersion(cliVersion),
     capabilities,
     ...(config.defaultModelId ? { defaultModelId: config.defaultModelId } : {}),
     ...(config.mcpUrl ? { mcpUrl: config.mcpUrl } : {}),
   };
 }
 
+/**
+ * serve 鉴权口令的**唯一来源**（B1）。
+ *
+ * 为什么取 serve 的 `effectiveServerPassword` 而不是 env 里那份：v2 未配置
+ * OPENCODE_SERVER_PASSWORD 时 opencode 会**自动生成**随机密码并打到 stdout——worker
+ * 捕获它之后 env 里依然是空的。谁按 env 那份构造鉴权，谁的每个请求都是 401，而 worker
+ * 仍注册成功、看起来健康（最坏的静默失败形态）。
+ *
+ * 为什么是**函数**而不是字符串：自动生成的密码要等 serve 起来、捕获到之后才知道 ⇒
+ * 只能在**每次请求时**现取（与 `serveEndpoint()` / `mcpStatusProbe` 同一套做法）。
+ */
+export function buildServePasswordProvider(
+  serveServer: Pick<OpencodeServer, 'effectiveServerPassword'>,
+): () => string | null {
+  return () => serveServer.effectiveServerPassword;
+}
+
+/**
+ * git 凭证落盘（**插件可见的那份 + worker 自己 HOME 那份**）。
+ *
+ * 为什么必须落到隔离配置域的 HOME：git 工具族是 opencode **插件**，跑在 serve 子进程里，
+ * 而 v2 隔离配置域把子进程的 HOME 重定向到隔离域 ⇒ 插件里的 `os.homedir()` 解析到的是
+ * 隔离域，不是 worker 自己的 HOME ⇒ 只写 worker HOME ⇒ 平台下发的凭证插件永远读不到
+ * （私有仓库 clone/push 失败）。
+ */
+export function writeGitCredsToServeScope(
+  entries: GitCredentialEntry[],
+  isolationScope: OpencodeIsolationScope,
+): GitCredsResult {
+  return writeGitCredsFile(entries, isolationScope.home);
+}
+
 export function main(env: NodeJS.ProcessEnv = process.env): void {
   const config = loadConfig(env);
-  const opencodeVersion = detectOpencodeVersion();
+  const versionInfo = detectOpencodeVersionInfo();
+  // T18 单轨：驱动实现只有 v2（v1 驱动已删除）——`resolveOpencodeDriverMode(false)` 会
+  // **响亮抛错**（`OPENCODE_V2_ENABLED=false` 不再是「退回 v1」的代码级开关）。
+  const driverMode = resolveOpencodeDriverMode(config.opencodeV2Enabled);
+  // T1 版本闸门（T18 起单模）：要求主版本 ≥ 2（镜像没换 CLI 规格，继续跑只会拿到 v1 契约）；
+  // 认不出版本 → 只告警不判死（计划 D2 风险对策：由控制面按版本串精确过滤兜底）。
+  assertOpencodeVersionSupported(versionInfo, {
+    logger: { warn: (message) => console.warn(message) },
+  });
+  const opencodeVersion = formatOpencodeVersion(versionInfo);
 
   printStartup(config, opencodeVersion);
   warnLoopbackAdvertiseHost(config);
+
+  // T16b：先把隔离配置域的目录建好（serve 的 HOME / XDG_* 全部指向它）。
+  ensureIsolationScope(config.isolationScope);
 
   // K3 修复（T6）：serve 启动前把 git 工具族注入工作目录（<workDir>/.opencode/tools/git.ts，
   // opencode 启动时扫描该目录自动注册；注入失败不阻断启动，工具缺失由后续执行时报错暴露）。
@@ -725,28 +1112,61 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   const serveServer = new OpencodeServer({
     port: config.opencodeServePort,
     serverPassword: config.serverPassword,
+    // T3 逃生开关：v2 恒开鉴权，密码为空时默认 fail-fast；显式开启后改为从 serve stdout
+    // 捕获 opencode 自动生成的密码（明文不落日志）。
+    allowGeneratedPassword: config.allowGeneratedPassword,
     cwd: config.workDir,
-    // OmO 开关：用户关掉后 serve 以 --pure 启动（不加载插件）。每次 spawn 时读取，
+    // T16b：隔离配置域——serve 子进程的 HOME/XDG_* 全部指向它，宿主机的全局配置、
+    // 全局插件、全局 AGENTS.md 不在作用域内（v2 没有 --pure 的等价物，T6 实测）。
+    isolationScope: config.isolationScope,
+    // OmO 开关：⚠️ v2 已无 --pure flag → 该开关不再影响启动参数，仅用于告警
+    // （插件抑制由 T16b 的隔离配置域承接）。每次 spawn 时读取，
     // 故开关变更后只要重启 serve 即生效（配置页保存时会触发重启）。
     omoEnabled: () => readOmoEnabled(config.workDir),
   });
 
-  // T4：V1Driver（封装 serve REST API）；serve 随机端口启动成功后在 .then 注入 baseUrl。
-  // 会话执行链路（createSession 驱动 → 事件上送）待 T10 回流接线；实例计数挂钩点见
-  // v1-driver.ts createSession 注释（F2 M4）。
-  const driver = new V1Driver({
-    serverPassword: config.serverPassword,
+  // T8：驱动经工厂构造（业务层只依赖 OpenCodeDriver 接缝；T18 起只有 v2 实现）。
+  // serve 随机端口启动成功后在 .then 注入 baseUrl。
+  // 会话执行链路（createSession 驱动 → 事件上送）待 T10 回流接线；实例计数由
+  // exec-server 的 trackInstanceStart/End 统一驱动（createSession 自身不计数）。
+  // D6 (f)：逐消息 system blob 的**插件交接**通道——blob 经交接文件进**模型请求的
+  // system 段**（插件不可用时驱动自动退回文本前缀兜底，见 v2-driver 的 routeSystemBlob）。
+  const systemHandoff = new SystemHandoffStore(config.workDir, {
+    logger: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+  });
+  const driver = createOpencodeDriver({
+    mode: driverMode,
+    // B1：口令取 serve 的**实际**鉴权口令（配置密码或 v2 自动生成的密码），且**每次请求
+    // 时现取**——v2 自动生成的密码要等 serve 起来、从 stdout 捕获后才知道；把它固化在
+    // 构造那一刻 = 无口令 ⇒ 驱动每个请求都 401，而 worker 仍注册成功、看起来健康。
+    // 绝不从环境变量另读一份（会与 serve 的真实鉴权漂移 ⇒ 全线 401）——与
+    // serveEndpoint() / mcpStatusProbe 同一套做法。
+    serverPassword: serveServer.effectiveServerPassword ?? undefined,
+    serverPasswordProvider: buildServePasswordProvider(serveServer),
+    systemHandoff,
   });
 
   // T4b：资源注入执行器——serve 启动前拉取控制面 skills/tools/mcp-servers 注入
   // <workDir>（.opencode/skills/ + .opencode/tools/ + opencode.json mcp 节），
   // 心跳命令 reload-config 回调复用同一注入器重拉（T4c 重启后生效）。
-  const injector = new ResourceInjector({
+  const injector = createResourceInjector({
     serverUrl: config.serverUrl,
     workerToken: config.workerToken,
     workerId: config.workerId,
     workDir: config.workDir,
   });
+
+  // D6 (f)：逐消息 system blob 的**插件交接**产物（`<workDir>/.opencode/plugins/`）。
+  // ⚠️ 必须在 serve 启动**之前**落盘（插件发现是按 location 惰性的，但产物要先在位）。
+  // 注入失败不阻断启动：驱动会自动退回文本前缀兜底（永远可用的下限）。
+  try {
+    const handoffPluginPath = injector.applySystemHandoffPlugin();
+    console.log(`[worker] system blob 交接插件已注入: ${handoffPluginPath}`);
+  } catch (err) {
+    console.warn(
+      `[worker] system blob 交接插件注入失败（退回文本前缀兜底）: ${(err as Error).message}`,
+    );
+  }
 
   // T6/T4c：注册状态（初始注册成功/重启后重注册共享更新；心跳定时器读取 workerId 与间隔）。
   let registeredWorkerId = '';
@@ -808,13 +1228,17 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     const models = reuseModels
       ? undefined
       : await resolveModels(driver, { stability: 2 });
-    const executableModels = resolveExecutableModels();
+    // models-truth：可执行模型探测 = **worker 自己那个 serve** 的模型目录
+    // （`GET /api/model`，serve 作用域；driver 的 listModels() 就是它）。
+    // ⚠️ v2 下**不能**用 `opencode models` CLI 探测——CLI 绑共享后台服务（49374），
+    // 是**另一个配置作用域**（实测退出码 1 ⇒ 注册降级不带 executableModels）。
+    const executableModels = await resolveExecutableModels(() => driver.listModels());
     const result = await registerWorkerWithRetry(
       {
         ...(await buildRegisterOptions(
           config,
           serveServer.port,
-          serveServer.version,
+          serveServer.versionSemver,
           opencodeVersion,
           lastInjectReport,
           models,
@@ -848,7 +1272,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         const report = await injector.injectAll();
         lastInjectReport = report;
         console.log(
-          `[worker] 注册后全量重注入完成: ${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers`,
+          `[worker] 注册后全量重注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers`,
         );
       } catch (err) {
         console.warn(`[worker] 注册后重注入失败: ${(err as Error).message}`);
@@ -860,7 +1284,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   };
 
   // T4c：重启后重新注册——serve 随机端口重启后可能变化，用当前 port 重新组装注册选项；
-  // 失败不退出（serve 已在新端口运行，server 连旧端口报 degraded，再次 reload-config 可修复）。
+  // 失败不退出（serve 已在新端口运行；控制面只连执行端点，端口不随 serve 变化 ⇒ 仍可达，
+  // 再次 reload-config 可把新的能力清单补注册上去）。
   const reRegister = async (): Promise<void> => {
     // 重注册快路径：模型目录没变，跳过稳定性探测（省 ~9s）——但上次注册降级
     // （未上报 models）或 C6 配置刚变更（opencode provider 段可能变了模型集）时
@@ -870,7 +1295,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     const result = await registerCurrent(!needsFullProbe);
     if (result === null) {
       console.warn(
-        '[worker] 重启后重新注册失败：serve 已在新端口运行，server 可能连不上（可再次触发 reload-config 修复）',
+        '[worker] 重启后重新注册失败：serve 已在新端口运行（控制面只连执行端点，端口不随 serve 变化 ⇒ 仍可达）；' +
+          '但控制面侧的能力清单（模型目录/serve 端口）暂时是旧的，可再次触发 reload-config 修复',
       );
       return;
     }
@@ -879,8 +1305,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     console.log(`[worker] 重启后重新注册成功: workerId=${result.workerId}`);
   };
 
-  // T4c：重启协调器——无活跃会话才重启（单 serve 实例，重启会中断会话）；
-  // 有活跃会话则挂起，等会话归零后自动执行。
+  // T4c：重启协调器——**只用于真正需要换进程的场景**（运维重启 / 二进制升级 /
+  // 崩溃恢复 / 热重载兜底）。配置类变更（skills/tools/MCP/agent 策略/模型凭据）
+  // 一律走下面的热重载路径（不重启 serve ⇒ 无端口漂移、无会话排空、无不可用窗口）。
   const restartCoordinator = new RestartCoordinator({
     activeSessionCount: () => getLoad().instances,
     // B1 配套：serve 重启（随机端口可能变化）后须同步 driver.baseUrl——否则
@@ -888,6 +1315,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     restart: async () => {
       const baseUrl = await serveServer.restart();
       driver.baseUrl = baseUrl;
+      // serve 重启 ⇒ 插件要重新加载 ⇒ 就绪标记作废（否则驱动会误信"插件已加载"）
+      systemHandoff.invalidateReady();
       return baseUrl;
     },
     // 独立模式无控制面：不注入 reRegister（重启后无需重新注册，避免无谓重试阻塞重启）
@@ -899,10 +1328,95 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     },
   });
 
-  // T8c：MCP 三态探测器（30s 节流——不能每 10s 心跳 spawn 子进程，Metis 高优补项 7）。
+  // ── 配置热重载（opencode v2 原生；**不重启 serve 进程**）────────────────────
+  // serve 端点**每次调用时读取**（serve 重启可能换端口）；密码取 serve 的**实际配置**
+  // （effectiveServerPassword = 配置密码或 v2 自动生成的密码）——不从环境变量另读
+  // 一份（会与 serve 的真实鉴权漂移 ⇒ 全线 401）。与 mcp-status-probe 同一套做法。
+  const serveEndpoint = (): { baseUrl: string; password: string | null } => ({
+    baseUrl: serveServer.baseUrl ?? '',
+    password: serveServer.effectiveServerPassword,
+  });
+
+  // 执行端点（pending 闸门的数据源）：命令处理器注册在它之前创建 ⇒ 用 holder 打破 TDZ。
+  let execServerRef: ExecServer | null = null;
+
+  const configReloader = new ConfigReloader({
+    endpoint: serveEndpoint,
+    // pending 闸门：`POST /api/location/reload` 会**取消**待答复的表单/权限
+    // （实测 opencode v2.0.28）⇒ 有 pending 时绝不重载，改走文件监听路径。
+    // 检测能力复用 exec-server 的同一份（逐会话、与 location 无关）。
+    // 执行端点尚未就绪 ⇒ 结论不完整 ⇒ 保守地不重载。
+    pendingProbe: async () =>
+      execServerRef
+        ? execServerRef.detectPendingRequests()
+        : { forms: 0, permissions: 0, sessions: [], incomplete: true },
+    logger: {
+      info: (message: string) => console.log(message),
+      warn: (message: string) => console.warn(message),
+      error: (message: string) => console.error(message),
+    },
+  });
+
+  /**
+   * 让已落盘的配置在 serve 里生效：**热重载优先**（不重启进程）。
+   *
+   * 三条出路（互斥，按序）：
+   * 1. 热重载成功（且效果已确认）→ 结束（serve 进程、端口、会话全不变）；
+   * 2. 有待答复的表单/权限 → **不重载**（改由文件监听路径生效，不取消任何待答复项）；
+   * 3. 热重载失败 / 效果未确认 → **回退到真实重启**（并记日志）——
+   *    静默失败会让 worker 声称一份 serve 从未加载的配置。
+   */
+  const applyConfigChange = async (
+    request: ConfigChangeRequest,
+    extraVerify?: () => Promise<ConfigVerification>,
+  ): Promise<ConfigReloadOutcome> => {
+    const providerIDs = request.providerIDs ?? [];
+    const verify = combineVerifiers([
+      providerIDs.length > 0
+        ? () => verifyProvidersVisible(serveEndpoint(), providerIDs)
+        : undefined,
+      extraVerify,
+    ]);
+    const result = await configReloader.reload(request.reason, verify);
+    if (result.outcome === 'reloaded') {
+      console.log(
+        `[worker] ${request.reason}：serve 已热重载（serve 进程未重启，端口与会话不变）`,
+      );
+      return result.outcome;
+    }
+    if (result.outcome === 'deferred') {
+      console.warn(
+        `[worker] ${request.reason}：存在待答复的表单/权限，location/reload 会取消它们 ⇒ ` +
+          '已跳过确定性热重载；改由 opencode v2 的文件监听路径生效（不取消任何待答复项）',
+      );
+      return result.outcome;
+    }
+    console.warn(
+      `[worker] ${request.reason}：热重载未生效（${result.detail}）⇒ 回退到真实重启`,
+    );
+    const decision = await restartCoordinator.requestRestart(
+      `${request.reason}（热重载兜底）`,
+    );
+    if (decision === 'pending') {
+      console.log(`[worker] ${request.reason}：存在活跃会话，重启挂起（会话归零后自动执行）`);
+    }
+    return result.outcome;
+  };
+
+  // T8c：MCP 状态探测器（30s 节流——不能每 10s 心跳都打一次 serve，Metis 高优补项 7）。
+  // 数据源 = **worker 自己那个 serve** 的 `GET /api/mcp`（Basic Auth 用 serve 密码）。
+  // ⚠️ **不是** opencode CLI：v2 的 CLI 子命令绑共享后台服务（49374），读的是另一个
+  // 配置作用域 ⇒ 观测不到 worker 的 serve（实测 CLI 答"没有 MCP 服务器"而 serve 是 connected）。
   // 心跳回调携带 getStatus() 快照（节流窗口内复用缓存），首次探测失败为空数组不阻断心跳。
   const mcpStatusProbe = new McpStatusProbe({
-    // cwd 对齐 workDir：opencode mcp list 基于 cwd 查找 opencode.json（注入配置落点）
+    // serve 端点**每次探测时读取**：serve 重启可能换端口（随机端口场景），
+    // 且密码取 serve 的**实际配置**（effectiveServerPassword = 配置密码或 v2 自动生成的
+    // 密码）——不从环境变量另读一份（会与 serve 的真实鉴权漂移 ⇒ 全线 401）。
+    endpoint: () => ({
+      baseUrl: serveServer.baseUrl ?? '',
+      password: serveServer.effectiveServerPassword,
+    }),
+    // cwd 对齐 workDir：内置 vteam MCP 的注入配置落点（<workDir>/opencode.json）
     cwd: config.workDir,
     logger: {
       warn: (message: string) => console.warn(`[worker] ${message}`),
@@ -913,7 +1427,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // 共用同一条路径，保证两处上报字段与失败处理完全一致。
   const sendHeartbeatOnce = async (): Promise<void> => {
     // F2 M4：load 上报真实活动会话数（instance-tracker 计数，
-    // T10 会话执行接线后由 V1Driver 调用点 trackInstanceStart/End 驱动）
+    // T10 会话执行接线后由驱动调用点 trackInstanceStart/End 驱动）
     const load: WorkerLoad = getLoad(config.workerMaxInstances);
     const health: WorkerHealth = serveServer.isRunning ? 'ok' : 'degraded';
     try {
@@ -926,8 +1440,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         workerId: registeredWorkerId,
         load,
         health,
-        // T8c：MCP 三态快照（节流缓存，30s 内复用）
-        mcpStatus: mcpStatusProbe.getStatus(),
+        // T8c：MCP 状态快照（节流缓存，30s 内复用）
+        mcpStatus: await mcpStatusProbe.getStatus(),
         ...updaterReport(),
         // 同 register：上报进程启动时定格的版本，不现读磁盘文件。
         codeVersion: BOOT_CODE_VERSION,
@@ -940,7 +1454,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   };
 
   // T4b：注册命令处理回调（T4a 挂载点）——reload-config 触发资源重拉 + 注入 +
-  // T4c 重启判定（无活跃会话立即重启 serve 使新配置生效，有活跃会话则挂起）。
+  // **热重载**（不再重启 serve；有待答复项时改走文件监听路径）。
   // C5b：记录上一次注入的 auth.json 路径（下次写入前 cleanup，不留存旧凭据明文）。
   // C6：同理记录 opencode.json（config 无明文凭据，写盘幂等，不需 cleanup）。
   let injectedAuthJsonPath: string | null = null;
@@ -953,72 +1467,66 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   onCommands(async (commands) => {
     for (const command of commands) {
       if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
-        try {
-          const report = await injector.injectAll();
+        await handleReloadConfigCommand(command, {
+          injectAll: () => injector.injectAll(),
           // T9：重注入后更新注入清单，重启后的 reRegister 上报最新 skills/tools
-          lastInjectReport = report;
-          console.log(
-            `[worker] reload-config：资源重注入完成（${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers）`,
-          );
-          const decision = await restartCoordinator.requestRestart(
-            `reload-config（resourceVersion=${command.resourceVersion}）`,
-          );
-          if (decision === 'pending') {
-            console.log('[worker] reload-config：存在活跃会话，重启挂起（会话归零后自动执行）');
-          }
-        } catch (err) {
-          console.warn(`[worker] reload-config 资源重注入失败: ${(err as Error).message}`);
-        }
+          onInjectReport: (report) => {
+            lastInjectReport = report;
+          },
+          applyConfigChange,
+          serveEndpoint,
+          log: (message) => console.log(message),
+          warn: (message) => console.warn(message),
+        });
       }
       if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
-        const payload = command.payload as ModelCredentialsPayload | undefined;
-        if (!payload?.providerKeys) {
-          console.warn('[worker] model-credentials 命令缺少 providerKeys 负载，跳过注入');
-          continue;
-        }
-        try {
-          // F3 防循环：内容幂等注入——auth.json 与 opencode.json（C6）内容均未
-          // 变化时跳过写盘与重启 serve，切断“server 无条件回放 → 重启 →
-          // reRegister → 回放 → 再重启”无限循环。
-          const result = await handleModelCredentials(
-            payload.providerKeys,
-            payload.providerConfigs,
-            injectedAuthJsonPath,
-            injectedConfigPath,
-            {
-              readContent: async (authJsonPath) => {
-                try {
-                  return await fs.promises.readFile(authJsonPath, 'utf8');
-                } catch {
-                  return null;
-                }
-              },
-              writeAuthJson,
-              cleanupAuthJson,
-              readConfig: async (configPath) => {
-                try {
-                  return await fs.promises.readFile(configPath, 'utf8');
-                } catch {
-                  return null;
-                }
-              },
-              writeOpencodeConfig,
-              requestRestart: (reason) =>
-                restartCoordinator.requestRestart(reason),
-              log: (message) => console.log(message),
-              warn: (message) => console.warn(message),
+        await handleModelCredentialsCommand(
+          command,
+          injectedAuthJsonPath,
+          injectedConfigPath,
+          {
+            // F3 防循环：内容幂等注入——auth.json 与 opencode.json（C6）内容均未
+            // 变化时跳过写盘与生效动作，切断“server 无条件回放 → 生效 → 回放”
+            // 无限循环。
+            injectCredentials: (keys, providerConfigs, authPath, cfgPath) =>
+              handleModelCredentials(keys, providerConfigs, authPath, cfgPath, {
+                readContent: async (authJsonPath) => {
+                  try {
+                    return await fs.promises.readFile(authJsonPath, 'utf8');
+                  } catch {
+                    return null;
+                  }
+                },
+                writeAuthJson: (providerKeys) =>
+                  writeAuthJson(providerKeys, config.isolationScope),
+                cleanupAuthJson,
+                readConfig: async (configPath) => {
+                  try {
+                    return await fs.promises.readFile(configPath, 'utf8');
+                  } catch {
+                    return null;
+                  }
+                },
+                writeOpencodeConfig: (existingRaw, section) =>
+                  writeOpencodeConfig(existingRaw, section, config.isolationScope),
+                scope: config.isolationScope,
+                applyConfigChange,
+                log: (message) => console.log(message),
+                warn: (message) => console.warn(message),
+              }),
+            onInjectedPaths: (authPath, cfgPath) => {
+              injectedAuthJsonPath = authPath;
+              injectedConfigPath = cfgPath;
             },
-          );
-          injectedAuthJsonPath = result.authJsonPath;
-          injectedConfigPath = result.configPath;
-          // C6：provider 配置段实际变更 → 重启后的 reRegister 必须全量重探
-          // （新模型进目录 / baseUrl 变化，快路径复用会漏报）
-          if (result.configChanged) {
-            configChangedSinceRegister = true;
-          }
-        } catch (err) {
-          console.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
-        }
+            // C6：provider 配置段实际变更 → **下次**真重启后的 reRegister 必须全量重探
+            // （新模型进目录 / baseUrl 变化，快路径复用会漏报）
+            onProviderConfigChanged: () => {
+              configChangedSinceRegister = true;
+            },
+            log: (message) => console.log(message),
+            warn: (message) => console.warn(message),
+          },
+        );
       }
       if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
         const payload = command.payload as GitCredentialsPayload | undefined;
@@ -1036,7 +1544,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
                 return null;
               }
             },
-            writeContent: (entries) => writeGitCredsFile(entries),
+            writeContent: (entries) => writeGitCredsToServeScope(entries, config.isolationScope),
             log: (message) => console.log(message),
             warn: (message) => console.warn(message),
           });
@@ -1092,7 +1600,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // T6：事件上送通道（进程内单例，seq 从 1 起单调递增 + F2 M1 bootId 区分重启）。
   // 事件产生（session.updated/task.completed 等）待 T10 回流接线（C1 并行任务）。
-  const eventSender = new EventSender({
+  const eventSender = createEventSender({
     serverUrl: config.serverUrl,
     workerId: config.workerId,
     workerToken: config.workerToken,
@@ -1116,6 +1624,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // GET /agents 未显式传 directory 时的回落值：与 serve cwd（config.workDir）一致，
     // 保证列出的 opencode agent 集合与实际执行时发现的集合相同
     workDir: config.workDir,
+    // git 凭证落到**插件可见**的 HOME（隔离配置域）——serve 子进程的 HOME 被重定向到那里，
+    // 插件里的 os.homedir() 解析到的也是那里（只写 worker 自己 HOME ⇒ 插件读不到）。
+    gitCredsHome: config.isolationScope.home,
     // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors(会话 id)，
     // 命中模型 API 错误（Rate limit/Free usage 等不透传 message.info.error；已按会话过滤避免
     // stale 泄漏）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）
@@ -1125,7 +1636,16 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // OmO 配置保存后重启 serve：opencode 只在启动时读 OmO 配置，不重启则新会话仍用旧模型。
     // 复用 RestartCoordinator（无活跃会话立即重启 / 有则挂起等归零），故不会打断进行中的会话。
     restartServe: (reason: string) => restartCoordinator.requestRestart(reason),
+    // 配置热重载（**不重启 serve 进程**）：独立模式的 POST /config/reload 用。
+    // 注册模式的配置变更走心跳命令路径（reload-config / model-credentials）。
+    reloadServe: async (reason: string): Promise<ConfigReloadOutcome> =>
+      applyConfigChange({ reason }).catch((err: unknown) => {
+        console.warn(`[worker] ${reason}：热重载异常: ${String(err)}`);
+        return 'failed' as ConfigReloadOutcome;
+      }),
   });
+  // 执行端点就绪引用（配置热重载的 pending 闸门数据源；命令处理器注册在它之前）
+  execServerRef = execServer;
   // T10：执行端点上报端口（start 成功 = 实际监听端口；失败置 undefined，注册不带 execPort）
   let execPort: number | undefined = config.workerExecPort;
 
@@ -1174,6 +1694,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   void (async () => {
     if (config.standalone) {
       console.log('[worker] 独立模式（WORKER_STANDALONE）：跳过控制面资源注入/注册/心跳');
+      // T18：注入被跳过 ⇒ `plugins` 段没人写 ⇒ v2 内置 `opencode.browser` 会静默遮蔽
+      // 平台自己的 browser 工具 ⇒ 此处补写（详见 ensureStandaloneProjectConfig）。
+      ensureStandaloneProjectConfig(injector);
       try {
         const seeded = seedOmoAgentModels(config.workDir);
         if (seeded) {
@@ -1190,7 +1713,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // T9：首次注入清单作为注册时上报的真实 skills/tools
       lastInjectReport = report;
       console.log(
-        `[worker] 平台资源注入完成: ${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers`,
+        `[worker] 平台资源注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers`,
       );
       // omo 子代理模型种子：新数据卷无配置文件时写入内置默认（已有则跳过，用户页面/API 修改优先）
       try {
@@ -1214,6 +1737,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       const baseUrl = await serveServer.start();
       // T4：serve 就绪后注入实际 baseUrl（随机端口场景，driver 后续请求才有目标地址）
       driver.baseUrl = baseUrl;
+      // 新起的 serve 还没加载插件 ⇒ 就绪标记作废（驱动会等插件加载，或退回文本前缀）
+      systemHandoff.invalidateReady();
       console.log(`[worker] opencode serve 就绪: ${baseUrl} (pid=${serveServer.pid})`);
 
       // T10：执行端点启动（node:http POST /execute，固定端口）。失败仅记录日志并
@@ -1271,5 +1796,11 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 // require.main 守卫：作为入口（node dist/index.js / tsx src/index.ts）才启动 worker；
 // 被 import（如 index.spec.ts 测 buildCapabilities）时不触发 main()。
 if (require.main === module) {
-  main();
+  try {
+    main();
+  } catch (err) {
+    // 启动期 fail-fast（如 T1 版本闸门 / T3 恒开鉴权）：打可操作错误后退出，不吐栈噪声
+    console.error(`[worker] 启动失败: ${(err as Error).message}`);
+    process.exit(1);
+  }
 }

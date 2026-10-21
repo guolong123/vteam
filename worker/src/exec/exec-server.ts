@@ -10,6 +10,11 @@
  * - `GET /file?path=<绝对路径>`（FR-41）：控制面经 WorkerClient 从 worker 工作区拉取
  *   文件内容（X-Worker-Token 鉴权，只读文件，10MB 上限），group_post fileRef 归档用。
  *
+ * 另有 **会话/模型端点组**（T10 / 决策 D3）：`POST /sessions`、`POST /sessions/:id/prompt`、
+ * `POST /sessions/:id/abort`、`GET /sessions/:id/messages`、`GET /models`——控制面此前
+ * 直连 opencode 的 5 个调用点全部收进 worker（经 OpenCodeDriver 接缝转发），
+ * 控制面从此只认 vteam 自有的 wire 形状。五者均带 X-Worker-Token 鉴权。
+ *
  * 并发安全：同一 worker 多任务（多 session）并行执行；每个 /execute 独立驱动，按
  * opencode 会话 id（请求 sessionId 或新建）区分，serve 单实例多会话。
  *
@@ -29,6 +34,17 @@ import {
   sendAndAwait,
 } from '../driver/prompt-await';
 import { ServeEventStream } from '../driver/serve-event-stream';
+import {
+  RunTerminalGate,
+  V2StreamAccumulator,
+  assembleAssistantText,
+  deriveUpstreamIdentity,
+  mapV2Event,
+  normalizeV2ContentIdList,
+  normalizeV2ContentIds,
+  resolveV2SessionId,
+} from '../driver/v2-event-map';
+import type { V2EventFrame } from '../driver/v2-event-map';
 import { isServeFatalLine } from '../runtime/serve-log';
 import { ResourceInjector } from '../resources/injector';
 import {
@@ -37,14 +53,21 @@ import {
   LocalConfigError,
   LocalConfigKind,
 } from './local-config';
+import { ConfigReloadOutcome } from '../reload/config-reloader';
+import {
+  PendingRequestSnapshot,
+  detectPendingRequests,
+  fetchPendingForms,
+  fetchPendingPermissions,
+} from '../reload/pending-requests';
 import {
   DriverModelRef,
   DriverRequestError,
   Logger,
-  ServeMessage,
-  ServePart,
-  V1Driver,
-} from '../driver/v1-driver';
+  DriverMessage,
+  DriverContent,
+  OpenCodeDriver,
+} from '../driver/opencode-driver';
 import {
   ensureBrowserProfileDir,
   resolveBrowserScopeId,
@@ -66,10 +89,19 @@ import {
   writeOmoAgents,
 } from '../resources/omo-config';
 import { UNKNOWN_MODEL_KEY, WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
+import type { UpstreamEventIdentity } from '../protocol/worker-protocol';
 import type {
+  CreateSessionRequestPayload,
   SecretCommandRequestPayload,
   SecretCommandResponsePayload,
   SensitiveCommandOutput,
+  SessionAbortResponsePayload,
+  SessionMessagesQuery,
+  SessionMessagesResponsePayload,
+  SessionPromptRequestPayload,
+  SessionPromptResponsePayload,
+  WorkerModelInfo,
+  WorkerModelRef,
 } from '../protocol/worker-protocol';
 import { collectFileArtifacts } from './artifact-extract';
 import { SensitiveCommandError, runSensitiveCommand } from './sensitive-command';
@@ -178,11 +210,30 @@ export const PLAN_DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.\-]*\.md$/;
  */
 export const MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
+/**
+ * 待答复项检测的**会话范围上限**（FIFO 淘汰最旧的）。
+ *
+ * 为什么要界：检测是**逐会话**的（`GET /api/session/{id}/form` 与 `/permission`），
+ * 成本 = 2×会话数的本地 HTTP 往返；会话数无界会让一次配置变更越等越久。
+ * 取 100：待答复项属于「用户正在交互」的会话（必然是近期的），
+ * 100 个会话的检测成本 ≈ 200 次本地往返（亚秒级）。
+ */
+export const KNOWN_SESSIONS_LIMIT = 100;
+
+/**
+ * T14：**终态宽限期** ms（事件路 ↔ 轮询路合流时的等待上限）。
+ *
+ * 轮询路判定完成（见到 step-finish）后，若事件路还没给出终态，等这么久让它补齐——
+ * 目的是让「轮询先到」与「事件先到」两种顺序**得到同一个结论**（事件证据优先）。
+ * 与 `prompt-await` 的默认值同口径（500ms）。
+ */
+const EVENT_GRACE_MS = 500;
+
 export interface ExecServerOptions {
   /** 监听端口（WORKER_EXEC_PORT）。 */
   port: number;
-  /** 驱动 serve 的 V1Driver。 */
-  driver: V1Driver;
+  /** 驱动 serve 的 OpenCodeDriver。 */
+  driver: OpenCodeDriver;
   /** 事件上送通道（进程内 EventSender 单例）。 */
   sender: EventSender;
   /**
@@ -240,6 +291,14 @@ export interface ExecServerOptions {
    */
   workDir?: string;
   /**
+   * git 凭证文件的**插件可见 HOME**（= opencode 隔离配置域的 HOME；index.ts 注入）。
+   *
+   * 为什么需要：git 工具族是 opencode 插件，跑在 serve 子进程里，而隔离配置域把子进程的
+   * HOME 重定向到隔离域 ⇒ 凭证必须落到那里，插件才读得到。
+   * 缺省 = 不传（只写 worker 自己 HOME；仅老调用方/单测会走到）。
+   */
+  gitCredsHome?: string;
+  /**
    * OmO 配置保存后重启 serve 使新配置生效（index.ts 注入 RestartCoordinator.requestRestart）。
    *
    * 为什么必须重启：opencode 在 serve **启动时**读取 OmO 配置，改文件不热生效——不重启则
@@ -250,6 +309,18 @@ export interface ExecServerOptions {
    * 已挂起等归零）。缺省不注入 = 保存后不重启（配置留待下次自然重启生效）。
    */
   restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /**
+   * 配置热重载执行器（**不重启 serve 进程**；index.ts 注入 ConfigReloader.reload）。
+   *
+   * 与 `restartServe` 的分工：
+   * - `restartServe` = **真重启**（二进制升级 / 运维重启 / 崩溃恢复）；
+   * - `reloadServe`  = **热重载**（配置类变更：skills/tools/MCP/agent 策略/模型凭据）。
+   *
+   * 返回值：热重载结局（'reloaded' 已生效 / 'deferred' 有待答复项故延后，改走文件监听
+   * 路径 / 'failed' 调用失败 / 'unverified' 重载成功但效果未确认 ⇒ 调用方回退真重启）。
+   * 缺省不注入 = /config/reload 返回 503（与 /config/restart 同款契约）。
+   */
+  reloadServe?: (reason: string) => Promise<ConfigReloadOutcome>;
   /**
    * 独立模式（WORKER_STANDALONE）：挂载 POST /config/* 本地配置下推端点。
    * 缺省 false = 不挂载（注册模式的配置一律走控制面下发，避免双事实源）。
@@ -306,6 +377,119 @@ export function normalizeParts(prompt: string | unknown[]): unknown[] {
     return [{ type: 'text', text: prompt }];
   }
   return prompt;
+}
+
+/**
+ * 会话类端点的路径段解析（`/sessions/:id/<action>`）。
+ *
+ * 为什么需要它：本文件的路由分发是「pathname 精确串比较」，而会话类端点带一个
+ * **路径参数**（会话 id）。段数必须**精确**匹配——`/sessions/abc`（少一段）与
+ * `/sessions/abc/prompt/extra`（多一段）都**不算命中**，杜绝错路由静默命中
+ * （例如把 `/sessions/abc` 当成 `/sessions/:id/messages` 去拉消息）。
+ *
+ * - 两段都做 URL 解码（会话 id 可能含需转义的字符，如 `%2F`）。
+ * - 解码失败（非法转义序列）或段为空 → 视为不匹配（上层回 404）。
+ */
+export function parseSessionActionPath(
+  pathname: string,
+): { id: string; action: string } | null {
+  const segments = pathname.split('/');
+  // 前导 '/' 会切出一个空串 → 合法形态是 ['', 'sessions', ':id', '<action>']（长度 4）
+  if (segments.length !== 4) {
+    return null;
+  }
+  if (segments[0] !== '' || segments[1] !== 'sessions') {
+    return null;
+  }
+  const id = decodePathSegment(segments[2]);
+  const action = decodePathSegment(segments[3]);
+  if (!id || !action) {
+    return null;
+  }
+  return { id, action };
+}
+
+/** 单个路径段的 URL 解码；空段或非法转义序列 → null。 */
+function decodePathSegment(segment: string): string | null {
+  if (!segment) {
+    return null;
+  }
+  try {
+    const decoded = decodeURIComponent(segment);
+    return decoded === '' ? null : decoded;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 解析请求体里的模型引用。
+ *
+ * 返回 `undefined` = 字段缺席；`null` = 显式 null；对象 = 合法引用。
+ * 形状非法时返回 `invalid`（调用方回 400，不静默丢弃调用方的意图）。
+ */
+function parseModelRef(value: unknown): WorkerModelRef | null | undefined | 'invalid' {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return 'invalid';
+  }
+  const ref = value as { providerID?: unknown; modelID?: unknown };
+  if (typeof ref.providerID !== 'string' || typeof ref.modelID !== 'string') {
+    return 'invalid';
+  }
+  if (!ref.providerID || !ref.modelID) {
+    return 'invalid';
+  }
+  return { providerID: ref.providerID, modelID: ref.modelID };
+}
+
+/**
+ * 读取驱动 abort 回执里的「是否真的打断了一轮」标志。
+ *
+ * 驱动契约里 `abort` 只保证「**不抛错**」（对未知/已结束会话是幂等空操作），
+ * 回执是否带中断细节由各实现自定（v1 无此概念 → 无回执细节）。故这里做**宽松读取**：
+ * 带 `interrupted` 就采信，没带就按 false（= 没有打断任何一轮的证据）。
+ */
+function readInterruptedFlag(result: unknown): boolean {
+  if (result && typeof result === 'object' && 'interrupted' in result) {
+    return (result as { interrupted?: unknown }).interrupted === true;
+  }
+  return false;
+}
+
+/**
+ * 解析消息端点的分页 query（limit / order / cursor）。
+ *
+ * 非法参数返回 null（调用方回 400）——不静默丢弃：调用方传了个错的 limit 却拿到
+ * 全量结果，会误判「消息只有这么几条」。
+ */
+function parseMessagesQuery(url: URL): SessionMessagesQuery | null {
+  const query: SessionMessagesQuery = {};
+  const rawLimit = url.searchParams.get('limit');
+  if (rawLimit !== null && rawLimit !== '') {
+    const limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit <= 0) {
+      return null;
+    }
+    query.limit = limit;
+  }
+  const rawOrder = url.searchParams.get('order');
+  if (rawOrder !== null && rawOrder !== '') {
+    if (rawOrder !== 'asc' && rawOrder !== 'desc') {
+      return null;
+    }
+    query.order = rawOrder;
+  }
+  const rawCursor = url.searchParams.get('cursor');
+  if (rawCursor !== null && rawCursor !== '') {
+    query.cursor = rawCursor;
+  }
+  return query;
 }
 
 /**
@@ -435,7 +619,7 @@ function toSecretCommandResponse(
 
 export class ExecServer {
   private readonly port: number;
-  private readonly driver: V1Driver;
+  private readonly driver: OpenCodeDriver;
   private readonly sender: EventSender;
   private readonly workerToken: string;
   private readonly firstTokenTimeoutMs: number;
@@ -450,6 +634,8 @@ export class ExecServer {
   private readonly workDir: string;
   /** OmO 配置保存后的 serve 重启回调（缺省 undefined = 不重启）。 */
   private readonly restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /** 配置热重载回调（缺省 undefined = /config/reload 返回 503）。 */
+  private readonly reloadServe?: (reason: string) => Promise<ConfigReloadOutcome>;
   /** 独立模式：挂载 POST /config/* 本地配置下推（注册模式不挂载，避免双事实源）。 */
   private readonly standalone: boolean;
   /** 本地配置下推执行器（standalone=true 且注入 resourceInjector 时可用）。 */
@@ -457,6 +643,19 @@ export class ExecServer {
   private readonly logger: Logger;
   /** `POST /secret-command` 幂等表：requestId → 归属 + 执行结果（同 requestId 绝不二次执行）。 */
   private readonly secretCommands = new Map<string, SecretCommandRecord>();
+  /**
+   * 本 worker 接触过的 opencode 会话 id（新建 + 复用）——待答复项检测的会话范围。
+   *
+   * 为什么必须**逐会话**查：`POST /api/location/reload` 会取消**所有 location** 的
+   * pending 项（实测 v2.0.28），而全局端点 `GET /api/form` 是**按 location 作用域**的
+   * （会话 move 到任务目录后查不到）⇒ 用全局端点当闸门会漏判 ⇒ 静默销毁用户正在
+   * 作答的问题。逐会话查与 location 无关。
+   *
+   * ⚠️ **有界**：只保留最近 {@link KNOWN_SESSIONS_LIMIT} 个会话（FIFO 淘汰）——
+   * 待答复项属于「用户正在交互」的会话（必然是近期的），而逐会话检测的成本是
+   * 2×会话数的本地 HTTP 往返，无界会让一次配置变更越等越久。
+   */
+  private readonly knownSessions = new Set<string>();
   private server: http.Server | null = null;
 
   constructor(options: ExecServerOptions) {
@@ -474,11 +673,16 @@ export class ExecServer {
     this.browserProfileRoot = options.browserProfileRoot ?? '';
     this.workDir = options.workDir ?? '';
     this.restartServe = options.restartServe;
+    this.reloadServe = options.reloadServe;
     this.logger = options.logger ?? console;
     this.standalone = options.standalone ?? false;
     this.localConfig =
       this.standalone && options.resourceInjector
-        ? new LocalConfigApplier({ injector: options.resourceInjector, logger: this.logger })
+        ? new LocalConfigApplier({
+            injector: options.resourceInjector,
+            logger: this.logger,
+            gitCredsHome: options.gitCredsHome,
+          })
         : undefined;
   }
 
@@ -487,6 +691,34 @@ export class ExecServer {
     return this.server?.address() && typeof this.server.address() === 'object'
       ? (this.server.address() as { port: number }).port
       : null;
+  }
+
+  /** 记住一个 opencode 会话（待答复项检测的会话范围；FIFO 有界）。 */
+  private rememberSession(sessionID: string): void {
+    const id = typeof sessionID === 'string' ? sessionID.trim() : '';
+    if (id === '') {
+      return;
+    }
+    this.knownSessions.delete(id);
+    this.knownSessions.add(id);
+    while (this.knownSessions.size > KNOWN_SESSIONS_LIMIT) {
+      const oldest = this.knownSessions.values().next();
+      if (oldest.done) {
+        break;
+      }
+      this.knownSessions.delete(oldest.value);
+    }
+  }
+
+  /**
+   * 检测当前是否存在**待答复的表单/权限**（逐会话查；location 无关）。
+   *
+   * 供配置热重载的安全闸门使用：`POST /api/location/reload` 会取消 pending 项，
+   * ⇒ 有 pending 时**不得**重载。检测失败（结论不完整）时返回 `incomplete: true`
+   * ⇒ 调用方走保守分支（不重载）。
+   */
+  async detectPendingRequests(): Promise<PendingRequestSnapshot> {
+    return detectPendingRequests(this.driver, this.knownSessions);
   }
 
   /** 是否已监听。 */
@@ -580,6 +812,23 @@ export class ExecServer {
     }
     if (url.pathname === '/omo-agent-prompt') {
       await this.handleOmoAgentPrompt(req, res, url);
+      return;
+    }
+    // ── 会话/模型端点（T10 / 决策 D3）────────────────────────────────────
+    // 这一组是「控制面彻底不直连 opencode」的承载面：控制面此前直连 opencode 的
+    // 5 个调用点（建会话/下发提示/读消息/中断/取模型）全部收进 worker，经
+    // OpenCodeDriver 接缝转发——控制面从此只认 vteam 自有的 wire 形状。
+    if (url.pathname === '/sessions') {
+      await this.handleSessionCreate(req, res);
+      return;
+    }
+    const sessionRoute = parseSessionActionPath(url.pathname);
+    if (sessionRoute) {
+      await this.handleSessionAction(req, res, sessionRoute, url);
+      return;
+    }
+    if (url.pathname === '/models') {
+      await this.handleModelsList(req, res);
       return;
     }
     if (url.pathname.startsWith('/config/')) {
@@ -820,7 +1069,7 @@ export class ExecServer {
   }
 
   /**
-   * /config/<kind> 与 /config/restart（仅独立模式）：本地配置下推。
+   * /config/<kind>、/config/restart 与 /config/reload（仅独立模式）：本地配置下推。
    * 注册模式返回 404 + 引导（配置一律经控制面下发，避免双事实源）。
    */
   private async handleConfigRoute(
@@ -837,6 +1086,10 @@ export class ExecServer {
     }
     if (kind === 'restart') {
       await this.handleConfigRestart(req, res);
+      return;
+    }
+    if (kind === 'reload') {
+      await this.handleConfigReload(req, res);
       return;
     }
     if (!(LOCAL_CONFIG_KINDS as readonly string[]).includes(kind)) {
@@ -922,6 +1175,44 @@ export class ExecServer {
     }
   }
 
+  /**
+   * POST /config/reload：触发 serve **热重载**使已下推配置生效（**不重启 serve 进程**）。
+   *
+   * 与 `/config/restart` 的分工：配置类变更走本端点（无端口漂移、无会话排空、
+   * 无 serve 不可用窗口）；`/config/restart` 保留给真正需要换进程的场景。
+   *
+   * 响应体 `{ reload: 'reloaded' | 'deferred' | 'failed' | 'unverified' }`：
+   * - `deferred` = 有待答复的表单/权限，热重载被跳过（改走文件监听路径）；
+   * - `failed` / `unverified` = 热重载没成功（调用方可回退到真重启）。
+   */
+  private async handleConfigReload(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    await drainRequest(req);
+    if (!this.reloadServe) {
+      sendJson(res, 503, { error: '热重载回调未注入，无法热重载' });
+      return;
+    }
+    try {
+      const reload = await this.reloadServe('exec /config/reload（本地配置下推）');
+      sendJson(res, 200, { reload });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] /config/reload 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
   /** POST /execute：校验 prompt → 202 {accepted:true} → fire-and-forget 驱动 serve。 */
   private async handleExecute(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
@@ -969,6 +1260,7 @@ export class ExecServer {
    */
   private async runInFlightPrompt(payload: ExecuteRequestPayload): Promise<void> {
     const sessionId = payload.sessionId ?? '';
+    this.rememberSession(sessionId);
     try {
       const { fileParts, notes } = await this.prepareAttachmentParts(payload);
       const parts: unknown[] = [
@@ -982,6 +1274,9 @@ export class ExecServer {
         parts,
         directory: payload.directory,
         system: payload.system,
+        // T18/D7：在飞注入 = **插队**（steer）——打断当前轮、按新指令重跑。
+        // 显式给出，不依赖驱动端的默认投递策略（默认值一变行为就静默漂移）。
+        delivery: 'steer',
       });
       this.logger.info(`[exec] 在飞注入 -> ${sessionId} parts=${parts.length}`);
     } catch (err) {
@@ -1396,6 +1691,355 @@ export class ExecServer {
     }
   }
 
+  // ---- 会话/模型端点（T10 / 决策 D3：控制面不再直连 opencode）----
+
+  /**
+   * POST /sessions——创建被驱动端会话。
+   *
+   * 控制面此前直连 opencode 的建会话端点（server/src/workers/worker.client.ts），
+   * 本端点把它收进 worker：控制面只调 worker，**不再知道 opencode 的会话 wire 形状**。
+   * - 鉴权：X-Worker-Token === workerToken（与 /file 同规格；未配置 token 一律 401）。
+   * - 请求体：{model?: {providerID, modelID}}（可为空；缺省用被驱动端默认模型）。
+   * - 驱动失败按 status 映射（404 → 404 会话失效；其余 → 502），绝不吞成 200。
+   */
+  private async handleSessionCreate(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    if (!this.checkWorkerToken(req, res, 'session create')) {
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readBody(req, this.maxBodyBytes);
+    } catch (err) {
+      await drainRequest(req);
+      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
+      return;
+    }
+    let body: CreateSessionRequestPayload;
+    try {
+      body = JSON.parse(raw || '{}') as CreateSessionRequestPayload;
+    } catch {
+      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
+      return;
+    }
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      sendJson(res, 400, { error: '请求体必须是 JSON 对象' });
+      return;
+    }
+    const model = parseModelRef(body.model);
+    if (model === 'invalid') {
+      sendJson(res, 400, { error: 'model 必须是 {providerID, modelID} 对象' });
+      return;
+    }
+    try {
+      const sessionId = await this.driver.createSession(model);
+      this.rememberSession(sessionId);
+      sendJson(res, 200, { sessionId });
+      this.logger.info(`[exec] session create -> ${sessionId}`);
+    } catch (err) {
+      this.sendDriverError(res, err, 'session create');
+    }
+  }
+
+  /**
+   * POST /sessions/:id/prompt——向会话下发一条提示。
+   *
+   * ⚠️ **语义**：本端点是「**持久化入队**」，**不是**「同步执行」——响应只表示
+   * 「已被收件箱收下」，**不代表 agent 已答复**。终态只能看事件或再读消息端点。
+   * - 鉴权：X-Worker-Token（与 /file 同规格）。
+   * - `delivery`（steer|queue）**原样透传**给驱动（投递策略是 vteam 侧语义，
+   *   被驱动端不支持时由驱动自行忽略）。
+   * - 响应回带驱动回执的**收件条目 id**（被驱动端无回执概念时缺席，不编造）。
+   */
+  private async handleSessionPrompt(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    if (!this.checkWorkerToken(req, res, 'session prompt')) {
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readBody(req, this.maxBodyBytes);
+    } catch (err) {
+      await drainRequest(req);
+      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
+      return;
+    }
+    let payload: SessionPromptRequestPayload;
+    try {
+      payload = JSON.parse(raw || '{}') as SessionPromptRequestPayload;
+    } catch {
+      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
+      return;
+    }
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      sendJson(res, 400, { error: '请求体必须是 JSON 对象' });
+      return;
+    }
+    if (payload.prompt === undefined || payload.prompt === null) {
+      sendJson(res, 400, { error: '缺少必填字段 prompt' });
+      return;
+    }
+    if (typeof payload.prompt !== 'string' && !Array.isArray(payload.prompt)) {
+      sendJson(res, 400, { error: 'prompt 必须是字符串或内容单元数组' });
+      return;
+    }
+    const delivery = payload.delivery;
+    if (delivery !== undefined && delivery !== 'steer' && delivery !== 'queue') {
+      sendJson(res, 400, { error: 'delivery 必须是 steer|queue' });
+      return;
+    }
+    const model = parseModelRef(payload.model);
+    if (model === 'invalid') {
+      sendJson(res, 400, { error: 'model 必须是 {providerID, modelID} 对象' });
+      return;
+    }
+    try {
+      const result = await this.driver.sendMessage(sessionId, {
+        model: model ?? null,
+        agent: payload.agent,
+        parts: normalizeParts(payload.prompt),
+        directory: payload.directory,
+        system: payload.system,
+        delivery,
+      });
+      const body: SessionPromptResponsePayload = { sessionId, admitted: true };
+      if (result?.messageId) {
+        body.messageId = result.messageId;
+      }
+      // 投递策略以**驱动回执**为准（被驱动端可能调整过）；驱动不回报时退回请求值。
+      const effectiveDelivery = result?.delivery ?? delivery;
+      if (effectiveDelivery) {
+        body.delivery = effectiveDelivery;
+      }
+      sendJson(res, 200, body);
+      this.logger.info(
+        `[exec] session prompt -> 已入队 (session=${sessionId}, delivery=${effectiveDelivery ?? 'default'}, messageId=${body.messageId ?? '-'})`,
+      );
+    } catch (err) {
+      this.sendDriverError(res, err, 'session prompt');
+    }
+  }
+
+  /**
+   * POST /sessions/:id/abort——中断会话当前这一轮。
+   *
+   * **幂等**：对未知/已结束的会话调用一律**成功**（驱动契约保证 abort 不抛错；
+   * 万一驱动回 404 也按「没什么可中断的」收敛为成功），绝不因会话不在而报错。
+   * - 鉴权：X-Worker-Token（与 /file 同规格）。
+   * - 无请求体。
+   */
+  private async handleSessionAbort(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    if (!this.checkWorkerToken(req, res, 'session abort')) {
+      return;
+    }
+    await drainRequest(req);
+    try {
+      const result: unknown = await this.driver.abort(sessionId);
+      const body: SessionAbortResponsePayload = {
+        sessionId,
+        interrupted: readInterruptedFlag(result),
+      };
+      sendJson(res, 200, body);
+      this.logger.info(
+        `[exec] session abort -> ${body.interrupted ? '已中断在飞轮次' : '无在飞轮次'} (session=${sessionId})`,
+      );
+    } catch (err) {
+      if (err instanceof DriverRequestError && err.status === 404) {
+        this.logger.info(
+          `[exec] session abort -> 会话不存在/已结束，幂等成功 (session=${sessionId})`,
+        );
+        sendJson(res, 200, { sessionId, interrupted: false });
+        return;
+      }
+      this.sendDriverError(res, err, 'session abort');
+    }
+  }
+
+  /**
+   * GET /sessions/:id/messages——读会话消息（可分页）。
+   *
+   * - 鉴权：X-Worker-Token（与 /file 同规格）。
+   * - 分页 query：limit / order / cursor，**原样透传**给驱动（被驱动端不支持
+   *   分页时由驱动自行忽略）。
+   * - 返回 vteam 渲染模型形状的消息数组（不是被驱动端的原始包装）。
+   */
+  private async handleSessionMessages(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    sessionId: string,
+    url: URL,
+  ): Promise<void> {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: `仅支持 GET，收到 ${req.method}` });
+      return;
+    }
+    if (!this.checkWorkerToken(req, res, 'session messages')) {
+      return;
+    }
+    const query = parseMessagesQuery(url);
+    if (query === null) {
+      sendJson(res, 400, {
+        error: '分页参数非法：limit 必须是正整数，order 必须是 asc|desc',
+      });
+      return;
+    }
+    try {
+      const messages = await this.fetchSessionMessages(sessionId, query);
+      const body: SessionMessagesResponsePayload = { sessionId, messages };
+      sendJson(res, 200, body);
+      this.logger.info(
+        `[exec] session messages -> ${messages.length} 条 (session=${sessionId})`,
+      );
+    } catch (err) {
+      this.sendDriverError(res, err, 'session messages');
+    }
+  }
+
+  /**
+   * GET /models——模型目录（vteam 自有形状）。
+   *
+   * ⚠️ 刻意**不返回**被驱动端的原始包装（v2 是 `{location, data}`）——那是被驱动端的
+   * wire 形状，控制面不该知道它（决策 D3）。这里返回 vteam 自己的模型条目数组。
+   * - 鉴权：X-Worker-Token（与 /file 同规格）。
+   */
+  private async handleModelsList(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: `仅支持 GET，收到 ${req.method}` });
+      return;
+    }
+    if (!this.checkWorkerToken(req, res, 'models list')) {
+      return;
+    }
+    try {
+      const models: WorkerModelInfo[] = await this.driver.listModels();
+      sendJson(res, 200, { models });
+      this.logger.info(`[exec] models list -> ${models.length} 个`);
+    } catch (err) {
+      this.sendDriverError(res, err, 'models list');
+    }
+  }
+
+  /** 会话类端点的动作分发（path 段已解析出 id + action）。 */
+  private async handleSessionAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    route: { id: string; action: string },
+    url: URL,
+  ): Promise<void> {
+    if (route.action === 'prompt') {
+      await this.handleSessionPrompt(req, res, route.id);
+      return;
+    }
+    if (route.action === 'abort') {
+      await this.handleSessionAbort(req, res, route.id);
+      return;
+    }
+    if (route.action === 'messages') {
+      await this.handleSessionMessages(req, res, route.id, url);
+      return;
+    }
+    sendJson(res, 404, { error: `未支持的路径: /sessions/:id/${route.action}` });
+  }
+
+  /**
+   * 拉取会话消息（**可选分页**透传）。
+   *
+   * 分页是被驱动端 v2 才有的能力（上游消息端点是游标分页），v1 驱动忽略该参数——
+   * 故分页入参对驱动是可选的，缺省即「取全部」。
+   */
+  private async fetchSessionMessages(
+    sessionId: string,
+    query: SessionMessagesQuery,
+  ): Promise<DriverMessage[]> {
+    return this.driver.getMessages(sessionId, query);
+  }
+
+  /**
+   * X-Worker-Token 校验（会话/模型端点共用；与 /file 同规格）。
+   *
+   * 未配置 workerToken → 一律 401（**fail closed**：宁可拒绝，也不裸奔）。
+   */
+  private checkWorkerToken(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    label: string,
+  ): boolean {
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      this.logger.warn(`[exec] ${label} -> 拒绝（X-Worker-Token 无效） (HTTP 401)`);
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 驱动失败 → HTTP 响应（会话/模型端点共用）。
+   *
+   * | 驱动 status | HTTP | body |
+   * |---|---|---|
+   * | 404 | 404 | {error, code:'SESSION_NOT_FOUND'} |
+   * | 429 | 429 | {error, code:'RATE_LIMITED'} |
+   * | 401 / 403 | 502 | {error, code:'UPSTREAM_UNAUTHORIZED'} |
+   * | 其它 / 无 | 502 | {error} |
+   *
+   * 为什么 404 原样透传：控制面据此判定「会话已失效」并走重建路径（与 exec-server
+   * 内部的 isSessionNotFound 同口径）。为什么 401 不透传成 401：那是**被驱动端**拒了
+   * worker 的凭据（worker↔被驱动端的配置问题），透传成 401 会让控制面误判成
+   * 「自己的 worker token 不对」。
+   */
+  private sendDriverError(
+    res: http.ServerResponse,
+    err: unknown,
+    label: string,
+  ): void {
+    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof DriverRequestError && err.status === 404) {
+      this.logger.warn(`[exec] ${label} 失败（会话失效）: ${message} (HTTP 404)`);
+      sendJson(res, 404, { error: message, code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    if (err instanceof DriverRequestError && err.status === 429) {
+      this.logger.warn(`[exec] ${label} 失败（上游限流）: ${message} (HTTP 429)`);
+      sendJson(res, 429, { error: message, code: 'RATE_LIMITED' });
+      return;
+    }
+    if (
+      err instanceof DriverRequestError &&
+      (err.status === 401 || err.status === 403)
+    ) {
+      this.logger.warn(`[exec] ${label} 失败（被驱动端鉴权失败）: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message, code: 'UPSTREAM_UNAUTHORIZED' });
+      return;
+    }
+    this.logger.warn(`[exec] ${label} 失败: ${message} (HTTP 502)`);
+    sendJson(res, 502, { error: message });
+  }
+
   // ---- 执行链路 ----
 
   /**
@@ -1562,6 +2206,13 @@ export class ExecServer {
       payload.sessionId || `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     trackInstanceStart(sessionKey);
     let opencodeSessionId = payload.sessionId ?? '';
+    // 终态闸门：事件路（durable 的 session.execution.*）与轮询路（消息终态）**共用**
+    // 这一个判定出口——两条路都到得了时，只允许发一次终态事件。声明在 try 之外，
+    // 失败分支（catch）也要读它。
+    let gate = new RunTerminalGate();
+    // 终态是否已开始上送（成功路径发出 session.updated(idle) 之前置位）：失败兜底
+    // 「补发 task.completed」只在**终态还没发过**时允许——否则一轮会出现两条 idle。
+    let terminalEmitted = false;
     try {
       // is_0000000010：worker 侧兜底创建目录（server 与 worker 可能不共享文件系统，
       // server 侧 mkdir 无效——目录由 worker 执行端点确保存在，持久卷挂载 /data/vteam-worker）。
@@ -1628,9 +2279,11 @@ export class ExecServer {
         phase: 'thinking',
       });
 
+      // 终态闸门：事件路（durable 的 session.execution.*）与轮询路（消息终态）**共用**
+      // 这一个判定出口——两条路都到得了时，只允许发一次终态事件。
       let result: CompletionResult;
       try {
-        result = await this.runSendAndAwait(payload, opencodeSessionId, ctx);
+        result = await this.runSendAndAwait(payload, opencodeSessionId, ctx, gate);
       } catch (err) {
         if (payload.sessionId && this.isSessionNotFound(err)) {
           // 复用会话失效（serve 重启/容器重建后旧会话 404）→ 自动 createSession 新建
@@ -1641,12 +2294,34 @@ export class ExecServer {
           trackInstanceRekey(sessionKey, opencodeSessionId);
           sessionKey = opencodeSessionId;
           ctx.sessionId = opencodeSessionId;
-          result = await this.runSendAndAwait(payload, opencodeSessionId, ctx);
+          // 新会话 = 新的一轮：终态闸门重置（旧会话的事件证据不带过来）
+          gate = new RunTerminalGate();
+          result = await this.runSendAndAwait(payload, opencodeSessionId, ctx, gate);
         } else {
           throw err;
         }
       }
 
+      // 终态判定（唯一出口）：事件证据优先于轮询证据。
+      const verdict = gate.settle() ?? { verdict: 'succeeded' as const };
+      if (verdict.verdict !== 'succeeded') {
+        // durable 事件判定本轮失败/中断 → 不发 task.completed，改发错误状态
+        this.logger.warn(
+          `[exec] 事件路判定本轮${verdict.verdict === 'interrupted' ? '被中断' : '失败'}（session=${opencodeSessionId}）：${verdict.error ?? '-'}`,
+        );
+        await this.sender.send(WORKER_EVENT_TYPES.AGENT_STATUS, {
+          ...ctx,
+          status: 'error',
+          error: verdict.error ?? '执行失败',
+        });
+        await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
+          ...ctx,
+          status: 'failed',
+        });
+        return;
+      }
+
+      terminalEmitted = true;
       await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
         ...ctx,
         status: 'idle',
@@ -1660,7 +2335,8 @@ export class ExecServer {
         ...ctx,
         model: modelKey,
         text: result.text,
-        parts: result.parts,
+        // part id 与事件路/轮询路统一（server 侧按 id 合并）
+        parts: normalizeV2ContentIdList(result.parts ?? []),
         ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
         ...(result.cost !== undefined ? { cost: result.cost } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
@@ -1671,13 +2347,51 @@ export class ExecServer {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`[exec] 执行失败 session=${opencodeSessionId}: ${message}`);
+      // 终态判定（唯一出口）：**先问后记**——闸门的 peek() 返回「事件证据 ?? 轮询证据」，
+      // 先把自己的失败证据记进去，闸门就再也分不出「事件路还没说话」与「事件路说了成功」
+      // （宽限期内迟到的失败会被吞掉：失败被当成成功）。故：先读判定，再记自己的证据。
+      // 读到的判定若说成功（事件证据说本轮成功、轮询路超时/失败），以终态证据为准 →
+      // 补发 task.completed（正文取一次消息快照）。
+      const gateVerdict = gate.peek();
+      gate.notePolling({ verdict: 'failed', error: message });
+      if (gateVerdict?.verdict === 'succeeded' && !terminalEmitted) {
+        this.logger.warn(
+          `[exec] 执行失败但终态证据判定成功，按终态证据补发 task.completed（session=${opencodeSessionId}）: ${message}`,
+        );
+        const messages = await this.safeGetMessages(opencodeSessionId);
+        await this.sender.send(WORKER_EVENT_TYPES.TASK_COMPLETED, {
+          taskId: payload.taskId,
+          agentId: payload.agentId,
+          sessionId: opencodeSessionId,
+          channelId: payload.channelId,
+          model: resolveUsageModelKey(payload.model, undefined),
+          text: assembleAssistantText(messages),
+          parts: normalizeV2ContentIdList(
+            messages
+              .filter((m) => m.info?.role === 'assistant')
+              .flatMap((m) => m.parts ?? []),
+          ),
+        });
+        await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
+          taskId: payload.taskId,
+          agentId: payload.agentId,
+          sessionId: opencodeSessionId,
+          channelId: payload.channelId,
+          status: 'idle',
+        });
+        return;
+      }
       await this.sender.send(WORKER_EVENT_TYPES.AGENT_STATUS, {
         taskId: payload.taskId,
         agentId: payload.agentId,
         sessionId: opencodeSessionId,
         channelId: payload.channelId,
         status: 'error',
-        error: err instanceof CompletionTimeoutError ? `执行失败：${message}` : message,
+        // 失败文案：终态证据里带上游错误详情就用它（事件证据更全：带 HTTP 码/响应体），
+        // 没有才用异常文案（超时等本地判定）。
+        error:
+          (gateVerdict?.verdict === 'failed' ? gateVerdict.error : undefined) ??
+          (err instanceof CompletionTimeoutError ? `执行失败：${message}` : message),
       });
       await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
         taskId: payload.taskId,
@@ -1688,6 +2402,18 @@ export class ExecServer {
       });
     } finally {
       trackInstanceEnd(sessionKey);
+    }
+  }
+
+  /** 读会话消息快照（失败不抛：返回空列表）——终态兜底补发正文时用。 */
+  private async safeGetMessages(sessionID: string): Promise<DriverMessage[]> {
+    try {
+      return await this.driver.getMessages(sessionID);
+    } catch (err) {
+      this.logger.warn(
+        `[exec] 读取会话消息快照失败（session=${sessionID}）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
     }
   }
 
@@ -1812,8 +2538,10 @@ export class ExecServer {
     payload: ExecuteRequestPayload,
     sessionID: string,
     ctx: Record<string, string | undefined>,
+    gate: RunTerminalGate,
   ): Promise<CompletionResult> {
     const tracker = new MessageDeltaTracker();
+    this.rememberSession(sessionID);
     // 每次任务独立 pending 检测器（去重集 + 防重入按任务隔离，任务结束即释放——
     // 实例级标志会跨任务残留 true，导致后续任务检测全部跳过）。
     const detector = new PendingQuestionDetector(this.driver, this.sender, this.logger);
@@ -1829,143 +2557,249 @@ export class ExecServer {
     // 提取增量（extractNewParts）仍在 onPoll 内**同步**完成，保证去重时序与现状一致；
     // 只有「上送」排进串行链。发送失败仅记日志，不阻断链与主流程。
     let deltaChain: Promise<void> = Promise.resolve();
-    const enqueueDelta = (messages: ServeMessage[]): void => {
+    const enqueueDelta = (messages: DriverMessage[]): number => {
       const fresh = tracker.extractNewParts(messages);
       if (fresh.length === 0) {
-        return;
+        return 0;
       }
       deltaChain = deltaChain
         .then(() => this.sendDelta(ctx, fresh))
         .catch((err: unknown) => {
           this.logger.warn(`message.part.delta 上送失败（不影响主流程）: ${String(err)}`);
         });
+      return fresh.length;
     };
-    // SSE 实时路（serve GET /event 订阅）：part 事件零阈值、零轮询延迟直接上送，
+    // SSE 实时路（serve GET /api/event 订阅）：part 事件零阈值、零轮询延迟直接上送，
     // 并经 tracker.admitSsePart 单调准入（推进才发、更新共享基准）——轮询快照对同一
     // part 的比较以该基准为底线，旧/更短快照被压制，双路不会互相回覆盖。全局总线
-    // 事件按 sessionID + assistant 消息集合过滤后才入链（其它会话/角色的事件直接丢弃）。
-    const enqueueParts = (freshParts: ServePart[], kind: 'update' | 'delta'): void => {
-      // 单调准入：SSE 重连/晚于轮询建立时，delta 合成的 part 文本可能**短于**轮询路
+    // 事件按 sessionID 过滤后才入链（其它会话的事件直接丢弃）。
+    const enqueueParts = (freshParts: DriverContent[], upstream?: UpstreamEventIdentity): void => {
+      // 单调准入：SSE 重连/晚于轮询建立时，增量合成的 part 文本可能**短于**轮询路
       // 已上送的全文——admitSsePart 对同 part.id 拒绝回退快照且不降低基准（见 tracker）。
-      const admitted = freshParts.filter((p) => tracker.admitSsePart(p, kind));
+      const admitted = freshParts.filter((p) => tracker.admitSsePart(p, 'delta'));
       if (admitted.length === 0) {
         return;
       }
       deltaChain = deltaChain
-        .then(() => this.sendDelta(ctx, admitted))
+        .then(() => this.sendDelta(ctx, admitted, upstream))
         .catch((err: unknown) => {
           this.logger.warn(`message.part.delta（SSE）上送失败（不影响主流程）: ${String(err)}`);
         });
     };
     // SSE 路开关：默认开（VTEAM_SSE_FORWARD=0/false 关，退回纯轮询兜底路）。
     const sseEnabled = !/^(0|false|no)$/i.test(process.env.VTEAM_SSE_FORWARD ?? '');
-    const assistantMsgIds = new Set<string>();
-    // SSE 连接建立后已见过**权威整快照**（message.part.updated）的 part id——增量合成
-    // （delta）只对这些 id 放行。连接晚于 part 开始时，delta 缓冲只含「连接后的片段」，
-    // 上送会把不完整后缀当成全文；本集合拦截它们，交给轮询全量快照兜底（(重)连接清空）。
-    const sseKnownPartIds = new Set<string>();
+    // 事件路可用性（T14 终态协调）：驱动有 baseUrl ⇒ 走 v2 事件总线（`/api/event`）。
+    // T18：v1 驱动已删除 ⇒ 不再有「没有事件总线」的驱动实现；判据只剩「驱动是否已注入
+    // baseUrl」（未注入 = serve 尚未就绪或注入的是无事件路的自定义实现）。
+    const eventPathAvailable = sseEnabled && Boolean(this.driver.baseUrl);
+    // 流式内容累积器（把 v2 的增量事件累积成「当前全文」part）：断线重连时**必须清空**
+    // ——v2 /api/event 是 volatile 实时总线（不重放历史帧），续用旧缓冲会拼出一段
+    // 从未存在过的正文。
+    const accumulator = new V2StreamAccumulator();
     let sseStream: ServeEventStream | null = null;
     if (sseEnabled && this.driver.baseUrl) {
       sseStream = new ServeEventStream({
         baseUrl: this.driver.baseUrl,
         serverPassword: this.driver.authPassword,
         logger: this.logger,
-        onMessageInfo: (info) => {
-          if (info.role === 'assistant' && typeof info.id === 'string' && info.id) {
-            assistantMsgIds.add(info.id);
-          }
+        onEvent: (frame) => {
+          this.handleV2Event(frame, sessionID, ctx, accumulator, gate, enqueueParts, detector);
         },
-        onPart: (part, kind) => {
-          // 全局总线过滤：① sessionID 匹配本任务会话（缺失时放行由消息集合兜底）；
-          // ② **严格 assistant-only**：messageID 必须存在且属于已知 assistant 消息。
-          //    part 本身不带 role，只有 message.updated 的 info.role 能区分——user/system
-          //    part（含注入的 prompt 上下文块：任务上下文/群聊回复要求 + 用户原文）绝不
-          //    进入流式 delta。旧实现在 assistant 集合为空时存在「逃逸口」，导致首条
-          //    assistant message.updated 到达前的任意 part（即 user 注入文本）被当 delta 上送。
-          // ③ assistant 消息在其 message.updated 之前到达的 part：本路直接丢弃，由轮询快照路
-          //    （extractNewParts，按 role=assistant 过滤）回填——丢帧不会永久丢失。
-          if (part.sessionID && part.sessionID !== sessionID) {
-            return;
-          }
-          if (!part.messageID || !assistantMsgIds.has(part.messageID)) {
-            return;
-          }
-          // ④ 增量合成（delta）只对已见过权威整快照的 part 放行：连接晚于 part 开始时，
-          //    缓冲仅为「连接后的后缀片段」，不可当全文上送（见 sseKnownPartIds）。
-          if (kind === 'delta' && !sseKnownPartIds.has(part.id)) {
-            return;
-          }
-          if (kind === 'update') {
-            sseKnownPartIds.add(part.id);
-          }
-          enqueueParts([part as unknown as ServePart], kind);
+        onMalformed: (info) => {
+          this.logger.warn(
+            `[sse-forward] 事件帧解析失败（累计 ${info.count} 次，该帧丢弃、不中断流）: ${info.reason}`,
+          );
         },
         onOpen: () => {
-          // 连接成活（首帧 server.connected）。**刻意不 reset 去重基准**：/event 不重放
-          // 历史帧，若清空基准，重连后的首个 delta 缓冲（仅含连接后的片段）会被当成
-          // 新快照上送并覆盖轮询已发全文 → 渲染回退。保留基准后，admitSsePart 的单调
-          // 准入会丢弃这些更短/非推进的片段；轮询路持续以全量快照兜底，不丢内容。
-          // 清空已见 part 集合：重连后须重新见过整快照才放行该 part 的增量。
-          sseKnownPartIds.clear();
-          this.logger.info(`[sse-forward] serve /event 已订阅（session=${sessionID}），增量按单调准入上送`);
+          // 连接成活（首帧 server.connected 或心跳）。**刻意不 reset 去重基准**：
+          // /api/event 不重放历史帧，若清空基准，重连后的首个增量（仅含连接后的片段）
+          // 会被当成新快照上送并覆盖轮询已发全文 → 渲染回退。保留基准后，
+          // admitSsePart 的单调准入会丢弃这些更短/非推进的片段；轮询路持续以全量
+          // 快照兜底，不丢内容。
+          this.logger.info(`[sse-forward] serve /api/event 已订阅（session=${sessionID}）`);
         },
-        onClose: (reason) => {
-          this.logger.warn(`[sse-forward] serve /event 断开（${reason}），轮询兜底路接管，将自动重连`);
+        onClose: (reason, info) => {
+          // v2 /api/event 是 **volatile 契约**：慢消费者会 overflow 断流、断线期间的事件
+          // 会丢。⇒ 与「serve 进程退出」是**两类不同的故障**，日志必须能分辨：
+          // - 一帧都没收到就断 = serve 不可达（进程退出/重启）；
+          // - 收到过帧再断 = 事件流中断（慢消费者 overflow 或对端断开）。
+          const kind =
+            info.frames === 0
+              ? 'serve 不可达（进程退出/重启）'
+              : '事件流中断（volatile 契约：慢消费者 overflow / 对端断开）';
+          this.logger.warn(
+            `[sse-forward] serve /api/event 断开（${reason}，本连接收到 ${info.frames} 帧）：${kind}；` +
+              '将退避重连，重连后从驱动轮询重同步状态',
+          );
+        },
+        onReconnect: async (info) => {
+          // ① 清空增量缓冲：/api/event 不重放历史帧，跨连接续用旧缓冲会拼出从未存在过的正文
+          accumulator.clear();
+          this.logger.warn(
+            `[sse-forward] 事件流重连（第 ${info.attempt} 次）：已清空增量缓冲，开始状态重同步`,
+          );
+          // ② 状态重同步：断线期间的事件已丢（volatile 契约）→ 从驱动拉权威快照重建。
+          //    权威状态只能靠轮询恢复（消息快照），不信任流。
+          try {
+            const messages = normalizeV2ContentIds(await this.driver.getMessages(sessionID));
+            const resent = enqueueDelta(messages);
+            this.logger.info(
+              `[sse-forward] 重连后状态重同步完成（session=${sessionID}，补发 ${resent} 个 part）`,
+            );
+          } catch (err) {
+            this.logger.warn(
+              `[sse-forward] 重连后状态重同步失败（轮询兜底路继续跑）: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         },
       });
       sseStream.start();
     }
-    const result = await sendAndAwait(
-      this.driver,
-      sessionID,
-      {
-        model: payload.model ?? null,
-        agent: payload.agent,
-        parts,
-        directory: payload.directory,
-        system: payload.system,
-      },
-      {
-        firstTokenTimeoutMs: this.firstTokenTimeoutMs,
-        totalTimeoutMs: this.totalTimeoutMs,
-        pollMs: this.pollMs,
-        serveErrorReader: this.serveErrorReader,
-        serveLogReader: this.serveLogReader,
-        // T17：serve 日志模型错误检测——匹配模型 API 错误关键词 + 结构化错误门（Rate limit/
-        // Free usage 等不透传 message.info.error）；true=提前失败（abort + 抛错，
-        // 错误文本经 CompletionTimeoutError 透传 agent.status error 事件）。结构化门
-        // （level=ERROR / error.* 字段）杜绝正常 INFO 行误触发提前 abort。
-        // T17-subagent：share subscriber 行是子 agent 域失败（主循环存活可自恢复），
-        // 永不触发 abort——只认顶层致命（prompt_async failed / process error /
-        // 本会话 stream error）。线上实测 08:18：一行子域 Model-not-found 秒杀
-        // PM+architect 两个健康主 agent（step=6，group_post 在途）。
-        // 含模型下架（ProviderModelNotFoundError / Model not found）：顶层命中即快速失败
-        // （重试同一模型必然继续失败，空等首字超时无意义）；子域形态由 isServeFatalLine 排除。
-        onServeError: (text) => isServeFatalLine(text),
-        onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
-          enqueueDelta(messages);
-          // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）
-          void detector.detect(ctx, sessionID);
+    try {
+      const result = await sendAndAwait(
+        this.driver,
+        sessionID,
+        {
+          model: payload.model ?? null,
+          agent: payload.agent,
+          parts,
+          directory: payload.directory,
+          system: payload.system,
+          // T18/D7：常规下发的投递策略**显式**取 steer（v2 的默认投递策略本就是 steer，
+          // 但不依赖默认——默认值一变，行为就静默漂移）。
+          delivery: 'steer',
         },
-      },
-    );
-    // 终态事件（session.updated idle / task.completed）由调用方在 runSendAndAwait 返回后
-    // 上送——先排空 delta 链，保证所有流式快照严格早于终态事件抵达 server。
-    await deltaChain;
-    sseStream?.close();
-    return result;
+        {
+          firstTokenTimeoutMs: this.firstTokenTimeoutMs,
+          totalTimeoutMs: this.totalTimeoutMs,
+          pollMs: this.pollMs,
+          serveErrorReader: this.serveErrorReader,
+          serveLogReader: this.serveLogReader,
+          // T17：serve 日志模型错误检测——匹配模型 API 错误关键词 + 结构化错误门（Rate limit/
+          // Free usage 等不透传 message.info.error）；true=提前失败（abort + 抛错，
+          // 错误文本经 CompletionTimeoutError 透传 agent.status error 事件）。结构化门
+          // （level=ERROR / error.* 字段）杜绝正常 INFO 行误触发提前 abort。
+          // T17-subagent：share subscriber 行是子 agent 域失败（主循环存活可自恢复），
+          // 永不触发 abort——只认顶层致命（prompt_async failed / process error /
+          // 本会话 stream error）。线上实测 08:18：一行子域 Model-not-found 秒杀
+          // PM+architect 两个健康主 agent（step=6，group_post 在途）。
+          // 含模型下架（ProviderModelNotFoundError / Model not found）：顶层命中即快速失败
+          // （重试同一模型必然继续失败，空等首字超时无意义）；子域形态由 isServeFatalLine 排除。
+          onServeError: (text) => isServeFatalLine(text),
+          onPoll: (messages: DriverMessage[], _elapsedMs: number) => {
+            // 内容 id 归一：让**轮询路**与**事件路**产出同一个 part id（否则 server 侧按
+            // id 合并时同一段正文会存成两个 part）。
+            enqueueDelta(normalizeV2ContentIds(messages));
+            // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）
+            void detector.detect(ctx, sessionID);
+          },
+          // T14：把**本轮的终态闸门**交给语义层当事件信号——轮询路与事件路从此合流到
+          // 同一个判定出口：① 轮询路判定前先问闸门（事件证据优先：事件路已判失败/中断时，
+          // 轮询路不得宣告成功）；② 轮询路判定完成后把自己的证据记进闸门（一次性收口
+          // settle() 仍由本层做，语义层不消耗它）。
+          // ⚠️ 顺序不可颠倒：闸门的 peek() 返回「事件证据 ?? 轮询证据」，**先问后记**才能
+          // 分清「事件路还没说话」与「事件路说了成功」——反了会把宽限期内迟到的失败吞掉
+          // （失败被当成成功）。语义层内部已按「先问后记」实现（见 prompt-await）。
+          // v1 回退路径（无事件路）⇒ 整块不传：轮询路不等待宽限期，行为零变化。
+          ...(eventPathAvailable
+            ? {
+                eventSignal: gate,
+                eventGraceMs: EVENT_GRACE_MS,
+                logger: this.logger,
+              }
+            : {}),
+        },
+      );
+      // 终态事件（session.updated idle / task.completed）由调用方在 runSendAndAwait 返回后
+      // 上送——先排空 delta 链，保证所有流式快照严格早于终态事件抵达 server。
+      await deltaChain;
+      return result;
+    } finally {
+      // **失败路径也必须关流**：否则 SSE 客户端会对着已死/已弃用的 serve 无限退避重连
+      // （挂住定时器 = 挂住进程）。
+      sseStream?.close();
+      accumulator.clear();
+    }
+  }
+
+  /**
+   * v2 事件 → vteam 事件的桥接（映射表见 `v2-event-map.ts`）。
+   *
+   * 三步：① 按会话过滤（/api/event 是全局总线）→ ② 查映射表 → ③ 上送（附上游身份）。
+   *
+   * 终态事件（`session.execution.*`）**不在这里发送**——交给 `RunTerminalGate` 统一
+   * 收口，否则事件路与消息轮询路会各发一次完成事件。
+   */
+  private handleV2Event(
+    frame: V2EventFrame,
+    sessionID: string,
+    ctx: Record<string, string | undefined>,
+    accumulator: V2StreamAccumulator,
+    gate: RunTerminalGate,
+    enqueueParts: (parts: DriverContent[], upstream?: UpstreamEventIdentity) => void,
+    detector: PendingQuestionDetector,
+  ): void {
+    // ① 全局总线过滤：只处理本任务会话的事件（无会话 id 的帧无法归属 → 丢弃）
+    const frameSession = resolveV2SessionId(frame);
+    if (frameSession === '' || frameSession !== sessionID) {
+      return;
+    }
+    // ② 映射（表驱动；未映射的事件 = 「已知未支持」清单里的条目，丢弃即可）
+    const outcomes = mapV2Event(frame, { sessionId: sessionID, accumulator });
+    if (outcomes.length === 0) {
+      return;
+    }
+    const identity = deriveUpstreamIdentity(frame);
+    for (const outcome of outcomes) {
+      if (outcome.kind === 'trigger') {
+        // ephemeral 触发器：只触发一次拉取（拉到的请求由 detector 上送，带自己的上游身份）
+        void detector.detect(ctx, sessionID);
+        continue;
+      }
+      if (outcome.terminal !== undefined) {
+        // 终态：交终态闸门（不直接发送）
+        gate.noteEvent(
+          {
+            verdict: outcome.terminal,
+            ...(typeof outcome.payload.error === 'string' ? { error: outcome.payload.error } : {}),
+          },
+          identity,
+        );
+        continue;
+      }
+      // ③ 上送（附上游身份 → server 可跨 worker 重启去重）
+      if (outcome.type === WORKER_EVENT_TYPES.MESSAGE_PART_DELTA) {
+        // 流式增量走串行链（与轮询路同一条链，保证顺序）
+        const parts = outcome.payload.parts;
+        enqueueParts(
+          Array.isArray(parts) ? (parts as DriverContent[]) : [],
+          identity,
+        );
+        continue;
+      }
+      void this.sender.send(outcome.type, {
+        ...ctx,
+        ...outcome.payload,
+        upstream: identity,
+      });
+    }
   }
 
   /** onPoll 钩子的上送段：把已提取的增量 parts 作为 message.part.delta 事件发出
-   *  （payload 形状不变：{ ...ctx, parts, status:'streaming' }）。 */
+   *  （payload 形状不变：{ ...ctx, parts, status:'streaming' }）。
+   *
+   *  `upstream` 只在**事件路**有值（v2 事件的上游身份 → server 可跨 worker 重启去重）；
+   *  轮询路的消息快照不是上游事件 → 不带身份。 */
   private async sendDelta(
     ctx: Record<string, string | undefined>,
-    parts: ServePart[],
+    parts: DriverContent[],
+    upstream?: UpstreamEventIdentity,
   ): Promise<void> {
     await this.sender.send(WORKER_EVENT_TYPES.MESSAGE_PART_DELTA, {
       ...ctx,
       parts,
       status: 'streaming',
+      ...(upstream !== undefined ? { upstream } : {}),
     });
   }
 }
@@ -1989,7 +2823,7 @@ class PendingQuestionDetector {
   private detecting = false;
 
   constructor(
-    private readonly driver: V1Driver,
+    private readonly driver: OpenCodeDriver,
     private readonly sender: EventSender,
     private readonly logger: Logger,
   ) {}
@@ -2000,7 +2834,7 @@ class PendingQuestionDetector {
     }
     this.detecting = true;
     try {
-      const questions = await this.driver.listQuestions(sessionID);
+      const questions = await fetchPendingForms(this.driver, sessionID);
       for (const q of questions) {
         const key = `q:${q.id}`;
         if (this.reported.has(key)) {
@@ -2012,9 +2846,12 @@ class PendingQuestionDetector {
           sessionId: sessionID,
           requestId: q.id,
           questions: q.questions,
+          // 上游身份：拉取派生的事件没有自己的事件帧 → 用**上游对象 id**
+          // （表单 id）作去重标识（一次触发可能拉出多个表单，用触发事件 id 会折叠成一条）
+          upstream: { eventId: q.id },
         });
       }
-      const permissions = await this.driver.listPermissions(sessionID);
+      const permissions = await fetchPendingPermissions(this.driver, sessionID);
       for (const p of permissions) {
         const key = `p:${p.id}`;
         if (this.reported.has(key)) {
@@ -2029,6 +2866,7 @@ class PendingQuestionDetector {
           type: p.action,
           pattern: resources.length === 1 ? resources[0] : resources,
           title: p.action,
+          upstream: { eventId: p.id },
         });
       }
     } catch (err) {

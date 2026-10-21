@@ -113,6 +113,37 @@ function formatQuestionText(question: Record<string, unknown>): string {
 }
 
 /**
+ * 渠道绑定域的可辨错误（缺陷 2）。
+ *
+ * `channel_send` 此前把「团队没绑定任何通知渠道」与「渠道名不存在」都笼统报成
+ * 「无法解析当前任务上下文」，把模型引向错误方向（去查任务上下文而不是查渠道绑定）。
+ * 这两个错误类把两种失败条件**分开**，并携带该团队**可用渠道清单**，
+ * 由调用方（MCP 层）据此给出可直接照做的文案。
+ */
+export class NotificationChannelNotBoundError extends Error {
+  constructor(
+    readonly teamId: string,
+    /** 该团队当前可用的渠道（id(name) 形态；未绑定时为空数组）。 */
+    readonly available: string[],
+  ) {
+    super(`团队 ${teamId} 未绑定任何通知渠道`);
+    this.name = 'NotificationChannelNotBoundError';
+  }
+}
+
+export class NotificationChannelNotFoundError extends Error {
+  constructor(
+    readonly teamId: string,
+    readonly target: string,
+    /** 该团队当前可用的渠道（id(name) 形态）。 */
+    readonly available: string[],
+  ) {
+    super(`渠道 ${target} 不存在或未绑定到团队 ${teamId}`);
+    this.name = 'NotificationChannelNotFoundError';
+  }
+}
+
+/**
  * Notifications are agent-decided via MCP, not auto-pushed.
  *
  * Inbound webhooks (generic/github/gitee/wecom) still post to task group via
@@ -534,25 +565,53 @@ export class NotificationDispatcherService
   /**
    * MCP channel_send 兼容：按团队绑定的通知渠道 id/name 定向发送（供 PlatformMcpService 调用）。
    * 在任务所属团队的 TeamNotificationChannel 绑定范围内查找匹配 id 或 name 的可用渠道，命中后经 dispatchToChannel 发送。
+   *
+   * 作用域：渠道绑定是**团队级**概念，故 `opts.teamId` 显式给出时直接用（团队会话
+   * 无任务时的路径）；缺省才由 taskId 反查团队。
+   *
+   * 失败条件**分开表达**（缺陷 2）：未绑定任何渠道 → NotificationChannelNotBoundError；
+   * 渠道名不存在 → NotificationChannelNotFoundError（两者都带该团队的可用渠道清单）。
    */
   async sendToChannelByIdOrName(
-    taskId: string,
+    taskId: string | null,
     target: string,
     text: string,
+    opts?: { teamId?: string | null },
   ): Promise<void> {
-    // Find task's team
-    let teamId: string | null = null;
+    const teamId = opts?.teamId ?? (await this.teamIdOfTask(taskId));
+    if (!teamId) throw new Error(`任务 ${taskId} 未关联团队`);
+
+    const channels = await this.boundChannelsOfTeam(teamId);
+    const available = channels
+      .filter((c) => c.enabled)
+      .map((c) => `${c.id}(${c.name})`);
+    if (channels.length === 0) {
+      throw new NotificationChannelNotBoundError(teamId, available);
+    }
+    const ch = channels.find((c) => c.id === target || c.name === target);
+    if (!ch) {
+      throw new NotificationChannelNotFoundError(teamId, target, available);
+    }
+    if (!ch.enabled) throw new Error(`渠道 ${target} 已停用`);
+    await this.dispatchToChannel(ch, { kind: 'markdown', text });
+  }
+
+  /** 任务 → 团队（null = 任务不存在或未关联团队）。 */
+  private async teamIdOfTask(taskId: string | null): Promise<string | null> {
+    if (!taskId) return null;
     try {
       const task = await (this.prisma as any).task.findUnique({
         where: { id: taskId },
         select: { teamId: true },
       });
-      teamId = task?.teamId ?? null;
+      return task?.teamId ?? null;
     } catch {
-      teamId = null;
+      return null;
     }
-    if (!teamId) throw new Error(`任务 ${taskId} 未关联团队`);
+  }
 
+  /** 团队已绑定的通知渠道（含停用行——停用与不存在要分开报错）。 */
+  private async boundChannelsOfTeam(teamId: string): Promise<any[]> {
     const links: Array<{ notificationChannelId: string }> = await (
       this.prisma as any
     ).teamNotificationChannel.findMany({
@@ -562,16 +621,10 @@ export class NotificationDispatcherService
     const ids = (links ?? [])
       .map((l) => l.notificationChannelId)
       .filter(Boolean);
-    if (ids.length === 0) throw new Error(`团队 ${teamId} 未绑定任何通知渠道`);
-    const channels: any[] = await (
-      this.prisma as any
-    ).notificationChannel.findMany({
-      where: { id: { in: ids }, enabled: true },
+    if (ids.length === 0) return [];
+    return await (this.prisma as any).notificationChannel.findMany({
+      where: { id: { in: ids } },
     });
-    const ch = channels.find((c) => c.id === target || c.name === target);
-    if (!ch) throw new Error(`渠道 ${target} 不存在或未绑定到团队 ${teamId}`);
-    if (!ch.enabled) throw new Error(`渠道 ${target} 已停用`);
-    await this.dispatchToChannel(ch, { kind: 'markdown', text });
   }
 
   /**

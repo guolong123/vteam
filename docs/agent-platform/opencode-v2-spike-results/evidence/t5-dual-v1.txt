@@ -1,0 +1,21 @@
+### install @opencode-ai/plugin (v1 era) into the scratch project
+(no @opencode-ai installed)
+
+### start v1 serve (1.18.32)
+Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.
+opencode server listening on http://127.0.0.1:46001
+--- v1 GET /config (plugin list) ---
+plugin = ['file:///private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/spike/dualv1/proj/.opencode/plugins/dual-tools.ts']
+--- v1 session create ---
+v1 session=ses_ea8e7bd5affem9cDFBodZoUasF
+--- v1 prompt_async (v1 body: parts[]) ---
+
+--- v1 messages ---
+[{"info":{"id":"msg_1571842c40015AI910mZQJDYR9","sessionID":"ses_ea8e7bd5affem9cDFBodZoUasF","role":"user","time":{"created":1792462570180},"summary":{"diffs":[]},"agent":"build","model":{"providerID":"spike-mock","modelID":"spike-model"}},"parts":[{"id":"prt_1571842c8001Gmlyd31oU2eSW9","sessionID":"ses_ea8e7bd5affem9cDFBodZoUasF","messageID":"msg_1571842c40015AI910mZQJDYR9","type":"text","text":"v1 dual probe __TOOL__:dual_probe:{\"n\":\"1\"}"}]},{"info":{"id":"msg_157184399001QOrs8Hv9a1g4LL","sessionID":"ses_ea8e7bd5affem9cDFBodZoUasF","role":"assistant","time":{"created":1792462570393},"parentID":"msg_1571842c40015AI910mZQJDYR9","modelID":"spike-model","providerID":"spike-mock","mode":"build","agent":"build","path":{"cwd":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/spike/dualv1/proj","root":"/"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}},"parts":[]}]
+--- markers ---
+  V1_DUAL_SERVER.txt: v1 server() called
+  V1_DUAL_SETUP.txt: v2 setup called
+t5-dualv1.sh: line 99: 12357 Terminated: 15          ( cd "$BASE/proj" && HOME="$BASE/home" XDG_CONFIG_HOME="$BASE/home/.config" "$V1BIN" serve --port 46001 --hostname 127.0.0.1 > "$BASE/v1.log" 2>&1 )
+--- v1 log tail ---
+Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.
+opencode server listening on http://127.0.0.1:46001

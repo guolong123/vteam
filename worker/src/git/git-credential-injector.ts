@@ -43,6 +43,10 @@ export interface GitCredsFile {
 export interface GitCredsResult {
   /** 凭证文件完整路径（= $HOME/.keta-git-creds.json） */
   path: string;
+  /**
+   * 实际写盘的全部路径（双写时 = [插件可见的那份, worker 自己 HOME 那份]；单写时 = [path]）。
+   */
+  paths?: string[];
 }
 
 /** 条目合法性判定（buildGitCredsFile 过滤 + handleGitCredentials 统计共用）。 */
@@ -78,16 +82,42 @@ export function buildGitCredsFile(
  * writeFileSync（mode 600）+ chmodSync 兜底（仿 writeAuthJson 双保险）。
  * homedir 在函数内动态求值（模块级常量 GIT_CREDS_FILE 加载时固化，此处保证
  * 测试/运行时 mock 均生效）。返回 { path }。
+ *
+ * @param targetHome **插件可见的 HOME**（= opencode 隔离配置域的 HOME）。传入时**双写**
+ *   （两份内容完全相同）：
+ *   ① `<targetHome>/.keta-git-creds.json`——**插件真正读的那一份**：git 工具族是注入到
+ *      `<workDir>/.opencode/plugins/git.ts` 的插件，跑在 **opencode serve 子进程**里，而
+ *      v2 隔离配置域把子进程的 HOME 重定向到隔离域 ⇒ 插件里的 `os.homedir()` 解析到的
+ *      是隔离域，不是 worker 自己的 HOME（v1 时 serve 继承宿主 HOME，两侧才碰巧一致）。
+ *   ② `os.homedir()/.keta-git-creds.json`——worker 自己的 HOME：幂等对比的读取面
+ *      （`handleGitCredentials` 比的就是这个文件）+ 兼容既有读法。
+ *   顺序：先写插件可见的那份 ⇒ 它写失败时 worker 自己那份**不会**被更新 ⇒ 下次下发
+ *   仍判定"内容变化"并重试两份（不会因半写而永久卡在旧内容）。
+ *   不传 = 只写 worker 自己的 HOME（既有行为不变）。
  */
-export function writeGitCredsFile(entries: GitCredentialEntry[]): GitCredsResult {
-  const homedir = os.homedir();
-  fs.mkdirSync(homedir, { recursive: true });
-  const credsPath = path.join(homedir, '.keta-git-creds.json');
-  fs.writeFileSync(credsPath, buildGitCredsFile(entries), {
-    mode: GIT_CREDS_FILE_MODE,
-  });
-  fs.chmodSync(credsPath, GIT_CREDS_FILE_MODE);
-  return { path: credsPath };
+export function writeGitCredsFile(
+  entries: GitCredentialEntry[],
+  targetHome?: string,
+): GitCredsResult {
+  const content = buildGitCredsFile(entries);
+  const workerHome = os.homedir();
+  const homes: string[] = [];
+  if (targetHome && path.resolve(targetHome) !== path.resolve(workerHome)) {
+    homes.push(targetHome);
+  }
+  homes.push(workerHome);
+  const written: string[] = [];
+  for (const home of homes) {
+    fs.mkdirSync(home, { recursive: true });
+    const credsPath = path.join(home, '.keta-git-creds.json');
+    fs.writeFileSync(credsPath, content, {
+      mode: GIT_CREDS_FILE_MODE,
+    });
+    fs.chmodSync(credsPath, GIT_CREDS_FILE_MODE);
+    written.push(credsPath);
+  }
+  // 返回插件可见的那份（双写时）；单写时就是 worker 自己 HOME 那份。
+  return { path: written[0], paths: written };
 }
 
 /**

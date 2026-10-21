@@ -478,7 +478,15 @@ export class QuestionsService {
     const answers: Prisma.InputJsonValue =
       row.kind === AGENT_QUESTION_KINDS.QUESTION
         ? (payload.answers as Prisma.InputJsonValue)
-        : { response: payload.response };
+        : {
+            response: payload.response,
+            // 拒绝必须**留下可读原因**：回复调用方（用户/确认 agent）拿到的答复里
+            // 只有 status=resolved + response='reject' 时，看不出「被拒的是什么」，
+            // 拒绝就成了静默失败（与缺陷 2「回执为空、无原因」同一类问题）。
+            ...(payload.response === 'reject'
+              ? { reason: this.permissionRejectionReason(row) }
+              : {}),
+          };
     const status =
       row.kind === AGENT_QUESTION_KINDS.QUESTION && payload.answers === null
         ? AGENT_QUESTION_STATUS.REJECTED
@@ -548,6 +556,35 @@ export class QuestionsService {
       teamId ? { type: 'team', id: teamId } : { type: 'global' },
     );
     return this.toDto(updated, managedMode);
+  }
+
+  /**
+   * 权限拒绝的可读原因（落进 AgentQuestion.answers.reason，回给回复调用方）。
+   *
+   * 动作与资源取自 AgentQuestion.content（worker 上送的 session.permission 事件里
+   * `type`=动作、`pattern`=资源）——被拒的是「访问外部目录」还是「执行某条命令」，
+   * 对被拒方接下来的降级动作影响很大，只说「被拒绝」等于让对方瞎猜。
+   */
+  private permissionRejectionReason(row: AgentQuestion): string {
+    const content = (row.content ?? {}) as {
+      type?: unknown;
+      pattern?: unknown;
+    };
+    const action =
+      typeof content.type === 'string' && content.type !== ''
+        ? content.type
+        : '未知动作';
+    const resources = Array.isArray(content.pattern)
+      ? content.pattern
+          .filter((r): r is string => typeof r === 'string')
+          .join('、')
+      : typeof content.pattern === 'string' && content.pattern !== ''
+        ? content.pattern
+        : '';
+    return (
+      `权限请求被拒绝（动作：${action}${resources ? `，资源：${resources}` : ''}）：` +
+      '本次操作未获授权，请改用其它方案继续推进。'
+    );
   }
 
   /** ses_ 回退 worker 定位：任务 teamId + 模板 agentId → 团队成员 → 其团队会话绑定 worker。 */
@@ -906,7 +943,15 @@ export class QuestionsService {
     const answers: Prisma.InputJsonValue =
       row.kind === AGENT_QUESTION_KINDS.QUESTION
         ? (payload.answers as Prisma.InputJsonValue)
-        : { response: payload.response };
+        : {
+            response: payload.response,
+            // 拒绝必须**留下可读原因**：回复调用方（用户/确认 agent）拿到的答复里
+            // 只有 status=resolved + response='reject' 时，看不出「被拒的是什么」，
+            // 拒绝就成了静默失败（与缺陷 2「回执为空、无原因」同一类问题）。
+            ...(payload.response === 'reject'
+              ? { reason: this.permissionRejectionReason(row) }
+              : {}),
+          };
     const status =
       row.kind === AGENT_QUESTION_KINDS.QUESTION && payload.answers === null
         ? AGENT_QUESTION_STATUS.REJECTED

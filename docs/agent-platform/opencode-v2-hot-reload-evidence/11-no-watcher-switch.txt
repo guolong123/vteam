@@ -1,0 +1,168 @@
+==============================================================================
+Artifact 11 — 不需要任何 watcher 开关 —— v2 的 watcher 段只有 `ignore`，热重载默认开启
+==============================================================================
+what      : 证明本次全部热重载都在「零 watcher 配置」下发生；并实测 v2 的 watcher 段只认 ignore（写 enabled 会被静默丢弃）
+when      : 2026-10-20T15:21:07.331Z
+binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
+serve     : http://127.0.0.1:61277  (pid 84513)
+isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
+scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+commands  :
+  $ cat "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/opencode.json"          # 全文 —— 没有 watcher 键
+  $ cat "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/opencode.json"          # 全文 —— 没有 watcher 键
+  $ # 实测 watcher 段只认 ignore：
+  $ node -e 'const f="/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.watcher={enabled:false};require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/config"   # 看归一化后的 watcher 段
+  $ grep 'watcher started' "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/serve.log"
+------------------------------------------------------------------------------
+--- 事实 1：本次全部热重载发生时，配置里**没有** watcher 段 --------------------
+项目配置 <proj>/opencode.json（原文）：
+---- 8< ----
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agents": {
+    "hotreload-agent": {
+      "description": "hot-reload probe agent",
+      "system": "SYSTEM_V3_MARKER_WATCHER"
+    }
+  },
+  "mcp": {
+    "servers": {
+      "hotreload-mcp": {
+        "type": "local",
+        "command": [
+          "node",
+          "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/mcp-stdio-server.mjs"
+        ],
+        "environment": {}
+      }
+    }
+  }
+}
+---- 8< ----
+
+隔离全局配置 $XDG_CONFIG_HOME/opencode/opencode.json（原文）：
+---- 8< ----
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "hotreload-global": {
+      "name": "Hot Reload Global",
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:45999/v1",
+        "apiKey": "sk-hot-reload-PROBE-NOT-A-REAL-KEY"
+      },
+      "models": {
+        "hotreload-global-model": {
+          "name": "hotreload-global-model"
+        }
+      }
+    },
+    "hotreload-lag": {
+      "name": "Hot Reload Lag",
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:45999/v1",
+        "apiKey": "sk-lag-PROBE-NOT-A-REAL-KEY"
+      },
+      "models": {
+        "hotreload-lag-model": {
+          "name": "hotreload-lag-model"
+        }
+      }
+    }
+  }
+}
+---- 8< ----
+
+⇒ 两个配置文件里**都没有** `watcher` 键；上面 01~10 的每一次热重载都是在这份
+  「零 watcher 配置」下发生的。
+
+--- 事实 2：v2 的 watcher 段只认 `ignore`（没有 enabled 之类的开关）----------
+（a）**契约级**：官方发布的 config schema 里的 `watcher` 定义（本次实时抓取）：
+      来源: https://opencode.ai/config.json
+      抓取时刻: 2026-10-20T15:21:05.329Z
+      ---- 8< ----
+      {
+        "type": "object",
+        "properties": {
+          "ignore": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "Filesystem watcher configuration"
+      }
+      ---- 8< ----
+      ⇒ `watcher` 的 `additionalProperties: false`，且**只有 `ignore` 一个属性**。
+
+（b）**实机级**：在项目配置里写 `watcher: { "enabled": false }`，v2 归一化后它变成：
+      写入时刻: 2026-10-20T15:21:00.088Z
+      ---- 8< ----
+      {}
+      ---- 8< ----
+（`enabled` 这个未知键被**静默丢弃**，watcher 段变成空对象；
+  serve 日志里也**没有**任何 `configuration normalization diagnostic` 告警 ——
+  证据（该时间窗内 serve 日志中 `normalization diagnostic` 的行数 =
+  0）：
+  (0 行 —— 没有告警)
+⇒ 也就是说：**根本没有「关掉热重载」这个旋钮**——热重载是默认行为，
+  唯一能配的只是 `watcher.ignore`（忽略哪些路径）。
+
+--- 事实 3：v2 的 watcher 是**默认开启**的 -----------------------------------
+serve 日志（watcher subscribe / started）：
+timestamp=2026-10-20T15:20:36.991Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode type=directory ignores=3 http.span=11 role=server
+timestamp=2026-10-20T15:20:36.993Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode type=directory ignores=3 http.span=13 role=server
+timestamp=2026-10-20T15:20:36.994Z level=INFO run=f8afcc2c message="watcher subscribe" path="/Library/Application Support" type=entries ignores=0 http.span=14 role=server
+timestamp=2026-10-20T15:20:36.994Z level=INFO run=f8afcc2c message="watcher started" path="/Library/Application Support" type=entries backend=node ignores=0 http.span=14 role=server
+timestamp=2026-10-20T15:20:36.994Z level=INFO run=f8afcc2c message="watcher subscribe" path=/ type=entries ignores=0 http.span=14 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/ type=entries backend=node ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private type=entries ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/private type=entries backend=node ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var type=entries ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/private/var type=entries backend=node ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders type=entries ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders type=entries backend=node ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.995Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y type=entries ignores=0 http.span=15 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y type=entries backend=node ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn type=entries ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn type=entries backend=node ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T type=entries ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T type=entries backend=node ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode type=entries ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode type=entries backend=node ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z type=entries ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z type=entries backend=node ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.996Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj type=entries ignores=0 http.span=16 role=server
+timestamp=2026-10-20T15:20:36.997Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj type=entries backend=node ignores=0 http.span=17 role=server
+
+⇒ 每一条 `watcher started ... ignores=0` 都说明监听已建立、忽略列表为空。
+
+--- 附：GET /api/config 的归一化回显（watcher 段为空对象）-------------------
+HTTP 200
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agents": {
+    "hotreload-agent": {
+      "system": "SYSTEM_V3_MARKER_WATCHER",
+      "description": "hot-reload probe agent"
+    }
+  },
+  "watcher": {},
+  "mcp": {
+    "servers": {
+      "hotreload-mcp": {
+        "type": "local",
+        "command": [
+          "node",
+          "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/mcp-stdio-server.mjs"
+        ],
+        "environment": {}
+      }
+    }
+  }
+}

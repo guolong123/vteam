@@ -18,6 +18,7 @@ import {
   extractConclusionParts,
   hasRenderableContent,
   mergePartsById,
+  normalizeParts,
   stripInjectedPromptParts,
 } from '../chat/message-parts';
 import { inferErrorType } from './infer-error-type';
@@ -153,7 +154,97 @@ const TASK_EVENT_ID_PREFIX = 'te';
 const MESSAGE_ID_PREFIX = 'm';
 
 /** 内存去重窗口上限（D4：seq 单调递增下保留最近 N 条即可覆盖连接内有序重发）。 */
-const DEDUP_WINDOW = 1000;
+export const DEDUP_WINDOW = 1000;
+
+/**
+ * 上游身份（worker 归一后随事件负载下发；opencode v2 适配 T12）。
+ *
+ * - `eventId`：v2 帧的 `evt_…` id —— **跨 worker 重启稳定**（worker 自己的
+ *   `evw_<bootId>_<seq>` 会随重启变，上游 id 不会）。
+ * - `aggregateId` / `seq`：v2 帧的 `durable` 块（`{aggregateID, seq, version}`）——
+ *   **仅 durable 事件有**（实测 delta 帧无 `durable`）。
+ * - `ordinal`：v2 文本增量的单调序号 —— **仅 delta 事件有**，在同一条 assistant
+ *   消息内单调递增。
+ */
+export interface UpstreamIdentity {
+  eventId: string;
+  aggregateId?: string;
+  seq?: number;
+  ordinal?: number;
+}
+
+/**
+ * 从事件负载里读上游身份（缺失 / 畸形 → undefined，即「无上游身份」）。
+ *
+ * 上游身份放在**事件负载**的 `upstream` 字段里（worker → server 的契约）；
+ * 老 worker 不带该字段 → 走 `(workerId, eventId)` 的存量去重口径。
+ */
+function readUpstreamIdentity(
+  dto: WorkerEventDto,
+): UpstreamIdentity | undefined {
+  const raw = (dto.payload as { upstream?: unknown } | null | undefined)
+    ?.upstream;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const eventId =
+    typeof record.eventId === 'string' && record.eventId !== ''
+      ? record.eventId
+      : undefined;
+  if (eventId === undefined) {
+    return undefined;
+  }
+  const aggregateId =
+    typeof record.aggregateId === 'string' && record.aggregateId !== ''
+      ? record.aggregateId
+      : undefined;
+  const seq =
+    typeof record.seq === 'number' && Number.isFinite(record.seq)
+      ? record.seq
+      : undefined;
+  const ordinal =
+    typeof record.ordinal === 'number' && Number.isFinite(record.ordinal)
+      ? record.ordinal
+      : undefined;
+  return {
+    eventId,
+    ...(aggregateId !== undefined ? { aggregateId } : {}),
+    ...(seq !== undefined ? { seq } : {}),
+    ...(ordinal !== undefined ? { ordinal } : {}),
+  };
+}
+
+/**
+ * 幂等键（**唯一**构造点；`isDuplicate` 只消费这里算出的键）。
+ *
+ * 三类事件 → 三个键：
+ * 1. **durable**（带 `aggregateId` + `seq`）→ `upstream:<aggregateId>:<seq>`
+ *    —— 上游 id 不随 worker 重启变化 ⇒ **worker 重启后重放同一上游事件仍判重**
+ *    （这是本次改动的核心：worker 自己的 `evw_<bootId>_<seq>` 会变）。
+ * 2. **ephemeral delta**（无 durable，有 `ordinal`）→ `upstream:<eventId>:<ordinal>`
+ *    —— `ordinal` 在同一 assistant 消息内单调 ⇒ 同一帧重投不会被应用两次。
+ *    口径说明：键里**同时**带 eventId 与 ordinal ⇒ 「同 ordinal 不同 eventId」
+ *    视为**不同**事件（保守：宁可多处理一次，也不吞掉一条真实增量）。
+ * 3. **其余**（无上游身份：老 worker、`worker.heartbeat`、`instance.created`、
+ *    `git.op` 等非上游事件）→ `worker:<workerId>:<eventId>`（存量口径不变）。
+ *
+ * 注：ephemeral 且**无 ordinal** 的上游事件（如 v2 的 `form.created` → vteam 的
+ * `session.question`）落到 `upstream:<eventId>`——v2 帧 id 本身全局唯一，重投仍判重。
+ */
+export function dedupKeyOf(dto: WorkerEventDto): string {
+  const upstream = readUpstreamIdentity(dto);
+  if (!upstream) {
+    return `worker:${dto.workerId}:${dto.eventId}`;
+  }
+  if (upstream.aggregateId !== undefined && upstream.seq !== undefined) {
+    return `upstream:${upstream.aggregateId}:${upstream.seq}`;
+  }
+  if (upstream.ordinal !== undefined) {
+    return `upstream:${upstream.eventId}:${upstream.ordinal}`;
+  }
+  return `upstream:${upstream.eventId}`;
+}
 
 /** message.part.delta 组装态缓存上限（有界；超限淘汰最旧——淘汰前会先把该条目
  *  未落库的尾段 flush 掉，见 cacheAssembled/flushEvictedStream）。 */
@@ -238,16 +329,33 @@ type AssemblingEntry = {
  * - task.completed → 最高优先级：解析 payload → onTaskCompleted 回调（T10 注册做
  *   落库+广播+emitFinal）；Ingress 自身不 emit task.completed
  *
- * 幂等（D4）：内存 Map key=`workerId:eventId` + 窗口环形缓冲（保留最近
- * DEDUP_WINDOW 条）；已见 → 返回 false 不重复处理。已知限制：server 重启后
- * 内存去重丢失 → at-least-once 边界（M4 规模可接受，生产级需 Phase 5
- * (worker_id, event_id) 唯一索引）；超窗口重放不幂等（worker 侧连接内有序不重发兜底）。
+ * 幂等（opencode v2 适配 T12）：内存 Map（键口径见 `dedupKeyOf`）+ 窗口环形缓冲
+ * （保留最近 DEDUP_WINDOW 条）；已见 → 返回 false 不重复处理。
+ *
+ * 键分三类（**上游身份优先**）：
+ * - durable 上游事件 → `upstream:<aggregateId>:<seq>`：**worker 重启后重放同一上游
+ *   事件仍判重**（上游 id 不变，worker 自己的 `evw_<bootId>_<seq>` 会变）。
+ * - ephemeral delta → `upstream:<eventId>:<ordinal>`：同一帧重投不重复应用。
+ * - 无上游身份（老 worker / 心跳 / instance.created / git.op 等）→ 沿用
+ *   `worker:<workerId>:<eventId>`，存量行为不变。
+ *
+ * ⚠️ **已知限制（不要误读为已修）**：去重表是**纯内存**的 ⇒ **server 重启后去重
+ * 状态全丢**，同一上游事件在 server 重启后仍会被重新处理一次。本次修的是
+ * **worker 重启**；server 重启的持久化去重需要 DB 唯一索引，**本阶段零 DDL 铁律
+ * 下不做**（生产级方案见 Phase 5）。
  */
 @Injectable()
 export class WorkerEventIngress {
   private readonly logger = new Logger(WorkerEventIngress.name);
 
-  /** 去重键 → 是否已见（键=`workerId:eventId`）；环形缓冲保证窗口内淘汰。 */
+  /**
+   * 去重键 → 是否已见（键口径见 `dedupKeyOf`：上游身份优先，无上游身份回落到
+   * `workerId:eventId`）；环形缓冲保证窗口内淘汰。
+   *
+   * ⚠️ **纯内存**：server 重启后本表全丢 ⇒ server 重启后同一上游事件仍会被重新
+   * 处理一次。**本次改动只修 worker 重启**（上游 id 跨 worker 重启稳定）。
+   * server 重启的持久化去重需 DB 唯一索引，本阶段**零 DDL**故不做。
+   */
   private readonly seen = new Map<string, true>();
   /** 键插入序（先进先出淘汰窗口）。 */
   private readonly order: string[] = [];
@@ -313,6 +421,11 @@ export class WorkerEventIngress {
     return this.sessionActivity.get(sessionId);
   }
 
+  /** 去重表当前条目数（诊断/测试用；窗口有界 ⇒ 恒 ≤ DEDUP_WINDOW）。 */
+  get dedupStoreSize(): number {
+    return this.seen.size;
+  }
+
   /** 刷新会话输出活动时间（空闲判死计时器；有 sessionId 才记录）。
    *  trigger-unification todo-7 双写：内存 sessionActivity map + DB
    *  Session.lastActivityAt（重启后内存丢失，scanIdleSessions 凭 DB 列判死）。
@@ -352,10 +465,9 @@ export class WorkerEventIngress {
         message: `Worker ${dto.workerId} 不存在（未注册）`,
       });
     }
-    if (this.isDuplicate(dto)) {
-      this.logger.debug(
-        `[dedup] 跳过重复事件 ${dto.workerId}:${dto.eventId} (${dto.type})`,
-      );
+    const dedupKey = dedupKeyOf(dto);
+    if (this.isDuplicate(dedupKey)) {
+      this.logger.debug(`[dedup] 跳过重复事件 key=${dedupKey} (${dto.type})`);
       return Promise.resolve(false);
     }
     switch (dto.type) {
@@ -684,7 +796,15 @@ export class WorkerEventIngress {
     // 注入提示防护：worker 异常时会把服务端注入的整段用户提示当流式增量回送，
     // 该 part 会污染 agent 处理行并被 UI 当成 agent 正文。此处先剔除注入提示
     // part，保证它既不建行也不累积进已有 processing 行（终态/读取期另有清洗）。
-    const kept = stripInjectedPromptParts(raw.parts);
+    // 存储形态边界：worker 上送的是 vteam 内部形态的 `parts[]`；若送来的是 v2
+    // 形态的 `content[]`（未来写入方 / 半迁移行），整包过边界归一后再落库。
+    const rawParts =
+      raw.parts !== undefined
+        ? raw.parts
+        : raw.content !== undefined
+          ? { content: raw.content }
+          : [];
+    const kept = stripInjectedPromptParts(normalizeParts(rawParts));
     if (kept.length === 0) {
       // 无保留 parts（纯非对象条目）→ 中间态无内容，不落库不广播
       this.logger.debug(
@@ -783,7 +903,9 @@ export class WorkerEventIngress {
         // 无条件追加会让一次工具调用在 content.parts 里堆出多份快照）。`monotonicText`
         // 单调守卫：同 id 的 text/reasoning 快照不得回退（更短/无包含关系 → 丢弃，
         // 保留更长旧快照）——修流式文本「出现→消失→再出现」的回退闪烁。
-        const merged = mergePartsById(oldContent.parts, kept, {
+        // 存储形态边界：整行 content 过边界（v1 形 `parts[]` 透传；v2 形 `content[]`
+        // 归一）——否则读到 v2 形行时旧内容会被当成空集而**静默丢失**。
+        const merged = mergePartsById(normalizeParts(oldContent), kept, {
           monotonicText: true,
         });
         const updated = await this.prisma.message.update({
@@ -1370,9 +1492,12 @@ export class WorkerEventIngress {
 
   // ---- 幂等 ----
 
-  /** 标记并判断是否已见：未见过 → 入 Map + 窗口淘汰最旧；已见 → true。 */
-  private isDuplicate(dto: WorkerEventDto): boolean {
-    const key = `${dto.workerId}:${dto.eventId}`;
+  /**
+   * 标记并判断是否已见：未见过 → 入 Map + 窗口淘汰最旧；已见 → true。
+   *
+   * 键由 `dedupKeyOf` 唯一构造（上游身份优先，无上游身份回落到 `workerId:eventId`）。
+   */
+  private isDuplicate(key: string): boolean {
     if (this.seen.has(key)) {
       return true;
     }
