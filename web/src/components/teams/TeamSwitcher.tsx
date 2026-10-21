@@ -5,12 +5,36 @@
  * 结构对照 `src/theme/theme-toggle.tsx`：mousedown 外点关闭 + role=menu / menuitemradio。
  * 团队身份由路由参数决定（URL 派生），切换即 `router.push('/teams/<id>/session')`。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
+
+/** 团队列表排序：最近活动的在前，从未活动的在后；同刻用 createdAt/名称/ID 兜底防抖。 */
+function sortTeamsByActivity(list: TeamDto[]): TeamDto[] {
+  const at = (t: TeamDto): number | null => {
+    const v = t.lastActivityAt ? Date.parse(t.lastActivityAt) : NaN;
+    return Number.isNaN(v) ? null : v;
+  };
+  const tiebreak = (a: TeamDto, b: TeamDto): number => {
+    const ca = Date.parse(a.createdAt);
+    const cb = Date.parse(b.createdAt);
+    if (Number.isFinite(ca) && Number.isFinite(cb) && ca !== cb) return cb - ca;
+    if (a.name !== b.name) return a.name < b.name ? -1 : 1;
+    return a.id < b.id ? -1 : 1;
+  };
+  return [...list].sort((a, b) => {
+    const ta = at(a);
+    const tb = at(b);
+    if (ta === null && tb === null) return tiebreak(a, b);
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    if (ta !== tb) return tb - ta;
+    return tiebreak(a, b);
+  });
+}
 
 export function TeamSwitcher({
   currentTeamId,
@@ -49,7 +73,8 @@ export function TeamSwitcher({
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
-  const teams = data?.items ?? [];
+  // 排序只作用于本下拉（接口的 createdAt desc 分页语义不动）。
+  const teams = useMemo(() => sortTeamsByActivity(data?.items ?? []), [data]);
 
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
@@ -157,7 +182,7 @@ export function TeamSwitcher({
                       {t.name}
                     </span>
                     <span style={{ display: "block", marginTop: 2, fontSize: fontSize.xs, color: neutral[400] }}>
-                      {`${(t.members ?? []).length} 成员 · ${t.currentTaskId ? "忙碌中" : "空闲"}`}
+                      {`${(t.members ?? []).length} 成员 · ${(t.activeTaskCount ?? 0) > 0 ? "忙碌中" : "空闲"}`}
                     </span>
                   </span>
                   {active && (
