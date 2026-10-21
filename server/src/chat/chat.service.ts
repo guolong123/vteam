@@ -14,7 +14,10 @@ import {
   MESSAGE_STATUS,
   SENDER_TYPE,
 } from '../common/constants/event.constants';
-import { TASK_STATUS } from '../common/constants/task.constants';
+import {
+  NON_TERMINAL_TASK_STATUSES,
+  TASK_STATUS,
+} from '../common/constants/task.constants';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { roleKeyOf } from '../common/agent-role-label';
 import { IdGeneratorService } from '../common/id-generator';
@@ -1165,9 +1168,10 @@ export class ChatService {
       }
     }
 
-    // 主 agent 门禁：团队当前任务非进行中 → 用户消息仅主成员目标放行，其余移除并系统提示。
-    // 无任务 / pending / blocked / 待验收等均关闭 fan-out：开工前只能和主 agent 沟通，
-    // 逼所有活走「建任务→流转到进行中→派发」正路（门禁需求）。DM 同理（对端非主即拦）。
+    // 主 agent 门禁：团队存在未完成任务 → 用户消息照常 fan-out（含 @ 子 agent）；
+    // 团队没有任何任务、或名下任务全部终态（completed/archived）→ 关门：仅主成员目标放行，
+    // 其余移除并系统提示，逼所有活走「建任务→流转到进行中→派发」正路（门禁需求）。
+    // 团队私聊同理（对端非主即拦）。
     // 被拦目标移出 dispatch（不改其余 triggers），消息本身仍保存；mainMemberId 缺失则
     // fail-open（避免未配置主 agent 的团队被砖）并记 warn。
     if (
@@ -1203,7 +1207,7 @@ export class ChatService {
             triggers.push(...kept);
             const mainName = nameOf(gate.mainMemberId);
             const hintText =
-              `任务尚未开始，当前只能与主 agent（${mainName}）沟通。` +
+              `当前没有未完成的任务，只能与主 agent（${mainName}）沟通。` +
               `已跳过对 ${[...new Set(droppedNames)].join('、')} 的派发——` +
               `请先让主 agent 创建任务并流转到进行中，再派活给子 agent。`;
             try {
@@ -1705,9 +1709,14 @@ export class ChatService {
   }
 
   /**
-   * 主 agent 门禁判定：团队当前任务为进行中 → 开门（open=true），fan-out 随便派；
-   * 否则关门（open=false），仅 mainMemberId 目标可派。mainMemberId 缺失 → 返回
+   * 主 agent 门禁判定：团队存在**未完成**的任务（任一非终态：queued/pending/in_progress/
+   * blocked/pending_review）→ 开门（open=true），fan-out 随便派；
+   * 团队没有任何任务、或名下任务全是终态（completed/archived）→ 关门（open=false），
+   * 仅 mainMemberId 目标可派。mainMemberId 缺失 → 返回
    * open=false + mainMemberId=null（调用方 fail-open）。异常 → null（调用方 fail-open）。
+   *
+   * 注：此处「未完成」取宽口径 NON_TERMINAL_TASK_STATUSES（有没有活没干完），
+   * 与 teams.service.ts 删团队校验用的窄口径「执行中的任务」（in_progress+pending_review）是两个概念。
    */
   private async checkMainAgentGate(
     teamId: string,
@@ -1715,20 +1724,16 @@ export class ChatService {
     try {
       const team = await (this.prisma as any).team.findUnique({
         where: { id: teamId },
-        select: { currentTaskId: true, mainAgentMemberId: true },
+        select: { mainAgentMemberId: true },
       });
       if (!team) return null;
       const mainMemberId = (team as any).mainAgentMemberId ?? null;
-      const currentTaskId = (team as any).currentTaskId ?? null;
-      if (!currentTaskId) return { open: false, mainMemberId };
-      const taskRow = await (this.prisma as any).task.findUnique({
-        where: { id: currentTaskId },
-        select: { status: true },
+      // 存在任一非终态任务即视为「有未完成的任务」→ 开门（不再看 currentTaskId）。
+      const unfinishedTask = await (this.prisma as any).task.findFirst({
+        where: { teamId, status: { in: [...NON_TERMINAL_TASK_STATUSES] } },
+        select: { id: true },
       });
-      return {
-        open: (taskRow as any)?.status === TASK_STATUS.in_progress,
-        mainMemberId,
-      };
+      return { open: !!unfinishedTask, mainMemberId };
     } catch {
       return null;
     }
