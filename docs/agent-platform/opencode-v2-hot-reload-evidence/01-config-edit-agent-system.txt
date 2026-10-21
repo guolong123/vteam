@@ -2,68 +2,70 @@
 Artifact 01 — agents.<name>.system —— 改项目 opencode.json 即生效（无任何触发调用）
 ==============================================================================
 what      : 改 <proj>/opencode.json 的 agents.hotreload-agent.system，然后只发 GET 请求读回
-when      : 2026-10-20T15:20:38.527Z
-binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
-serve     : http://127.0.0.1:61277  (pid 84513)
-isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
-scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+when      : 2026-10-21T04:51:51.252Z
+binary    : opencode v2.0.32  (/usr/local/bin/opencode)
+serve     : http://127.0.0.1:38677  (pid 23)
+isolation : HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg  XDG_CONFIG_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config  XDG_DATA_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/data
+scratch   : /tmp/opencode/hot-reload-20261021T045146Z
 commands  :
   $ # 改配置（fs.writeFileSync 等价：同一路径 truncate+write，无 unlink/rename）
-  $ node -e 'const f="/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.agents["hotreload-agent"].system="SYSTEM_V2_MARKER";require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
+  $ node -e 'const f="/tmp/opencode/hot-reload-20261021T045146Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.agents["hotreload-agent"].system="SYSTEM_V2_MARKER";require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
   $ # 只读回，不触发任何重载（--data-urlencode 会把 [ ] 编成 %5B %5D，即 v2 的 deepObject 风格）
-  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:61277/api/agent/hotreload-agent" --data-urlencode "location[directory]=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"
+  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:38677/api/agent/hotreload-agent" --data-urlencode "location[directory]=/tmp/opencode/hot-reload-20261021T045146Z/proj"
 ------------------------------------------------------------------------------
 --- 观察：改文件之后，只有 GET，没有任何「触发」调用 ------------------------
-  改文件时刻                 : 2026-10-20T15:20:38.215Z
-  观察到新值                 : 改后 311 ms（轮询间隔 100 ms）
+  改文件时刻                 : 2026-10-21T04:51:50.525Z
+  观察到新值                 : 改后 712 ms（轮询间隔 100 ms）
   窗口内请求数                : 6
 
 窗口内的全部 HTTP 请求（逐条）：
-  2026-10-20T15:20:38.215Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:38.216Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:38.319Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:38.422Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:38.526Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
-  2026-10-20T15:20:38.527Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:51:50.525Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:51:50.533Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:51:50.637Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:51:50.743Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:51:51.241Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
+  2026-10-21T04:51:51.243Z  GET /api/agent/hotreload-agent?location%5Bdirectory%5D=$PROJ  -> 200
 
 窗口内是否出现过 POST /api/location/reload ？ -> **否**
 窗口内是否出现过 POST（非 reload）？        -> **否**
 
 --- 改之前：GET /api/agent/hotreload-agent --------------------------------
 HTTP 200
-{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V1_MARKER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
+{"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V1_MARKER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
 
 --- 轮询时间线（每次读到的 system 值）-------------------------------------
   t=+    0ms  system="SYSTEM_V1_MARKER"
-  t=+  103ms  system="SYSTEM_V1_MARKER"
-  t=+  206ms  system="SYSTEM_V1_MARKER"
-  t=+  309ms  system="SYSTEM_V2_MARKER"
+  t=+  105ms  system="SYSTEM_V1_MARKER"
+  t=+  211ms  system="SYSTEM_V1_MARKER"
+  t=+  314ms  system="SYSTEM_V2_MARKER"
 
 --- 改之后：GET /api/agent/hotreload-agent --------------------------------
 HTTP 200
-{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V2_MARKER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
+{"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"},"data":{"id":"hotreload-agent","name":"hotreload-agent","request":{"settings":{},"headers":{},"body":{}},"system":"SYSTEM_V2_MARKER","description":"hot-reload probe agent","mode":"primary","hidden":false,"permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"read","resource":"*.env","effect":"ask"},{"action":"read","resource":"*.env.*","effect":"ask"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"browser","resource":"*","effect":"deny"}]}}
 
 --- serve 日志（本次动作期间新增的行）-------------------------------------
-timestamp=2026-10-20T15:20:38.339Z level=INFO run=f8afcc2c message=event event.id=evt_159e676c300151p6gwkWU5HfVr event.created=1792509638339 event.type=config.updated event.location.directory=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj event.location.workspaceID=undefined event.data={} http.span=1359 role=server
-timestamp=2026-10-20T15:20:38.343Z level=INFO run=f8afcc2c message=event event.id=evt_159e676c7001g6c06smG4f9O32 event.created=1792509638343 event.type=provider.updated event.location.directory=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj event.location.workspaceID=undefined event.data={}
-timestamp=2026-10-20T15:20:38.346Z level=INFO run=f8afcc2c message=event event.id=evt_159e676ca001DXyHZz0wQ3Dus5 event.created=1792509638346 event.type=model.updated event.location.directory=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj event.location.workspaceID=undefined event.data={} http.span=1366 role=server
-timestamp=2026-10-20T15:20:38.348Z level=INFO run=f8afcc2c message=event event.id=evt_159e676cc0012Z4mNFbIsWwMhH event.created=1792509638348 event.type=provider.updated event.location.directory=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj event.location.workspaceID=undefined event.data={}
-timestamp=2026-10-20T15:20:38.350Z level=INFO run=f8afcc2c message=event event.id=evt_159e676ce001WG97PakeUr4Ugp event.created=1792509638350 event.type=model.updated event.location.directory=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj event.location.workspaceID=undefined event.data={} http.span=1370 role=server
-timestamp=2026-10-20T15:20:38.351Z level=INFO run=f8afcc2c message="watcher stopped" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skill type=file http.span=1371 role=server
-timestamp=2026-10-20T15:20:38.351Z level=INFO run=f8afcc2c message="watcher stopped" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skills type=file http.span=1371 role=server
-timestamp=2026-10-20T15:20:38.351Z level=INFO run=f8afcc2c message="watcher stopped" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skill type=file http.span=1371 role=server
-timestamp=2026-10-20T15:20:38.351Z level=INFO run=f8afcc2c message="watcher stopped" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skills type=directory http.span=1371 role=server
-timestamp=2026-10-20T15:20:38.351Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skill type=file ignores=0
-timestamp=2026-10-20T15:20:38.351Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skill type=file backend=node ignores=0 http.span=1371 role=server
-timestamp=2026-10-20T15:20:38.352Z level=DEBUG run=f8afcc2c message="skill source loaded" source=directory:/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skill type=directory directories="[\"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skill\"]" skills=[]
-timestamp=2026-10-20T15:20:38.352Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skills type=file ignores=0
-timestamp=2026-10-20T15:20:38.352Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skills type=file backend=node ignores=0 http.span=1372 role=server
-timestamp=2026-10-20T15:20:38.352Z level=DEBUG run=f8afcc2c message="skill source loaded" source=directory:/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skills type=directory directories="[\"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/skills\"]" skills=[]
-timestamp=2026-10-20T15:20:38.352Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skill type=file ignores=0
-timestamp=2026-10-20T15:20:38.352Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skill type=file backend=node ignores=0 http.span=1372 role=server
-timestamp=2026-10-20T15:20:38.353Z level=DEBUG run=f8afcc2c message="skill source loaded" source=directory:/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skill type=directory directories="[\"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skill\"]" skills=[]
-timestamp=2026-10-20T15:20:38.353Z level=INFO run=f8afcc2c message="watcher subscribe" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skills type=directory ignores=0
-timestamp=2026-10-20T15:20:38.353Z level=INFO run=f8afcc2c message="watcher started" path=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skills type=directory backend=fs-events ignores=0 http.span=1373 role=server
-timestamp=2026-10-20T15:20:38.353Z level=DEBUG run=f8afcc2c message="skill source loaded" source=directory:/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skills type=directory directories="[\"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/skills\"]" skills=[]
-timestamp=2026-10-20T15:20:38.442Z level=INFO run=f8afcc2c message=event event.id=evt_159e6772a001YCKBKZKFbDRRvg event.created=1792509638442 event.type=command.updated event.location.directory=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj event.location.workspaceID=undefined event.data={}
-timestamp=2026-10-20T15:20:38.442Z level=INFO run=f8afcc2c message=event event.id=evt_159e6772a0020XVi4zebPA1bHG event.created=1792509638442 event.type=agent.updated event.location.directory=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj event.location.workspaceID=undefined event.data={}
+timestamp=2026-10-21T04:51:50.643Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd24f200120J4I6uNm16gxz event.created=1792558310643 event.type=config.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={} http.span=2204 role=server
+timestamp=2026-10-21T04:51:50.657Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd2501001TCl9ClkNKoE341 event.created=1792558310657 event.type=provider.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={}
+timestamp=2026-10-21T04:51:50.664Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd2508001ojuamOQBl6Z3Ja event.created=1792558310664 event.type=model.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={} http.span=2225 role=server
+timestamp=2026-10-21T04:51:50.670Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd250e0015i4l21y3rOAgQ5 event.created=1792558310670 event.type=provider.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={}
+timestamp=2026-10-21T04:51:50.677Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd2515001T9NxHVyYniyHKQ event.created=1792558310677 event.type=model.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={} http.span=2238 role=server
+timestamp=2026-10-21T04:51:50.677Z level=INFO run=0ac77ccd message="watcher stopped" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skill type=file http.span=2238 role=server
+timestamp=2026-10-21T04:51:50.678Z level=INFO run=0ac77ccd message="watcher stopped" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skills type=file http.span=2239 role=server
+timestamp=2026-10-21T04:51:50.678Z level=INFO run=0ac77ccd message="watcher stopped" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skill type=file http.span=2239 role=server
+timestamp=2026-10-21T04:51:50.678Z level=INFO run=0ac77ccd message="watcher stopped" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skills type=directory http.span=2239 role=server
+timestamp=2026-10-21T04:51:50.679Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skill type=file ignores=0
+timestamp=2026-10-21T04:51:50.679Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skill type=file backend=node ignores=0 http.span=2240 role=server
+timestamp=2026-10-21T04:51:50.681Z level=DEBUG run=0ac77ccd message="skill source loaded" source=directory:/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skill type=directory directories="[\"/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skill\"]" skills=[]
+timestamp=2026-10-21T04:51:50.681Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skills type=file ignores=0
+timestamp=2026-10-21T04:51:50.681Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skills type=file backend=node ignores=0 http.span=2242 role=server
+timestamp=2026-10-21T04:51:50.682Z level=DEBUG run=0ac77ccd message="skill source loaded" source=directory:/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skills type=directory directories="[\"/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config/opencode/skills\"]" skills=[]
+timestamp=2026-10-21T04:51:50.682Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skill type=file ignores=0
+timestamp=2026-10-21T04:51:50.683Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skill type=file backend=node ignores=0 http.span=2244 role=server
+timestamp=2026-10-21T04:51:50.683Z level=DEBUG run=0ac77ccd message="skill source loaded" source=directory:/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skill type=directory directories="[\"/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skill\"]" skills=[]
+timestamp=2026-10-21T04:51:50.683Z level=INFO run=0ac77ccd message="watcher subscribe" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skills type=directory ignores=0
+timestamp=2026-10-21T04:51:50.684Z level=INFO run=0ac77ccd message="watcher started" path=/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skills type=directory backend=inotify ignores=0 http.span=2245 role=server
+timestamp=2026-10-21T04:51:50.684Z level=DEBUG run=0ac77ccd message="skill source loaded" source=directory:/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skills type=directory directories="[\"/tmp/opencode/hot-reload-20261021T045146Z/proj/.opencode/skills\"]" skills=[]
+timestamp=2026-10-21T04:51:50.748Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd255c001Qi4LVMA263CHGT event.created=1792558310748 event.type=command.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={}
+timestamp=2026-10-21T04:51:50.749Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd255d0012wDJfzzFEce39Q event.created=1792558310749 event.type=agent.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={}
+timestamp=2026-10-21T04:51:51.233Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd2741001qw0aZFsSy949bm event.created=1792558311233 event.type=provider.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={}
+timestamp=2026-10-21T04:51:51.238Z level=INFO run=0ac77ccd message=event event.id=evt_15ccd2746001W06qgTVjVrKcxw event.created=1792558311238 event.type=model.updated event.location.directory=/tmp/opencode/hot-reload-20261021T045146Z/proj event.location.workspaceID=undefined event.data={} http.span=2799 role=server

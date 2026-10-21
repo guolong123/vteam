@@ -2,34 +2,35 @@
 Artifact 02 — mcp.servers.<name> —— 改项目 opencode.json 即生效（无任何触发调用）
 ==============================================================================
 what      : 往 <proj>/opencode.json 加 mcp.servers.hotreload-mcp（本地 stdio MCP server），再 GET /api/mcp
-when      : 2026-10-20T15:20:38.740Z
-binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
-serve     : http://127.0.0.1:61277  (pid 84513)
-isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
-scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+when      : 2026-10-21T04:51:51.691Z
+binary    : opencode v2.0.32  (/usr/local/bin/opencode)
+serve     : http://127.0.0.1:38677  (pid 23)
+isolation : HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg  XDG_CONFIG_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/.config  XDG_DATA_HOME=/tmp/opencode/hot-reload-20261021T045146Z/xdg/data
+scratch   : /tmp/opencode/hot-reload-20261021T045146Z
 commands  :
   $ # 加 mcp.servers.hotreload-mcp（type=local, command=[node, mcp-stdio-server.mjs]）
-  $ node -e 'const f="/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.mcp={servers:{"hotreload-mcp":{type:"local",command:["node","/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/mcp-stdio-server.mjs"],environment:{}}}};require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
-  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:61277/api/mcp" --data-urlencode "location[directory]=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"
+  $ node -e 'const f="/tmp/opencode/hot-reload-20261021T045146Z/proj/opencode.json";const d=JSON.parse(require("fs").readFileSync(f));d.mcp={servers:{"hotreload-mcp":{type:"local",command:["node","/tmp/opencode/hot-reload-20261021T045146Z/mcp-stdio-server.mjs"],environment:{}}}};require("fs").writeFileSync(f,JSON.stringify(d,null,2))'
+  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:38677/api/mcp" --data-urlencode "location[directory]=/tmp/opencode/hot-reload-20261021T045146Z/proj"
 ------------------------------------------------------------------------------
 --- 观察：改文件之后，只有 GET，没有任何「触发」调用 ------------------------
-  改文件时刻                 : 2026-10-20T15:20:38.528Z
-  观察到新 server           : 改后 211 ms
-  状态变成 connected        : 改后 1 ms
+  改文件时刻                 : 2026-10-21T04:51:51.260Z
+  观察到新 server           : 改后 219 ms
+  状态变成 connected        : 改后 209 ms
   窗口内 POST 数            : 0
 
 --- 改之前：GET /api/mcp -------------------------------------------------
 HTTP 200
-{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[]}
+{"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"},"data":[]}
 
 --- 轮询时间线 -----------------------------------------------------------
   t=+    0ms  servers=[]
   t=+  103ms  servers=[]
-  t=+  206ms  servers=["hotreload-mcp"]
+  t=+  207ms  servers=["hotreload-mcp"]
 
 --- 改之后：GET /api/mcp -------------------------------------------------
 HTTP 200
-{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[{"name":"hotreload-mcp","status":{"status":"connected"}}]}
+{"location":{"directory":"/tmp/opencode/hot-reload-20261021T045146Z/proj"},"data":[{"name":"hotreload-mcp","status":{"status":"connected"}}]}
 
 --- 连接状态时间线 -------------------------------------------------------
-  t=+    0ms  status="connected"
+  t=+    0ms  status="pending"
+  t=+  203ms  status="connected"

@@ -56,6 +56,8 @@ let BASE = "";
 let serveProc = null;
 let servePid = null;
 let VERSION = "";
+/** 从 `opencode --version` 的输出里取出纯版本号（形如 `2.0.32`），避免脚本里写死版本。 */
+let VNUM = "unknown";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const iso = () => new Date().toISOString();
@@ -251,6 +253,7 @@ setInterval(() => {}, 1000)
 
   // ---- 起 serve（隔离 env）------------------------------------------------
   VERSION = spawnSync(BIN, ["--version"], { encoding: "utf8" }).stdout.trim();
+  VNUM = (VERSION.match(/\d+\.\d+\.\d+/) || ["unknown"])[0];
   const port = await findFreePort();
   BASE = `http://127.0.0.1:${port}`;
   console.log(`opencode: ${VERSION}`);
@@ -760,7 +763,7 @@ export default Plugin.define({
       "",
       "--- 观察：apiKey 的呈现方式 ----------------------------------------------",
       `provider 响应里的 settings.apiKey = ${JSON.stringify(globalProv?.settings?.apiKey)}`,
-      "⇒ **v2.0.28 并没有把 apiKey 脱敏**：`GET /api/provider` / `GET /api/provider/{id}` /",
+      "⇒ **v" + VNUM + " 并没有把 apiKey 脱敏**：`GET /api/provider` / `GET /api/provider/{id}` /",
       "  `GET /api/model` 都**明文回显** `settings.apiKey`。",
       "  （本证据里的 key 是**合成的假串**，不是任何真实凭据。）",
       "  ⇒ 因此本证据证明的是「全局配置里的 provider 段被热重载看见了」，",

@@ -19,7 +19,7 @@
 
 | 等级 | 含义 | 本文档里的标记 |
 |---|---|---|
-| **A** | **实机实测**：在真实 `opencode v2.0.28` 二进制上跑过（含隔离 `HOME`/`XDG_*`） | ✅ 实测 |
+| **A** | **实机实测**：在真实 `opencode v2.0.28` 二进制上跑过（含隔离 `HOME`/`XDG_*`）；**热重载一组已在锁版 `2.0.32` 上复检**（§2.4） | ✅ 实测 |
 | **B** | **读发布类型 / 官方文档**：对**已发布**的 `@opencode/*@2.0.32` 类型定义或 v2 官方文档求证 | 📄 发布类型/文档 |
 | **C** | **读 vteam 源码**：`file:line` 逐条核对 | 🔍 源码 |
 | **D** | **未验证**：推断或待实测 | ⚠️ 未验证 |
@@ -37,8 +37,9 @@
 
 ### 1.1 契约基线的版本口径（**每次读契约前必须知道**）
 
-- `docs/agent-platform/opencode-v2-contract-baseline/openapi.json`（**118 paths / 142 ops / 285 schemas**）**由本机 `opencode v2.0.28` 生成**，**不是** worker 镜像锁定的 `@opencode/cli@2.0.32`。
-- `docs/agent-platform/opencode-v2-hot-reload-evidence/`（热重载实测证据，**§2.3 U-a 的闭环交付物**）**同样由 2.0.28 产出**（2026-10-20）——**也不是**锁版版本的证据；2.0.32 的复检清单在该目录的 `README.md` §5。
+- `docs/agent-platform/opencode-v2-contract-baseline/openapi.json`（**118 paths / 142 ops / 285 schemas**）**由本机 `opencode v2.0.28` 生成**，**不是** worker 镜像锁定的 `@opencode/cli@2.0.32`——它是**契约形态快照**（OpenAPI shape 捕获），**该重跑**（§6.6）。
+- `docs/agent-platform/opencode-v2-hot-reload-evidence/`（热重载实测证据，**§2.3 U-a 的闭环交付物**）的**行为**证据**已由锁版 `2.0.32` 产出**（2026-10-21 复检完成，§2.4）——复检覆盖的路径上**未发现行为差异** ⇒ **行为**口径上它**就是**锁版版本的证据；**契约形态**口径上仍以 2.0.28 的快照为准（上一条）。
+  ⇒ 两者是**不同性质的产物**（形态快照 vs 行为证据），**"锁版即锁证据"只对前者成立**。
 - `@opencode/*@2.0.32` 的**发布类型**已单独核对（📄）——本文档凡标 📄 的都基于它。
 - ⚠️ **`GET /api/model` 在 2.0.28 与 2.0.32 形态一致**（都是 `{location, data}`；2.0.32 见 `@opencode/client@2.0.32` 的 `ModelListOutput = { location: LocationPublicRef; data: Array<ModelInfo> }`）⇒ **代码里"容忍裸数组"是防御性的，不是已知版本漂移**。
 
@@ -85,21 +86,44 @@
 | **R14** | 用量账（`model_usage` 落库） | `session.usage.updated`（会话维度瞬时值） | **different-scope** | medium | 🔍 + 📄 | §3.14 |
 | **R15** | question/permission pending 检测（轮询） | `form.created` / `permission.asked` 事件 | **partially-redundant** | medium | 🔍 + 📄 | §3.15 |
 
-**证据列读法**：`🔍` = 读 vteam 源码（每行都带 `file:line`）· `✅` = 实机实测（真 `opencode v2.0.28`）· `📄` = 读发布类型 / 官方文档 / 契约快照。
+**证据列读法**：`🔍` = 读 vteam 源码（每行都带 `file:line`）· `✅` = 实机实测（真 `opencode v2.0.28`；**热重载一组 = 锁版 `2.0.32` 复检后**，见 §2.4）· `📄` = 读发布类型 / 官方文档 / 契约快照。
 ⇒ **每一行都至少有"读代码"这一半**——判定的前提是"vteam 侧机制确实长这样"；"v2 侧有对应物"才有实测 / 发布类型支撑。
 
 ### 2.3 明确**未验证**的部分（不要把本文档当已完成的证明）
 
 | # | 未验证项 | 涉及 | 影响 |
 |---|---|---|---|
-| **U-a** | ✅ **已闭环（证据已入库）**——**自动文件热重载的原始证据**现在在仓库里：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（11 份逐条原始输出 + `README.md` + 可复现的 `repro.mjs`）。**实测版本 = 2.0.28**（锁版目标 2.0.32 ⇒ 见该目录 §5 的复检清单）。覆盖：`agents.<name>.system` 改文件即生效（**无任何触发调用**）· `mcp.servers.<name>` · `.opencode/skills/<name>/SKILL.md` · `.opencode/plugins/<f>.ts` 新增与**原地编辑（`setup()` 重入——注入器依赖的那一行）** · 隔离全局配置的 provider 段 · `POST /api/location/reload`（**204 / serve PID 不变 / 会话存活 / 重建异步**）· **pending form + permission 被 reload 取消**（**所有 location**）· **对照组：没有 reload 时 pending 存活** · **文件监听路径保留 pending** · **不需要任何 `watcher` 开关** | R4 / §5.1 🥇 | **证据已入库**；实施热重载时直接引用该目录（不再依赖调查轮的现场记录）。**残余**：锁版到 **2.0.32** 后必须按该目录 §5 的清单复检（尤其「`location/reload` 是否仍取消 pending」与「原地编辑插件 → `setup()` 重入」） |
-| **U-a′** | **2.0.32 上的复检尚未做**——本目录的证据全部来自 **2.0.28**（与契约基线快照同版本，**都不是**锁版的 2.0.32） | R4 / §5.1 (b) | 复检清单见 `opencode-v2-hot-reload-evidence/README.md` §5；**在复检之前，热重载的条件调用逻辑是按 2.0.28 的行为写的**（若 2.0.32 不再取消 pending，闸门可从「defer」放宽为「直接重载」） |
-| **U-b** | **`POST /api/location/reload` 在 2.0.32 的行为细节未验**（实测行为来自 2.0.28；尤其"cancel pending permission/form"这条在 2.0.32 是否仍成立） | R4 / §5.1 (b) | 锁版后**必须重测**；未重测前，热重载的 (a) 条件调用逻辑是**按 2.0.28 的行为写的** |
+| **U-a** | ✅ **已闭环（证据已入库）**——**自动文件热重载的原始证据**现在在仓库里：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（12 份逐条原始输出 + `README.md` + 可复现的 `repro.mjs` / `repro-deferred.mjs`）。**实测版本 = 2.0.28，锁版 `2.0.32` 的复检已完成**（§2.4）。覆盖：`agents.<name>.system` 改文件即生效（**无任何触发调用**）· `mcp.servers.<name>` · `.opencode/skills/<name>/SKILL.md` · `.opencode/plugins/<f>.ts` 新增与**原地编辑（`setup()` 重入——注入器依赖的那一行）** · 隔离全局配置的 provider 段 · `POST /api/location/reload`（**204 / serve PID 不变 / 会话存活 / 重建异步**）· **pending form + permission 被 reload 取消**（**所有 location**）· **对照组：没有 reload 时 pending 存活** · **文件监听路径保留 pending** · **不需要任何 `watcher` 开关** | R4 / §5.1 🥇 | **证据已入库**；实施热重载时直接引用该目录（不再依赖调查轮的现场记录）。**残余已清**：锁版 **2.0.32** 的复检**已完成**（§2.4）——清单里最关键的两条**都成立**：「`location/reload` **仍取消** pending form 与 permission」与「**原地编辑插件 → `setup()` 重入**」（marker 计数 1→2，**入库那轮 305 ms**；2.0.32 **3 轮实测区间 205 ~ 305 ms**）⇒ **闸门策略与 settle 窗口都不必改** |
 | **U-c** | **`POST /api/credential` 的 integration 维度只验到"存得进、读得回、且不覆盖 `settings.apiKey`"**——没有穷举 integration 的完整语义（哪些 provider 能建成 integration） | R3 | vteam 自配 baseUrl provider 的最终归属**尚未定**（继续走配置文件？把 provider 建成 integration？），见计划 §10 新增项 |
 | **U-d** | **`GET /api/experimental/session/{id}/log` 的 `?after=<seq>` 能否真的补齐断线期间的 durable 事件**，**未在真 serve 上端到端验过**（只验了契约里的参数与返回形态） | R6 | T13 的补齐逻辑仍需活栈验证；计划 §10 Q14 的残余项 |
 | **U-e** | **v2 的 form → vteam question 的形状映射有损在哪几个字段，未逐字段列过** | R15 | 事件快路的**完整性**未定 ⇒ 兜底轮询必须保留（已如此设计） |
 | **U-f** | **`ctx.permission.hook("evaluate")` 在 vteam 场景下能不能真的承载跨进程业务闸门**，**未做原型** | R9 | 用它替代 vteam 权限矩阵 = **新增架构**，不是换个 API（§6.1） |
 | **U-g** | **本文档的"收益"全部是定性判断**（消掉几个连锁成本），**没有任何基准测量** | §5 | 排序（🥇🥈🥉）可信，但"值多少"未量化 |
+
+> ✅ **原 U-a′ 与 U-b 两条登记已关闭**（2026-10-21）：这两条登记的就是"**锁版 `2.0.32` 上的热重载复检**"本身——复检**已完成**，逐条结果见 **§2.4**。⇒ §2.3 里**仍然未验证**的只剩 **U-c ~ U-g**（U-a 保留在表内作闭环记录）。
+
+### 2.4 锁版 `2.0.32` 上的热重载复检（**已完成**，2026-10-21）
+
+> **本节取代**原 §2.3 的 **U-a′**（"2.0.32 上的复检尚未做"）与 **U-b**（"`location/reload` 在 2.0.32 的行为细节未验"）两条登记。
+> 复检清单 = `docs/agent-platform/opencode-v2-hot-reload-evidence/README.md` §5；**原始证据在该目录**（**已由锁版 `2.0.32` 产出**）。
+> 复检前的证据来自 **2.0.28** ⇒ 下表是**两个版本逐条比对**的结果。
+>
+> **⏱ 数字口径（必读，否则容易把最坏值当成测量值）**：2.0.32 上这个探针**连跑了 3 轮** `repro.mjs`（UTC 04:29 前后 / 04:47~04:48 / **04:51~04:52**），**行为断言逐条一致、只有耗时不同**；证据目录**只保留"入库那一轮"**（04:51~04:52，产物即该目录 01~11 号），另两轮的原始输出**不入库** ⇒
+> - 本节写的**"入库那轮"** = **能在入库产物（01~11 号）里逐条查到的那个数**；
+> - 本节写的**"3 轮实测区间" / "多轮最坏"** = 三轮里的区间与最坏值（**区间、逐轮值与"哪一轮入库"见证据目录 `README.md` §5.3 / §5.4**）。
+> ⇒ **余量结论一律按最坏值算**（单轮数字不能用来下结论），但**引用的实测值必须能在入库产物里查到**。
+
+| # | 复检项（对应清单 §5 条目） | `2.0.32` 实测结果 | 与 `2.0.28` 的差异 | 结论 |
+|---|---|---|---|---|
+| **1** | **`location/reload` 的取消语义** | **仍然取消** pending form 与 pending permission | 无 | ⇒ `deferred` 闸门分支**仍有存在理由**，**闸门策略不变** |
+| **2** | **是否仍在所有 location 上取消** | **是**（默认 location + 任务子目录各验一套） | 无 | ⇒ **location 作用域 vs per-session 的不对称仍成立**（`GET /api/form` 查不到子目录会话的待答复项，而 `GET /api/session/{id}/form` 查得到）⇒ 平台的**逐会话** pending 探针**仍然必要** |
+| **3** | **重载后的重建滞后** | 新值 **+223 ms** 才可见（**3 轮实测区间 98 ~ 376 ms ⇒ 多轮最坏 +376 ms**）；紧跟 204 的那一次读**仍读到旧快照**（**入库那轮 +62 ms**，**多轮最坏 +137 ms**） | **放大约 3×**（2.0.28：+123 ms / +24 ms ⇒ 2.0.32 **多轮最坏** +376 ms / +137 ms） | ⇒ 仍在 **2000 ms** settle 窗口内（`worker/src/reload/config-reloader.ts` 的 `DEFAULT_SETTLE_MS`），**余量约 5.3×**（按**多轮最坏 376 ms** 算）⇒ **窗口不必重估** |
+| **4** | **六条文件监听行**（agent `system` 改文件 / `mcp.servers` / skill 文件 / plugin 新增 / **plugin 原地编辑** / 有 pending 时改配置） | **六条全部与 2.0.28 一致** | 无 | ⇒ 注入器真正依赖的那一行（**原地编辑插件文件（无 unlink/rename）→ `setup()` 重入**）**仍成立**：marker 计数 **1→2**，**入库那轮 305 ms**（2.0.28：205 ms；2.0.32 **3 轮实测区间 205 ~ 305 ms**） |
+| **5** | **`deferred` 分支端到端**（真实 `2.0.32` 栈） | 有 pending form **且** permission 在飞时，worker 的 `POST /config/reload` 返回 `{"reload":"deferred"}`；**四个 pending id 全部原样存活**；配置变更**之后仍然生效**（走 opencode 的文件监听路径，经 opencode API 读回） | 无 | ⇒ 闸门**不冗余**。**对照组**：答完四个 pending 后**同一端点**返回 `{"reload":"reloaded"}`（serve 日志显示完整 location 重建）；**再一组对照**：直接打 `POST /api/location/reload` ⇒ **pending 被取消**（204 → 两个列表都空） |
+| **6** | （附带）**`settings.apiKey` 在 provider 响应里是否明文回显** | **仍然明文回显** | 无 | ⇒ 先前记录的结论（key **原样回显**，不只是"可见性"）**在锁版上成立** |
+
+**其它延迟（相对 2000 ms settle 窗口）**：plugin 新增 → 首次 `setup()` 调用 **2.0.28 306 ms → 2.0.32 入库那轮 207 ms**（**3 轮实测区间 207 ~ 919 ms ⇒ 多轮最坏 919 ms**；余量 **6.4× → ≈2.2×**）· MCP server 出现 **211 → 入库那轮 219 ms**（3 轮实测区间 214 ~ 397 ms）· 隔离全局配置新增 provider **209 → 入库那轮 221 ms**（3 轮实测区间 221 ~ 373 ms）· reload 请求自身耗时 **2028 → 入库那轮 2216 ms**（3 轮实测区间 2126 ~ 2432 ms）。
+⇒ **余量一律按最坏值算**（窗口仍然够用，最坏路径余量 ≈2.2×）；但 **plugin 路径的余量已从 6.4× 缩到 ≈2.2×** ⇒ **后续升级必须盯这一条**（若继续变慢，settle 窗口要重估）。
 
 ---
 
@@ -164,8 +188,8 @@
 - 三个触发点：`worker/src/index.ts:1136-1141`（`reload-config`）、`worker/src/index.ts:381-384`（`model-credentials`）、`worker/src/index.ts:1225-1230`（运维 `restart` 命令）。
 
 **v2 侧**
-- ✅ **实测（2.0.28）**：**自动文件热重载**——`agents` / `mcp.servers` / `skills` / `plugins` / 隔离域全局配置，**改文件即生效，serve PID 不变**。
-  **证据已入库**：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（11 份原始输出 + `repro.mjs`，可一键复现；§2.3 U-a 已闭环）。
+- ✅ **实测（2.0.28；锁版 `2.0.32` 已复检，覆盖路径上无行为差异——§2.4）**：**自动文件热重载**——`agents` / `mcp.servers` / `skills` / `plugins` / 隔离域全局配置，**改文件即生效，serve PID 不变**。
+  **证据已入库**：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（12 份原始输出 + `repro.mjs` / `repro-deferred.mjs`，可一键复现；§2.3 U-a 已闭环，锁版 `2.0.32` 复检见 §2.4）。
 - 📄 **契约**：`POST /api/location/reload` → `204`；OpenAPI 描述原文：*"Shut down and rebuild every loaded location. **Pending permissions and forms are cancelled**; running sessions continue with fresh services at the next step boundary. Emits `location.shutdown` for client recovery…"*。
 - 📄 **CLI**：`opencode reload`（⚠️ **作用域错配**——CLI 绑共享后台服务 49374，不是 worker 自己 spawn 的 serve，同 §2.9 的坑 ⇒ vteam 必须走 **HTTP 端点**）。
 
@@ -174,14 +198,15 @@
 - 收益（消掉三个连锁成本）：**端口漂移 → 要 re-registration**（`worker/src/restart/restart-coordinator.ts:96-100`）、**活跃会话必须排空 → 变更延迟不可控**、**重启窗口内 serve 不可用**。
 
 **当前状态：✅ 已确证，🚧 实施中**（另一条并行工作正在落地；**本文档不把它写成已完成**）。
-**证据**：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（实测 2.0.28；逐条原始输出 + 复现脚本）。
+**证据**：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（2.0.28 实测 + **锁版 `2.0.32` 复检**，§2.4；逐条原始输出 + 复现脚本）。
 
 **三条实施约束**
 - **(a) 必须条件调用**：`location/reload` 会 **cancel pending 的 permission 与 form**（OpenAPI 描述如此）⇒ 有 pending 时**降级走文件监听**并**明确日志**。
-  ⚠️ **实测还多两条**（`opencode-v2-hot-reload-evidence/` 的 07/08）：
+  ⚠️ **实测还多两条**（`opencode-v2-hot-reload-evidence/` 的 07/08，**锁版 `2.0.32` 复检后仍成立**——§2.4 第 2/3 条）：
   ① **`GET /api/form` / `GET /api/permission/request` 是 location 作用域的**——会话被 move 到任务目录后，默认 location 的查询**查不到**它的待答复项，而 `location/reload` 取消的是**所有 location** ⇒ 闸门必须**逐会话**查，**绝不能**用全局端点；
-  ② **重载后的重建是异步的**（204 之后 **~100 ms** 才可见，单次校验读会读到旧快照）⇒ 效果确认必须走**有界 settle 窗口**，否则会误判"未生效"并触发**不必要的真实重启**。
-- **(b) 版本未验**：实测行为来自 **2.0.28**；`location.reload` 在 **2.0.32 的行为细节未验**（锁版后必须重测；复检清单见 `opencode-v2-hot-reload-evidence/README.md` §5）。
+  ② **重载后的重建是异步的**（2.0.28：新值 **+123 ms** 才可见、紧跟 204 的单次校验读会读到旧快照（+24 ms）；**锁版 `2.0.32` 复检：入库那轮 +223 ms / +62 ms（3 轮实测区间 98 ~ 376 ms、**多轮最坏 +376 ms / +137 ms**）**，仍在这个量级内）⇒ 效果确认必须走**有界 settle 窗口**（**2000 ms**，`worker/src/reload/config-reloader.ts` 的 `DEFAULT_SETTLE_MS`；2.0.32 下**余量约 5.3×** ⇒ **窗口不必重估**），否则会误判"未生效"并触发**不必要的真实重启**。
+- **(b) 版本已复检（2026-10-21）**：复检在**锁版 `2.0.32`** 上完成（§2.4）——`location/reload` **仍取消** pending、**仍在所有 location 上取消**、重建滞后 **入库那轮 +223 ms（3 轮最坏 +376 ms）**（仍在 2000 ms 窗口内）、六条文件监听行**逐条一致** ⇒ **闸门策略与 settle 窗口都不必改**。
+  ⚠️ **唯一要盯的**：**plugin 路径**的生效延迟从 **2.0.28 的 306 ms 涨到 2.0.32 的 3 轮最坏 919 ms**（**入库那轮只有 207 ms ⇒ 轮间抖动 3~4 倍**；settle 窗口余量 **6.4× → ≈2.2×**）⇒ **后续版本升级要重新量这一条**。
 - **(c) 真重启能力必须保留**：运维 `RESTART`、worker 自更新、serve 崩溃恢复、`/config/restart` 都要真重启 ⇒ `RestartCoordinator` **收窄为运维/升级专用**，**不是删除**。
 
 ### 3.5 R5 — 事件去重　**partially-redundant**（medium）
@@ -373,14 +398,14 @@
 
 **caveat 清单**
 - **(a)** `location/reload` **会 cancel pending 的 permission 与 form** ⇒ **必须条件调用**：有 pending 时降级走文件监听 + **明确日志**。
-  ⚠️ 实测补充（`opencode-v2-hot-reload-evidence/` 的 08）：待答复项的**全局端点是 location 作用域的** ⇒ 闸门必须**逐会话**查；
-  ⚠️ 实测补充（07）：重载后的重建**异步**（~100 ms）⇒ 效果确认要**有界 settle 窗口**。
-- **(b)** 实测行为来自 **2.0.28**；`location.reload` 在 **2.0.32 的行为细节未验** ⇒ 锁版后必须重测（清单见 `opencode-v2-hot-reload-evidence/README.md` §5）。
+  ⚠️ 实测补充（`opencode-v2-hot-reload-evidence/` 的 08，**2.0.32 复检后仍成立**）：待答复项的**全局端点是 location 作用域的** ⇒ 闸门必须**逐会话**查；
+  ⚠️ 实测补充（07，**2.0.32 复检后仍成立**）：重载后的重建**异步**（2.0.28 **+123 ms** / **2.0.32 入库那轮 +223 ms，3 轮最坏 +376 ms**）⇒ 效果确认要**有界 settle 窗口**（**2000 ms**，2.0.32 下余量约 5.3× ⇒ **不必重估**）。
+- **(b)** **版本已复检（2026-10-21）**：锁版 `2.0.32` 上的复检**已完成**（§2.4）——**取消语义、全 location 取消、重建滞后、六条文件监听行、`deferred` 分支端到端、`settings.apiKey` 明文回显**六项**逐条复检通过，覆盖路径上**未发现行为差异** ⇒ **闸门策略与 settle 窗口都不必改**；**要盯的只有 plugin 路径**（生效延迟 **306 ms（2.0.28）→ 3 轮最坏 919 ms（2.0.32；入库那轮 207 ms）**，settle 窗口余量 **6.4× → ≈2.2×**）。
 - **(c)** **真重启能力必须保留**（运维 `RESTART` / worker 自更新 / serve 崩溃恢复 / `/config/restart`）⇒ `RestartCoordinator` 收窄，**不是删除**。
-- **(d)** **别顺手把 provider 段改成 `POST /api/credential`**——实测凭据表**不覆盖** provider 段的 `settings.apiKey`（§3.3）。
+- **(d)** **别顺手把 provider 段改成 `POST /api/credential`**——实测凭据表**不覆盖** provider 段的 `settings.apiKey`（§3.3；**2.0.32 复检：仍然明文回显**，§2.4 第 6 条）。
 
 **当前状态：✅ 已确证，🚧 实施中**（本文档不写成已完成）。
-**证据**：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（实测 2.0.28；11 份原始输出 + 复现脚本 + 2.0.32 复检清单）。
+**证据**：`docs/agent-platform/opencode-v2-hot-reload-evidence/`（2.0.28 实测 + **锁版 `2.0.32` 复检**，§2.4；12 份原始输出 + 复现脚本）。
 
 ### 5.2 🥈 停止写 `auth.json`　（R11）
 
@@ -455,6 +480,7 @@ worker ↔ server 的协议类型是**两份副本**：
 - 快照（`opencode-v2-contract-baseline/openapi.json`）由 **2.0.28** 生成；锁版目标是 **2.0.32**。
 - ⇒ **锁版即锁契约基线**：用 2.0.32 重跑快照，差异项逐条登记到计划 §10。
 - ⚠️ **`GET /api/model` 两版形态一致**（都是 `{location, data}`）⇒ 代码里"容忍裸数组"是**防御性**的，**不是**已知版本漂移（⚠️ 别按"版本漂移"去"修"它）。
+- ⚠️ **口径**：这条只针对**契约快照**（**OpenAPI 形态捕获**）；**行为**证据（热重载）**已由锁版 `2.0.32` 产出**，复检覆盖的路径上**未发现行为差异**（§2.4）⇒ **"锁版即锁证据"只对快照成立**，不适用于行为证据。
 
 ### 6.7 后台执行的"唤醒"是**状态落进会话历史**，不是推事件
 
