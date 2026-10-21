@@ -35,12 +35,16 @@ data:
   # WORKER_ID 不在共享 ConfigMap 下发：由 worker StatefulSet 按 pod 名注入
   # （downward API，pod 名 <release>-worker-<ordinal> 全局唯一），多副本天然唯一，
   # 避免共享同一 ID 相互覆盖注册。
+  # opencode serve 监听地址（值保留 0.0.0.0 仅为兼容 + 集群内 serve 调试 Service/Ingress）：
+  # **v2 控制面不直连 serve**，只调 worker 的执行端点（:4198，端口随 capabilities.execPort 上报）
+  # ⇒ serve 是否监听非回环与控制面可达性无关（留回环更安全）；此处不改值，仅订正理由。
   OPENCODE_SERVE_HOSTNAME: {{ .Values.worker.env.serveHostname | quote }}
   OPENCODE_SERVE_PORT: {{ .Values.worker.env.servePort | quote }}
   # WORKER_ADVERTISE_HOST 不在共享 ConfigMap 下发：StatefulSet 多副本下必须按 pod 注入
   # 专属 headless DNS（<pod>.<release>-worker-headless.<ns>.svc，见 statefulset-worker.yaml
-  # env 覆盖）。worker 无共享 ClusterIP Service（仅 headless），server 经每副本上报的
-  # headless baseUrl 直连对应 pod（serve :4000 / exec :4198 同 origin），不依赖负载均衡。
+  # env 覆盖）。worker 无共享 ClusterIP Service（仅 headless），控制面经每副本上报的
+  # headless baseUrl **只取主机部分** + exec :4198 直连对应 pod（serve :4000 不参与拨号），
+  # 不依赖负载均衡。
   WORKER_DEFAULT_MODEL: {{ .Values.worker.env.defaultModel | quote }}
   WORKER_FIRST_TOKEN_TIMEOUT_MS: {{ .Values.worker.env.firstTokenTimeoutMs | quote }}
   # 代码版本（worker/src/code-version.ts）：env 优先于 dist/version.js 文件戳。worker 镜像

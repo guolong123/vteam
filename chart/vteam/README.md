@@ -133,7 +133,7 @@ helm install vteam chart/vteam \
 |------|-----------|------|
 | server | ClusterIP :3000 | 后端 API `/api/v1`、Swagger `/api/v1/docs` |
 | web | ClusterIP :3000 | 控制台 |
-| worker | Headless :4000 | opencode serve（无共享 ClusterIP；server 经每副本 headless DNS 直连，不对外） |
+| worker | Headless :4000 | opencode serve（无共享 ClusterIP；**控制面不直连 serve**，只调 worker 自己的执行端点 `:4198`（`capabilities.execPort` 上报），主机取每副本上报的 headless baseUrl 主机部分；serve 仅供调试，不对外） |
 | mysql | Headless :3306 | 内置 MySQL |
 
 访问方式：
@@ -184,7 +184,10 @@ worker 卷用 `--set worker.persistence.<name>.storageClass=<sc>`。
   （v1 驱动已随 v2 切换删除）。
 - **server 与 worker 必须一起换**：v2 的控制面↔opencode 通道换成了 worker 的执行端点，
   v1 server + v2 worker / v2 server + v1 worker **都不能互通**。
-- **数据卷快照是前置条件**：回滚 = 回滚镜像到 `v1.0.4` **+ 恢复迁移前的数据卷**。
+- **数据卷快照**：回滚 = 回滚镜像到 `v1.0.4` **+ 恢复迁移前的数据卷**。⚠️ 但"恢复卷"只在
+  **隔离根被指回 v1 数据目录**时才是**硬前置**：默认隔离根（`<HOME>/.opencode-iso`）下 v2
+  **不就地迁移** v1 的库 ⇒ 回滚**不必**恢复卷，损失**有界**于 v2 窗口期新建的会话。
+  快照仍是**强烈建议**（便宜的保险），且**回滚步骤不变**（仍按 §8.6 走）。
 
 完整的交付顺序、灰度闸门、观察项清单、回滚命令与数据影响见
 **`docs/deployment.md` 的「八、OpenCode v2 灰度与回滚」**。

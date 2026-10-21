@@ -197,8 +197,8 @@ worker 在启动与 `reload-config` 时拉取；SDK 侧用 `WorkerService.set_re
 | `SERVER_URL` | `http://localhost:3000` | 控制面基址（独立模式忽略） |
 | `WORKER_STANDALONE` | `false` | `true` = 独立模式（跳过注册/心跳/资源拉取，挂载 `/config/*`） |
 | `WORKER_EXEC_PORT` | `4198` | 执行端点端口 |
-| `OPENCODE_SERVE_PORT` / `_HOSTNAME` | `0`（随机）/ `127.0.0.1` | serve 端口与绑定（容器/跨机需 `0.0.0.0`） |
-| `WORKER_ADVERTISE_HOST` | 自动探测内网 IP | 上报给控制面的 serve 基址 |
+| `OPENCODE_SERVE_PORT` / `_HOSTNAME` | `0`（随机）/ `127.0.0.1` | serve 端口与绑定（**只对 worker 自身有意义**：控制面不直连 serve，只调执行端点 `:4198` ⇒ 留回环即可，容器/跨机也**不必**为控制面改成 `0.0.0.0`） |
+| `WORKER_ADVERTISE_HOST` | 自动探测内网 IP | 上报给控制面的基址（`capabilities.baseUrl`；控制面只取其**主机部分**，端口由 `capabilities.execPort` 决定 ⇒ 实际要求是控制面能到达该主机的 `:4198`） |
 | `WORK_DIR` | `/data/vteam-worker` | serve cwd + 资源注入落点 |
 | `WORKER_MAX_INSTANCES` | `5` | 并发会话上限 |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | `300000` | 首字超时 |

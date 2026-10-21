@@ -16,22 +16,22 @@
 
 ## 0. 交互总览
 
-Worker 与 Server 之间共有 **5 条 HTTP 通道**：
+Worker 与 Server 之间共有 **5 条 HTTP 通道**（其中 ⑤ 已于 D3 / T18 取消，现行 4 条）：
 
 | # | 通道 | 方向 | 模式 | 用途 |
 |---|------|------|------|------|
 | ① | 注册 / 心跳 | Worker → Server | 主动 POST（10s 周期） | 注册、负载上报、**下行命令捎带** |
 | ② | 事件回流 | Worker → Server | 主动 POST（实时推送） | 会话状态、流式增量、任务完成等事件 |
 | ③ | 资源拉取 | Worker → Server | Worker 反向 GET（收到 reload 信号后） | 技能 / 工具 / MCP / Agent 策略注入 |
-| ④ | 执行端点 | Server → Worker | Server 主动 POST/GET（`execPort`，默认 4198） | 下发执行任务、文件拉取、计划/OmO 配置 |
-| ⑤ | serve 代理 | Server → Worker | Server 主动 POST/GET（`capabilities.baseUrl:port`） | opencode serve 会话 API 透传（**v2 形态：全部 `/api` 前缀 + 恒开鉴权**；计划 D3 / T18 落地后本通道取消，改为调执行端点④的会话/模型代理） |
+| ④ | 执行端点 | Server → Worker | Server 主动 POST/GET（`capabilities.execPort`，缺省 4198） | 下发执行任务、文件拉取、计划/OmO 配置、会话/模型代理 |
+| ⑤ | serve 代理（**已取消**） | —（控制面**不与 opencode serve 通信**） | 不再按 `capabilities.baseUrl` 拨号 | v1 期 opencode serve 会话 API 透传；D3 / T18 落地后取消，改为经执行端点④的会话/模型代理（`POST /sessions`、`POST /sessions/:id/prompt`、`POST /sessions/:id/abort`、`GET /sessions/:id/messages`、`GET /models`） |
 
 ```
  Worker ──①register/heartbeat(10s)──▶ Server     （心跳响应捎带 commands）
  Worker ──②POST /worker/events──────▶ Server     （事件实时回流，恒 202）
  Worker ──③GET /skills /tools ...───▶ Server     （收到 reload-config 后拉取）
  Server ──④POST /execute 等─────────▶ Worker:4198（执行端点，独立 node:http）
- Server ──⑤POST /api/session 等─────▶ Worker:serve（opencode serve REST；D3/T18 后取消）
+ Server ──⑤（已取消）───────────────✗  Worker:serve（控制面不与 opencode serve 通信）
 ```
 
 **下行命令模型（①捎带）**：Server 端资源/配置变更时不直接推送，而是把命令入队
@@ -98,10 +98,16 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | `tools` | string[] | ✅ | 工具名列表 |
 | `models` | string[] | ❌ | serve 可用模型 id（`providerID/modelID`），入库同步用 |
 | `executableModels` | string[] | ❌ | `opencode models` CLI 真实可执行模型集 |
-| `port` | int | ❌ | serve 实际监听端口 |
-| `baseUrl` | string | ❌ | serve 对 server 公布的基址（优先于 `port`） |
-| `execPort` | int | ❌ | 执行端点端口（默认 4198） |
+| `port` | int | ❌ | serve 实际监听端口（v2 控制面**不据此拨号**——仅展示/排障） |
+| `baseUrl` | string | ❌ | worker 对外公布的基址（`${WORKER_ADVERTISE_HOST}:${serve 端口}`）；控制面**只取其主机部分**——serve 端口不参与拨号 |
+| `execPort` | int | ❌ | 执行端点端口（缺省 4198）；控制面据此拼 `<baseUrl 主机>:<execPort>` 直连执行端点 |
 | `agentPolicies` | object | ❌ | `{ enabled, names[], generatedAt? }` agent 策略注入结果 |
+
+> ⚠️ **v2 拨号口径**（`server/src/workers/worker.client.ts` → `resolveExecBaseUrl()`）：控制面**只**调 worker 执行端点——
+> 取 `capabilities.baseUrl` 的**主机部分**（`protocol//hostname`，**不含 serve 端口**）+ `capabilities.execPort`
+> （缺省 `DEFAULT_EXEC_PORT=4198`）拼出 `<host>:<execPort>`，请求带 `X-Worker-Token`。
+> **serve 端口不参与拨号**——控制面不与 opencode serve 通信（v1 期是按 `resolveBaseUrl` 连 serve 端口）。
+> server 端另兼容可选的 `capabilities.execBaseUrl`（**完整执行端点基址**，如 `http://worker:4198`，优先于上面两步；worker 当前不上报该字段）。
 
 **响应** `200`：
 
@@ -263,6 +269,7 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 ## 6. 通道④：Server → Worker 执行端点（`execPort`，默认 4198）
 
 独立 `node:http` 监听（与 serve 端口解耦），路径全小写。鉴权：`X-Worker-Token`（写路径）。
+**控制面只连本端点**（`<baseUrl 主机>:<capabilities.execPort>`，缺省 4198）——serve 端口不参与拨号。
 
 | 方法 | 路径 | 鉴权 | 成功码 | 用途 |
 |------|------|------|--------|------|
@@ -294,7 +301,9 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | `executionConfig` | `{ permissions, writePaths }` | ❌ | 执行策略（权限矩阵） |
 | `attachments` | `{ url, mime?, filename? }[]` | ❌ | 图片附件引用（Worker 按需下载） |
 
-**URL 解析**：`capabilities.execBaseUrl` → 否则 serve 基址 origin + `capabilities.execPort`（默认 4198）。
+**URL 解析**（v2 口径）：`capabilities.execBaseUrl`（完整执行端点基址）→ 否则 `capabilities.baseUrl` 的**主机部分**
+（`protocol//hostname`，**不含 serve 端口**）+ `capabilities.execPort`（缺省 4198）→ 拼出 `<host>:<execPort>`，
+请求带 `X-Worker-Token`。**serve 端口不参与拨号**——控制面不与 opencode serve 通信（v1 期是按 `resolveBaseUrl` 连 serve 端口）。
 
 **执行流程**：Worker 驱动 serve 执行，事件经通道②回流；Server 不再自持轮询。
 首字超时（`WORKER_FIRST_TOKEN_TIMEOUT_MS`，缺省 0=禁用）abort；空闲判死由 `instance-tracker` 负责。
@@ -353,18 +362,19 @@ curl -X POST -H 'X-Worker-Token: <token>' http://<worker>:4198/config/restart
 ⚠️ 安全：这些端点写入明文凭据（auth.json / git-creds），必须 `X-Worker-Token`；
 执行端点绑 `0.0.0.0`，暴露到非可信网络等于开放配置写入口 —— 部署时应网络隔离或仅内网可达。
 
-## 7. 通道⑤：Server → Worker serve 代理（`capabilities.baseUrl:port`）
+## 7. 通道⑤（**已取消**）：Server → Worker serve 代理（v1 历史契约）
 
 > ⚠️ **opencode v2 适配后的订正（2026-10-20）**：
 > ① **v2 只保留 `/api` 前缀**（v1 的 legacy 根路径面已移除），下表的 v1 端点在 v2 serve 上**已不存在**——而且**不是 404，而是 200 + web SPA 的 HTML**（⚠️ 只查状态码的自检会因错误的原因判"正常"）；
 > ② v2 **恒开鉴权**（`OPENCODE_SERVER_PASSWORD` 必填），Basic 头不再是"可选"；
 > ③ 健康检查必须用 **`GET /api/info`**（未鉴权 401 / 已鉴权 200），**不得**用 `GET /`（v2 的 `GET /` 未鉴权也返回 200 + SPA HTML）；
-> ④ **本通道在计划 D3 / T18 落地后被取消**——控制面的 5 处 opencode 直连收敛到**执行端点④**（worker 侧新增 `POST /sessions`、`POST /sessions/:id/prompt`、`POST /sessions/:id/abort`、`GET /sessions/:id/messages`、`GET /models`），控制面只调 worker、**不再持有任何 opencode 端点字面量**（见 07 篇 §11.5）。
-> ⚠️ **当前状态（2026-10-20）**：worker 侧已单轨收口（v1 driver 已删），**但控制面这 5 处直连尚未收敛**——`server/src/workers/worker.client.ts` 仍持有 v1 端点字面量，在 v2 serve 上会打到 web SPA（200 + HTML）。**这是代码与文档之间的已知缺口**，待 D3/T18 的控制面侧落地。
+> ④ **本通道已取消**（D3 / T18 落地）——控制面的 opencode 直连全部收敛到**执行端点④**（worker 侧 `POST /sessions`、`POST /sessions/:id/prompt`、`POST /sessions/:id/abort`、`GET /sessions/:id/messages`、`GET /models`），控制面只调 worker、**不再持有任何 opencode 端点字面量**（见 07 篇 §11.5）。
+> ⚠️ **当前状态（2026-10-21）**：v2 两侧均已单轨收口——worker 侧 v1 driver 已删；控制面侧 `server/src/workers/worker.client.ts` **不再持有任何 opencode 端点字面量**（serve Basic Auth 与 `SERVER_PASSWORD` 一并移除），只经 `resolveExecBaseUrl()` 调执行端点④（带 `X-Worker-Token`）。**控制面不与 opencode serve 通信**——下表仅作 v1 契约历史留档。
 >
 > 下表按 **v2 形态**列出（= 收敛前的最后形态）。
 
-opencode serve 原生 REST API 透传（**v2 恒开鉴权**：Basic，用户名固定 `opencode`）。由 `WorkerClient.request()` 统一拼装。
+（**v1 历史形态**，当前控制面不再直连 serve）opencode serve 原生 REST API 透传（Basic，用户名固定 `opencode`）；
+v1 期由 `WorkerClient.request()` 统一拼装——v2 已删除该方法，现为 `requestExec()` / `requestToUrl()`，只打执行端点④。
 
 | 方法 | 路径 | 用途 | 失败语义 |
 |------|------|------|---------|
@@ -377,7 +387,7 @@ opencode serve 原生 REST API 透传（**v2 恒开鉴权**：Basic，用户名�
 | GET | `/api/provider` | Provider 全量（Worker 内部 `listModels` 用） | 降级 `/api/model` |
 | GET | `/api/agent` | opencode agent 列表（Worker 内部 `listAgents` 用；v2 需用 `location[directory]=` deepObject 写法，扁平写法 400） | 抛 |
 
-> **注**：上表是 **Server 直连 serve** 的路径（收敛前的最后形态）；`/agents`、`/todos`、`/plan-files` 等带目录语义的列表走的是**执行端点④**（路径同名但端口不同）。**v2 形态修正**：`/session`、`/session/:id/*` 在 v2 serve 上只命中 web SPA（200 + HTML），**必须改用 `/api/*` 前缀**。
+> **注**：上表是 **v1 期 Server 直连 serve** 的路径（**历史留档，不构成当前控制面的 API 面**）；现行控制面只用**执行端点④**——会话/模型走 `POST /sessions`、`POST /sessions/:id/prompt`、`POST /sessions/:id/abort`、`GET /sessions/:id/messages`、`GET /models`，`/agents`、`/todos`、`/plan-files` 等带目录语义的列表同样走执行端点（路径同名但端口不同）。**v2 形态修正（历史注）**：`/session`、`/session/:id/*` 在 v2 serve 上只命中 web SPA（200 + HTML），**必须改用 `/api/*` 前缀**。
 
 ---
 
@@ -466,12 +476,12 @@ Server ──SSE──▶ Web 前端
 | Server 侧 | Worker 侧 | 说明 |
 |-----------|----------|------|
 | `WORKER_TOKEN` | `X_WORKER_TOKEN` | 共享鉴权 token（必须一致） |
-| `WORKER_BASE_URL` | — | serve 基址回退（默认 `http://localhost:4199`） |
-| `SERVER_PASSWORD` | `OPENCODE_SERVER_PASSWORD` | serve Basic Auth 密码 |
+| `WORKER_BASE_URL` | — | 执行端点**主机**回退（默认 `http://localhost:4199`，只取主机部分）——serve 端口不参与拨号 |
+| `SERVER_PASSWORD`（v2 已移除） | `OPENCODE_SERVER_PASSWORD` | serve Basic Auth 密码（**控制面不再需要**——控制面不直连 serve；仅 worker 自身 serve 用） |
 | — | `SERVER_URL` | Server 基址（compose 内 `http://server:3000`） |
 | — | `WORKER_ID` / `WORKER_NAME` | Worker 身份 |
 | — | `WORKER_EXEC_PORT` | 执行端点端口（默认 4198） |
-| — | `WORKER_ADVERTISE_HOST` | 对外公布 serve 基址主机 |
+| — | `WORKER_ADVERTISE_HOST` | 上报基址的主机部分（`capabilities.baseUrl` = `${WORKER_ADVERTISE_HOST}:${serve 端口}`；控制面只取主机部分，端口由 `capabilities.execPort` 决定） |
 | — | `WORKER_MCP_URL` | 内置 vteam MCP 地址覆盖 |
 | — | `WORKER_DEFAULT_MODEL` | 默认模型 id |
 | — | `WORKER_MAX_INSTANCES` | 最大并发（默认 5） |

@@ -45,9 +45,9 @@ docker build -t vteam-worker:local ./worker
 ```bash
 docker run -d --name vteam-worker \
   -e X_WORKER_TOKEN=dev-token \
+  -e OPENCODE_SERVER_PASSWORD=change-me-serve-password \
   -e SERVER_URL=http://<控制面地址>:13999 \
   -e WORKER_ID=w_demo_1 \
-  -e OPENCODE_SERVE_HOSTNAME=0.0.0.0 \
   -e OPENCODE_SERVE_PORT=4000 \
   -e WORKER_ADVERTISE_HOST=http://<server 可达的 worker 地址> \
   -e WORKER_EXEC_PORT=4198 \
@@ -60,14 +60,18 @@ docker run -d --name vteam-worker \
 
 worker 启动后会向 `SERVER_URL` 注册（失败指数退避重试，重试耗尽退出）。
 
+⚠️ `OPENCODE_SERVER_PASSWORD` **必填**（服务模式与独立模式都需要）：v2 的 `opencode serve` 恒开
+Basic Auth（用户名固定 `opencode`），为空时 opencode 自动生成随机密码打到 stdout、worker 不解析
+→ worker 启动 fail-fast。
+
 ### 3.3 独立模式（无控制面）
 
 ```bash
 docker run -d --name vteam-worker-standalone \
   -e X_WORKER_TOKEN=dev-token \
+  -e OPENCODE_SERVER_PASSWORD=change-me-serve-password \
   -e WORKER_STANDALONE=true \
   -e WORKER_ID=w_demo_standalone \
-  -e OPENCODE_SERVE_HOSTNAME=0.0.0.0 \
   -e OPENCODE_SERVE_PORT=4100 \
   -e WORKER_EXEC_PORT=4198 \
   -e WORK_DIR=/data/vteam-worker \
@@ -82,12 +86,13 @@ docker run -d --name vteam-worker-standalone \
 | 变量 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `X_WORKER_TOKEN` | 是 | 无 | 与 SDK/控制面一致的共享 token |
+| `OPENCODE_SERVER_PASSWORD` | **是**（v2 serve 恒开鉴权） | 无 | opencode serve 认证密码（Basic Auth，用户名固定 `opencode`）；为空 → worker 启动 fail-fast |
 | `SERVER_URL` | 服务模式必填 | `http://localhost:3000` | 控制面基址（注册/心跳/事件） |
 | `WORKER_STANDALONE` | 否 | `false` | `true` = 独立模式（跳过注册/心跳/资源拉取） |
 | `WORKER_ID` | 否 | `w_<hostname>` | worker 唯一 id |
-| `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | serve 绑定地址；容器/跨机必须 `0.0.0.0` |
-| `OPENCODE_SERVE_PORT` | 否 | `0`（随机） | serve 端口 |
-| `WORKER_ADVERTISE_HOST` | 否 | 自动探测本机内网 IP | 上报给控制面的 serve 基址（`capabilities.baseUrl`） |
+| `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | serve 绑定地址（**v2 控制面不直连 serve**，只调 worker 执行端点 `:4198` ⇒ 留回环即可；容器/跨机也**不必**为控制面改成 `0.0.0.0`） |
+| `OPENCODE_SERVE_PORT` | 否 | `0`（随机） | serve 端口（**只对 worker 自身有意义**，控制面不拨号） |
+| `WORKER_ADVERTISE_HOST` | 否 | 自动探测本机内网 IP | 上报给控制面的基址（`capabilities.baseUrl`；控制面只取其**主机部分**，端口由 `capabilities.execPort` 决定 ⇒ 实际要求是控制面能到达该主机的 `:4198`） |
 | `WORKER_EXEC_PORT` | 否 | `4198` | 执行端点端口（SDK 直连目标） |
 | `WORK_DIR` | 否 | `/data/vteam-worker` | serve 工作目录 + 资源注入落点 |
 | `WORKER_MAX_INSTANCES` | 否 | `5` | 并发会话上限 |

@@ -47,7 +47,7 @@ vteam 提供两套部署方式，按环境选择：
 | `X_WORKER_TOKEN` | worker | 同 `WORKER_TOKEN` | worker 侧鉴权 |
 | `SERVER_URL` | worker | `http://server:3000` | 注册/心跳的 server 地址 |
 | `WORKER_ID` | worker | `w_compose_worker` | compose 单副本固定 |
-| `OPENCODE_SERVE_HOSTNAME` | worker | `0.0.0.0` | serve 监听地址 |
+| `OPENCODE_SERVE_HOSTNAME` | worker | `0.0.0.0` | serve 监听地址（**v2 下控制面不直连 serve**——控制面调 worker 的执行端点 `:4198`，鉴权 `X-Worker-Token`；此处只决定 serve 自身对外可达性） |
 | `OPENCODE_SERVE_PORT` | worker | `4000` | serve 固定端口 |
 | `WORKER_ADVERTISE_HOST` | worker | `http://worker` | 上报给 server 的 baseUrl（compose 服务名） |
 | `WORKER_DEFAULT_MODEL` | worker | 空 | Agent 未配模型时的默认模型兜底 |
@@ -466,14 +466,16 @@ docker compose build --build-arg OPENCODE_CLI_SPEC=@opencode/cli@2.0.32 worker
    mcp-servers 时按 worker 覆盖内置地址下发（不修改全局 seed 地址，集群内 worker 无感知）。
 2. **server 连不上 worker**：`WORKER_ADVERTISE_HOST` 默认 `http://127.0.0.1`（仅本机可访问），
    server 在远端用回环地址连 worker 执行端点 → 消息只有 ACK 无实际回复、worker 显示不可用。
-   须设置为 server 可达的 worker 地址，并将 `OPENCODE_SERVE_HOSTNAME` 设为 `0.0.0.0`
-   （serve 监听非回环，server 才能连上；执行端点 node:http 已监听 `0.0.0.0`，无需改动）。
+   须设置为 server 可达的 worker 地址 ⇒ **控制面实际要能到达的是该主机的 `:4198`**
+   （执行端点 `WORKER_EXEC_PORT`；执行端点 node:http 已监听 `0.0.0.0`，无需改动）。
+   ⚠️ v2 控制面**不直连 opencode serve** ⇒ `OPENCODE_SERVE_HOSTNAME=0.0.0.0` **不是**为了让
+   控制面连上 serve，它只决定 serve 自身对外可达（回滚 v1 时 v1 server 直连 serve 才需要）。
 
 ```bash
 # worker/.env —— 集群外 worker 三件套
 WORKER_MCP_URL=http://<控制面外部地址>/api/v1/platform-mcp   # 内置 vteam MCP 外部可达地址
 WORKER_ADVERTISE_HOST=http://<worker 局域网 IP>              # server 可达的 worker 地址（baseUrl）
-OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 监听非回环，server 才能连上
+OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 自身对外监听；v2 控制面走 :4198 执行端点，不直连 serve
 ```
 
 - `<控制面外部地址>`：worker 所在网络可达的 server 地址（如 `https://vteam.example.com`）；
@@ -630,13 +632,22 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
    `/session/:id/prompt_async` …，v2 上已移除）。⇒
    **v1 server + v2 worker 与 v2 server + v1 worker 都不能互通**（不是"能跑但降级"，
    是会话链路直接断）。
-3. **数据卷要一起回滚**（详见 §8.6/§8.7）。v2 把会话存储换成了 SQLite `opencode.db`，
-   worker 的 serve 跑在**隔离配置域**里（`XDG_DATA_HOME=<HOME>/.opencode-iso/data`）⇒
-   **v1 的二进制读不到 v2 形态的会话库**，v2 期间产生的会话在回滚后对 v1 不可见。
-   ⇒ **数据卷快照是安全灰度的前置条件**，不是可选项。
-   （若部署时**没有**启用隔离域——把 `XDG_DATA_HOME` 指回 v1 的数据目录——则 v2 的迁移是
-   **就地**发生的，v1 连卷都读不了 ⇒ 恢复卷从"建议"升级为"硬性要求"。两种情况下
-   **回滚步骤完全一样**，所以按 §8.6 做即可。）
+3. **数据卷快照：要，但"硬前置"只在一种部署形态下成立**（详见 §8.6/§8.7）。v2 把会话存储
+   换成了 SQLite `opencode.db`，而 worker 的 serve 跑在**隔离配置域**里
+   （`XDG_DATA_HOME=<HOME>/.opencode-iso/data`；隔离根 `OPENCODE_ISOLATION_ROOT` 缺省
+   `<HOME>/.opencode-iso`，见 `worker/src/config.ts` 的 `resolveIsolationScope`）
+   ⇒ **v2 的库落在与 v1 不同的目录**（v1 的库在 `<HOME>/.local/share/opencode/`）
+   ⇒ **v2 不会就地迁移 v1 的库**。
+   ⇒ **缺省形态下，回滚不需要恢复数据卷**：v1 自己的数据原封未动，**v1 期间产生的会话
+   全部还在**；损失是**有界的**——只丢 v2 窗口期内新建的会话（以及平台侧引用这些 v2 会话
+   id 的行，v1 解析不了）。
+   ⇒ **例外（这一种形态下快照才是硬前置）**：若把 `OPENCODE_ISOLATION_ROOT` /
+   `XDG_DATA_HOME` **指回了 v1 的数据目录**，v2 的迁移就是**就地**发生的
+   ⇒ **v1 的二进制读不到 v2 形态的会话库**（v1 连卷都读不了）⇒ **必须**恢复卷。
+   ⇒ **动手前先确认** `OPENCODE_ISOLATION_ROOT` **没有**指向 v1 的数据目录
+   （缺省值即安全形态）——否则"回滚不用恢复卷"这句话**不成立**。
+   ⇒ **两种形态的回滚步骤完全一样**，都按 §8.6 做即可（快照是**便宜的保险**：建 G0 闸门
+   时顺手做掉），但它**不是**缺省形态下的**无条件硬前置**。
 4. **没有"混跑保护网"**。调度器确实有 opencode 版本过滤，但**当前没有任何生产调用方**
    设置 `AssignmentRequirement.opencodeVersion` ⇒ 该过滤**今天是失效的**
    （详见 §8.4）。⇒ **切换前必须把 v1 worker 全部下线**，不能指望调度器帮你挡住。
@@ -669,6 +680,23 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
 > ⇒ **server 必须先接受五态，worker 才能开始上报五态**；**滚动更新 worker 只有在 server
 > 已是新版之后才安全**——"先起新 worker、后升 server" 正是这个故障模式（worker 刚起来就
 > 报 `pending`/`disabled`，server 不认 ⇒ 400 ⇒ 判离线 ⇒ 看起来像"worker 起不来"）。
+
+### 8.1.1 物理机 / 集群外 worker（不在 chart 编排内）
+
+本章的交付顺序默认 worker 是 **Helm 管理的 StatefulSet**。**物理机 / VM 上的 worker**
+（systemd，`EnvironmentFile=<dir>/worker/.env`）**不在 chart 的 rollout 编排内**——它的升级
+由运维手工控制 ⇒ "**先升 server、再升 worker**"这条硬约束**天然可执行**（先把 server 升完，
+再重启 worker）。四条要点：
+
+- **opencode CLI 必须是 v2**：`npm i -g @opencode/cli@2.0.32`（v2 **改了包名**；v1 的 npm 包
+  `opencode-ai` 永远停在 1.19.3，**到不了 v2**）。
+- **`OPENCODE_SERVER_PASSWORD` 必须写进那份 `.env`**：v2 **恒开鉴权**，缺它 worker
+  **启动即 fail-fast**（不是"先跑起来再报错"）。
+- **控制面只连 worker 的执行端点**（`WORKER_EXEC_PORT`，缺省 4198）：该端口必须对控制面
+  **可达**；**serve 端口不必对外暴露**（serve 可以留在回环，见 §8.0 事实 2）。
+- **升级前先快照 `<WORK_DIR>/opencode.json`**：注入器会把它**改写成 v2 形态**
+  （`mcp:` → `mcp.servers:`）⇒ 残留的 v2 形态嵌套键被 **v1 的注入器**读到会**误解析 MCP 段**
+  （这一份文件就是本形态下"数据卷快照"的对应物）。
 
 ### 8.2 灰度步骤与闸门
 
@@ -826,7 +854,9 @@ curl -s -H "Authorization: Bearer $JWT" http://<server>/api/v1/workers | jq '.[]
 ### 8.6 回滚步骤（可执行）
 
 > **前置条件（回滚前必须成立，否则"回滚"会变成"带伤上线"）**：
-> 1. **迁移前的数据卷快照存在且可恢复**（home 卷 + work 卷；见 §8.6.3）。
+> 1. **迁移前的数据卷快照存在且可恢复**（home 卷 + work 卷；见 §8.6.3）——**隔离根
+>    （`OPENCODE_ISOLATION_ROOT`）指回 v1 数据目录**（= §8.7 的"未启用隔离域"）时是**硬前置**；
+>    **缺省隔离根**下是**强烈建议**（便宜的保险，见 §8.0 事实 3）。
 > 2. **v1 线的镜像可用**（`v1.0.4` 树构建的 server / web / worker，已推 registry）。
 > 3. `vteam-baseline-v1.yaml`（灰度前导出的 values 基线，含 v1 image tag）在手。
 
@@ -855,8 +885,10 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline-v1.yaml 
   --wait --timeout 300s
 ```
 
-> ⚠️ `helm rollback` / `helm upgrade` 只回滚 **values**，**不回滚数据卷** ⇒ §8.6.3 是
-> 必做项，不是可选项。
+> ⚠️ `helm rollback` / `helm upgrade` 只回滚 **values**，**不回滚数据卷** ⇒ §8.6.3 的恢复卷
+> **在"隔离根指回 v1 数据目录"时是必做项，不是可选项**；**缺省隔离根**下 v2 不就地迁移
+> v1 的库 ⇒ 回滚不恢复卷也只丢 v2 窗口期的会话 ⇒ 恢复卷降为**强烈建议**（便宜的保险）。
+> **两种形态的步骤相同**，都照 §8.6.3 走（见 §8.0 事实 3）。
 
 #### 8.6.3 恢复迁移前的数据卷
 
@@ -987,10 +1019,14 @@ cd /tmp/vteam-v1-rollback && docker compose up -d --build
 >   `uploads` 卷 / MySQL 里，**不丢**）。
 > - **没做卷快照 ⇒ 没有"回到 v1 形态"的材料**：v1 线的老会话仍在卷上（隔离域设计使然，
 >   见 §8.0 事实 3），但 v2 期间的会话对 v1 不可见，且注入配置带 v2 形态残留。
-> - ⇒ **结论：数据卷快照是"安全灰度"的前置条件**，不是回滚的"锦上添花"。
+> - ⇒ **结论：数据卷快照是"安全灰度"的前置条件**，不是回滚的"锦上添花"——**隔离根指回
+>   v1 数据目录**时它是**硬前置**（不恢复卷 ⇒ v1 连卷都读不了）；**缺省隔离根**下 v2 不
+>   就地迁移 v1 的库 ⇒ 不恢复卷最坏也只丢 v2 窗口期的会话 ⇒ 快照是**强烈建议**的**便宜
+>   保险**（G0 闸门顺手做掉）。
 > - ⚠️ **口径差异提醒**（别把两句矛盾的话混用）：本表"只回滚镜像"一列描述的是
 >   **v2 worker 带隔离域上线**的现状（v1 的老库在 `<HOME>/.local/share/opencode/`，
 >   与 v2 的隔离域 `<HOME>/.opencode-iso/data/` **不是同一个目录**）。若部署时**未启用
 >   隔离域**，v2 的迁移就是**就地**的、v1 连卷都读不了 ⇒ 那一列全部按"丢失"计。
->   **两种情况的回滚步骤相同（§8.6 都要求恢复卷）**，区别只在于"不回滚卷"的后果有多严重。
+>   **两种情况的回滚步骤相同（§8.6 走同一套流程）**，区别只在于"不回滚卷"的后果有多严重
+>   ——以及**快照是不是硬前置**（见 §8.0 事实 3）。
 
