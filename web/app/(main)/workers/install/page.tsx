@@ -12,9 +12,12 @@
  * - curl 下载地址动态化：脚本由控制面 web 静态服务提供（/install-worker.sh），下载 URL 与
  *   serverUrl 默认值均取当前页面访问地址（window.location.origin，挂载后填充避免 SSR mismatch）——
  *   不再硬编码 example 地址。
- * - 真实默认值（MOCK-03）：opencode 版本默认 2.0.32（= worker/Dockerfile 的
- *   ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32 锁版；v1 的 npm 包 opencode-ai 已冻结在 1.19.3、
- *   永远到不了 v2，而 worker 启动期版本闸门要求主版本 ≥ 2——选 v1 会让 worker 启动即判死）；
+ * - 真实默认值（MOCK-03）：opencode 版本默认 **latest**（npm 包 @opencode/cli 的 latest 标签
+ *   = 最新已发布的 v2；curl 脚本路径据此安装）。下拉里另保留两个可复现的具体版本：2.0.32
+ *   （= worker/Dockerfile 的 ARG OPENCODE_CLI_SPEC 锁版，镜像路径用的就是它）与 2.0.28（实测版本）。
+ *   ⚠️ 两条安装路径可能落在不同 opencode 版本上：脚本跟 latest、docker 跟镜像内置的 2.0.32；
+ *   但 v1 的 npm 包 opencode-ai 已冻结在 1.19.3、永远到不了 v2，而 worker 启动期版本闸门要求
+ *   主版本 ≥ 2——选 v1 会让 worker 启动即判死（安装脚本另有一道 ≥3 的硬闸，详见 install-worker.sh）；
  *   workerId 初始随机生成（worker-XX，与「重新生成」按钮同源逻辑，替代示例值 worker-05）。
  * - 纯静态展示（不执行真实安装）；复制按钮为唯一增强交互：navigator.clipboard 写剪贴板
  *   （原型"复制"占位语义），失败静默降级。
@@ -283,10 +286,13 @@ export default function WorkerInstallPage() {
   const [workerId, setWorkerId] = useState("");
   const [workerToken, setWorkerToken] = useState("");
   const [concurrency, setConcurrency] = useState(8);
-  /* 默认值 = worker 实际运行的 opencode v2 版本（worker/Dockerfile ARG OPENCODE_CLI_SPEC
-     = @opencode/cli@2.0.32，与 install-worker.sh 的缺省一致）；v1 的 npm 包 opencode-ai
-     冻结在 1.19.3（永不到 v2），worker 启动期版本闸门要求主版本 ≥ 2 → 选 v1 会让 worker 启动即判死 */
-  const [opencodeVersion, setOpencodeVersion] = useState("2.0.32");
+  /* opencode 版本（curl 脚本路径）：缺省 **latest** = npm 包 @opencode/cli 的 latest 标签
+     （最新已发布的 v2）——跟随上游发布，避免把裸机安装钉死在两个硬编码版本上；
+     需要可复现时在下拉里选具体版本（2.0.32 = 镜像锁版 / 2.0.28 = 实测版本）。
+     ⚠️ v1 的 npm 包 opencode-ai 冻结在 1.19.3（永不到 v2），worker 启动期版本闸门要求主版本 ≥ 2
+     → 选 v1 会让 worker 启动即判死；≥3 会被 install-worker.sh 硬失败拦下（worker 驱动只验证过 v2）。
+     ℹ️ docker 路径不受本选择影响：镜像内 opencode 由构建期 OPENCODE_CLI_SPEC 锁死为 2.0.32。 */
+  const [opencodeVersion, setOpencodeVersion] = useState("latest");
 
   /* 网络可达性（可选）：外部/跨机 worker 专用，空值不拼接命令——集群内/本机无需配置 */
   const [advertiseHost, setAdvertiseHost] = useState("");
@@ -350,7 +356,7 @@ export default function WorkerInstallPage() {
 
   const curlSteps = [
     "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
-    "脚本自动安装前置（node / opencode CLI v2（@opencode/cli）缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / v2 serve 恒开鉴权的 OPENCODE_SERVER_PASSWORD 由脚本随机生成 / --advertise-host 传入的 IP 由脚本自动补全为 http://<ip> 作为 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
+    "脚本自动安装前置（node / opencode CLI v2（@opencode/cli，缺省按 npm latest 装最新已发布的 v2）缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / v2 serve 恒开鉴权的 OPENCODE_SERVER_PASSWORD 由脚本随机生成 / --advertise-host 传入的 IP 由脚本自动补全为 http://<ip> 作为 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
     "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度；控制面随后只拨 worker 的执行端点 <上报主机>:4198（opencode serve 不再对外）",
   ];
 
@@ -492,15 +498,22 @@ export default function WorkerInstallPage() {
                     ))}
                   </select>
                 </FieldRow>
-                <FieldRow label="opencode 版本" hint="v2（主版本 ≥ 2）· 仅 curl 脚本安装可选，docker 镜像锁版 @opencode/cli@2.0.32">
+                <FieldRow label="opencode 版本" hint="v2（主版本 ≥ 2）· 缺省 latest（最新 v2）· 仅 curl 脚本路径可选">
                   <select
                     value={opencodeVersion}
                     onChange={(e) => setOpencodeVersion(e.target.value)}
+                    title="缺省按 npm 的 latest 标签安装 @opencode/cli（最新已发布的 v2）。需要可复现的版本时，把鼠标移到本下拉上选一个具体版本（如 2.0.32），生成的命令会带上 --opencode <版本>。"
                     style={{ ...inputStyle, cursor: "pointer" }}
                   >
-                    <option value="2.0.32">2.0.32（@opencode/cli · 缺省 · 镜像锁版）</option>
+                    <option value="latest">latest（@opencode/cli 最新 v2 · 默认）</option>
+                    <option value="2.0.32">2.0.32（@opencode/cli · 镜像锁版 · 可复现）</option>
                     <option value="2.0.28">2.0.28（@opencode/cli · 实测版本）</option>
                   </select>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>
+                    curl 脚本路径缺省装 npm 的 latest（v2 包最新已发布版本），把鼠标移到版本上可选具体版本钉版；
+                    docker 路径用的是镜像内置的锁定版 opencode（2.0.32）——两条路径可能落在不同 opencode
+                    版本上，但都满足 worker 的「主版本 ≥ 2」闸门。
+                  </span>
                 </FieldRow>
               </div>
 
