@@ -11,6 +11,7 @@ import {
   SENDER_TYPE,
 } from '../common/constants/event.constants';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
+import { NON_TERMINAL_TASK_STATUSES } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -144,6 +145,22 @@ describe('ChatService', () => {
       } as any);
       (prisma as any).teamMember.findMany.mockResolvedValue([]);
     }
+  };
+
+  /**
+   * 模拟 DB：团队名下的任务集合。
+   * 门禁查询（task.findFirst + status 集合过滤）与频道上下文兜底查询（status != archived）
+   * 共用同一个 prisma mock，按 where 形状分流：门禁查询取 tasks 中首个非终态者（无则 null）。
+   */
+  const mockTeamTasks = (tasks: { id: string; status: string }[]) => {
+    prisma.task.findFirst.mockImplementation(async (args: any) => {
+      if (args?.where?.status?.in) {
+        const inSet: string[] = args.where.status.in;
+        const hit = tasks.find((t) => inSet.includes(t.status));
+        return hit ? { id: hit.id } : null;
+      }
+      return { id: taskId, status: 'pending', teamId: 'tm_0000000001' } as any;
+    });
   };
 
   beforeEach(async () => {
@@ -316,7 +333,7 @@ describe('ChatService', () => {
       expect(realtime.broadcast).toHaveBeenCalledTimes(2);
     });
 
-    it('主 agent 门禁：无进行中任务时用户@子agent被拦，仅主目标放行+系统提示', async () => {
+    it('主 agent 门禁：无未完成任务时用户@子agent被拦，仅主目标放行+系统提示', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
         {
@@ -334,9 +351,10 @@ describe('ChatService', () => {
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
-        currentTaskId: null,
         mainAgentMemberId: 'tmm_main',
       });
+      // 团队名下只有终态任务 → 门禁查非终态集合命中不到 → 关门
+      mockTeamTasks([{ id: 't_0000000009', status: 'completed' }]);
       prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
       idGen.nextId.mockResolvedValue('m_x');
       prisma.message.create.mockResolvedValue(messageRow());
@@ -357,11 +375,12 @@ describe('ChatService', () => {
       expect(prisma.message.create).toHaveBeenCalledTimes(2);
       const hintCall = prisma.message.create.mock.calls[1][0];
       expect(hintCall.data.senderType).toBe(SENDER_TYPE.system);
+      expect(hintCall.data.content.text).toContain('当前没有未完成的任务');
       expect(hintCall.data.content.text).toContain('只能与主 agent');
       expect(hintCall.data.content.text).toContain('产品-1');
     });
 
-    it('主 agent 门禁：@主agent本人放行（无进行中任务也不拦）', async () => {
+    it('主 agent 门禁：@主agent本人放行（无未完成任务也不拦）', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
         {
@@ -373,9 +392,10 @@ describe('ChatService', () => {
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
-        currentTaskId: null,
         mainAgentMemberId: 'tmm_main',
       });
+      // 团队无任何任务 → 关门，但目标是主成员本人 → 照常放行
+      mockTeamTasks([]);
       prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
       idGen.nextId.mockResolvedValue('m_x');
       prisma.message.create.mockResolvedValue(messageRow());
@@ -392,7 +412,7 @@ describe('ChatService', () => {
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
     });
 
-    it('主 agent 门禁：当前任务进行中 → 开门，子目标照常派发', async () => {
+    it('主 agent 门禁：存在非终态任务 → 开门，子目标照常派发', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
         {
@@ -410,14 +430,9 @@ describe('ChatService', () => {
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
-        currentTaskId: 't_0000000001',
         mainAgentMemberId: 'tmm_main',
       });
-      prisma.task.findUnique.mockResolvedValue({
-        id: 't_0000000001',
-        status: 'in_progress',
-        teamId: 'tm_0000000001',
-      });
+      mockTeamTasks([{ id: 't_0000000002', status: 'in_progress' }]);
       prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
       idGen.nextId.mockResolvedValue('m_x');
       prisma.message.create.mockResolvedValue(messageRow());
@@ -432,6 +447,159 @@ describe('ChatService', () => {
 
       expect(result.triggers).toHaveLength(1);
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      // 门禁按「团队非终态任务集合」查询，不再读 team.currentTaskId
+      expect(prisma.task.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId: 'tm_0000000001',
+          status: { in: [...NON_TERMINAL_TASK_STATUSES] },
+        },
+        select: { id: true },
+      });
+    });
+
+    it('主 agent 门禁（回归）：存在待验收 pending_review 任务 → 闸门开，@子agent照常派发且无系统提示', async () => {
+      allowAccess();
+      (prisma as any).teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发-1',
+          removedAt: null,
+        },
+      ]);
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: 'tmm_main',
+      });
+      // 待验收（pending_review）也是未完成任务 → 闸门必须开
+      mockTeamTasks([
+        { id: 't_0000000010', status: 'completed' },
+        { id: 't_0000000011', status: 'pending_review' },
+      ]);
+      prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
+      idGen.nextId.mockResolvedValue('m_x');
+      prisma.message.create.mockResolvedValue(messageRow());
+      dispatcher.dispatch.mockResolvedValue({ replies: [] });
+
+      const result = await service.createMessage(channelId, userId, {
+        text: '@开发-1 干活',
+        mentions: [
+          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' },
+        ],
+      } as any);
+
+      // 子目标照常派发
+      expect(result.triggers).toHaveLength(1);
+      expect(result.triggers[0]).toMatchObject({
+        instanceId: 'tmm_dev',
+        status: 'dispatched',
+      });
+      expect(dispatcher.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targets: [expect.objectContaining({ instanceId: 'tmm_dev' })],
+        }),
+      );
+      // 只落库用户消息一条：无门禁系统提示
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(prisma.message.create.mock.calls[0][0].data.senderType).toBe(
+        SENDER_TYPE.user,
+      );
+    });
+
+    it('主 agent 门禁：团队任务全为终态（completed/archived）→ 闸门关，@子agent被拦+系统提示', async () => {
+      allowAccess();
+      (prisma as any).teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发-1',
+          removedAt: null,
+        },
+      ]);
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: 'tmm_main',
+      });
+      mockTeamTasks([
+        { id: 't_0000000010', status: 'completed' },
+        { id: 't_0000000011', status: 'archived' },
+      ]);
+      prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
+      idGen.nextId.mockResolvedValue('m_x');
+      prisma.message.create.mockResolvedValue(messageRow());
+      dispatcher.dispatch.mockResolvedValue({ replies: [] });
+
+      const result = await service.createMessage(channelId, userId, {
+        text: '@开发-1 干活',
+        mentions: [
+          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' },
+        ],
+      } as any);
+
+      expect(result.triggers).toHaveLength(0);
+      expect(dispatcher.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ targets: [] }),
+      );
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      const hintCall = prisma.message.create.mock.calls[1][0];
+      expect(hintCall.data.senderType).toBe(SENDER_TYPE.system);
+      expect(hintCall.data.content.text).toContain('当前没有未完成的任务');
+      expect(hintCall.data.content.text).toContain('已跳过对 开发-1 的派发');
+    });
+
+    it('主 agent 门禁：团队无任何任务 → 闸门关，@子agent被拦+系统提示', async () => {
+      allowAccess();
+      (prisma as any).teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发-1',
+          removedAt: null,
+        },
+      ]);
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: 'tmm_main',
+      });
+      mockTeamTasks([]);
+      prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
+      idGen.nextId.mockResolvedValue('m_x');
+      prisma.message.create.mockResolvedValue(messageRow());
+      dispatcher.dispatch.mockResolvedValue({ replies: [] });
+
+      const result = await service.createMessage(channelId, userId, {
+        text: '@开发-1 干活',
+        mentions: [
+          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' },
+        ],
+      } as any);
+
+      expect(result.triggers).toHaveLength(0);
+      expect(dispatcher.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ targets: [] }),
+      );
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      const hintCall = prisma.message.create.mock.calls[1][0];
+      expect(hintCall.data.senderType).toBe(SENDER_TYPE.system);
+      expect(hintCall.data.content.text).toContain('当前没有未完成的任务');
     });
 
     it('无 mentions 且任务无主实例（team_group）→ 不触发：triggers 空、dispatcher 空目标、仅广播用户消息', async () => {

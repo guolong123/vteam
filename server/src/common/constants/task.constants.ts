@@ -29,6 +29,36 @@ export const TASK_STATUS_ORDER: readonly TaskStatus[] = [
   TASK_STATUS.archived,
 ];
 
+/**
+ * 非终态任务状态集（＝「有未完成的任务」，宽口径）。
+ *
+ * 语义：任务已建立且尚未收尾——已建未开工（queued/pending）、正在做（in_progress）、
+ * 卡住（blocked）、已提交待验收（pending_review / UI「待验收」）都算「团队还有活没干完」。
+ * 只要团队名下存在任一这些状态的任务，就认为存在未完成任务。
+ *
+ * ⚠️ 与另外两个「窄口径」严格区分，别混用：
+ * - `teams.service.ts` 删团队前置校验的「执行中的任务」＝in_progress + pending_review
+ *   （只管 worker 在跑或待人工验收的，会变孤儿/丢评审态）；
+ * - `tasks.service.ts` 并行上限的「占用」＝in_progress + blocked。
+ * 本集合是「有没有未完成的活」这一更宽的问题，两者不是一回事。
+ */
+export const NON_TERMINAL_TASK_STATUSES: readonly TaskStatus[] = [
+  TASK_STATUS.queued,
+  TASK_STATUS.pending,
+  TASK_STATUS.in_progress,
+  TASK_STATUS.blocked,
+  TASK_STATUS.pending_review,
+];
+
+/**
+ * 终态任务状态集：completed（已验收完成）/ archived（已归档）。
+ * 团队名下所有任务皆为此集（或团队根本没有任何任务）时，即视为「没有未完成的任务」。
+ */
+export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = [
+  TASK_STATUS.completed,
+  TASK_STATUS.archived,
+];
+
 export const TASK_PRIORITY = {
   high: 'high',
   medium: 'medium',
