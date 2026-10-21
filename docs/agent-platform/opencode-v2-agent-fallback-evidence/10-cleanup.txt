@@ -1,0 +1,4 @@
+=== 10 收尾核对（容器内） ===
+serve 进程：已退出（code=130）
+容器内 pgrep -fl "[o]pencode serve" => (空 —— 无残留 serve 进程)
+桩 provider：已关闭

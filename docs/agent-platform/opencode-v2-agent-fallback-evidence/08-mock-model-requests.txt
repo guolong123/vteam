@@ -1,0 +1,25 @@
+=== 08 桩 provider 收到的**模型请求**（摘要；**完整原文**见同目录 `mock-model-request-NN.json`） ===
+（每个 agent 的 system 里埋了 `PROBE_SYSTEM_MARKER <name>` 标记：
+ 出现哪个标记 ⇒ 哪个 agent 的提示进了模型请求；一个标记都没有 ⇒ 没走任何 vteam agent）
+
+--- 模型请求 #1
+at     : 2026-10-21T07:50:54.238Z
+POST /v1/chat/completions
+model  : probe-model
+stream : true
+messages 条数 : 2
+tools 条数    : 0
+system 提示里的判别标记：(无 —— 没走任何 vteam agent)
+system 提示前 300 字符："You are a title generator. You output ONLY a thread title. Nothing else.\n\n<task>\nGenerate a brief title that would help the user find this conversation later.\n\nFollow all rules in <rules>\nUse the <examples> so you know what a good title looks like.\nYour output must be:\n- A single line\n- <=50 charact"
+完整原文：见 `mock-model-request-01.json`
+
+--- 模型请求 #2
+at     : 2026-10-21T07:50:54.246Z
+POST /v1/chat/completions
+model  : probe-model
+stream : true
+messages 条数 : 2
+tools 条数    : 12
+system 提示里的判别标记：PROBE_SYSTEM_MARKER vteam-developer
+system 提示前 300 字符："PROBE_SYSTEM_MARKER vteam-developer\n# Your Model\n- Name: probe-model\n- Provider ID: probelocal\n- Model ID: probe-model\n# Code Mode\n\nUse the `execute` tool to call the tools listed below. They cannot be called directly. They only work inside code you pass to `execute`.\n\nThe catalog is complete. Do no"
+完整原文：见 `mock-model-request-02.json`

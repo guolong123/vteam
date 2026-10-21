@@ -1,0 +1,31 @@
+=== 05 未知 agent：切完之后把会话**读回** ===
+--- GET /api/session/ses_ea28fd977ffePEJc6eG2Yorx4G  （切到未知 agent "Sisyphus - ultraworker" 之后读回会话）
+REQUEST : GET /api/session/ses_ea28fd977ffePEJc6eG2Yorx4G
+BODY    : (none)
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 6 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28fd977ffePEJc6eG2Yorx4G","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","agent":"Sisyphus - ultraworker","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792568993430,"updated":1792568993458},"location":{"directory":"/scratch/proj"}}}
+
+--- 会话 ses_ea28fd977ffePEJc6eG2Yorx4G 的 agent 字段（判据）："Sisyphus - ultraworker"
+--- GET /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G  （切到未知 agent "Prometheus - Plan Builder" 之后读回会话）
+REQUEST : GET /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G
+BODY    : (none)
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 2 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28fd93affeRxxc0dJGGJZh5G","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","agent":"Prometheus - Plan Builder","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792568993482,"updated":1792568993491},"location":{"directory":"/scratch/proj"}}}
+
+--- 会话 ses_ea28fd93affeRxxc0dJGGJZh5G 的 agent 字段（判据）："Prometheus - Plan Builder"
+--- GET /api/session/ses_ea28fd922ffeLly7zFjkXRYQdc  （切到未知 agent "Atlas - Plan Executor" 之后读回会话）
+REQUEST : GET /api/session/ses_ea28fd922ffeLly7zFjkXRYQdc
+BODY    : (none)
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 14 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28fd922ffeLly7zFjkXRYQdc","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","agent":"Atlas - Plan Executor","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792568993505,"updated":1792568993514},"location":{"directory":"/scratch/proj"}}}
+
+--- 会话 ses_ea28fd922ffeLly7zFjkXRYQdc 的 agent 字段（判据）："Atlas - Plan Executor"

@@ -1,0 +1,35 @@
+=== 06 未知 agent：**端到端执行**（真发一条消息，看哪个 agent 执行） ===
+--- POST /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/model（切到桩 provider）
+REQUEST : POST /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/model
+BODY    : {"model":{"providerID":"probelocal","id":"probe-model"}}
+STATUS  : 204 No Content
+CTYPE   : -
+ELAPSED : 41 ms
+RESPONSE BODY (verbatim):
+
+
+--- POST /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/prompt（未知 agent 的会话）
+REQUEST : POST /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/prompt
+BODY    : {"text":"PROBE: 回答任意内容。"}
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 51 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"msg_15d70273f001CAQDOLZePsf2oQ","sessionID":"ses_ea28fd93affeRxxc0dJGGJZh5G","time":{"created":1792568993604},"type":"user","payload":{"text":"PROBE: 回答任意内容。"},"delivery":"steer"}}
+
+--- GET /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/message?order=asc&limit=200
+REQUEST : GET /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/message?order=asc&limit=200
+BODY    : (none)
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 61 ms
+RESPONSE BODY (verbatim):
+{"data":[{"id":"msg_15d7026d30016oC8K5a4QmctnR","time":{"created":1792568993491},"type":"agent-switched","agent":"Prometheus - Plan Builder"},{"id":"msg_15d702720001suU9zUGwa1uBn3","time":{"created":1792568993568},"type":"model-switched","model":{"id":"probe-model","providerID":"probelocal"}},{"id":"msg_15d70277a001rChv3CsNwqWApj","time":{"created":1792568993659},"type":"idle","outcome":"failed","error":{"type":"unknown","message":"Agent not found: \"Prometheus - Plan Builder\""}}],"cursor":{"previous":"eyJpZCI6Im1zZ18xNWQ3MDI2ZDMwMDE2b0M4SzVhNFFtY3RuUiIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoicHJldmlvdXMifQ","next":"eyJpZCI6Im1zZ18xNWQ3MDI3N2EwMDFyQ2h2M0NzTndxV0FwaiIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoibmV4dCJ9"}}
+
+--- 消息逐条摘要（type / agent / 文本片段 / error）
+{"id":"msg_15d7026d30016oC8K5a4QmctnR","type":"agent-switched","agent":"Prometheus - Plan Builder","text":"","error":null}
+{"id":"msg_15d702720001suU9zUGwa1uBn3","type":"model-switched","agent":null,"text":"","error":null}
+{"id":"msg_15d70277a001rChv3CsNwqWApj","type":"idle","agent":null,"text":"","error":{"type":"unknown","message":"Agent not found: \"Prometheus - Plan Builder\""}}
+--- 判定：assistant 消息的 agent 字段 = []
+--- 判定：idle（run 级结果）消息 = [{"outcome":"failed","error":{"type":"unknown","message":"Agent not found: \"Prometheus - Plan Builder\""}}]
+--- 事件总线里出现过的帧类型：["server.connected","session.execution.started","session.execution.failed","models-dev.refreshed","integration.updated","provider.updated","model.updated"]

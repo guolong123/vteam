@@ -1,0 +1,56 @@
+=== 02 路由发现（不假设消息端点） ===
+--- GET /api/info
+STATUS  : 200 OK
+CTYPE   : application/json
+LEN     : 133 bytes
+RESPONSE BODY (verbatim, >600 字节则截断——web SPA 的 HTML 无诊断价值):
+{"version":"2.0.32","pid":27,"urls":["http://127.0.0.1:45991"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}
+
+--- GET /api/doc
+STATUS  : 404 Not Found
+CTYPE   : -
+LEN     : 0 bytes
+RESPONSE BODY (verbatim, >600 字节则截断——web SPA 的 HTML 无诊断价值):
+
+
+--- GET /doc
+STATUS  : 200 OK
+CTYPE   : text/html
+LEN     : 6962 bytes
+RESPONSE BODY (verbatim, >600 字节则截断——web SPA 的 HTML 无诊断价值):
+<!doctype html>
+<html lang="en" style="background-color: var(--v2-background-bg-deep, #fafafa)">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, interactive-widget=resizes-content, viewport-fit=cover"
+    />
+    <title>OpenCode</title>
+    <link rel="icon" type="image/x-icon" href="/icons/prod/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/prod/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" crossorigin="use-credentials" />
+    <meta name="theme-color" content="#f
+...[截断 6362 字节]
+
+--- GET /openapi.json
+STATUS  : 200 OK
+CTYPE   : application/json
+LEN     : 280291 bytes
+RESPONSE BODY (verbatim, >600 字节则截断——web SPA 的 HTML 无诊断价值):
+{"openapi":"3.1.0","info":{"title":"opencode HttpApi","version":"0.0.1","description":"Experimental HttpApi surface for selected instance routes."},"paths":{"/api/info":{"get":{"tags":["server"],"operationId":"server.info","parameters":[],"security":[],"responses":{"200":{"description":"ServerInfo","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ServerInfo"}}}},"400":{"description":"InvalidRequestError","content":{"application/json":{"schema":{"$ref":"#/components/schemas/InvalidRequestErrorEncoded"}}}},"401":{"description":"UnauthorizedError","content":{"application/json
+...[截断 279691 字节]
+
+--- GET /api/openapi.json
+STATUS  : 404 Not Found
+CTYPE   : -
+LEN     : 0 bytes
+RESPONSE BODY (verbatim, >600 字节则截断——web SPA 的 HTML 无诊断价值):
+
+
+--- GET /api
+STATUS  : 404 Not Found
+CTYPE   : -
+LEN     : 0 bytes
+RESPONSE BODY (verbatim, >600 字节则截断——web SPA 的 HTML 无诊断价值):
+

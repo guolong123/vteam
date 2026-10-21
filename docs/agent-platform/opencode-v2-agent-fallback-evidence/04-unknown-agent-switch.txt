@@ -1,0 +1,58 @@
+=== 04 未知 agent：切 agent 的**确切 HTTP 状态与 body** ===
+（平台在派发时把成员绑定的外部 agent 名**无条件**下发，不校验：
+ `server/src/chat/worker-dispatcher.ts` 的 `opencodeAgentName ?? policyCandidate ?? omit`；
+ `worker/src/driver/v2-driver.ts` 的 `switchAgent` 直接 POST 名字）
+
+--- POST /api/session（为未知 agent "Sisyphus - ultraworker" 建会话）
+REQUEST : POST /api/session
+BODY    : {"location":{"directory":"/scratch/proj"}}
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 58 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28fd977ffePEJc6eG2Yorx4G","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792568993430,"updated":1792568993430},"location":{"directory":"/scratch/proj"}}}
+
+--- POST /api/session/ses_ea28fd977ffePEJc6eG2Yorx4G/agent  {"agent":"Sisyphus - ultraworker"}  ← 平台会原样下发的字符串
+REQUEST : POST /api/session/ses_ea28fd977ffePEJc6eG2Yorx4G/agent
+BODY    : {"agent":"Sisyphus - ultraworker"}
+STATUS  : 204 No Content
+CTYPE   : -
+ELAPSED : 18 ms
+RESPONSE BODY (verbatim):
+
+
+--- POST /api/session（为未知 agent "Prometheus - Plan Builder" 建会话）
+REQUEST : POST /api/session
+BODY    : {"location":{"directory":"/scratch/proj"}}
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 14 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28fd93affeRxxc0dJGGJZh5G","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792568993482,"updated":1792568993482},"location":{"directory":"/scratch/proj"}}}
+
+--- POST /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/agent  {"agent":"Prometheus - Plan Builder"}  ← 平台会原样下发的字符串
+REQUEST : POST /api/session/ses_ea28fd93affeRxxc0dJGGJZh5G/agent
+BODY    : {"agent":"Prometheus - Plan Builder"}
+STATUS  : 204 No Content
+CTYPE   : -
+ELAPSED : 8 ms
+RESPONSE BODY (verbatim):
+
+
+--- POST /api/session（为未知 agent "Atlas - Plan Executor" 建会话）
+REQUEST : POST /api/session
+BODY    : {"location":{"directory":"/scratch/proj"}}
+STATUS  : 200 OK
+CTYPE   : application/json
+ELAPSED : 12 ms
+RESPONSE BODY (verbatim):
+{"data":{"id":"ses_ea28fd922ffeLly7zFjkXRYQdc","projectID":"30f4c5ab48770dab16dbe1c44694451b99c3b9c0","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1792568993505,"updated":1792568993505},"location":{"directory":"/scratch/proj"}}}
+
+--- POST /api/session/ses_ea28fd922ffeLly7zFjkXRYQdc/agent  {"agent":"Atlas - Plan Executor"}  ← 平台会原样下发的字符串
+REQUEST : POST /api/session/ses_ea28fd922ffeLly7zFjkXRYQdc/agent
+BODY    : {"agent":"Atlas - Plan Executor"}
+STATUS  : 204 No Content
+CTYPE   : -
+ELAPSED : 6 ms
+RESPONSE BODY (verbatim):
+

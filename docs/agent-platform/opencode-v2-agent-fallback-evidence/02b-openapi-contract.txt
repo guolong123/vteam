@@ -1,0 +1,1155 @@
+=== 02b OpenAPI 契约（`GET /openapi.json`）里与本测量相关的部分 ===
+（书面契约只说"把会话的 agent 设成这个名字"，**没有任何"名字必须存在"的校验/错误码**）
+
+GET /openapi.json => 200（application/json，280291 字节）
+spec.info = {"title":"opencode HttpApi","version":"0.0.1","description":"Experimental HttpApi surface for selected instance routes."}
+
+--- spec 里共有 119 条路径；含 "session" 的路径：
+[
+  "/api/session",
+  "/api/experimental/session/stats",
+  "/api/experimental/session/import",
+  "/api/experimental/session/{sessionID}/export",
+  "/api/session/active",
+  "/api/session/{sessionID}",
+  "/api/session/{sessionID}/fork",
+  "/api/session/{sessionID}/agent",
+  "/api/session/{sessionID}/model",
+  "/api/session/{sessionID}/move",
+  "/api/session/{sessionID}/prompt",
+  "/api/session/{sessionID}/command",
+  "/api/experimental/session/{sessionID}/skill",
+  "/api/session/{sessionID}/synthetic",
+  "/api/session/{sessionID}/shell",
+  "/api/session/{sessionID}/compact",
+  "/api/experimental/session/{sessionID}/wait",
+  "/api/session/{sessionID}/revert/stage",
+  "/api/session/{sessionID}/revert",
+  "/api/session/{sessionID}/revert/commit",
+  "/api/session/{sessionID}/context",
+  "/api/session/{sessionID}/diff",
+  "/api/session/{sessionID}/inbox",
+  "/api/session/{sessionID}/inbox/{inboxID}",
+  "/api/experimental/session/{sessionID}/instructions/entries",
+  "/api/experimental/session/{sessionID}/instructions/entries/{key}",
+  "/api/session/{sessionID}/generate",
+  "/api/experimental/session/{sessionID}/log",
+  "/api/session/{sessionID}/interrupt",
+  "/api/session/{sessionID}/background",
+  "/api/session/{sessionID}/message/{messageID}",
+  "/api/session/{sessionID}/form",
+  "/api/session/{sessionID}/form/{formID}",
+  "/api/session/{sessionID}/form/{formID}/reply",
+  "/api/session/{sessionID}/environment",
+  "/api/session/{sessionID}/view",
+  "/api/session/{sessionID}/message",
+  "/api/experimental/voice/session",
+  "/api/session/{sessionID}/permission",
+  "/api/session/{sessionID}/permission/{requestID}",
+  "/api/session/{sessionID}/permission/{requestID}/reply",
+  "/api/experimental/session/{sessionID}/terminal/read",
+  "/api/experimental/session/{sessionID}/terminal"
+]
+
+--- 本测量用到的端点在 OpenAPI 里的**全部**路径定义
+### /api/agent
+{
+  "get": {
+    "tags": [
+      "agent"
+    ],
+    "operationId": "agent.list",
+    "parameters": [
+      {
+        "name": "location",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "directory": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false,
+        "style": "deepObject",
+        "explode": true
+      }
+    ],
+    "security": [],
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "location": {
+                  "$ref": "#/components/schemas/Location.PublicRef"
+                },
+                "data": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Agent.Info"
+                  }
+                }
+              },
+              "required": [
+                "location",
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "LocationNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+            }
+          }
+        }
+      }
+    },
+    "description": "Retrieve currently registered agents.",
+    "summary": "List agents"
+  }
+}
+
+### /api/session
+{
+  "get": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.list",
+    "parameters": [
+      {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Maximum number of sessions to return. Defaults to the newest 50 sessions."
+        },
+        "required": false
+      },
+      {
+        "name": "order",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session order for the first page. Use desc for newest first or asc for oldest first."
+        },
+        "required": false
+      },
+      {
+        "name": "search",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false
+      },
+      {
+        "name": "parentID",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Session.ID"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "null"
+                  ]
+                }
+              ],
+              "description": "Filter by parent session. Use null to return only root sessions."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false
+      },
+      {
+        "name": "directory",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/AbsolutePath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false
+      },
+      {
+        "name": "project",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/Project.ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false
+      },
+      {
+        "name": "subpath",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/RelativePath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false
+      },
+      {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/SessionsCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false
+      }
+    ],
+    "security": [],
+    "responses": {
+      "200": {
+        "description": "SessionsResponse",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionsResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "InvalidCursorError | InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/InvalidCursorErrorEncoded"
+                },
+                {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      }
+    },
+    "description": "Retrieve sessions in the requested order. Items keep that order across pages; use cursor.next or cursor.previous to move through the ordered list.",
+    "summary": "List sessions"
+  },
+  "post": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.create",
+    "parameters": [],
+    "security": [],
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "$ref": "#/components/schemas/Session.Info"
+                }
+              },
+              "required": [
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "SessionNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+            }
+          }
+        }
+      }
+    },
+    "description": "Create a session at the requested location. A parentID creates a linked child session at its parent's location.",
+    "summary": "Create session",
+    "requestBody": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Session.ID"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "parentID": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Session.ID"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "agent": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Agent.ID"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "model": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Model.Ref"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "location": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Location.PublicRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Session.Metadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "permissions": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Permission.Ruleset"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": true
+    }
+  }
+}
+
+### /api/session/{sessionID}
+{
+  "get": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.get",
+    "parameters": [
+      {
+        "name": "sessionID",
+        "in": "path",
+        "schema": {
+          "$ref": "#/components/schemas/Session.ID"
+        },
+        "required": true
+      }
+    ],
+    "security": [],
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "$ref": "#/components/schemas/Session.Info"
+                }
+              },
+              "required": [
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "SessionNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+            }
+          }
+        }
+      }
+    },
+    "description": "Retrieve a session by ID.",
+    "summary": "Get session"
+  },
+  "delete": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.remove",
+    "parameters": [
+      {
+        "name": "sessionID",
+        "in": "path",
+        "schema": {
+          "$ref": "#/components/schemas/Session.ID"
+        },
+        "required": true
+      }
+    ],
+    "security": [],
+    "responses": {
+      "204": {
+        "description": "<No Content>"
+      },
+      "400": {
+        "description": "InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "SessionNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+            }
+          }
+        }
+      }
+    },
+    "description": "Delete a session and its child sessions.",
+    "summary": "Delete session"
+  },
+  "patch": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.update",
+    "parameters": [
+      {
+        "name": "sessionID",
+        "in": "path",
+        "schema": {
+          "$ref": "#/components/schemas/Session.ID"
+        },
+        "required": true
+      }
+    ],
+    "security": [],
+    "responses": {
+      "204": {
+        "description": "<No Content>"
+      },
+      "400": {
+        "description": "InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "SessionNotFoundError | LocationNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                },
+                {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "Update mutable session properties.",
+    "summary": "Update session",
+    "requestBody": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Session.Metadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "permissions": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Permission.Ruleset"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": true
+    }
+  }
+}
+
+### /api/session/{sessionID}/agent
+{
+  "post": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.switchAgent",
+    "parameters": [
+      {
+        "name": "sessionID",
+        "in": "path",
+        "schema": {
+          "$ref": "#/components/schemas/Session.ID"
+        },
+        "required": true
+      }
+    ],
+    "security": [],
+    "responses": {
+      "204": {
+        "description": "<No Content>"
+      },
+      "400": {
+        "description": "InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "SessionNotFoundError | LocationNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                },
+                {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "Switch the agent used by subsequent provider turns.",
+    "summary": "Switch session agent",
+    "requestBody": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "$ref": "#/components/schemas/Agent.ID"
+              }
+            },
+            "required": [
+              "agent"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": true
+    }
+  }
+}
+
+### /api/session/{sessionID}/prompt
+{
+  "post": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.prompt",
+    "parameters": [
+      {
+        "name": "sessionID",
+        "in": "path",
+        "schema": {
+          "$ref": "#/components/schemas/Session.ID"
+        },
+        "required": true
+      }
+    ],
+    "security": [],
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "$ref": "#/components/schemas/Session.Inbox.User"
+                }
+              },
+              "required": [
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "SessionNotFoundError | LocationNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                },
+                {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409": {
+        "description": "ConflictError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ConflictErrorEncoded"
+            }
+          }
+        }
+      }
+    },
+    "description": "Durably admit one session input and schedule agent-loop execution unless resume is false.",
+    "summary": "Send message",
+    "requestBody": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Session.Message.ID"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PromptInput.FileAttachment"
+                }
+              },
+              "agents": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prompt.AgentAttachment"
+                }
+              },
+              "skills": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PromptInput.SkillAttachment"
+                }
+              },
+              "metadata": {
+                "type": "object"
+              },
+              "delivery": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Session.Inbox.Delivery"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "resume": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": true
+    }
+  }
+}
+
+### /api/session/{sessionID}/message
+{
+  "get": {
+    "tags": [
+      "session"
+    ],
+    "operationId": "session.message.list",
+    "parameters": [
+      {
+        "name": "sessionID",
+        "in": "path",
+        "schema": {
+          "$ref": "#/components/schemas/Session.ID"
+        },
+        "required": true
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Maximum number of messages to return. When omitted, the endpoint returns its default page size."
+        },
+        "required": false
+      },
+      {
+        "name": "order",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Message order for the first page. Use desc for newest first or asc for oldest first."
+        },
+        "required": false
+      },
+      {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response. Do not combine with order."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": false
+      },
+      {
+        "name": "type",
+        "in": "query",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "agent-switched",
+                "model-switched",
+                "location-switched",
+                "user",
+                "synthetic",
+                "system",
+                "skill",
+                "shell",
+                "assistant",
+                "compaction"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Filter by message type before pagination. When omitted, all message types are returned. Pass the same type when following cursors."
+        },
+        "required": false
+      }
+    ],
+    "security": [],
+    "responses": {
+      "200": {
+        "description": "SessionMessagesResponse",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionMessagesResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "InvalidCursorError | InvalidRequestError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/InvalidCursorErrorEncoded"
+                },
+                {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "UnauthorizedError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "SessionNotFoundError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+            }
+          }
+        }
+      },
+      "500": {
+        "description": "UnknownError",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UnknownErrorEncoded"
+            }
+          }
+        }
+      }
+    },
+    "description": "Retrieve projected messages for a session, optionally filtered by type. Items keep the requested order across pages; use cursor.next or cursor.previous to move through the ordered timeline, passing the same type filter on each page.",
+    "summary": "Get session messages"
+  }
+}
+
+### /api/session/{id}
+(spec 里没有这个路径)
+
+### /api/session/{id}/agent
+(spec 里没有这个路径)
+
+### /api/session/{id}/prompt
+(spec 里没有这个路径)
+
+### /api/session/{id}/message
+(spec 里没有这个路径)
+
+--- components.schemas 里与 Session 相关的 schema 名
+["Session.ID","SessionNotFoundErrorEncoded","SessionMessagesResponse","Session.Message.Info","Session.Message.Idle","Session.StructuredError","Session.Message.ID","Session.Message.Compaction","Session.Message.Compaction.Failed","Session.Message.Compaction.Completed","Session.ProviderContext","Session.ProviderContext.Provenance","Session.Message.ProviderState_5","Session.Message.Compaction.Running","Session.Message.Assistant","Session.Message.Assistant.Retry","Session.Message.ProviderState_4","Session.Message.Assistant.Tool","Session.Message.ToolState.Error","Session.Message.ToolState.Completed","Session.Message.ToolState.Running","Session.Message.ToolState.Streaming","Session.Message.ProviderState_3","Session.Message.ProviderState_2","Session.Message.Assistant.Reasoning","Session.Message.ProviderState_1","Session.Message.Assistant.Text","Session.Message.ProviderState","Session.Message.Shell","Session.Message.Skill","Session.Message.System","Session.Message.Synthetic","Session.Message.User","Session.Message.LocationSwitched","Session.Message.ModelSelected","Session.Message.AgentSelected","SessionInterruptResponse","SessionLogItemEncoded","SessionGenerateResponse","Session.Inbox.Delivery","Session.Inbox.Info","Session.Inbox.Move","Session.Inbox.MovePayload","Session.Inbox.Compaction","Session.Inbox.CompactionPayload","Session.Inbox.Synthetic","Session.Inbox.SyntheticPayload","Session.Inbox.User","Session.Inbox.UserPayload","SessionBusyErrorEncoded","Session.Revert","Session.Metadata","Session.Info","Session.ForkBoundary","SessionActive","SessionTransfer.Data","SessionStats.Info","SessionStats.ModelUsage","SessionStats.Activity","SessionStats.Tools","SessionStats.ToolUsage","SessionStats.ToolTotals","SessionsResponse","SessionsCursor"]
