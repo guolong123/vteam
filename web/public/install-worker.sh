@@ -8,7 +8,7 @@
 #
 # 流程：自动安装前置（git / node >= 18 / opencode CLI v2，缺失即自动装）→ 下载 worker 发布包
 #   → npm install → 生成 .env（SERVER_URL / WORKER_ID / X_WORKER_TOKEN /
-#   OPENCODE_SERVER_PASSWORD）→ 校验 X_WORKER_TOKEN → 启动
+#   OPENCODE_SERVER_PASSWORD / WORKER_MAX_INSTANCES）→ 校验 X_WORKER_TOKEN → 启动
 #   （复用仓库内 worker/scripts/start.sh 语义：启动即注册，随后每 10s 心跳）。
 #   worker 源码以发布包（pack-worker.sh 产物）从控制面下载，不做 git clone——
 #   目标机器无需任何仓库 SSH 凭证，复制命令即可完整安装。
@@ -34,7 +34,10 @@
 # 参数：
 #   --server <url>      控制面地址（缺省 http://localhost:3000）
 #   --worker-id <id>    worker 唯一 id（缺省 w_<hostname>）
-#   --concurrency <n>   并发上限（预留：worker 侧当前硬编码 maxInstances=1，见 worker/src/index.ts）
+#   --concurrency <n>   并发上限（写入 .env 的 WORKER_MAX_INSTANCES）：worker 侧读该变量
+#                       （worker/src/config.ts，缺省 5），并随注册上报 capabilities.maxInstances，
+#                       控制面按容量分派。传值必须是正整数（非法值本脚本直接报错退出，不静默兜底）。
+#                       不传则不写该变量（保留 worker 自己的缺省 5）。
 #   --opencode <ver>    opencode CLI 版本（缺省 latest = npm 包 @opencode/cli 的 latest 标签，即最新已发布的 v2）：
 #                       可传 latest / 裸版本号（2.0.32 / v2.0.32）或完整 npm spec（@opencode/cli@2.0.32），
 #                       后两者用于**钉版**（可复现安装）；CLI 缺失时按此规格 npm 全局安装，
@@ -88,6 +91,7 @@ set -euo pipefail
 SERVER_URL=""
 WORKER_ID=""
 CONCURRENCY=""
+CONCURRENCY_SET=""
 OPENCODE_VERSION=""
 WORKER_TOKEN=""
 WORKER_SRC_URL=""
@@ -107,7 +111,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --server) SERVER_URL="${2:-}"; shift 2 ;;
     --worker-id) WORKER_ID="${2:-}"; shift 2 ;;
-    --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
+    --concurrency) CONCURRENCY="${2:-}"; CONCURRENCY_SET="1"; shift 2 ;;
     --opencode) OPENCODE_VERSION="${2:-}"; shift 2 ;;
     --token) WORKER_TOKEN="${2:-}"; shift 2 ;;
     --src-url) WORKER_SRC_URL="${2:-}"; shift 2 ;;
@@ -128,8 +132,23 @@ done
 
 SERVER_URL="${SERVER_URL:-http://localhost:3000}"
 WORKER_ID="${WORKER_ID:-w_$(hostname)}"
-CONCURRENCY="${CONCURRENCY:-8}"
 WORKER_SRC_URL="${WORKER_SRC_URL:-${SERVER_URL%/}/worker-src.tar.gz}"
+
+# --concurrency 校验：写入 .env 的 WORKER_MAX_INSTANCES（worker 侧真实读取的变量，缺省 5）。
+# 非法值直接拒绝——worker 自身遇到非法值只会告警并回落 5，静默兜底会让运维误以为并发上限已生效。
+if [ -n "${CONCURRENCY_SET}" ]; then
+  if ! printf '%s' "${CONCURRENCY}" | grep -qE '^[0-9]+$'; then
+    echo "[install-worker] ERROR: --concurrency 必须为正整数（收到：${CONCURRENCY:-空值}）" >&2
+    exit 1
+  fi
+  # 去掉前导零再比较：拦掉 "0"/"00" 等非正值；超长数字按非法处理（避免算术溢出）。
+  concurrency_num="${CONCURRENCY#"${CONCURRENCY%%[!0]*}"}"
+  concurrency_num="${concurrency_num:-0}"
+  if [ "${#concurrency_num}" -gt 9 ] || [ "${concurrency_num}" -lt 1 ]; then
+    echo "[install-worker] ERROR: --concurrency 必须为正整数（收到：${CONCURRENCY}）" >&2
+    exit 1
+  fi
+fi
 
 # ------------------------------ 前置环境自动安装（缺失即装，保证一键成功） ------------------------------
 # 目标：git/curl/node/opencode 无需用户预装。node 缺失时下载官方二进制到 $HOME/.local/node；
@@ -365,6 +384,11 @@ if [ -n "${WORKER_TOKEN}" ]; then
   update_env X_WORKER_TOKEN "${WORKER_TOKEN}"
 fi
 update_env WORKER_ID "${WORKER_ID}"
+# 并发上限 → WORKER_MAX_INSTANCES（worker 读该变量并随注册上报 capabilities.maxInstances）；
+# 未显式传 --concurrency 时不写，保留 worker 自己的缺省（5）。
+if [ -n "${CONCURRENCY_SET}" ]; then
+  update_env WORKER_MAX_INSTANCES "${CONCURRENCY}"
+fi
 if [ -n "${WORKER_MCP_URL}" ]; then
   update_env WORKER_MCP_URL "${WORKER_MCP_URL}"
 fi
@@ -478,7 +502,7 @@ if ! chmod 600 .env; then
   echo "[install-worker] ⚠️  未能把 .env 权限收紧到 600，请手动执行：chmod 600 ${INSTALL_DIR}/worker/.env" >&2
 fi
 
-echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}，OPENCODE_SERVE_PORT=${resolved_serve_port:-0}，OPENCODE_SERVER_PASSWORD 已注入）"
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}${CONCURRENCY_SET:+，WORKER_MAX_INSTANCES=${CONCURRENCY} 已注入}，OPENCODE_SERVE_PORT=${resolved_serve_port:-0}，OPENCODE_SERVER_PASSWORD 已注入）"
 if [ "${resolved_serve_port:-0}" != "0" ]; then
   echo "[install-worker] opencode serve 端口已固定为 ${resolved_serve_port}（重启不变；改端口可重跑并加 --serve-port <port>）"
 fi
@@ -642,5 +666,9 @@ EOF
 fi
 
 echo "[install-worker] 启动 worker（workerId=${WORKER_ID}，server=${SERVER_URL}）..."
-echo "[install-worker] 并发上限参数 --concurrency ${CONCURRENCY} 为预留项（worker 侧当前硬编码 maxInstances=1）"
+if [ -n "${CONCURRENCY_SET}" ]; then
+  echo "[install-worker] 并发上限：WORKER_MAX_INSTANCES=${CONCURRENCY}（已写入 .env；worker 读该变量，随注册上报 capabilities.maxInstances）"
+else
+  echo "[install-worker] 并发上限：未传 --concurrency → 不写 WORKER_MAX_INSTANCES，保留 worker 缺省（5）"
+fi
 exec ./scripts/start.sh

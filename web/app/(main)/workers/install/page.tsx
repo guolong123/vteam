@@ -31,6 +31,10 @@
  * - 网络可达性（可选）：外部/跨机 worker 专用参数（--advertise-host / --serve-hostname / --mcp-url），
  *   --advertise-host 只需填 IP（http:// 与端口由脚本/worker 自动处理；不填则 worker 自动探测本机 IP）；
  *   空值不拼接，集群内/本机 worker 无需配置；详见 worker install-worker.sh。
+ *
+ * - docker 路径的镜像引用可编辑（③ 的「worker 镜像」字段，缺省 guojongg/vteam-worker:latest）：
+ *   内网机器常拉不到 Docker Hub；且镜像必须是含 opencode v2 适配的构建——当前 latest 仍指向
+ *   v1.0.4（v1 worker + v1 opencode CLI），与 v2 控制面不兼容。
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
@@ -294,6 +298,16 @@ export default function WorkerInstallPage() {
      ℹ️ docker 路径不受本选择影响：镜像内 opencode 由构建期 OPENCODE_CLI_SPEC 锁死为 2.0.32。 */
   const [opencodeVersion, setOpencodeVersion] = useState("latest");
 
+  /* worker 镜像（docker 路径专用）：完整镜像引用（仓库 + tag），可编辑。
+     缺省 = Docker Hub 上发布流水线推送的 guojongg/vteam-worker:latest
+     （.github/workflows/release-images.yml 的 IMAGE_NAMESPACE: guojongg；原写死的
+     ketaops/opencode-worker 在 Docker Hub 上不存在，docker run 直接拉取失败）。
+     内网机器常拉不到 Docker Hub → 需改填内网仓库（docker-hosted.ketaops.cc /
+     docker-release.ketaops.cc / chart 缺省 docker.ketaops.cc），故做成可编辑字段。
+     ⚠️ 镜像必须含 opencode v2 适配：当前 latest 仍指向 v1.0.4（v1 worker + v1 opencode CLI），
+     与 v2 控制面不兼容（见 dockerSteps 的告警）。 */
+  const [workerImage, setWorkerImage] = useState("guojongg/vteam-worker:latest");
+
   /* 网络可达性（可选）：外部/跨机 worker 专用，空值不拼接命令——集群内/本机无需配置 */
   const [advertiseHost, setAdvertiseHost] = useState("");
   const [serveHostname, setServeHostname] = useState("");
@@ -348,9 +362,12 @@ export default function WorkerInstallPage() {
      docker 命令：v2 下控制面只连 worker 的**执行端点**（capabilities.execPort，缺省 4198），
      不连 opencode serve ⇒ 发布 4198:4198，serve 只在容器内用（不映射宿主机）；
      X_WORKER_TOKEN（注册鉴权）与 OPENCODE_SERVER_PASSWORD（v2 serve 恒开鉴权）均为必填，
-     后者用 openssl rand 现场生成，避免把口令写死进页面。 */
+     后者用 openssl rand 现场生成，避免把口令写死进页面。
+     并发上限注入 WORKER_MAX_INSTANCES（worker 侧真实读取的变量，随注册上报 capabilities.maxInstances；
+     旧的 CONCURRENCY 环境变量 worker 根本不读）；镜像引用取自「worker 镜像」字段
+     （缺省 guojongg/vteam-worker:latest，可改内网仓库）。 */
   const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`;
-  const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e CONCURRENCY=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ketaops/opencode-worker:latest`;
+  const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
@@ -361,8 +378,10 @@ export default function WorkerInstallPage() {
   ];
 
   const dockerSteps = [
-    "在目标机器执行 docker run 命令，拉取 ketaops/opencode-worker 镜像（镜像内 opencode 版本由构建期 OPENCODE_CLI_SPEC 锁定为 @opencode/cli@2.0.32，运行期改不了）",
-    "容器启动后读取环境变量注入的 SERVER_URL / WORKER_ID / 能力声明并注册（X_WORKER_TOKEN 注册鉴权必填；OPENCODE_SERVER_PASSWORD 为 v2 serve 恒开鉴权必填项，命令中已用 openssl rand 现场生成；外部/跨机 worker 需在上方填写「上报 IP」）",
+    "在目标机器执行 docker run 命令，拉取「worker 镜像」字段指定的镜像（缺省 guojongg/vteam-worker:latest；内网机器改填 docker-hosted.ketaops.cc/ketaops/vteam-worker、docker-release.ketaops.cc/ketaops/vteam-worker 等内网仓库；镜像内 opencode 版本由构建期 OPENCODE_CLI_SPEC 锁定为 @opencode/cli@2.0.32，运行期改不了）",
+    "⚠️ 镜像必须含 opencode v2 适配：当前 latest 仍指向 v1.0.4（v1 worker + v1 opencode CLI），与 v2 控制面不兼容（控制面调 worker 执行端点返回 404，消息不跑但界面显示在线）——待首个带 v2 适配的发布替换 latest 前，请钉一个含 v2 适配的 tag，勿用 opencode CLI 为 v1 的镜像",
+    "容器启动后读取环境变量注入的 SERVER_URL / WORKER_ID / 能力声明（WORKER_MAX_INSTANCES → 上报 capabilities.maxInstances）并注册（X_WORKER_TOKEN 注册鉴权必填；OPENCODE_SERVER_PASSWORD 为 v2 serve 恒开鉴权必填项，命令中已用 openssl rand 现场生成；外部/跨机 worker 需在上方填写「上报 IP」）",
+    "SERVER_URL 必须是目标机器能访问到的控制面地址：跨机 worker 填控制面的集群可达地址（如 http://<控制面可达 IP>:13000），别留 127.0.0.1——那指向 worker 机器自身，页面缺省值正是本机 origin",
     "等待首次心跳：宿主机端口 4198 是 worker 的执行端点（控制面按注册上报的 <上报主机>:4198 拨，X-Worker-Token 鉴权）；opencode serve 只在容器内使用，无需映射到宿主机",
   ];
 
@@ -485,7 +504,7 @@ export default function WorkerInstallPage() {
 
               {/* 能力声明：并发上限 + opencode 版本 */}
               <div data-testid="capability-config" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
-                <FieldRow label="并发上限" hint="能力声明 · 调度依据">
+                <FieldRow label="并发上限" hint="能力声明 · 调度依据（写入 WORKER_MAX_INSTANCES）">
                   <select
                     value={concurrency}
                     onChange={(e) => setConcurrency(Number(e.target.value))}
@@ -657,6 +676,30 @@ export default function WorkerInstallPage() {
                   在目标机器执行
                 </span>
               </div>
+
+              {/* docker 路径专用：镜像引用可编辑（内网机器拉不到 Docker Hub 时改填内网仓库） */}
+              {method === "docker" && (
+                <FieldRow
+                  label="worker 镜像"
+                  hint="Docker Hub 缺省 guojongg/vteam-worker · 内网可换内网仓库 · 须为含 opencode v2 适配的构建"
+                >
+                  <input
+                    data-testid="worker-image-input"
+                    value={workerImage}
+                    onChange={(e) => setWorkerImage(e.target.value)}
+                    placeholder="guojongg/vteam-worker:latest"
+                    spellCheck={false}
+                    style={inputStyle}
+                  />
+                  <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>
+                    填完整镜像引用（仓库 + tag）。Docker Hub 缺省 guojongg/vteam-worker:latest——发布流水线
+                    IMAGE_NAMESPACE=guojongg 推送的命名空间；内网机器改填内网仓库
+                    docker-hosted.ketaops.cc/ketaops/vteam-worker、docker-release.ketaops.cc/ketaops/vteam-worker
+                    （chart 缺省 docker.ketaops.cc/ketaops/vteam-worker），取目标机能拉通的那一个。
+                    镜像必须是包含 opencode v2 适配的构建。
+                  </span>
+                </FieldRow>
+              )}
 
               <CommandBlock command={command} />
 
