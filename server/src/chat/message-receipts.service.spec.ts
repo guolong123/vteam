@@ -3,7 +3,11 @@ import { EVENT_TYPES } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { MessageReceiptsService } from './message-receipts.service';
+import { TRIGGER_SCAN_INTERVAL_MS_DEFAULT } from '../timers/trigger.service';
+import {
+  MessageReceiptsService,
+  RECEIPT_EXPIRY_GRACE_MS,
+} from './message-receipts.service';
 
 describe('MessageReceiptsService（plan-review-execution-gates Todo 5）', () => {
   let service: MessageReceiptsService;
@@ -159,6 +163,172 @@ describe('MessageReceiptsService（plan-review-execution-gates Todo 5）', () =>
         fromInstanceId: 'tmm_pm',
         teamId: 'tm_1',
       });
+    });
+  });
+
+  /**
+   * 到期清账的**宽限窗**：催办（expiresAt 那一刻起、最迟一个催办 ticker 周期内发出）
+   * 与到期清账抢的是同一瞬间 ⇒ 清账若先赢，催办 handler 重读发现 status≠pending
+   * ⇒ 这次催办永远发不出去（回执"已处理"，平台毫无察觉）。
+   * 宽限窗把清账判定线挪到 expiresAt + 宽限窗 ⇒ 催办必然先于清账拿到机会。
+   */
+  describe('expireDue 宽限窗（催办 vs 清账赛跑）', () => {
+    interface GraceRow {
+      id: string;
+      messageId: string | null;
+      taskId: string | null;
+      teamId: string;
+      fromInstanceId: string;
+      toInstanceId: string;
+      status: string;
+      nudgeCount: number;
+      expiresAt: Date;
+    }
+    const NOW = new Date('2026-09-16T00:00:00Z');
+    let store: GraceRow[];
+
+    const row = (id: string, expiresAt: Date): GraceRow => ({
+      id,
+      messageId: 'm_1',
+      taskId: 't_1',
+      teamId: 'tm_1',
+      fromInstanceId: 'tmm_pm',
+      toInstanceId: 'tmm_dev',
+      status: 'pending',
+      nudgeCount: 0,
+      expiresAt,
+    });
+
+    beforeEach(() => {
+      store = [];
+      // 只认「到期清账」那一种查询形状（status + expiresAt<=截止线）；其余查询
+      // （续号扫描、question 应答结账扫描）一律空集 ⇒ 本块只考察清账的判定线。
+      prisma.messageReceipt.findMany.mockImplementation(
+        (args: { where: { status?: string; expiresAt?: { lte?: Date } } }) => {
+          const lte = args.where.expiresAt?.lte;
+          if (!lte) return Promise.resolve([]);
+          return Promise.resolve(
+            store.filter(
+              (r) =>
+                (args.where.status === undefined ||
+                  r.status === args.where.status) &&
+                r.expiresAt.getTime() <= lte.getTime(),
+            ),
+          );
+        },
+      );
+      prisma.messageReceipt.update.mockImplementation(
+        (args: {
+          where: { id: string };
+          data: { status?: string; nudgeCount?: { increment: number } };
+        }) => {
+          const target = store.find((r) => r.id === args.where.id);
+          if (!target) return Promise.resolve(null);
+          if (args.data.status) target.status = args.data.status;
+          if (args.data.nudgeCount?.increment) {
+            target.nudgeCount += args.data.nudgeCount.increment;
+          }
+          return Promise.resolve(target);
+        },
+      );
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+    });
+
+    it('清账判定线 = now - 宽限窗（不是 now）', async () => {
+      await service.expireDue(NOW);
+
+      expect(prisma.messageReceipt.findMany).toHaveBeenCalledWith({
+        where: {
+          status: 'pending',
+          expiresAt: {
+            lte: new Date(NOW.getTime() - RECEIPT_EXPIRY_GRACE_MS),
+          },
+        },
+      });
+    });
+
+    it('不变式：宽限窗 ≥ 一个催办 ticker 周期（调大催办 ticker 必须同步调大宽限窗）', () => {
+      expect(RECEIPT_EXPIRY_GRACE_MS).toBeGreaterThanOrEqual(
+        TRIGGER_SCAN_INTERVAL_MS_DEFAULT,
+      );
+    });
+
+    it('到期瞬间（expiresAt == now）：清账**不**判死 ⇒ 回执行仍是 pending（催办的机会还在）', async () => {
+      store.push(row('mr_grace', NOW));
+
+      const rows = await service.expireDue(NOW);
+
+      expect(rows).toHaveLength(0);
+      expect(store[0].status).toBe('pending');
+      expect(prisma.messageReceipt.update).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('到期后（now + 宽限窗 - 1ms）：仍在宽限窗内 ⇒ 仍 pending', async () => {
+      store.push(row('mr_grace', NOW));
+
+      const rows = await service.expireDue(
+        new Date(NOW.getTime() + RECEIPT_EXPIRY_GRACE_MS - 1),
+      );
+
+      expect(rows).toHaveLength(0);
+      expect(store[0].status).toBe('pending');
+    });
+
+    it('到期后整整一个宽限窗（now + 宽限窗）：宽限窗用尽 ⇒ 判死', async () => {
+      store.push(row('mr_grace', NOW));
+
+      const rows = await service.expireDue(
+        new Date(NOW.getTime() + RECEIPT_EXPIRY_GRACE_MS),
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(store[0].status).toBe('expired');
+    });
+
+    it('过了宽限窗（expiresAt <= now - 宽限窗）：照常清成 expired + 广播 receipt.expired', async () => {
+      store.push(
+        row('mr_stale', new Date(NOW.getTime() - RECEIPT_EXPIRY_GRACE_MS - 1)),
+      );
+
+      const rows = await service.expireDue(NOW);
+
+      expect(rows).toHaveLength(1);
+      expect(store[0].status).toBe('expired');
+      const teamCall = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.RECEIPT_EXPIRED && c[2]?.type === 'team',
+      );
+      expect(teamCall?.[1]).toMatchObject({
+        receiptId: 'mr_stale',
+        status: 'expired',
+      });
+    });
+
+    it('宽限窗边界（expiresAt == now - 宽限窗）：判死（lte 边界含端点）', async () => {
+      store.push(
+        row('mr_edge', new Date(NOW.getTime() - RECEIPT_EXPIRY_GRACE_MS)),
+      );
+
+      const rows = await service.expireDue(NOW);
+
+      expect(rows).toHaveLength(1);
+      expect(store[0].status).toBe('expired');
+    });
+
+    it('宽限窗让清账晚到，但**不会**让过期不可达：很老很老的 pending 仍会被清掉', async () => {
+      store.push(row('mr_ancient', new Date('2000-01-01T00:00:00Z')));
+
+      const rows = await service.expireDue(NOW);
+
+      expect(rows).toHaveLength(1);
+      expect(store[0].status).toBe('expired');
+    });
+
+    it('周期扫描（sweepExpiredReceipts）在到期瞬间也不判死 ⇒ 本轮清账 0 条', async () => {
+      store.push(row('mr_grace', NOW));
+
+      await expect(service.sweepExpiredReceipts(NOW)).resolves.toBe(0);
+      expect(store[0].status).toBe('pending');
     });
   });
 
