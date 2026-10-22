@@ -613,6 +613,29 @@ fi
 log "PRE-1b schema guard PASS (both migrations applied on this image)"
 
 # ===========================================================================
+# G 的对照基线（必须在 A..F **之前**取）
+# ===========================================================================
+# 为什么不按「绝对 0」断言：`pm_artifact_count` 统计的是 PM 提交的**全部**产出物，
+# 其中包含 PM 职责内允许的「协调记录 / 核验结论」。团队跑过几轮真实任务后，库里必然
+# 有这类记录，绝对值 0 就不再成立（本地实测：t_0000000007 的「流程与核验记录」被计入）。
+# 因此这里只断言「**本次运行没有新增** PM 产出物」——这才是本脚本要证明的事。
+api GET "/api/v1/teams/$TEAM_ID/coordination-metrics"
+assert2xx "G-baseline"
+G_PM_ART_BASE="$(python3 - "$API_OUT" <<'PYBASE'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(""); raise SystemExit(0)
+for m in d.get("metrics") or []:
+    if m.get("key") == "pm_artifact_count":
+        print(m.get("value")); break
+PYBASE
+)"
+[[ -n "$G_PM_ART_BASE" ]] || G_PM_ART_BASE=0
+log "G 基线：本脚本运行前 pm_artifact_count=${G_PM_ART_BASE}（历史轮次留下的 PM 协调记录不计入本次断言）"
+
+# ===========================================================================
 # A · 迁移生效（真实库里看得到）
 # ===========================================================================
 # 断言来源：
@@ -953,30 +976,37 @@ DPAY_PY
     continue
   fi
 
-  # ⑤ 在 worker 会话里找催办文案（默认口径拉一次；找不到再按倒序拉一次，覆盖长会话）
+  # ⑤ 在 worker 会话里找**本轮**催办文案（默认口径拉一次；找不到再按倒序拉一次，覆盖长会话）
+  #
+  # 用 receiptId 而不是「平台自动催办」做锚点：opencode 会话的转录**跨运行保留**
+  # （脚本只删自己建的 messages 行，删不掉 worker 侧的会话史），所以上一次运行留下的
+  # 催办文案会先被命中，落款里是**上一轮**的 receiptId ⇒ 断言的逐字落款必然不匹配。
+  # receiptId 本轮唯一 ⇒ 只有本轮催办能命中。
+  receipt_marker="receiptId=${D_RECEIPT_ID}"
   texts=""
   tdeadline=$(( $(date +%s) + D_TEXT_WAIT_SEC ))
   while [[ $(date +%s) -lt $tdeadline ]]; do
     texts="$(worker_session_texts "$sid")"
-    if ! grep -q '平台自动催办' <<<"$texts"; then
+    if ! grep -qF "$receipt_marker" <<<"$texts"; then
       texts_desc="$(worker_session_texts "$sid" desc)"
-      if grep -q '平台自动催办' <<<"$texts_desc"; then texts="$texts_desc"; fi
+      if grep -qF "$receipt_marker" <<<"$texts_desc"; then texts="$texts_desc"; fi
     fi
-    if grep -q '平台自动催办' <<<"$texts"; then break; fi
+    if grep -qF "$receipt_marker" <<<"$texts"; then break; fi
     sleep 3
   done
-  if ! grep -q '平台自动催办' <<<"$texts"; then
-    D_ATTEMPT_LOG="$D_ATTEMPT_LOG; #$attempt worker 会话（${sid}）里没找到催办文案"
+  if ! grep -qF "$receipt_marker" <<<"$texts"; then
+    D_ATTEMPT_LOG="$D_ATTEMPT_LOG; #$attempt worker 会话（${sid}）里没找到本轮催办文案（${receipt_marker}）"
     continue
   fi
-  D_NUDGE_TEXT="$(python3 - "$texts" <<'DSEG_PY'
+  D_NUDGE_TEXT="$(python3 - "$texts" "$D_RECEIPT_ID" <<'DSEG_PY'
 import json, sys
 try:
     arr = json.loads(sys.argv[1])
 except Exception:
     arr = []
+marker = "receiptId=" + sys.argv[2]
 for t in arr:
-    if "平台自动催办" in (t or ""):
+    if marker in (t or ""):
         print(t)
         break
 DSEG_PY
@@ -1107,15 +1137,18 @@ print(json.dumps(d, ensure_ascii=False, indent=2))' "$METRICS_JSON" >"$METRICS_P
 log "G 协调度指标原始响应（完整 JSON 存于 ${METRICS_PRETTY}）："
 head -120 "$METRICS_PRETTY" | sed 's/^/[e2e] metrics| /' | tee -a "$E2E_LOG"
 G_PY_RC=0
-python3 - "$METRICS_JSON" <<'PY' 2>&1 | tee -a "$E2E_LOG" || G_PY_RC=1
+python3 - "$METRICS_JSON" "$G_PM_ART_BASE" <<'PY' 2>&1 | tee -a "$E2E_LOG" || G_PY_RC=1
 import json, sys
 d = json.load(open(sys.argv[1]))
+base = int(sys.argv[2] or 0)
 ms = {m.get("key"): m for m in (d.get("metrics") or [])}
 art = ms.get("pm_artifact_count")
 if art is None:
     print("G FAIL: 响应里没有 pm_artifact_count 指标（keys=%s）" % list(ms)); raise SystemExit(1)
-if art.get("value") != 0:
-    print("G FAIL: PM 产出物数 = %r（期望 0：PM 只做传话人/流程协调，不亲自交付）" % art.get("value")); raise SystemExit(1)
+# 只断言「本次运行没有新增」：历史轮次里 PM 提交的协调记录不应让本脚本失败。
+if art.get("value") > base:
+    print("G FAIL: PM 产出物数从 %d 涨到 %r（本次运行新增了 PM 产出物：PM 只做传话人/流程协调，不亲自交付）"
+          % (base, art.get("value"))); raise SystemExit(1)
 if art.get("target") != {"operator": "=", "value": 0}:
     print("G FAIL: pm_artifact_count 的 target = %r（期望 {'operator':'=','value':0}）" % art.get("target")); raise SystemExit(1)
 share = ms.get("pm_message_share")
@@ -1128,11 +1161,11 @@ if not isinstance(v, (int, float)) or not (0.0 <= float(v) <= 1.0):
 if not (0.05 <= float(v) <= 0.95):
     print("G FAIL: PM 消息占比 = %r 落在退化区间外（合理区间 0.05..0.95）" % v); raise SystemExit(1)
 det = share.get("detail") or {}
-print("G pm_artifact_count=0（ok=%r）；pm_message_share=%.4f（PM %s 条 / 全团队 %s 条）"
-      % (art.get("ok"), float(v), det.get("pmMessages"), det.get("totalAgentMessages")))
+print("G pm_artifact_count=%r（基线 %d，本次未新增）；pm_message_share=%.4f（PM %s 条 / 全团队 %s 条）"
+      % (art.get("value"), base, float(v), det.get("pmMessages"), det.get("totalAgentMessages")))
 PY
 [[ "$G_PY_RC" == "0" ]] || fail "G" "协调度指标断言失败（原因见上一行）"
-pass "G 协调度指标端点可用：PM 产出物数=0，PM 消息占比在合理区间"
+pass "G 协调度指标端点可用：本次运行未新增 PM 产出物（基线 ${G_PM_ART_BASE}），PM 消息占比在合理区间"
 
 # ===========================================================================
 # 总结 —— 反跳过的守卫：重读原始日志

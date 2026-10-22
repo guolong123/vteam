@@ -262,3 +262,24 @@ UPDATE，守卫覆盖 NULL/空串/批次 C 之前/批次 C 全部出厂值）+ 2
 **验证**：本地 compose 迁移已应用；库值 `correction.handoff = {}`（其它 6 个岗位不变）；
 四条纪律祈使句 4/4 命中、行业映射残留 0、scopeSummary 59 字含两条主动条款；
 jest 198 suites / 4669 passed；tsc clean；lint 68 warnings / 0 errors。
+
+### 批次 E 附带发现：`pm_artifact_count` 指标定义有缺陷（未在本批修）
+
+本地实测：PM 在 `t_0000000007` 提交了产出物
+「`t_0000000007 流程与核验记录（…）`」（type=text，作者 `a_project_manager`）。
+这是 PM **职责内**允许的产出（其 `deliverables` 就是「进度与风险 / 协调记录」），
+但 `pm_artifact_count` 把它算进「PM 产出物数」，而该指标的 target 写死 `{operator:'=', value:0}`
+⇒ **合规行为被判成违规**（假阳性）。
+
+根因：指标名与口径不一致——它想度量「PM 有没有顶替别人交付」，实际度量的是
+「PM 有没有提交任何产出物」。后者必然非 0（PM 本来就要交协调记录）。
+
+建议（另案）：
+1. **改口径**：只统计「不属于 PM 自身 deliverables 的产出物」（按 `artifacts.category` /
+   `type` / 岗位 `deliverables` 交集判定），target 保持 0；
+2. 或**改语义**：把指标改名为 `pm_foreign_artifact_count`（PM 提交的非本岗位产出物数），
+   并在 detail 里同时给出 `pmOwnArtifacts`（本岗位记录数）便于对照；
+3. 无论哪种，都需要同步 `coordination-metrics.service.ts` 的 target 与 e2e G 段。
+
+本次 e2e 的处置：G 段改为**运行相对**断言（运行前取基线，断言「本次运行未新增」）——
+它证明的是「这一轮没有越界交付」，不依赖「库必须干净」。指标本身的缺陷仍待修。
