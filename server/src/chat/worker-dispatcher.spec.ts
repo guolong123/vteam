@@ -106,6 +106,12 @@ describe('WorkerDispatcher', () => {
     task: { findUnique: jest.Mock };
     // 团队归属（v1.0.3 履职收口清账）：默认无主成员（beforeEach 经 as any 注入）
     team: { findUnique: jest.Mock };
+    // 团队成员行：成员实例（tmm_）→ 模板 Agent（a_）的解析来源（内联产出物作者归属）
+    teamMember: {
+      findUnique: jest.Mock;
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+    };
     modelUsage: { create: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
@@ -254,6 +260,7 @@ describe('WorkerDispatcher', () => {
         teamMember: {
           findMany: jest.fn().mockResolvedValue([]),
           findFirst: jest.fn().mockResolvedValue(null),
+          findUnique: jest.fn().mockResolvedValue(null),
         },
         team: {
           findUnique: jest.fn().mockResolvedValue({ mainAgentMemberId: null }),
@@ -4268,19 +4275,103 @@ describe('WorkerDispatcher', () => {
       });
 
       expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledTimes(2);
-      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(1, {
-        taskId: request.taskId,
-        type: 'text',
-        title: '需求说明',
-        content: '内容一',
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(
+        1,
+        {
+          taskId: request.taskId,
+          type: 'text',
+          title: '需求说明',
+          content: '内容一',
+        },
+        { authorAgentId: null },
+      );
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(
+        2,
+        {
+          taskId: request.taskId,
+          type: 'doc',
+          title: '设计文档',
+          content: '',
+          fileRef: 'file://x',
+        },
+        { authorAgentId: null },
+      );
+    });
+
+    it('内联产出物声明 → 记录作者 Agent id（成员实例 → team_members.agent_id）', async () => {
+      prisma.teamMember.findUnique.mockResolvedValue({
+        id: 'tmm_0000000001',
+        agentId: 'a_product',
       });
-      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(2, {
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
         taskId: request.taskId,
-        type: 'doc',
-        title: '设计文档',
-        content: '',
-        fileRef: 'file://x',
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '产出需求文档',
+        artifacts: [{ type: 'text', title: '需求说明', content: '内容一' }],
       });
+
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledTimes(1);
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledWith(
+        {
+          taskId: request.taskId,
+          type: 'text',
+          title: '需求说明',
+          content: '内容一',
+        },
+        { authorAgentId: 'a_product' },
+      );
+    });
+
+    it('作者解析不到 → 产出物照常归档、作者 NULL、不抛错', async () => {
+      prisma.teamMember.findUnique.mockResolvedValue(null);
+      prisma.teamMember.findFirst.mockResolvedValue(null);
+      prisma.agent.findUnique.mockResolvedValue(null);
+      const d = createDispatcher();
+
+      await expect(
+        d.handleTaskCompleted({
+          taskId: request.taskId,
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          text: '产出需求文档',
+          artifacts: [{ type: 'text', title: '需求说明', content: '内容一' }],
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledTimes(1);
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledWith(
+        {
+          taskId: request.taskId,
+          type: 'text',
+          title: '需求说明',
+          content: '内容一',
+        },
+        { authorAgentId: null },
+      );
+    });
+
+    it('作者解析抛错 → 降级 NULL 且不阻断归档（缺作者不能丢交付物）', async () => {
+      prisma.teamMember.findUnique.mockRejectedValue(new Error('db down'));
+      const d = createDispatcher();
+
+      await expect(
+        d.handleTaskCompleted({
+          taskId: request.taskId,
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          text: '产出需求文档',
+          artifacts: [{ type: 'text', title: '需求说明', content: '内容一' }],
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledTimes(1);
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledWith(
+        expect.anything(),
+        { authorAgentId: null },
+      );
     });
 
     it('artifacts 归档成功 → 广播 artifact.submitted（task scope，前端产出物列表实时刷新）', async () => {
@@ -4348,19 +4439,27 @@ describe('WorkerDispatcher', () => {
       });
 
       expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledTimes(2);
-      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(1, {
-        taskId: request.taskId,
-        type: 'doc',
-        title: '端到端文档测试',
-        content: '',
-        fileRef: '/tmp/opencode/e2e-doc.md',
-      });
-      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(2, {
-        taskId: request.taskId,
-        type: 'text',
-        title: '要点',
-        content: '内容',
-      });
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(
+        1,
+        {
+          taskId: request.taskId,
+          type: 'doc',
+          title: '端到端文档测试',
+          content: '',
+          fileRef: '/tmp/opencode/e2e-doc.md',
+        },
+        { authorAgentId: null },
+      );
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenNthCalledWith(
+        2,
+        {
+          taskId: request.taskId,
+          type: 'text',
+          title: '要点',
+          content: '内容',
+        },
+        { authorAgentId: null },
+      );
     });
 
     it('P3：payload.artifacts 与 text 提取重复声明 → 去重归档一次', async () => {
@@ -4380,13 +4479,16 @@ describe('WorkerDispatcher', () => {
       });
 
       expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledTimes(1);
-      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledWith({
-        taskId: request.taskId,
-        type: 'doc',
-        title: '重复声明',
-        content: '',
-        fileRef: '/tmp/opencode/dup.md',
-      });
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledWith(
+        {
+          taskId: request.taskId,
+          type: 'doc',
+          title: '重复声明',
+          content: '',
+          fileRef: '/tmp/opencode/dup.md',
+        },
+        { authorAgentId: null },
+      );
     });
 
     it('频道定位：成员私聊频道（teamId+teamMemberId）优先，群聊频道回退', async () => {
@@ -8092,12 +8194,15 @@ describe('WorkerDispatcher', () => {
       await jest.advanceTimersByTimeAsync(0);
 
       expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledTimes(1);
-      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledWith({
-        taskId: request.taskId,
-        type: 'text',
-        title: '需求说明',
-        content: '内容一',
-      });
+      expect(artifactsService.onArtifactSubmitted).toHaveBeenCalledWith(
+        {
+          taskId: request.taskId,
+          type: 'text',
+          title: '需求说明',
+          content: '内容一',
+        },
+        { authorAgentId: 'a_product' },
+      );
       jest.useRealTimers();
     });
 

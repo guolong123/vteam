@@ -3136,6 +3136,15 @@ export class WorkerDispatcher
     // P3：合并 worker 显式上送（payload.artifacts）与 server 从回复文本提取
     // （extractArtifacts）的声明——方案 A 下 worker 完成事件不带 artifacts 字段，
     // 归档依赖 text 提取（F3 MAJOR-2 poll 路径逻辑，切方案 A 后曾丢失）。
+    //
+    // **作者归属**（补 PR #66 遗留）：内联声明这条归档路径此前恒写 author_agent_id=NULL
+    // ⇒ 协调度指标 pm_artifact_count 对这一整块产出物失明。解析不到作者 ⇒ null
+    // （人工/系统归档的诚实值），**绝不**因此拒绝归档。
+    const authorAgentId = await this.resolveArtifactAuthorAgentId({
+      teamId: settled.teamId,
+      teamMemberId: settled.teamMemberId,
+      agentId: settled.agentId,
+    });
     const mergedArtifacts = this.mergeArtifactDeclarations([
       ...(Array.isArray(payload.artifacts) ? payload.artifacts : []),
       ...extractArtifacts(text),
@@ -3146,15 +3155,18 @@ export class WorkerDispatcher
     for (const raw of mergedArtifacts) {
       const art = (raw ?? {}) as Record<string, unknown>;
       try {
-        const result = await this.artifactsService.onArtifactSubmitted({
-          taskId,
-          type: String(art.type ?? ''),
-          title: String(art.title ?? ''),
-          content: String(art.content ?? ''),
-          ...(art.fileRef !== undefined
-            ? { fileRef: String(art.fileRef) }
-            : {}),
-        });
+        const result = await this.artifactsService.onArtifactSubmitted(
+          {
+            taskId,
+            type: String(art.type ?? ''),
+            title: String(art.title ?? ''),
+            content: String(art.content ?? ''),
+            ...(art.fileRef !== undefined
+              ? { fileRef: String(art.fileRef) }
+              : {}),
+          },
+          { authorAgentId },
+        );
         if (result.status === 'invalid') {
           this.logger.warn(
             `agent ${agentId} 产出物声明非法（${result.reason}）：${JSON.stringify(art)}`,
@@ -3208,6 +3220,65 @@ export class WorkerDispatcher
     // 群聊回复只经 MCP group_post 工具直发（工具 handler 已落库群聊并广播）——
     // 不再做任何兜底转发（文本声明/群聊触发兜底转发完整回复均移除）：私聊正文
     // 独白留在 private 会话频道，群聊不展示私聊内容（曾致群聊每人 3 条）。
+  }
+
+  /**
+   * 产出物作者 Agent id 解析（内联产出物声明的完成回流路径）。
+   *
+   * `artifact_versions.author_agent_id` 是 **Agent 外键**（schema.prisma
+   * `author Agent? @relation("ArtifactAuthor")`），故只能写模板 Agent id（a_ 前缀），
+   * 成员实例 id（tmm_ 前缀）会撞 FK。口径与 PR #66 的 submit_artifact 路径一致：
+   * **成员实例 id → team_members 行 → agent_id**（该列是执行该成员的模板 Agent）。
+   *
+   * 解析顺序（任一步命中即返回，值必然满足 Agent 外键）：
+   * 1. team_members 按成员实例 id 查 → agent_id（成员行存在 ⇒ 外键必然有效）；
+   * 2. team_members 按 agentId 查（成员实例 id 缺失时的兜底）→ agent_id；
+   * 3. agents 按 agentId 查存在性（非团队成员的主 Agent 等）→ agentId 本身。
+   *
+   * 查不到 ⇒ null（人工/系统归档的诚实值）。**绝不抛错**：缺作者不能把一次正常的
+   * 产出物归档搞失败（落库失败 = 交付物丢失，比缺作者严重得多）。
+   */
+  private async resolveArtifactAuthorAgentId(args: {
+    teamId: string | null;
+    teamMemberId: string | null;
+    agentId: string | null;
+  }): Promise<string | null> {
+    const teamMember = (this.prisma as any).teamMember;
+    try {
+      if (args.teamMemberId && teamMember?.findUnique) {
+        const member = await teamMember.findUnique({
+          where: { id: args.teamMemberId },
+          select: { agentId: true },
+        });
+        if (member?.agentId) return member.agentId;
+      }
+      if (args.agentId && teamMember?.findFirst) {
+        const member = await teamMember.findFirst({
+          where: {
+            agentId: args.agentId,
+            ...(args.teamId ? { teamId: args.teamId } : {}),
+          },
+          select: { agentId: true },
+        });
+        if (member?.agentId) return member.agentId;
+      }
+      if (args.agentId) {
+        const agent = await (this.prisma as any).agent?.findUnique?.({
+          where: { id: args.agentId },
+          select: { id: true },
+        });
+        if (agent?.id) return agent.id;
+      }
+      return null;
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      this.logger.warn(
+        `产出物作者解析失败（降级为 NULL，不影响归档）agent=${args.agentId ?? '-'} member=${args.teamMemberId ?? '-'}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
   }
 
   /**

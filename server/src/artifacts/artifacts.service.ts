@@ -138,15 +138,24 @@ export class ArtifactsService implements OnModuleInit {
    * 消费 `artifact.submitted` 事件（T2 MockConsumer 广播契约 → 落库）。
    * 非法声明**不抛错**返回 `{status:'invalid'}`（12 篇 §3.1 回退普通消息语义，
    * 事件消费链路不能被非法输入打崩）；合法声明转 append 归档。
+   *
+   * **作者归属**：`meta.authorAgentId` 是产出物的作者 Agent id，落
+   * `artifact_versions.author_agent_id`（Agent 外键）。缺省 ⇒ NULL。
+   * 两条归档入口都必须透传作者，否则协调度指标（coordination-metrics.service.ts
+   * `pm_artifact_count` 按 author_agent_id 归岗）对这部分产出物彻底失明
+   * （恒 NULL ⇒ 永远查不到「谁产出了交付物」，只报平安的假阴性）。
+   * 调用方解析不到作者时传 `undefined`/null ⇒ 版本行写 NULL（人工/系统归档的诚实值），
+   * **不得**因为缺作者而拒绝归档。
    */
   async onArtifactSubmitted(
     payload: ArtifactSubmittedPayload,
+    meta: AppendMeta = {},
   ): Promise<{ status: string; reason?: string; artifact?: unknown }> {
     const validation = validateArtifactDeclaration(payload);
     if (!validation.valid) {
       return { status: 'invalid', reason: validation.reason };
     }
-    return this.append(payload.taskId, payload);
+    return this.append(payload.taskId, payload, meta);
   }
 
   /**
