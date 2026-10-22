@@ -21,6 +21,7 @@ import {
   V2_EVENT_MAP,
   RunTerminalGate,
   V2StreamAccumulator,
+  V2RunEventScope,
   assembleAssistantText,
   buildStepFinishPart,
   deriveUpstreamDedupKey,
@@ -644,6 +645,57 @@ describe('终态闸门 RunTerminalGate', () => {
 
   it('尚无证据 → settle 返回 null', () => {
     expect(new RunTerminalGate().settle()).toBeNull();
+  });
+});
+
+describe('本轮归属闸门 V2RunEventScope', () => {
+  function inboxFrame(itemType: 'user' | 'move', seq: number): V2EventFrame {
+    return {
+      id: `evt_inbox_${itemType}`,
+      type: 'session.inbox.enqueued',
+      data: {
+        inboxID: `msg_${seq}`,
+        sessionID: 'ses_1',
+        item: { type: itemType, payload: {}, delivery: 'steer' },
+      },
+      durable: { aggregateID: 'ses_1', seq, version: 1 },
+    };
+  }
+
+  function execFrame(verdict: 'started' | 'succeeded' | 'failed', seq: number): V2EventFrame {
+    return {
+      id: `evt_exec_${verdict}_${seq}`,
+      type: `session.execution.${verdict}`,
+      data: { sessionID: 'ses_1' },
+      durable: { aggregateID: 'ses_1', seq, version: 1 },
+    };
+  }
+
+  it('move 执行的 started/succeeded 不归属本轮（这是线上权限不上报的根因）', () => {
+    const scope = new V2RunEventScope();
+    expect(scope.observe(inboxFrame('move', 1)).allowTerminal).toBe(false);
+    expect(scope.observe(execFrame('started', 2)).allowTerminal).toBe(false);
+    expect(scope.observe(execFrame('succeeded', 3)).allowTerminal).toBe(false);
+    expect(scope.bound).toBe(false);
+  });
+
+  it('用户 prompt 入队 + 其 execution.started 之后，终态才归属本轮', () => {
+    const scope = new V2RunEventScope();
+    scope.observe(inboxFrame('move', 1));
+    scope.observe(execFrame('started', 2));
+    scope.observe(execFrame('succeeded', 3));
+    expect(scope.observe(inboxFrame('user', 4)).allowTerminal).toBe(false);
+    expect(scope.observe(execFrame('started', 5)).allowTerminal).toBe(false);
+    expect(scope.bound).toBe(true);
+    expect(scope.observe(execFrame('succeeded', 6)).allowTerminal).toBe(true);
+  });
+
+  it('终态只归属一次：下一轮必须重新等 prompt 入队', () => {
+    const scope = new V2RunEventScope();
+    scope.observe(inboxFrame('user', 1));
+    scope.observe(execFrame('started', 2));
+    expect(scope.observe(execFrame('succeeded', 3)).allowTerminal).toBe(true);
+    expect(scope.observe(execFrame('failed', 4)).allowTerminal).toBe(false);
   });
 });
 

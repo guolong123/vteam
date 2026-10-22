@@ -355,6 +355,72 @@ export class RunTerminalGate {
   }
 }
 
+/** 执行终态事件（durable；**运行级**结果，不是 step 级）。 */
+const EXECUTION_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
+  'session.execution.succeeded',
+  'session.execution.failed',
+  'session.execution.interrupted',
+]);
+
+/**
+ * 判断一帧是否是「用户 prompt 已入队」信号。
+ *
+ * v2 把**目录切换（move）**也做成 inbox 条目（实测 2.0.32 / 2.1.2：
+ * `session.inbox.enqueued{item.type:'move'}` → `session.execution.started` →
+ * `session.execution.succeeded`），随后才是真正的 prompt 条目
+ * （`item.type:'user'` → `session.execution.started` → …）。
+ */
+export function isUserPromptEnqueuedFrame(frame: V2EventFrame): boolean {
+  if (frame.type !== 'session.inbox.enqueued') {
+    return false;
+  }
+  const item = rec(frame.data, 'item');
+  return item !== undefined && str(item, 'type') === 'user';
+}
+
+/**
+ * 每轮执行的事件归属闸门：**只承认本轮用户 prompt 所启动的那次执行**的终态。
+ *
+ * 为什么需要（线上根因，opencode 2.1.2 / 2.0.32 均复现）：
+ * `V2Driver.sendMessage` 在首次下发前会 `POST /api/session/{id}/move` 切目录；v2 把
+ * move 实现成一个 **inbox 条目**，它的执行独立发一对
+ * `session.execution.started` / `session.execution.succeeded`（实测早于用户 prompt
+ * 入队 10~200ms）。`RunTerminalGate` 只看「有没有 succeeded」，于是把 **move 的成功**
+ * 当成本轮结束：`runSendAndAwait` 立刻返回、SSE 订阅关闭、onPoll 停止——而用户 prompt
+ * 其实还没开始跑。之后模型请求权限时既没有事件订阅也没有 onPoll，
+ * `session.permission` 永远上不去（用户只看到 serve 原生确认框）。
+ *
+ * 归属判据（与版本无关，只看事件顺序）：本轮终态必须发生在
+ * ① `session.inbox.enqueued{item.type:'user'}` 之后，且
+ * ② 该帧之后至少一次 `session.execution.started`。
+ */
+export class V2RunEventScope {
+  private promptEnqueued = false;
+  private runStarted = false;
+
+  /** 观察一帧（每帧一次，顺序与总线一致）；返回该帧终态是否属于本轮。 */
+  observe(frame: V2EventFrame): { allowTerminal: boolean } {
+    if (isUserPromptEnqueuedFrame(frame)) {
+      this.promptEnqueued = true;
+    }
+    if (frame.type === 'session.execution.started' && this.promptEnqueued) {
+      this.runStarted = true;
+    }
+    const isTerminal = EXECUTION_TERMINAL_EVENTS.has(frame.type);
+    const allowTerminal = isTerminal && this.promptEnqueued && this.runStarted;
+    if (isTerminal) {
+      // 终态只归属一次：之后的终态属于下一轮/迟到帧，不再重复收口
+      this.runStarted = false;
+    }
+    return { allowTerminal };
+  }
+
+  /** 本轮是否已绑定用户 prompt 的执行（可观测/测试用）。 */
+  get bound(): boolean {
+    return this.promptEnqueued && this.runStarted;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // part id 归一（兼容层；正式口径见 `v2-part-id.ts`）
 // ---------------------------------------------------------------------------

@@ -64,6 +64,43 @@ function stepFinishPart(): DriverContent {
   return { id: 'p_fin', type: 'step-finish', reason: 'stop', cost: 0.5, tokens: { input: 10, output: 2 } };
 }
 
+/** v2 用户 prompt 入队帧（实测形态；本轮归属闸门的起点）。 */
+function userPromptInboxFrame(sessionID: string, seq: number): unknown {
+  return {
+    id: `evt_inbox_user_${seq}`,
+    type: 'session.inbox.enqueued',
+    data: {
+      inboxID: `msg_inbox_${seq}`,
+      sessionID,
+      item: { type: 'user', payload: { text: 'go' }, delivery: 'steer' },
+    },
+    durable: { aggregateID: sessionID, seq, version: 1 },
+  };
+}
+
+/** v2 目录切换（move）入队帧：它的执行终态**不属于**本轮。 */
+function moveInboxFrame(sessionID: string, seq: number): unknown {
+  return {
+    id: `evt_inbox_move_${seq}`,
+    type: 'session.inbox.enqueued',
+    data: {
+      inboxID: `msg_move_${seq}`,
+      sessionID,
+      item: { type: 'move', payload: { location: { directory: '/tmp/x' } }, delivery: 'steer' },
+    },
+    durable: { aggregateID: sessionID, seq, version: 1 },
+  };
+}
+
+function executionStartedFrame(sessionID: string, seq: number): unknown {
+  return {
+    id: `evt_exec_started_${seq}`,
+    type: 'session.execution.started',
+    data: { sessionID },
+    durable: { aggregateID: sessionID, seq, version: 1 },
+  };
+}
+
 /** 首轮即完成的 serve messages（含 step-finish）。 */
 const FINISH_MSGS: DriverMessage[] = [
   asstMsg('a1', [textPart('Hello'), stepFinishPart()]),
@@ -3777,7 +3814,9 @@ describe('ExecServer：v2 事件路（SSE → vteam 事件）', () => {
     try {
       await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
       await sse.waitForConnection();
-      // 事件路先到：durable 的执行成功
+      // 事件路先到：用户 prompt 入队 + 本轮执行启动 → durable 的执行成功
+      sse.push(userPromptInboxFrame('ses_1', 10));
+      sse.push(executionStartedFrame('ses_1', 11));
       sse.push({
         id: 'evt_done',
         type: 'session.execution.succeeded',
@@ -3813,6 +3852,8 @@ describe('ExecServer：v2 事件路（SSE → vteam 事件）', () => {
     try {
       await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
       await sse.waitForConnection();
+      sse.push(userPromptInboxFrame('ses_1', 10));
+      sse.push(executionStartedFrame('ses_1', 11));
       sse.push({
         id: 'evt_fail',
         type: 'session.execution.failed',
@@ -3825,6 +3866,166 @@ describe('ExecServer：v2 事件路（SSE → vteam 事件）', () => {
       expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(0);
       const status = sent.find((s) => s.type === 'agent.status' && s.payload.status === 'error');
       expect(status?.payload.error).toBe('模型不存在');
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+});
+
+describe('ExecServer：question/权限事件路（v2 原生 permission.asked / form.created）', () => {
+  function mockPendingDriver(): {
+    driver: OpenCodeDriver;
+    listQuestions: jest.Mock;
+    listPermissions: jest.Mock;
+  } {
+    const createSession = jest.fn().mockResolvedValue('ses_1');
+    const sendMessage = jest.fn().mockResolvedValue(undefined);
+    const getMessages = jest.fn().mockResolvedValue([]);
+    const abort = jest.fn().mockResolvedValue(undefined);
+    const listQuestions = jest.fn().mockResolvedValue([]);
+    const listPermissions = jest.fn().mockResolvedValue([]);
+    const driver = {
+      createSession,
+      sendMessage,
+      getMessages,
+      abort,
+      listQuestions,
+      listPermissions,
+    } as unknown as OpenCodeDriver;
+    return { driver, listQuestions, listPermissions };
+  }
+
+  function permissionAskedFrame(sessionID: string, permissionID: string, seq: number): unknown {
+    return {
+      id: `evt_perm_asked_${seq}`,
+      type: 'permission.asked',
+      data: {
+        id: permissionID,
+        sessionID,
+        action: 'external_directory',
+        resources: ['/etc/*'],
+        save: ['/etc/*'],
+        source: { type: 'tool' },
+      },
+    };
+  }
+
+  function formCreatedFrame(sessionID: string, formID: string, seq: number): unknown {
+    return {
+      id: `evt_form_created_${seq}`,
+      type: 'form.created',
+      data: { form: { id: formID, sessionID, title: '确认' } },
+    };
+  }
+
+  it('permission.asked → session.permission 一次；重复帧不重发；move 终态不收口本轮', async () => {
+    const { driver, listPermissions } = mockPendingDriver();
+    listPermissions.mockResolvedValue([
+      { id: 'per_1', sessionID: 'ses_1', action: 'external_directory', resources: ['/etc/*'] },
+    ]);
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5000,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+      // 首次下发前的 move：独立执行，它的 succeeded 不能结束本轮
+      sse.push(moveInboxFrame('ses_1', 1));
+      sse.push(executionStartedFrame('ses_1', 2));
+      sse.push({
+        id: 'evt_move_done',
+        type: 'session.execution.succeeded',
+        data: { sessionID: 'ses_1' },
+        durable: { aggregateID: 'ses_1', seq: 3, version: 1 },
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(0);
+
+      // 用户 prompt 入队 → 本轮执行启动 → 权限请求
+      sse.push(userPromptInboxFrame('ses_1', 4));
+      sse.push(executionStartedFrame('ses_1', 5));
+      sse.push(permissionAskedFrame('ses_1', 'per_1', 6));
+      await waitFor(() => sent.some((s) => s.type === 'session.permission'));
+
+      const permissions = sent.filter((s) => s.type === 'session.permission');
+      expect(permissions).toHaveLength(1);
+      expect(permissions[0].payload).toMatchObject({
+        taskId: 't_1',
+        agentId: 'a_1',
+        sessionId: 'ses_1',
+        permissionId: 'per_1',
+        type: 'external_directory',
+        pattern: '/etc/*',
+        upstream: { eventId: 'per_1' },
+      });
+
+      // 同一 permission 的重复触发帧（不同 event id）→ 去重，不再上送
+      sse.push(permissionAskedFrame('ses_1', 'per_1', 7));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(sent.filter((s) => s.type === 'session.permission')).toHaveLength(1);
+
+      // 已答复/已移除 → 不复活
+      listPermissions.mockResolvedValue([]);
+      sse.push({
+        id: 'evt_perm_replied',
+        type: 'permission.replied',
+        data: { sessionID: 'ses_1', requestID: 'per_1', reply: 'once' },
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      expect(sent.filter((s) => s.type === 'session.permission')).toHaveLength(1);
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+
+  it('form.created → session.question（questions 详情透传，一次）', async () => {
+    const { driver, listQuestions } = mockPendingDriver();
+    listQuestions.mockResolvedValue([
+      {
+        id: 'frm_1',
+        sessionId: 'ses_1',
+        questions: [{ question: '继续吗？', header: '确认', options: [{ label: '继续' }] }],
+      },
+    ]);
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5000,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+      sse.push(userPromptInboxFrame('ses_1', 10));
+      sse.push(executionStartedFrame('ses_1', 11));
+      sse.push(formCreatedFrame('ses_1', 'frm_1', 12));
+      await waitFor(() => sent.some((s) => s.type === 'session.question'));
+      const questions = sent.filter((s) => s.type === 'session.question');
+      expect(questions).toHaveLength(1);
+      expect(questions[0].payload).toMatchObject({
+        taskId: 't_1',
+        sessionId: 'ses_1',
+        requestId: 'frm_1',
+        questions: [{ question: '继续吗？', header: '确认' }],
+        upstream: { eventId: 'frm_1' },
+      });
     } finally {
       await exec.stop();
       await sse.close();
@@ -3879,6 +4080,8 @@ describe('ExecServer：终态协调（事件路 ↔ 轮询路合流，T14）', (
       if (calls === 2) {
         // 轮询路这一轮看到 step-finish；同时事件路给出成功（两条路都到得了终态）
         await sse.waitForConnection();
+        sse.push(userPromptInboxFrame('ses_1', 16));
+        sse.push(executionStartedFrame('ses_1', 17));
         sse.push(executionFrame('succeeded', 18));
       }
       return FINISH_MSGS;
@@ -3903,12 +4106,10 @@ describe('ExecServer：终态协调（事件路 ↔ 轮询路合流，T14）', (
       expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'idle')).toHaveLength(1);
       expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'failed')).toHaveLength(0);
       expect(sent.filter((s) => s.type === 'agent.status' && s.payload.status === 'error')).toHaveLength(0);
-      // 事件序列与既有行为一致
-      expect(sent.map((s) => s.type)).toEqual([
-        'session.updated',
+      // 事件序列与既有行为一致（execution.started 也会产生一条 running，幂等）
+      expect(sent.map((s) => s.type).filter((t) => t !== 'session.updated')).toEqual([
         'agent.status',
         'message.part.delta',
-        'session.updated',
         'task.completed',
       ]);
       // 轮询路问过闸门并采纳了事件证据（证据=event ⇒ 两条路合流到同一个闸门）
@@ -3948,6 +4149,8 @@ describe('ExecServer：终态协调（事件路 ↔ 轮询路合流，T14）', (
     try {
       await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
       await sse.waitForConnection();
+      sse.push(userPromptInboxFrame('ses_1', 16));
+      sse.push(executionStartedFrame('ses_1', 17));
       sse.push(executionFrame('failed', 20, 'Invalid API key.'));
       await sse.delivered;
       await waitFor(() => sent.some((s) => s.type === 'agent.status' && s.payload.status === 'error'));
@@ -3980,6 +4183,8 @@ describe('ExecServer：终态协调（事件路 ↔ 轮询路合流，T14）', (
       if (calls === 2) {
         // 轮询路这一轮看到 step-finish；事件路的失败**迟到**（落在宽限期内）
         await sse.waitForConnection();
+        sse.push(userPromptInboxFrame('ses_1', 16));
+        sse.push(executionStartedFrame('ses_1', 17));
         sse.push(executionFrame('failed', 21, 'Invalid API key.'));
       }
       return FINISH_MSGS;
