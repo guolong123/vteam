@@ -1,0 +1,343 @@
+==============================================================================
+批次 E · 协调度指标（pm-coordination-hardening）证据
+==============================================================================
+
+【一句话】新增**只读、管理员可见**的团队协调度端点，把「PM 只协调不执行」这条纪律
+        从 agent 自写的记忆（4 团队 6 处）变成**可测量的数字**；实测本地 compose 库
+        复现基线：PM 消息 106 条 / 占比 68.8%（≈68%）、PM 产出物 **0**。
+
+【端点】GET /api/v1/teams/:teamId/coordination-metrics
+        鉴权：AdminGuard（平台管理员 users:manage / permissions.all）——
+              复用仓库既有 admin 端点护栏（memories.controller.ts 同款），
+              **未新造任何权限键/能力点**，未收窄任何权限。
+        参数：windowHours（1..720，缺省 168=7 天；超限 400，不静默截断）、
+              to（ISO-8601 窗口右端点，缺省=现在，用于复现历史窗口）
+        只读：零写入、零状态、零定时任务、无新表、无 migration。
+
+【为什么按窗口而不是全量】三张事实表（messages / artifact_versions / message_receipts）
+        都随时间线性增长；窗口不设上限 ⇒ 单请求扫描量无界。上限 720h（30 天）的依据：
+        运营者复核「最近」的合理视野是上个月；量级估算 ≈ 77 条 agent 消息/天 ⇒
+        上限窗口 ≈ 5.5 万行扫描，且聚合全部在 DB 侧完成。
+
+------------------------------------------------------------------------------
+一、改动文件
+------------------------------------------------------------------------------
+  server/src/teams/coordination-metrics.constants.ts     新增：窗口上限/缺省/错误码 + 基线注释
+  server/src/teams/coordination-metrics.service.ts       新增：四条指标的全部口径与聚合查询
+  server/src/teams/coordination-metrics.controller.ts    新增：GET 端点（AdminGuard）
+  server/src/teams/dto/query-coordination-metrics.dto.ts 新增：窗口参数 DTO（class-validator）
+  server/src/teams/coordination-metrics.service.spec.ts   新增：35 例
+  server/src/teams/coordination-metrics.controller.spec.ts 新增：12 例（含 supertest HTTP 层 4 例）
+  server/src/teams/teams.module.ts                      改：注册新 controller/service/AdminGuard
+
+  未触碰（其它批次 / 硬约束）：server/src/chat/**、server/src/platform-mcp/**、worker/src/**、
+  server/src/common/constants/**、server/prisma/seed.ts、server/prisma/schema.prisma、
+  web/**；无 migration；无新依赖；无 as any / @ts-ignore / @ts-expect-error；
+  未删除/弱化任何既有测试；未 git commit/add/stash/checkout/reset。
+------------------------------------------------------------------------------
+二、命令与真实输出
+------------------------------------------------------------------------------
+
+$ npx jest src/teams
+PASS src/teams/coordination-metrics.service.spec.ts
+PASS src/teams/seed.spec.ts
+PASS src/teams/teams.controller.spec.ts
+PASS src/teams/team-channel-bindings.controller.spec.ts
+PASS src/teams/coordination-metrics.controller.spec.ts
+PASS src/teams/teams.service.spec.ts
+
+Test Suites: 6 passed, 6 total
+Tests:       170 passed, 170 total
+Snapshots:   0 total
+Time:        3.806 s
+Ran all test suites matching /src\/teams/i.
+
+$ npx jest src/teams/coordination-metrics --verbose
+      ✓ 窗口上限 720h：超限抛 400 COORDINATION_METRICS_WINDOW_INVALID（不静默截断） (5 ms)
+      ✓ 窗口下界 1h：0 / 负数 / 非整数一律 400 (1 ms)
+      ✓ to 不是可解析时间 ⇒ 400（不做「当成现在」的静默兜底） (1 ms)
+      ✓ 缺省窗口 = 168h（7 天），并把窗口下界写进查询条件 (1 ms)
+      ✓ 显式 to + windowHours ⇒ 窗口 = [to - windowHours, to]（可复现历史窗口）
+      ✓ 每条指标都自带覆盖窗口（自描述） (1 ms)
+      ✓ 响应可无损 JSON 序列化（detail 里没有漏 await 的 Promise） (1 ms)
+      ✓ 团队不存在 ⇒ 404 TEAM_NOT_FOUND
+      ✓ 只读：不写库（全程无 create/update/delete 调用面） (1 ms)
+      ✓ PM 未产出任何交付物 ⇒ 0 且 ok=true (1 ms)
+      ✓ PM 产出过交付物 ⇒ 计数 > 0 且 ok=false（越界可见）
+      ✓ PM 占比 = PM 消息 / 全团队 agent 消息（基线 106/111）
+      ✓ 岗位分解之和 == 全团队 agent 消息数（不重复计数、不丢消息） (1 ms)
+      ✓ 一个 Agent 被多岗位复用 ⇒ 归岗位序最靠前者（不重复计数）
+      ✓ 消息只走聚合：message.findMany 永不被调用（原始行不进内存） (1 ms)
+      ✓ 聚合查询带窗口与团队频道范围（不扫全表）
+      ✓ 派发数 = message_receipts 的 dispatch 行数；亲做 = PM 消息 − 派发通告
+      ✓ 一次 fan-out 多目标 = 多行回执 = 多次派发（按行计） (1 ms)
+      ✓ 派发查询限定 PM 成员 + 团队 + dispatch 类型（不扫别人的账）
+      ✓ 粗口径：私聊占比 + 群私条数（本地基线 群 67 / 私 39）
+      ✓ 精确同文重合：DB 侧聚合返回的计数透传（逐字相同才算） (1 ms)
+      ✓ 同文判定失败 ⇒ 降级 null 且不抛（观测面不因补充信号整体挂掉）
+      ✓ 窗口内无任何消息 ⇒ 指标全 0、占比 0（不出现 NaN） (1 ms)
+      ✓ 团队没有任何频道 ⇒ 直接跳过消息聚合（不构造空 IN 查询）
+      ✓ 团队没有 PM 成员 ⇒ PM 相关指标全 0（不报错、不误报）
+      ✓ agent 消息缺 sender_id ⇒ 计入总数并落 unassigned 桶（分解之和 == 总数） (1 ms)
+      ✓ 消息口径：窗口外的行 / 非 agent 行 / 别队频道的行都不计入
+      ✓ 产出物口径：窗口外的 PM 产出物 / 别队的 PM 产出物都不计入 (1 ms)
+      ✓ 派发口径：非 dispatch 回执 / 别人派发的回执 / 窗口外的回执都不计入
+      ✓ 双报口径：群聊/私聊按频道类型分桶（窗口外与别队频道不进私聊桶）
+      ✓ GET teams/:teamId/coordination-metrics（裸挂载 + 完整路径） (5 ms)
+      ✓ 控制器只暴露一个 GET（观测面零写操作） (1 ms)
+      ✓ 端点挂 AdminGuard（不挂 PermissionGuard：teams.view 不含「看全团队经营数据」） (1 ms)
+      ✓ 未认证 ⇒ 401 (1 ms)
+      ✓ 非管理员（无 users:manage）⇒ 403 FORBIDDEN_ADMIN
+      ✓ 管理员 ⇒ 放行 (1 ms)
+      ✓ 转发 teamId + 查询参数给 service
+      ✓ service 抛 404 时原样透传（团队不存在） (1 ms)
+    ✓ 缺省（空对象）无校验错误（窗口取服务层缺省 168h）
+    ✓ windowHours 在 1..720 内合法 (1 ms)
+    ✓ windowHours 超上限（721）⇒ 校验失败（HTTP 层直接 400）
+    ✓ windowHours 非整数 ⇒ 校验失败
+    ✓ to 必须是 ISO-8601 时间 (1 ms)
+    ✓ 未带身份 ⇒ 401（AdminGuard 兜底认证） (45 ms)
+    ✓ 非管理员 ⇒ 403 FORBIDDEN_ADMIN（service 不被调用） (2 ms)
+    ✓ 管理员 ⇒ 200，响应体就是指标契约，且查询参数透传 (3 ms)
+    ✓ 窗口超上限（?windowHours=721）⇒ 400（管道拦下，不进 service） (3 ms)
+Test Suites: 2 passed, 2 total
+Tests:       47 passed, 47 total
+
+$ npx tsc --noEmit -p tsconfig.json
+(no output = clean, exit=0)
+
+$ npm run lint:check
+  931:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 68 problems (0 errors, 68 warnings)
+
+  基线对照（任务书）：68 problems / 0 errors ⇒ **本批新增 0 个 problem / 0 个 error**。
+  （开工瞬间的临时基线为 69/1，那 1 个 error 来自当时在飞的批次 A4 的 migration spec，
+    非本批文件；本批文件 eslint 单跑输出为空。）
+
+  $ npx eslint src/teams/coordination-metrics*.ts src/teams/dto/query-coordination-metrics.dto.ts src/teams/teams.module.ts
+  (无输出 = 0 problems)
+
+$ npx jest --runInBand  (全量 server 套件)
+
+Test Suites: 196 passed, 196 total
+Tests:       1 skipped, 4609 passed, 4610 total
+Snapshots:   1 passed, 1 total
+Time:        16.036 s, estimated 35 s
+Ran all test suites.
+  ⇒ 全量 server 套件无回归（本批未动任何既有测试）。
+
+------------------------------------------------------------------------------
+三、本地 compose 数据库实测（真实实现跑在真实库上，只读）
+------------------------------------------------------------------------------
+
+  跑法：把本仓库 src 编译成 JS，随 server 容器内的 Prisma client 连本地 compose 库，
+        直接调用 CoordinationMetricsService（不是另写 SQL 复算）。
+  库：docker exec vteam-compose-db … mysql vteam（tm_0000000001，7 成员 / 242 消息 /
+      7 产出物 / 12 issue / 7 会话 / 5 任务）；**全程只读 SELECT，无任何写入**。
+  跑完复核：messages 242 / artifacts 7 / message_receipts 26 / teams 2 / team_members 7 —— 与开工前一致。
+
+  窗口 windowHours=168（7 天）：2026-10-15T06:54:06.458Z → 2026-10-22T06:54:06.458Z
+  窗口 windowHours=720（30 天，上限）：2026-09-22T06:54:06.499Z → 2026-10-22T06:54:06.499Z
+  两个窗口结果**完全一致**（该数据集全部落在 7 天内）⇒ 窗口语义自洽。
+
+  ┌──────────────────────┬───────────────┬───────────────────────────────────────────────┐
+  │ 指标                 │ 计划基线      │ 本端点实测（tm_0000000001）                  │
+  ├──────────────────────┼───────────────┼───────────────────────────────────────────────┤
+  │ PM 消息数            │ 106           │ 106          │ 按 sender_id(执行 Agent) 归岗            │
+  │ agent 消息总数       │ 155           │ 154          │ 团队频道范围 ⇒ 少 1 条：m_0000000280     │
+  │                      │               │           落在另一团队 tm_0000000002 的群聊频道 │
+  │ PM 消息占比          │ 68%           │ 68.8%        │ 106/154；计划口径 106/155 = 68.4%         │
+  │ PM 产出物（交付物）数 │ 0             │ 0            │ 目标恒 0 ⇒ ok=True                          │
+  │ PM 派发次数          │ —（未记）     │ 12           │ message_receipts 的 dispatch 行            │
+  │ PM 亲做结论数        │ —（未记）     │ 94           │ PM 消息 106 − 派发通告 12                 │
+  │ PM 派发占比          │ —（未记）     │ 11.3%        │ 12/106                                    │
+  │ PM 群聊消息          │ 67            │ 67           │                                           │
+  │ PM 私聊消息          │ 39            │ 39           │                                           │
+  │ 双报率（私聊占比）   │ —（未记）     │ 36.8%        │ 粗口径：私聊/(群聊+私聊)                  │
+  │ 群私条数比           │ —（未记）     │ 58.2%        │ 粗口径：min/max                            │
+  │ 精确「同文」双报     │ —（未记）     │ 0            │ 逐字相同口径（本数据集是转述体，测不出）  │
+  └──────────────────────┴───────────────┴───────────────────────────────────────────────┘
+
+  岗位分解（窗口内，按岗位序）：
+    roleKey            roleName     messages     share   artifacts
+    product            产品经理                2     1.30%           0
+    project_manager    项目经理              106    68.83%           0
+    architect          架构师                 7     4.55%           0
+    developer          开发者                 4     2.60%           0
+    tester             测试                 28    18.18%           0
+    plan               计划员                 7     4.55%           0
+    librarian          知识管理员               0     0.00%           0
+    （合计）                                 154
+
+  24 小时窗口对照（证明窗口真的生效，不是恒定值）：
+    windowHours=24 ⇒ 总消息 8、PM 消息 5、占比 62.5%、派发 0、亲做 5
+    windowHours=720 ⇒ 与 168 相同 ⇒ 30 天上限窗口内数据无新增。
+
+  完整响应（windowHours=168；roles 段见上表，metrics 段如下）：
+
+    ── pm_artifact_count
+       name=PM 产出物数（交付物）  value=0  unit=count  target={'operator': '=', 'value': 0}  ok=True
+       window=2026-10-15T06:54:06.458Z → 2026-10-22T06:54:06.458Z
+       detail={"pmArtifacts": 0, "pmArtifactVersions": 0, "teamArtifacts": 7, "unassignedArtifacts": 7}
+    ── pm_message_share
+       name=PM 消息占比  value=0.6883116883116883  unit=ratio  target=None  ok=None
+       window=2026-10-15T06:54:06.458Z → 2026-10-22T06:54:06.458Z
+       detail={"pmMessages": 106, "totalAgentMessages": 154, "byRole": [{"roleKey": "product", "roleName": "产品经理", "messages": 2, "messageShare": 0.012987012987012988}, {"roleKey": "project_manager", "roleName": "项目经理", "messages": 106, "messageShare": 0.6883116883116883}, {"roleKey": "architect", "roleName": "架构师", "messages": 7, "messageShare": 0.045454545454545456}, {"roleKey": "developer", "roleName": "开发者", "messages": 4, "messageShare": 0.025974025974025976}, {"roleKey": "tester", "roleName": "测试", "messages": 28, "messageShare": 0.18181818181818182}, {"roleKey": "plan", "roleName": "计划员", "messages": 7, "messageShare": 0.045454545454545456}, {"roleKey": "librarian", "roleName": "知识管理员", "messages": 0, "messageShare": 0}]}
+    ── pm_dispatch_vs_self_execution
+       name=PM 派发 vs 亲做  value=94  unit=count  target=None  ok=None
+       window=2026-10-15T06:54:06.458Z → 2026-10-22T06:54:06.458Z
+       detail={"dispatches": 12, "dispatchMessages": 12, "pmMessages": 106, "pmGroupMessages": 67, "pmPrivateMessages": 39, "selfConclusions": 94, "dispatchShare": 0.11320754716981132, "selfConclusionShare": 0.8867924528301887}
+    ── pm_group_private_double_report
+       name=PM 群聊 + 私聊双报  value=0.36792452830188677  unit=ratio  target=None  ok=None
+       window=2026-10-15T06:54:06.458Z → 2026-10-22T06:54:06.458Z
+       detail={"groupMessages": 67, "privateMessages": 39, "privateShare": 0.36792452830188677, "balanceRatio": 0.582089552238806, "exactTextOverlapMessages": 0, "signal": "crude（粗口径为主）+ exact-text-overlap（精确同文为下界）"}
+
+  端到端 HTTP 语义（单测内 supertest 打真实路由 + 真实 AdminGuard + 全局前缀/校验管道）：
+    未带身份            ⇒ 401（service 未被调用）
+    非管理员            ⇒ 403 FORBIDDEN_ADMIN（service 未被调用）
+    管理员              ⇒ 200 + 指标契约响应体
+    ?windowHours=721    ⇒ 400（管道拦下，service 未被调用）
+
+------------------------------------------------------------------------------
+四、变异检查（mutation check）—— 证明每条指标的查询/口径真被测试锁住
+------------------------------------------------------------------------------
+
+批次 E 变异检查（mutation check）—— 目的：证明每条指标的查询/口径真的被测试锁住。
+方法：逐条把一条指标的查询条件或口径改坏 ⇒ 对应用例必须转红 ⇒ 还原 ⇒ 复跑全绿。
+命令：npx jest src/teams/coordination-metrics
+
+===================================================================
+### 变异：M1 删掉 message.groupBy 的窗口条件（消息占比口径）
+--- 失败用例（jest 失败清单） ---
+  ● CoordinationMetricsService › 指标 ②：PM 消息占比 + 岗位分解 › 聚合查询带窗口与团队频道范围（不扫全表）
+  ● CoordinationMetricsService › 查询语义（where 真的下推到 DB 侧） › 双报口径：群聊/私聊按频道类型分桶（窗口外与别队频道不进私聊桶）
+  ● CoordinationMetricsService › 查询语义（where 真的下推到 DB 侧） › 派发口径：非 dispatch 回执 / 别人派发的回执 / 窗口外的回执都不计入
+  ● CoordinationMetricsService › 查询语义（where 真的下推到 DB 侧） › 消息口径：窗口外的行 / 非 agent 行 / 别队频道的行都不计入
+  ● CoordinationMetricsService › 窗口校验 › 缺省窗口 = 168h（7 天），并把窗口下界写进查询条件
+--- 统计 ---
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       5 failed, 42 passed, 47 total
+--- 关键断言差异（前 3 处）---
+    Expected: 111
+    Received: 1110
+    Expected: 104
+    Received: 1103
+    Expected: 67
+    Received: 1066
+
+===================================================================
+### 变异：M2 删掉 artifactVersion.groupBy 的窗口条件（PM 产出物数口径）
+--- 失败用例（jest 失败清单） ---
+  ● CoordinationMetricsService › 查询语义（where 真的下推到 DB 侧） › 产出物口径：窗口外的 PM 产出物 / 别队的 PM 产出物都不计入
+--- 统计 ---
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 46 passed, 47 total
+--- 关键断言差异（前 3 处）---
+    Expected: 0
+    Received: 1
+
+===================================================================
+### 变异：M3 删掉 messageReceipt.groupBy 的 kind=dispatch 条件（派发口径）
+--- 失败用例（jest 失败清单） ---
+  ● CoordinationMetricsService › 指标 ③：派发 vs 亲做 › 派发查询限定 PM 成员 + 团队 + dispatch 类型（不扫别人的账）
+  ● CoordinationMetricsService › 查询语义（where 真的下推到 DB 侧） › 派发口径：非 dispatch 回执 / 别人派发的回执 / 窗口外的回执都不计入
+--- 统计 ---
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       2 failed, 45 passed, 47 total
+--- 关键断言差异（前 3 处）---
+    Expected: "dispatch"
+    Received: undefined
+    Expected: 2
+    Received: 3
+
+===================================================================
+### 变异：M4 群聊/私聊频道类型写反（双报口径）
+--- 失败用例（jest 失败清单） ---
+  ● CoordinationMetricsService › 指标 ④：群聊 + 私聊双报 › 粗口径：私聊占比 + 群私条数（本地基线 群 67 / 私 39）
+  ● CoordinationMetricsService › 查询语义（where 真的下推到 DB 侧） › 双报口径：群聊/私聊按频道类型分桶（窗口外与别队频道不进私聊桶）
+--- 统计 ---
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       2 failed, 45 passed, 47 total
+--- 关键断言差异（前 3 处）---
+    Expected: 67
+    Received: 39
+    Expected: 67
+    Received: 39
+
+===================================================================
+### 变异：M5 去掉窗口上限（>720h 不再报错，改用 Number.MAX_SAFE_INTEGER）
+--- 失败用例（jest 失败清单） ---
+  ● CoordinationMetricsService › 窗口校验 › 窗口上限 720h：超限抛 400 COORDINATION_METRICS_WINDOW_INVALID（不静默截断）
+--- 统计 ---
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 46 passed, 47 total
+--- 关键断言差异（前 3 处）---
+
+===================================================================
+### 变异：还原后（必须全绿）
+--- 失败用例（jest 失败清单） ---
+--- 统计 ---
+Test Suites: 2 passed, 2 total
+Tests:       47 passed, 47 total
+--- 关键断言差异（前 3 处）---
+
+MUTATION-CHECK-DONE
+
+------------------------------------------------------------------------------
+五、口径说明（读数前必读）
+------------------------------------------------------------------------------
+1. **消息归岗按 sender_id（执行 Agent），不按 sender_instance_id。**
+   实测依据：3 条 tester 的回信落在 PM 的私聊频道（sender_id=a_tester，
+   sender_instance_id=PM 成员）。按实例归岗 PM 会虚高到 109，按 Agent 归岗是 106
+   —— 106 才是计划里记的基线口径。
+2. **一个 Agent 被多个岗位复用**时归「岗位序最靠前」的那一个（sortOrder，再按 key 兜底），
+   保证「岗位分解之和 == 全团队 agent 消息数」，不重复计数。
+   实测：a_developer 同时被 developer/plan 两个岗位的成员使用 ⇒ 归 developer。
+3. **产出物的作者记在版本行**（artifact_versions.author_agent_id；artifacts 本体无作者列）。
+   本数据集 7 个产出物的作者全为 NULL ⇒ 全部落 unassigned 桶、PM 产出物 0。
+   「PM 产出物 = 0」在这里**同时**因为「PM 没产出」与「产出物没记作者」，指标本身仍是对的
+   （PM 确实一条都没提交），但要意识到该数据集无法区分这两种 0。
+4. **派发口径**：`message_receipts` 中 kind=dispatch 且 from_instance_id = PM 成员的行数
+   = 定向派发次数（一次 fan-out 多目标 = 多行 = 多次派发）；派发通告消息数按 messageId 去重。
+   「亲做」= PM 消息数 − 派发通告数（派发通告本身是「派活」，不是亲做）。
+5. **双报口径**：主指标是**粗口径**（私聊占比 + 群私条数比）；另附**精确同文**（归一化空白后
+   逐字相同、且同时出现在群聊与私聊频道）作为**下界**。
+   为什么精确口径测不出：线上 PM 的私聊多为「已在群聊回复：……」的**转述**，逐字不同 ⇒
+   实测 exactTextOverlap=0，而私聊占比 36.8% 说明双报确实存在。
+   ⇒ **解读时以粗口径为主，精确值只当下界**（它回答「有没有逐字照抄」，不回答「有没有双报」）。
+   要拿到真正的「同一结论」需要语义比对或「群帖→私帖」引用关系，**那需要新表/新字段**，
+   本批硬约束禁止 ⇒ 未做，报告在此。
+6. **分母口径**：本端点按「团队频道 + 窗口」统计 ⇒ 分母 154；计划里的 155 是全库口径。
+   差的 1 条（m_0000000280）是 e2e 残留消息，落在另一个团队 tm_0000000002 的群聊频道，
+   不属本团队 ⇒ 团队视角下不应计入。分子 106 两者一致。
+
+------------------------------------------------------------------------------
+六、已知残留 / 请编排者复核
+------------------------------------------------------------------------------
+1. **缺 (channel_id, created_at) 复合索引**：messages 现只有 (channel_id, id)、
+   (task_id, created_at)、(channel_id, task_id)。本端点按「团队频道 + 窗口」过滤时，
+   MySQL 走 (channel_id, id) 定位频道后仍需逐行过滤 created_at ⇒ 单次扫描该频道全部历史。
+   有界（窗口 ≤ 720h + 团队频道集合），但大团队上仍是频道全量扫描。
+   彻底解法是加 migration 建 (channel_id, created_at) 索引 —— **本批禁止建 migration**，未做。
+2. **UI 有意不做**（web/** 未碰）：本批是服务端观测面，前端指标面板留待后续。
+3. **无历史快照**：本端点只回答「此刻的窗口内」，不做趋势存储（要趋势需新表，本批禁止）。
+4. **PM 阈值未硬编码**：除「PM 产出物 = 0」这一计划给定的硬目标外，消息占比/双报率
+   **不设阈值**（只给基线与 note）——阈值是运营决策，不该由实现替用户定；
+   若要告警，建议由调用方按 note 里的基线自行判定。
+5. **同文判定用了一条 raw SQL**（$queryRawUnsafe + 占位符，无字符串拼接）：MySQL 方言
+   （JSON 提取 + REGEXP_REPLACE）⇒ 若将来换 PG/SQLite 需改写；失败时降级为 null + WARN，
+   不影响其余指标。
+6. **私聊频道语义**：本数据集里 PM 的 39 条私聊是 PM 自己在自己私聊频道发的
+   （「已在群聊回复：…」类转述），不是「别人私聊 PM」⇒ 私聊占比读作「PM 的协调输出里有多少
+   团队看不见」，而不是「PM 私下说了多少悄悄话」。若将来私聊语义变化，指标口径需同步复核。
+7. **admin 门按 AdminGuard 口径**（permissions.all 或 users.manage）：与既有 admin 端点一致；
+   未新增权限键，符合「不收窄权限、不发明能力点」的硬约束。
+8. **团队模块归属**：本批把端点放进既有 TeamsModule（而非新开模块）——团队维度的读本就属于
+   团队域，且该模块已有第二个 scoped 控制器（team-channel-bindings）作先例；
+   新开模块只会多一次 app.module 接线。若编排者希望独立成模块，迁移成本很低
+   （service 不依赖 TeamsModule 的任何东西，只依赖全局 PrismaService）。
+
+==============================================================================
+证据文件结束。生成方式：把真实命令输出（jest/tsc/eslint）与 compose 库实测 JSON 拼装。
+==============================================================================
