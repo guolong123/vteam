@@ -1522,7 +1522,7 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     expect(readManifest(workDir).agentNames).toEqual(['vteam-developer', 'vteam-tester']);
   });
 
-  it('(c) 空 agent 集 → 中性化：受管 agent 键移除，用户文件与 plugin 条目不受影响', async () => {
+  it('(c) 空 agent 集 → 中性化**保留**上次受管块（权限集不变），manifest 记陈旧，用户文件与 plugin 条目不受影响', async () => {
     const workDir = workDirFor();
     await injectorForPolicies(workDir, POLICIES).injectAll();
     fs.mkdirSync(path.join(workDir, '.opencode', 'plugins'), { recursive: true });
@@ -1532,14 +1532,18 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
 
     const cfg = readConfig(workDir);
-    expect(cfg.agents?.['vteam-developer']).toBeUndefined();
-    expect(cfg.agents?.['vteam-tester']).toBeUndefined();
+    // 批次 D-1：受管块**保留**（删掉 = 退回引擎默认权限 = 权限放大，fail-open）。
+    expect(cfg.agents?.['vteam-developer']).toEqual(V2_ENTRY);
+    expect(cfg.agents?.['vteam-tester']).toBeDefined();
     expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
     expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'manual-tool.ts'))).toBe(true);
-    expect(readManifest(workDir).agentNames).toEqual([]);
+    // 记账与「块仍在配置里」一致：名字不清零 + 标记未刷新。
+    const manifest = readManifest(workDir);
+    expect(manifest.agentNames).toEqual(['vteam-developer', 'vteam-tester']);
+    expect(manifest.agentPoliciesStale).toBe(true);
   });
 
-  it('(d) 拉取失败后再成功：agent 中性化 → 恢复，无 guard 残留', async () => {
+  it('(d) 拉取失败后再成功：受管块保留（未刷新）→ 成功注入刷新并清陈旧标记，无 guard 残留', async () => {
     const workDir = workDirFor();
     await injectorForPolicies(workDir, POLICIES).injectAll();
 
@@ -1553,14 +1557,95 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     });
     const report = await injectorForPolicies(workDir, POLICIES, failingFetch).injectAll();
     expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
-    expect(readConfig(workDir).agents?.['vteam-developer']).toBeUndefined();
+    // 批次 D-1：失败后受管块仍在（权限集不变），不再是「删掉 ⇒ 退回引擎默认」。
+    expect(readConfig(workDir).agents?.['vteam-developer']).toEqual(V2_ENTRY);
+    expect(readManifest(workDir).agentPoliciesStale).toBe(true);
 
     const again = await injectorForPolicies(workDir, POLICIES).injectAll();
     expect(again.agentPolicies).toEqual({
       enabled: true,
       names: ['vteam-developer', 'vteam-tester'],
     });
+    // 成功注入 ⇒ 块已刷新 ⇒ 陈旧标记清零（否则标记撒谎）。
+    expect(readManifest(workDir).agentPoliciesStale).toBe(false);
     expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
+  });
+
+  it('(f) 首次注入 + 拉取失败：无历史受管块可保留 → 不写受管定义，告警说明退回引擎默认权限', async () => {
+    const workDir = workDirFor();
+    const failingFetch = jest.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/agent-policies') {
+        return { ok: false, status: 503, statusText: 'down', json: async () => ({}) } as unknown as Response;
+      }
+      return makeFetch(routesWith(POLICIES))(input);
+    });
+    const warnings: string[] = [];
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: failingFetch,
+      logger: { warn: (m: string) => warnings.push(m) },
+    });
+
+    const report = await injector.injectAll();
+    expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
+    // 首次注入无块可保留 ⇒ opencode.json 里没有受管 agent 定义（= 引擎默认权限，与改前一致）。
+    expect(readConfig(workDir).agents?.['vteam-developer']).toBeUndefined();
+    expect(readManifest(workDir).agentNames ?? []).toEqual([]);
+    expect(readManifest(workDir).agentPoliciesStale).toBe(true);
+    // 告警必须说清「无历史块可保留」与「引擎默认权限」。
+    expect(warnings.join('\n')).toContain('无历史受管块可保留');
+    expect(warnings.join('\n')).toContain('引擎默认权限');
+  });
+
+  it('(g) 中性化告警说明「保留未刷新」与「上次已知权限集」（运维能看到陈旧）', async () => {
+    const workDir = workDirFor();
+    await injectorForPolicies(workDir, POLICIES).injectAll();
+
+    const warnings: string[] = [];
+    const okFetch = makeFetch(routesWith(POLICIES));
+    const failingFetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/agent-policies') {
+        return { ok: false, status: 500, statusText: 'boom', json: async () => ({}) } as unknown as Response;
+      }
+      return okFetch(input, init);
+    });
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: failingFetch,
+      logger: { warn: (m: string) => warnings.push(m) },
+    });
+    await injector.injectAll();
+
+    const text = warnings.join('\n');
+    expect(text).toContain('保留');
+    expect(text).toContain('未刷新');
+    expect(text).toContain('上次已知');
+  });
+
+  it('(h) 拉取失败后受管块内容**字节不变**（权限集既不收窄也不放大）', async () => {
+    const workDir = workDirFor();
+    await injectorForPolicies(workDir, POLICIES).injectAll();
+    const before = readConfig(workDir).agents;
+
+    const okFetch = makeFetch(routesWith(POLICIES));
+    const failingFetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/agent-policies') {
+        return { ok: false, status: 500, statusText: 'boom', json: async () => ({}) } as unknown as Response;
+      }
+      return okFetch(input, init);
+    });
+    await injectorForPolicies(workDir, POLICIES, failingFetch).injectAll();
+
+    expect(readConfig(workDir).agents).toEqual(before);
   });
 
   it('(e) 持久卷残留被清除：roles.json/sessions/插件文件/plugin 条目/manifest 键', async () => {

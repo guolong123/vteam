@@ -25,6 +25,12 @@
  * `.opencode/plugins/`，manifest 的 `toolPlugins` 记它；升级前的 `.opencode/tools/` 残留由
  * `legacyTools` 一次性清掉（v2 已不发现该目录，留着只会误导读者与清理逻辑）。
  *
+ * ⚠️ **失败中性化 = 保留，不是删除**（2026-10-22 批次 D-1 修正）：`/agent-policies` 拉取失败
+ * /形状非法/角色集为空时，本注入器**不删**上次注入的受管 agent 块——删掉它等于让 agent 退回
+ * **引擎默认权限**（比平台配置的权限集**更宽**）⇒ 一次控制面抖动就把权限**放大**了
+ * （fail-open）。改为保留 ⇒ 权限集**既不收窄也不放大**（agent 跑在**上次已知**权限集上）。
+ * 首次注入（无历史受管块）无块可保留，行为同前（不写入受管定义），但必须显式告警。
+ *
  * worker 独立进程铁律：不 import server 代码（apiUrl/WORKER_TOKEN_HEADER 复用 registry-client 常量）。
  */
 
@@ -83,6 +89,12 @@ export interface InjectReport {
    * agent 策略注入结果（Todo 14 上报能力位的成功/报告信号）：
    * - 成功（`/agent-policies` 拉取成功且角色集非空）→ `{ enabled: true, names: 本次写入名 }`；
    * - 失败中性化（拉取失败或角色集为空）→ `{ enabled: false, names: [] }`。
+   *
+   * ⚠️ `enabled: false` 的语义 = **本轮没有刷新** agent 策略（不是「没有受管块」）。
+   * 批次 D-1 起失败中性化**保留**上次受管块（权限集不变），但平台侧的能力位门
+   * （`workerSupportsAgentPolicies`）据此判定该 worker 的策略**已陈旧** ⇒ 不派发
+   * 需要策略的 agent（stale-true 防护在派发侧，不在配置侧）。陈旧事实另记在
+   * manifest 的 `agentPoliciesStale` 键 + 注入器告警日志里。
    */
   agentPolicies: { enabled: boolean; names: string[] };
 }
@@ -164,6 +176,17 @@ interface InjectManifest {
    * 的 agent 键不在此列，清理时保留）。
    */
   agentNames?: string[];
+  /**
+   * 受管 agent 块**未刷新**标记（批次 D-1）。
+   *
+   * ⚠️ 语义：`true` = 上一次 `/agent-policies` 拉取失败（或形状非法/角色集为空），
+   * **受管块被保留**（未刷新）⇒ agent 正运行在**上次已知**权限集上（陈旧但**未放大**）。
+   * 成功注入时清零（块已刷新）。
+   *
+   * 为什么单独一个键而不是把 `agentNames` 清空：清空会让下一次清理逻辑以为「受管块
+   * 不存在」而下轮把它当垃圾删掉；保留名字 + 标记陈旧，才是与「块仍在配置里」一致的记账。
+   */
+  agentPoliciesStale?: boolean;
   /**
    * 逐消息 system blob 的**插件交接**产物文件名（`.opencode/plugins/<file>`）。
    *
@@ -379,6 +402,9 @@ export class ResourceInjector {
    * 拉取 `GET /agent-policies`（与 `/mcp-servers` 同鉴权：`X-Worker-Token` +
    * `x-worker-id`，见 `getJson`）。失败/形状非法/agent 集为空 → 返回 null（调用方
    * 走失败中性化），**永不抛错**（注入链不因策略拉取失败而中断 skills/tools/mcp）。
+   *
+   * ⚠️ 返回 null **不等于**「删掉受管块」：中性化路径**保留**上次受管块（批次 D-1），
+   * 权限集不变（删掉 = 退回引擎默认 = 权限放大）。此处只报「本轮不刷新」。
    */
   async fetchAgentPoliciesSafe(): Promise<AgentPoliciesResponse | null> {
     let data: AgentPoliciesResponse;
@@ -386,16 +412,21 @@ export class ResourceInjector {
       data = await this.getJson<AgentPoliciesResponse>('/agent-policies', {});
     } catch (err) {
       this.logger?.warn?.(
-        `[inject] /agent-policies 拉取失败，中性化受管 agent：${(err as Error).message}`,
+        `[inject] /agent-policies 拉取失败，本轮不刷新受管 agent（保留上次受管块，权限集不变）：` +
+          `${(err as Error).message}`,
       );
       return null;
     }
     if (!Array.isArray(data?.agents)) {
-      this.logger?.warn?.('[inject] /agent-policies 响应形状非法，中性化受管 agent');
+      this.logger?.warn?.(
+        '[inject] /agent-policies 响应形状非法，本轮不刷新受管 agent（保留上次受管块，权限集不变）',
+      );
       return null;
     }
     if (data.agents.length === 0) {
-      this.logger?.warn?.('[inject] /agent-policies agent 集为空，中性化受管 agent');
+      this.logger?.warn?.(
+        '[inject] /agent-policies agent 集为空，本轮不刷新受管 agent（保留上次受管块，权限集不变）',
+      );
       return null;
     }
     return data;
@@ -612,7 +643,8 @@ export class ResourceInjector {
       config[SECTION_AGENTS] = { ...this.readAgentSection(config), ...section };
     } catch (err) {
       this.logger?.warn?.(
-        `[inject] agent 定义构造失败，中性化受管 agent：${(err as Error).message}`,
+        `[inject] agent 定义构造失败，本轮不刷新受管 agent（保留上次受管块，权限集不变）：` +
+          `${(err as Error).message}`,
       );
       return this.writeNeutralized(config, configPath, mcpNames).agentPolicies;
     }
@@ -666,7 +698,8 @@ export class ResourceInjector {
       config[SECTION_AGENTS] = { ...this.readAgentSection(config), ...section };
     } catch (err) {
       this.logger?.warn?.(
-        `[inject] agent 定义构造失败，中性化受管 agent：${(err as Error).message}`,
+        `[inject] agent 定义构造失败，本轮不刷新受管 agent（保留上次受管块，权限集不变）：` +
+          `${(err as Error).message}`,
       );
       return this.writeNeutralized(config, configPath, names);
     }
@@ -681,23 +714,58 @@ export class ResourceInjector {
 
   /**
    * 失败中性化写盘（拉取失败 / 角色集为空 / 定义构造失败三入口共用）：
-   * 移除受管 agent 键，manifest 相应键清零，报告 `{enabled:false, names:[]}`。
+   *
+   * ⚠️ **保留上次受管块，不删除**（批次 D-1，2026-10-22）。
+   *
+   * 改前的行为：中性化 = `cleanupByManifest('agentNames', [], config)` → **删掉**
+   * `opencode.json` 里的受管 agent 块 ⇒ agent 退回**引擎默认权限**——那比平台配置的
+   * 权限集**更宽** ⇒ 一次控制面抖动（网络失败/形状非法/角色集为空）就**静默放大了**
+   * 受管 agent 的权限（fail-open，与本仓「失败即收紧/失败即拒绝」的约定相反）。
+   *
+   * 改后的行为：**保留**上次成功注入的受管块（内容一字不改）⇒ 权限集**既不收窄也不
+   * 放大**（agent 跑在**上次已知**权限集上，陈旧但安全）；manifest 记
+   * `agentPoliciesStale: true`（块**未刷新**）并**保留** `agentNames`（块仍在配置里，
+   * 记账必须与之一致——清空会让下轮清理把它当垃圾删掉）。
+   *
+   * 首次注入（无历史受管块）无块可保留：opencode.json 里不写受管定义（= 引擎默认权限，
+   * 与改前一致），但必须显式告警说明「没有上次已知权限集可用」。
+   *
+   * 不抛错：策略拉取失败**不得**中断注入链（skills/tools/mcp 照常注入）。
    */
   private writeNeutralized(
     config: Record<string, unknown>,
     configPath: string,
     mcpNames: string[],
   ): { mcpServers: string[]; agentPolicies: { enabled: boolean; names: string[] } } {
-    this.cleanupByManifest('agentNames', [], config);
+    const manifest = this.readManifest();
+    // 受管块名字**不清零**：块仍在 opencode.json 里（未删除、未改写）。
+    const preserved = manifest.agentNames ?? [];
     this.purgeLegacyGuardArtifacts(config);
     this.writeManifest({
+      // ⚠️ 读**purge 之后**的 manifest：purge 会删掉 guardRolesFile 等历史键，
+      // 用 purge 之前的快照回写会把它们复活（改前也是 purge 后再读）。
       ...this.readManifest(),
       mcpServers: mcpNames,
-      agentNames: [],
+      agentNames: preserved,
+      agentPoliciesStale: true,
     });
     this.injectOmoPlugin(config);
     this.disableBuiltinBrowserPlugin(config);
     this.writeConfig(configPath, config);
+    if (preserved.length > 0) {
+      this.logger?.warn?.(
+        `[inject] agent 策略未刷新（拉取失败/形状非法/角色集为空）→ **保留**上次注入的受管块` +
+          `（${preserved.join(', ')}，内容未改写）：agent 正运行在**上次已知**权限集上` +
+          '（权限既未收窄也未放大）。若控制面长时间不可用，该权限集可能已过期，请人工确认。',
+      );
+    } else {
+      this.logger?.warn?.(
+        '[inject] agent 策略未刷新（拉取失败/形状非法/角色集为空）→ **无历史受管块可保留**' +
+          '（首次注入/上一轮本就无受管块）：opencode.json 未写入受管 agent 定义，' +
+          'agent 将使用**引擎默认权限**（比平台配置的权限集更宽）——' +
+          '首次注入前请确保控制面可达。',
+      );
+    }
     return { mcpServers: mcpNames, agentPolicies: { enabled: false, names: [] } };
   }
 
@@ -1427,7 +1495,8 @@ export class ResourceInjector {
         config[SECTION_AGENTS] = agents;
       }
     }
-    this.writeManifest({ ...manifest, agentNames: names });
+    // 成功注入 ⇒ 受管块已刷新 ⇒ 清掉中性化期间记的「未刷新」标记（否则标记会撒谎）。
+    this.writeManifest({ ...manifest, agentNames: names, agentPoliciesStale: false });
   }
 }
 

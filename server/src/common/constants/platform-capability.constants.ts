@@ -22,6 +22,27 @@
  *
  * 目录与 `VTEAM_MCP_TOOL_NAMES`（`agent.constants.ts`，32 项）**一一覆盖**：
  * 每个工具恰好属于一个能力点（`platform-capability.coverage.spec.ts` 断言，防漂移）。
+ *
+ * ── 新增能力点键的**硬约束**（批次 D-3，2026-10-22 落笔）────────────────────
+ *
+ * ① **缺失键 ⇒ 允许**（default-allow，见上）⇒「这个键不存在」**永远不是**一种安全的
+ *    拒绝方式：服务端门（`PlatformToolPermissionService.assertToolAllowed`）只在矩阵值
+ *    **显式 `false`** 时 403，`matrix?.[key] !== false` ⇒ 缺键即放行。
+ *    ⇒ 想拒绝某能力点，必须**显式写 `false`**，不能靠「不写这个键」。
+ * ② 因此**新增一个能力点键 = 给所有存量行发一份全局通行证**（凡缺该键的行都变成
+ *    「允许」）⇒ 新键必须**同 PR** 带：
+ *    - 一条**全表回填 migration**（给每个 `agent_roles` 行写该键——按出厂矩阵取值，
+ *      逐键独立 UPDATE + `JSON_CONTAINS_PATH` 只增不改，运营者已显式的值原样保留）；
+ *    - `src/prisma/role-capabilities-backfill.spec.ts` 守卫（目录键 ⇒ 必须有回填迁移，
+ *      且回填必须覆盖**所有**岗位行）。
+ *    缺任一件 ⇒ 存量部署静默获得新能力，**任何地方都不会报错**（这正是 default-allow
+ *    的坑：门没关 ≠ 装了门）。
+ * ③ 守卫的静态部分跑**出厂事实**（本目录 / `BUILTIN_ROLE_CAPABILITY_MAPS` / seed 镜像 /
+ *    migration SQL），真实行检查在有 MySQL 的环境里跑（本地无 MySQL ⇒ 静态部分才是
+ *    真正执行的那一半，见该 spec 的文件头说明）。
+ * ④ 目录键的**三份副本**（本目录 / `prisma/seed.ts` 镜像 / `web/src/api/role-capabilities.ts`）
+ *    由 `role-capabilities-web-parity.spec.ts`（服务端↔web）与 `seed.spec.ts`（服务端↔seed）
+ *    双向锁死；改本目录必须同步改那两份，否则守卫转红。
  */
 
 /**

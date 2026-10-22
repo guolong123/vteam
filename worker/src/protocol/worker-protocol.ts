@@ -69,8 +69,12 @@ export interface WorkerCapabilities {
   /**
    * 角色 agent 策略能力位（Todo 14：由 injector `injectAll()` 结果驱动）。
    * - 成功写入 agent 节 → `{ enabled: true, names: 本次写入名 }`；
-   * - 拉取失败/角色集为空（中性化）→ `{ enabled: false, names: [] }`。
+   * - 拉取失败/角色集为空（本轮**未刷新**）→ `{ enabled: false, names: [] }`。
    * 旧 worker 无此字段 → server 视为 false（向后兼容，加法可选字段）。
+   *
+   * ⚠️ 批次 D-1：`enabled:false` **不再**意味着「受管块被删除」——中性化路径改为**保留**
+   * 上次受管块（权限集不变），`enabled:false` 只表示「策略**陈旧**」⇒ server 的
+   * `workerSupportsAgentPolicies` 据此不派发需要策略的 agent（陈旧即不派发）。
    */
   agentPolicies?: { enabled: boolean; names: string[]; generatedAt?: string };
 }
