@@ -1,0 +1,520 @@
+================================================================================
+批次 C · 项目经理「只协调不执行」纪律落点（pm-coordination-hardening）
+日期：2026-10-22   仓库：/Volumes/SSD-Data/01work/git-project/vteam
+================================================================================
+
+【为什么做这一批】
+  生产证据（平台记忆模块，实况）：同一条纠正指令「PM 只协调不执行 / 串行派活 /
+  做完即停」已经被写进 4 个不同团队 + 1 条全局 + 1 条岗位级记忆，合计至少 6 次；
+  其中一条还记着 2026-10-22（当天）用户直接对 PM 说过这件事——而行为没有变。
+  ⇒ **指令层纠正在生产上已被证明不足**：纪律必须落进**权威载体**，让每次部署
+    开箱即用，不必每个团队重新教一遍。
+
+  本批落在两个权威载体 + 一次存量回填：
+    C1  agent_roles.role_prompt（岗位定义，每次派发以【岗位职责】注入）
+    C2  execution_policies.config.correction.scopeSummary（平台级【职责边界】段）
+    C3  新增幂等 migration，把 C1/C2 的新正文回填到**存量部署**
+
+  批次 A（并行 lane，另一位 agent）另修派发通道本身；两者叠加，单独任一都不够。
+
+【本批未做（按用户决定 / 硬约束）】
+  · 未收窄任何权限：bashEffect / writeGlobs / toolAllows / AgentRole.capabilities /
+    seed 的能力矩阵派生 / resolveTaskEffect 全部**一字未动**。
+  · 未改 server/src/platform-mcp/**（批次 A 的文件）。
+  · 未改 server/src/chat/worker-dispatcher.ts（MAIN_AGENT_INSTRUCTION 对全部主 Agent
+    生效，产品经理的岗位确实含「拆解」，改它会回归其他岗位）。
+  · 未改 agent_roles 表结构、未加列；未编辑任何既有迁移目录（含冻结基线）。
+  · 未动 web/**；未加 npm 依赖；未用 as any / @ts-ignore  silencing；
+    未删除/弱化/跳过任何既有测试；未执行 git commit/add/stash/checkout/reset。
+
+================================================================================
+一、改动文件清单
+================================================================================
+  M  server/src/common/constants/agent-role-prompts.constants.ts   （C1 权威源）
+  M  server/src/common/constants/agent.constants.ts                 （C2 权威源）
+  M  server/prisma/seed.ts                    （两处自包含镜像，逐字节同步）
+  A  server/prisma/migrations/20261022000000_pm_coordination_discipline/migration.sql
+  A  server/src/common/constants/pm-coordination-discipline.spec.ts （C1/C2 内容契约）
+  A  server/src/prisma/pm-coordination-discipline.migration.spec.ts （C3 迁移守卫）
+  M  server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap
+     （C2 改了 PM 的 scopeSummary ⇒ /agent-policies 的 agents[].description 随之变；
+       这是快照的**唯一一行**变化，见下）
+  M  .omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json
+  M  .omo/evidence/vteam-role-behavior-abstraction/before-boundary.json
+     （两份**冻结出厂基线**：C2 改了 PM 边界正文 ⇒ 渲染基线必须重基线化。
+       两份文件都只改了 PM 一条，其余 6 岗逐字节不变。三份基线已在 1883453 重新入库，
+       故这两处重基线化**可提交**。)
+  M  docs/agent-platform/16-内置Agent角色与提示词库.md
+     （follow-up ②：只同步 PM 的 scope/职责/协同文案，共 7 处；既有漂移刻意未动）
+
+================================================================================
+二、C1 · PM 岗位定义（rolePrompt）新增正文
+================================================================================
+  载体：agent_roles.role_prompt ⇒ 派发时以 `【岗位职责】<rolePrompt>` 注入系统提示
+        （worker-dispatcher.ts buildSystemInstructions，成员行 roleId → AgentRole 连接）。
+  风格：与既有岗位同调（祈使句、一条一规则、点名具体工具与具体回执条件）。
+
+--- 完整新正文（agent-role-prompts.constants.ts 与 prisma/seed.ts 逐字节一致）---
+
+# 角色：项目经理
+你是任务虚拟团队中的项目经理 Agent，只负责流程控制，不产出具体交付物。
+
+## 职责
+- 环节推进：按已确认的实施计划（计划员产出）推进环节流转，用 issue 跟踪每项状态；不自行拆解任务、不制定实施计划，缺失计划时 @计划员-1 补出。
+- 计划完工：任务交付齐备或进入待验收时，若计划仍处于执行中，须调 vteam_plan_complete 标记计划完工（executing→completed）；平台真值源是 DB plans.status，改计划文件无效，不要 @计划员-1 去改文件。
+- 进度跟踪：掌握团队各角色进展，环节切换或产出完成时主动在群聊同步进度与待办。
+- 风险管理：识别需求/方案/实现/验证各环节的风险与依赖，提前向成员提示并给出缓解建议。
+- 阻塞协调：发现阻塞时定位责任角色，用 vteam_notify_agent 定向协调，必要时提示成员介入。
+- 产出是派发与核验，不是交付物：需求、方案、实现代码、测试用例、计划一律由归属岗位产出（需求→产品经理、方案→架构师、实现→开发者、用例→测试者、计划→计划员）；你的产出只有派发记录、进度与风险信息、核验结论，不代写内容本身。
+- 职责边界：不产出需求、方案、代码、测试用例等具体交付物；不代替任何角色做专业判断；不作出验收判定。流程控制信息（进度、风险、协调记录）经群聊消息与 issue 记录承载。
+
+## 协同方式
+- 响应 @ 触发；被 @all 广播时同步项目目标与分工。
+- 派发优先于动手：收到需求先派给归属岗位；只有该岗位不可用（无人或无法开工），或用户明确要求你亲自做，你才亲自做，且必须先在群里说明为什么绕过派发。
+- 串行派活：一次只激活一个执行者——要某人开工就只发一条 vteam_notify_agent 定向派发，其余成员用 vteam_group_post 群帖告知（群帖不唤醒任何人）；有先后依赖时分阶段派发，上游回执 stage=end（已完工）后再派下游。
+- 做完即停：只完成派给你的那一步就停；不并行产出别处的材料，不替其他岗位做专业判断（方案选型、代码写法、用例设计、验收结论都不是你的产出）。
+- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）：先明确拒绝，再把该工作交给归属岗位，不要顺手自己做掉。
+- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。
+
+--- 新增/改写的四条（逐条对照）---
+
+  [新增 · 职责段] 产出是派发与核验，不是交付物：需求、方案、实现代码、测试用例、计划
+      一律由归属岗位产出（需求→产品经理、方案→架构师、实现→开发者、用例→测试者、
+      计划→计划员）；你的产出只有派发记录、进度与风险信息、核验结论，不代写内容本身。
+
+  [新增 · 协同段] 派发优先于动手：收到需求先派给归属岗位；只有该岗位不可用（无人或无法
+      开工），或用户明确要求你亲自做，你才亲自做，且必须先在群里说明为什么绕过派发。
+
+  [新增 · 协同段] 串行派活：一次只激活一个执行者——要某人开工就只发一条
+      vteam_notify_agent 定向派发，其余成员用 vteam_group_post 群帖告知（群帖不唤醒
+      任何人）；有先后依赖时分阶段派发，上游回执 stage=end（已完工）后再派下游。
+
+  [新增 · 协同段] 做完即停：只完成派给你的那一步就停；不并行产出别处的材料，不替其他
+      岗位做专业判断（方案选型、代码写法、用例设计、验收结论都不是你的产出）。
+
+  [改写 · 协同段] 越界条目从「只说转交」升级为「**拒绝并**转交」：
+      旧：越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。
+      新：越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）：先明确拒绝，
+          再把该工作交给归属岗位，不要顺手自己做掉。
+      （前缀逐字保留：seed.spec.ts 对全部 7 岗断言这一句存在。）
+
+  为什么这四条必须是**祈使句 + 具体条件**而不是身份陈述：
+    · 「只协调不执行」作为身份陈述已经在旧正文里（"只负责流程控制，不产出具体交付物"），
+      而行为照样没变——身份陈述不是可执行指令。
+    · 平台真实派发工具是 vteam_notify_agent（唤醒）与 vteam_group_post（群帖不唤醒）；
+      上游完工的真实回执形态是 stage=end。
+    · agent prompt（工作方式）里已有一条「唤醒即派发」，但那是**怎么干活**；
+      岗位定义（**这个岗位是什么**）里此前没有对应纪律——两段逐句互斥（seed.spec 断言），
+      所以本批在岗位定义侧新增**不同措辞**的同义纪律，避免踩 de-dup 闸门。
+
+================================================================================
+三、C2 · 平台级【职责边界】段（scopeSummary）
+================================================================================
+  载体：execution_policies.config.correction.scopeSummary ⇒ renderBoundarySection 渲染成
+        派发系统提示里的【职责边界】段；同一段还会被插进越界拒绝话术
+        ROLE_POLICY_DENY_TEMPLATE 的「职责：<scopeSummary>」位置。
+
+--- 旧 → 新 ---
+  旧（53 字）：
+    流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。
+
+  新（69 字，单句）：
+    流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。
+
+  渲染后派发时 agent 实际读到的【职责边界】段：
+    【职责边界】流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。
+    越界处理：超出上述职责范围的请求必须拒绝（不要执行），说明你的职责边界，并通过 vteam_notify_agent 或群聊 @ 转交对应角色（requirements→vteam-product、design→vteam-architect、code→vteam-developer、test→vteam-tester、plan→vteam-plan）。
+
+  关键性质：**主动**（一律派给对应岗位 / 你只产出派发与核验），不再只是「被要求越界时才
+  拒绝」的条件式禁令；仍是**一句**（分号分句、句号收尾），不撑大每次越界拒绝话术。
+  handoffTo / bashEffect / writeGlobs / toolAllows **一律未动**（权限收窄明确不在本批范围）。
+================================================================================
+四、C3 · 存量回填迁移
+================================================================================
+  目录：server/prisma/migrations/20261022000000_pm_coordination_discipline/migration.sql
+  排序：晚于 20261019000000_parallel_tasks（上一批）与 20260925000000_squashed_baseline。
+  冻结基线 **20260925000000_squashed_baseline/migration.sql 未被编辑**（docs/migration-baseline.md）。
+
+  为什么必须用迁移：seed.ts 对 ExecutionPolicy 与 AgentRole 一律 `update: {}`
+  （create-if-absent，不回滚用户编辑）⇒ **重跑 seed 不会把新正文推给存量部署**；
+  而派发时 agent 读到的是 DB 里的 role_prompt / correction.scopeSummary。
+
+  两条语句（原文见 migration.sql）：
+    1) UPDATE `agent_roles` SET `role_prompt` = '<新正文>', `updated_at` = NOW(3)
+       WHERE `key` = 'project_manager'
+         AND ( `role_prompt` IS NULL OR `role_prompt` = '' OR `role_prompt` = '<旧正文>' );
+    2) UPDATE `execution_policies`
+       SET `config` = JSON_SET(`config`, '$.correction.scopeSummary', '<新 scopeSummary>'),
+           `updated_at` = NOW(3)
+       WHERE `id` = 'ep_project_manager'
+         AND ( JSON_UNQUOTE(JSON_EXTRACT(`config`, '$.correction.scopeSummary')) IS NULL
+               OR JSON_UNQUOTE(JSON_EXTRACT(`config`, '$.correction.scopeSummary')) = '<旧 v1>'
+               OR JSON_UNQUOTE(JSON_EXTRACT(`config`, '$.correction.scopeSummary')) = '<旧 v2>' );
+
+  幂等：两条都是「按当前值匹配的 UPDATE」。第一次跑完当前值 = 新正文，而新正文**不在**
+        守卫集合里（守卫只认 NULL / 空串 / 出厂旧正文）⇒ 第二次跑 0 行受影响。
+        全迁移零 INSERT / DELETE / ALTER / DDL ⇒ 可安全重复执行。
+  不覆盖用户编辑：守卫认的是**出厂旧正文**；管理员在页面上改过的正文与之不等 ⇒ 不动它。
+  覆盖全部存量形态：PM 的 scopeSummary 在历史上有过两版出厂正文
+        v1 = 5c38304 引入、5072df5 改掉：「流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。」
+        v2 = 5072df5 至今：「流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。」
+        两条都写进守卫 ⇒ 期间建的库也能收敛。role_prompt 侧另加 NULL / 空串两支。
+  转义：正文含中文与换行，换行以 \n 转义写入单行字面量（默认 sql_mode 下 \n = 0x0A），
+        无 ASCII 单引号 / 反斜杠冲突（引号全为全角）。
+
+  迁移守卫 spec：server/src/prisma/pm-coordination-discipline.migration.spec.ts
+  （本机/CI 无 MySQL ⇒ 这是该迁移的唯一可执行护栏，断言九件事）
+    ① 迁移目录恰好一个，字典序晚于上一批与 baseline
+    ② 可执行语句恰好两条且都是 UPDATE（无 INSERT/DELETE/ALTER/CREATE/DROP/TRUNCATE/REPLACE）
+    ③ 第一条改 agent_roles.role_prompt，行选择器是 `key` = 'project_manager'
+    ④ 第二条改 execution_policies.config 的 $.correction.scopeSummary，行选择器 `id` = 'ep_project_manager'
+    ⑤ 不碰其他岗位：可执行 SQL 里没有别的内置 role key（ar_*/ep_*），也没有别的表
+    ⑥ 幂等：两条的 WHERE 只认「出厂旧值」，新值不在其中 ⇒ 重跑 0 行受影响；
+       且两条历史出厂 scopeSummary 都在守卫里
+    ⑦ 守卫认的是**出厂旧正文**（结构钉死 + 不含新纪律条款）⇒ 用户改过的正文不会被覆盖
+    ⑧ 三处副本同文：常量 === seed 镜像 === 迁移字面量（role_prompt 与 scopeSummary 各一份）
+    ⑨ baseline 未被编辑：基线里既没有新正文，列形态（role_prompt text / config json NOT NULL）也没变
+
+================================================================================
+五、命令与结果（真实输出）
+================================================================================
+
+---------- [V1] npx jest src/prisma src/common ----------
+PASS src/prisma/seed.spec.ts (15.224 s)
+PASS src/common/constants/pm-coordination-discipline.spec.ts (15.703 s)
+PASS src/common/constants/trigger.constants.spec.ts (15.559 s)
+Test Suites: 40 passed, 40 total
+Tests:       429 passed, 429 total
+Snapshots:   0 total
+
+---------- [V2] npx jest src/execution-policies src/chat（受 C2 影响的两个目录） ----------
+PASS src/execution-policies/agent-policies.native-edit.spec.ts
+PASS src/chat/worker-dispatcher.plan-hash.spec.ts
+PASS src/chat/worker-dispatcher.spec.ts (5.089 s)
+Test Suites: 29 passed, 29 total
+Tests:       836 passed, 836 total
+Snapshots:   1 passed, 1 total
+
+---------- [V3] npx tsc --noEmit -p tsconfig.json ----------
+(无输出 = 零错误)
+
+---------- [V4] npm run lint:check（仓库基线 68 problems / 0 errors） ----------
+
+✖ 71 problems (3 errors, 68 warnings)
+  3 errors and 0 warnings potentially fixable with the `--fix` option.
+
+本批改动文件的定向 eslint（0 error）：
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts
+  1435:9  warning  'localModelSeeds' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 1 problem (0 errors, 1 warning)
+
+
+---------- [V5] 变异检查 ①：把 PM 岗位正文临时换回旧版（git HEAD 版） ----------
+FAIL src/prisma/pm-coordination-discipline.migration.spec.ts
+    ✓ ① 迁移目录恰好一个，字典序晚于上一批与 baseline (2 ms)
+    ✓ ② 可执行语句恰好两条，且都是 UPDATE（无 INSERT/DELETE/DDL） (2 ms)
+    ✓ ③ 第一条改 agent_roles.role_prompt，行选择器是 key = project_manager (1 ms)
+    ✓ ④ 第二条改 execution_policies.config 的 correction.scopeSummary，行选择器是 ep_project_manager
+    ✓ ⑤ 不碰其他岗位：可执行 SQL 里没有别的内置 role key，也没有别的表 (1 ms)
+    ✕ ⑥ 幂等：两条的 WHERE 只认「出厂旧值」，新值不在其中 ⇒ 重跑 0 行受影响 (3 ms)
+    ✕ ⑦ 守卫认的是**出厂旧正文**，用户改过的正文不会被覆盖 (1 ms)
+    ✕ ⑧ 三处副本同文：常量 === seed 镜像 === 迁移字面量 (1 ms)
+    ✓ ⑨ baseline 未被编辑：基线里既没有新正文，列形态也没变 (2 ms)
+FAIL src/common/constants/pm-coordination-discipline.spec.ts
+    ✕ ① 产出是派发与核验，不是交付物 (2 ms)
+    ✕ ② 派发优先于动手：先派发，且例外必须说明原因
+    ✕ ③ 串行派活：一次一个执行者 + 其余成员群帖告知 + 上游 stage=end 再派下游
+    ✕ ④ 做完即停：只做被派的那一步、不并行产出、不替人做专业判断
+    ✕ 越界条目 = 拒绝**并**转交归属岗位（不再只是「按【职责边界】转交」）
+    ✕ 纪律是**可执行指令**（祈使句条目），不是身份陈述或条件式愿望
+    ✓ 原有岗位内容一条没丢（身份 / 职责 / 协同方式 / 验收边界）
+    ✕ 7 个内置岗位正文：常量 === seed 镜像（逐角色） (4 ms)
+    ✓ PM 的 scopeSummary：常量 === seed 镜像（ROLE_BOUNDARIES 镜像）
+    ✓ scopeSummary 是**一句**主动规则：把交付物路由给归属岗位，自己只产出派发与核验
+    ✓ scopeSummary 保持单句且不膨胀（它会被插进每次越界拒绝话术） (1 ms)
+    ✓ renderBoundarySection 渲染出的【职责边界】段含主动委派条款
+Test Suites: 2 failed, 2 total
+Tests:       10 failed, 11 passed, 21 total
+
+---------- [V6] 变异检查 ①还原后（应全绿） ----------
+PASS src/prisma/pm-coordination-discipline.migration.spec.ts
+    ✓ ① 迁移目录恰好一个，字典序晚于上一批与 baseline (2 ms)
+    ✓ ② 可执行语句恰好两条，且都是 UPDATE（无 INSERT/DELETE/DDL）
+    ✓ ③ 第一条改 agent_roles.role_prompt，行选择器是 key = project_manager (1 ms)
+    ✓ ④ 第二条改 execution_policies.config 的 correction.scopeSummary，行选择器是 ep_project_manager
+    ✓ ⑤ 不碰其他岗位：可执行 SQL 里没有别的内置 role key，也没有别的表
+    ✓ ⑥ 幂等：两条的 WHERE 只认「出厂旧值」，新值不在其中 ⇒ 重跑 0 行受影响 (1 ms)
+    ✓ ⑦ 守卫认的是**出厂旧正文**，用户改过的正文不会被覆盖
+    ✓ ⑧ 三处副本同文：常量 === seed 镜像 === 迁移字面量 (2 ms)
+    ✓ ⑨ baseline 未被编辑：基线里既没有新正文，列形态也没变
+PASS src/common/constants/pm-coordination-discipline.spec.ts
+    ✓ ① 产出是派发与核验，不是交付物 (2 ms)
+    ✓ ② 派发优先于动手：先派发，且例外必须说明原因
+    ✓ ③ 串行派活：一次一个执行者 + 其余成员群帖告知 + 上游 stage=end 再派下游
+    ✓ ④ 做完即停：只做被派的那一步、不并行产出、不替人做专业判断
+    ✓ 越界条目 = 拒绝**并**转交归属岗位（不再只是「按【职责边界】转交」）
+    ✓ 纪律是**可执行指令**（祈使句条目），不是身份陈述或条件式愿望 (1 ms)
+    ✓ 原有岗位内容一条没丢（身份 / 职责 / 协同方式 / 验收边界）
+    ✓ 7 个内置岗位正文：常量 === seed 镜像（逐角色） (1 ms)
+    ✓ PM 的 scopeSummary：常量 === seed 镜像（ROLE_BOUNDARIES 镜像）
+    ✓ scopeSummary 是**一句**主动规则：把交付物路由给归属岗位，自己只产出派发与核验
+    ✓ scopeSummary 保持单句且不膨胀（它会被插进每次越界拒绝话术）
+    ✓ renderBoundarySection 渲染出的【职责边界】段含主动委派条款
+Test Suites: 2 passed, 2 total
+Tests:       21 passed, 21 total
+
+---------- [V7] 变异检查 ②：把 PM scopeSummary 临时换回旧版（主动委派句消失） ----------
+    ✓ ① 产出是派发与核验，不是交付物 (1 ms)
+    ✓ ② 派发优先于动手：先派发，且例外必须说明原因
+    ✓ ③ 串行派活：一次一个执行者 + 其余成员群帖告知 + 上游 stage=end 再派下游 (1 ms)
+    ✓ ④ 做完即停：只做被派的那一步、不并行产出、不替人做专业判断
+    ✓ 越界条目 = 拒绝**并**转交归属岗位（不再只是「按【职责边界】转交」）
+    ✓ 纪律是**可执行指令**（祈使句条目），不是身份陈述或条件式愿望
+    ✓ 原有岗位内容一条没丢（身份 / 职责 / 协同方式 / 验收边界） (1 ms)
+    ✓ 7 个内置岗位正文：常量 === seed 镜像（逐角色） (1 ms)
+    ✕ PM 的 scopeSummary：常量 === seed 镜像（ROLE_BOUNDARIES 镜像） (1 ms)
+    ✕ scopeSummary 是**一句**主动规则：把交付物路由给归属岗位，自己只产出派发与核验
+    ✓ scopeSummary 保持单句且不膨胀（它会被插进每次越界拒绝话术）
+    ✕ renderBoundarySection 渲染出的【职责边界】段含主动委派条款
+Tests:       3 failed, 9 passed, 12 total
+
+---------- [V8] 变异检查 ②还原后（应全绿） ----------
+PASS src/common/constants/pm-coordination-discipline.spec.ts
+Tests:       12 passed, 12 total
+
+---------- [V9] 还原完整性（逐字节 diff，应为空） ----------
+OK agent.constants.ts
+OK agent-role-prompts.constants.ts
+
+================================================================================
+六、本批的 diff（供 review）
+================================================================================
+ server/prisma/seed.ts                                             | 8 ++++++--
+ server/src/common/constants/agent-role-prompts.constants.ts       | 6 +++++-
+ server/src/common/constants/agent.constants.ts                    | 2 +-
+ .../__snapshots__/agent-policies.custom-agents.spec.ts.snap       | 2 +-
+ 4 files changed, 13 insertions(+), 5 deletions(-)
+
+设计文档（follow-up ②，只动 PM 的 scope/职责/协同文案）：
+  docs/agent-platform/16-内置Agent角色与提示词库.md | 9 ++++++++-
+    §2.1 PM 行定位一句话 + 核心产出物、§2.2 协作流正文 + mermaid 节点、
+    §4.1 角色定位引号、§4.2 身份行 / 职责 / 工作方式 / 协同方式
+
+未跟踪的新增文件：
+?? server/prisma/migrations/20261022000000_pm_coordination_discipline/
+?? server/src/common/constants/pm-coordination-discipline.spec.ts
+?? server/src/prisma/pm-coordination-discipline.migration.spec.ts
+
+两份冻结出厂基线（**未跟踪文件**——批次 F 的 600c1ca 已把它们移出 git，
+故 `git diff` 看不到；本批在**工作区**重基线化，只改 PM 一条，其余 6 岗逐字节不变）：
+    .omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json
+      → agents[] 里只有 vteam-project_manager 这一条的 description 变了：
+        旧「流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。」
+        新「流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。」
+      → guard.roles 未变（逐字节相同）
+    .omo/evidence/vteam-role-behavior-abstraction/before-boundary.json
+      → sections 里只有 vteam-project_manager 这一段变了（其余 6 段逐字节相同）；
+        新段由**真实生产函数** renderBoundarySection 渲染得到，不是手抄。
+
+快照的实际变化（各一行，只有 PM 的 description）：
+    - "description": "流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。",
+    + "description": "流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。",
+
+================================================================================
+七、残留与已知风险（如实报告）
+================================================================================
+  1. ~~execution_policies.description 未随 config.correction.scopeSummary 一起回填~~
+     → **已解决（follow-up ①）**：迁移新增第三条 UPDATE，同一行、同一句话、同一套守卫。
+  2. ~~docs/agent-platform/16-内置Agent角色与提示词库.md 仍写着旧岗位正文与旧 scopeSummary~~
+     → **已解决（follow-up ②）**：PM 的 scope/职责/协同文案已同步（7 处）。
+     该文档的**其余**既有漂移（PM 的 bash 写成 deny、「默认主 Agent = 产品经理」措辞、
+     「五类角色」框架与现役 7 岗）按编排者要求**刻意未动**，逐条记录在 9.3 节。
+  3. 证据脚本 .omo/evidence/vteam-role-behavior-abstraction/capture-boundary.mjs 的检查 (b)
+     读 before-agent-policies.json 的 guard.roles[*].correction，而该文件的 guard.roles
+     只剩 {permission} ⇒ 脚本在**本批之前**就已跑不通（与本批无关）；它是证据脚本不是
+     jest 测试，不参与门禁。
+  4. 本批新增的两份 spec **不依赖**任何 .omo/evidence 目录下的文件 ⇒ 干净检出可复现。
+
+================================================================================
+八、跨 lane 提示（冲突 1 已由批次 F 解决；冲突 2 由批次 A 自行收尾）
+================================================================================
+  [冲突 1 · 与批次 F 撞车 · **已解决**] 批次 F 已提交 **1883453**
+      「evidence JSON 不再入库（保留 3 个冻结基线）」⇒ 三份冻结基线重新入库，
+      本批对它们的重基线化可提交（git status 显示为 M）。以下为历史记录，保留备查：
+      （原冲突 1 原文）批次 F 曾提交 **600c1ca**
+      「chore(omo): evidence JSON 不再入库」：给 .gitignore 加了 `.omo/evidence/**/*.json`
+      并把证据目录下的 663 个 json 移出 git。本批必须重基线化的两份**冻结出厂基线**
+      正好在其中：
+        .omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json
+        .omo/evidence/vteam-role-behavior-abstraction/before-boundary.json
+      它们是 jest 的**输入**（不是 jest 生成的产物），被 7 个 spec 读取
+      （src/execution-policies 5 个 + src/chat/worker-dispatcher.spec.ts 2 个断言）；
+      夹具自己的注释写着「该文件必须随仓库提交（git ls-files 可见），否则干净检出下
+      测试不可复现」，缺失时 loadEvidenceJson 直接抛错（清晰报错而非静默跳过）。
+
+      事实核对（git cat-file -e HEAD:<path>）：
+        baseline-agent-policies.json  NOT IN HEAD
+        before-boundary.json           NOT IN HEAD
+        before-agent-policies.json     NOT IN HEAD
+      ⇒ **在干净检出上，这 7 个 spec 在本批之前就已经是红的**（缺文件 ⇒ 清晰报错）。
+      本批没有让情况变差，也没有变好：本批把工作区里的两份基线重基线化到与新正文一致，
+      所以**当前工作区全绿**；但它们未跟踪 ⇒ 重基线化无法进版本库。
+
+      ⇒ 建议编排者二选一（本批无权处理，也未执行 git add）：
+         (a) 把这两份文件重新纳入版本管理：它们是 jest 的**输入**、jest 不会重新生成
+             它们（`capture-native-only-baseline.mjs` 只重生成 baseline-agent-policies.json，
+             而 before-boundary.json 是历史捕获物、无生成器），与批次 F「jest 弄脏工作区」
+             的初衷不冲突；
+         (b) 把两份基线复制到受版本控制的目录（如 server/src/execution-policies/__fixtures__/），
+             并让 policy-fixtures.ts 优先读受控副本。
+      不处理的话：干净检出上那 7 个 spec 继续红（与本批无关，但会掩盖本批的验证信号）。
+      ⇒ **实际结局**：1883453 已按 (a) 处理（保留 3 个冻结基线入库），本批的
+        重基线化随之可提交；全量 jest src 现为 189/189 suites、4505/4505 全绿。
+
+  [冲突 2 · 与批次 A 并行] 批次 A 正在改 server/src/platform-mcp/platform-mcp.service.ts。
+      在其改动落地期间，全量 jest 有 1 个 suite / 7 个用例红（全部在 notify_agent 一族：
+      落库/广播/节流/@all/幂等），且 lint 有 3 个 prettier error（同文件）。
+      这些**不是本批引入**：本批未触碰 platform-mcp/**，且定向 eslint 显示本批改动文件
+      0 error、仅 seed.ts 一条既有 warning（localModelSeeds，HEAD 版本同样存在）。
+      批次 A 收尾后应自然转绿。
+
+  [建议 · 报告给批次 B] server/src/chat/worker-dispatcher.ts 的 MAIN_AGENT_INSTRUCTION
+      仍然写着「牵头拆解工作并分派给团队成员」——而线上团队的主 Agent **就是 PM**。
+      这句与本批落地的「PM 不拆解、只派发」存在语义张力。本批按约束未改它
+      （它对全部主 Agent 生效，产品经理的岗位确实含「拆解」，改它会回归其他岗位）。
+      建议批次 B（B-3 工具契约自描述，同一波晚于 A4）顺带裁决 MAIN_AGENT_INSTRUCTION
+      是否要按「主 Agent 是谁」分叉。
+
+================================================================================
+九、复审 follow-up（2026-10-22，编排者复审后追加）
+================================================================================
+
+【9.1 编排者复核结论（记录在案，无需本批再动）】
+  · 手写 DDL 的 \n 转义**已实证安全**：MySQL 8 默认 sql_mode（无 NO_BACKSLASH_ESCAPES）下
+    `"a\nb" = CONCAT('a', CHAR(10), 'b')` 求值为 1 ⇒ 字面量里的 \n 解码为真实换行；
+    且**线上实例** agent_roles.role_prompt 落库后确实含真实换行（chr(10) in prompt → True）。
+    这是本仓**第一次**用裸 SQL 字面量写多行文本（冻结基线只声明列；线上正文其实来自
+    seed 的 Prisma upsert，此前无先例）⇒ 已写进 migration 文件头的转义说明。
+  · before-agent-policies.json **不受本批影响**（它不承载 PM 的 scope 文案），
+    故 server/src/execution-policies/agent-policies.matrix.spec.ts:217-222 的硬编码
+    sha256 闸门仍然有效（15/15 通过）。
+  · 批次 F 的冲突已独立解决（合并为 1883453「evidence JSON 不再入库（保留 3 个冻结基线）」）：
+    三份冻结基线已重新入库 ⇒ 本批对它们的重基线化**可提交**（git status 显示为 M）。
+  · 编排者侧复跑：jest src/prisma src/common src/execution-policies → 54/54 suites、639/639 全绿。
+
+【9.2 follow-up ①：execution_policies.description 一并回填】
+  问题：seed 的策略 upsert 把 description 落成 `boundary.scopeSummary`
+        （server/prisma/seed.ts 的 policy upsert create 分支），于是**同一条事实有两个副本**：
+        fresh install 两处同文；只回填 config.correction.scopeSummary 的存量部署会出现
+        「【职责边界】段是新文案、/agent-policies 的 agents[].description 还是旧文案」。
+  修法：迁移新增第三条 UPDATE（同一行 ep_project_manager、同一句话）：
+
+    UPDATE `execution_policies`
+    SET `description` = '<新 scopeSummary>', `updated_at` = NOW(3)
+    WHERE `id` = 'ep_project_manager'
+      AND (
+        `description` IS NULL
+        OR `description` = '<旧 v1>'
+        OR `description` = '<旧 v2>'
+      );
+
+  守卫与语义与第二条完全同构：
+    · 幂等——守卫只认「出厂旧正文」，新正文不在其中 ⇒ 重跑 0 行受影响；
+    · 不覆盖用户编辑——description 是页面可编辑字段，运营者改过的文案与之不等 ⇒ 不动它；
+    · 显式禁止「≠ 新值」这种宽判据（那会覆盖运营者的编辑）。
+  旧值来源核对：description 自 fef82ff 引入策略 seed 起就落成 scopeSummary，
+    而 scopeSummary 的历史出厂文案只有两版（5c38304 的 v1、5072df5 的 v2）
+    ⇒ description 的历史出厂文案**同样是这两版**，守卫写全即可覆盖所有存量部署。
+  迁移文件头同步更正：「本迁移只回填两行」→「共三条 UPDATE，落在两行上」，
+    并新增「为什么 (3) 不能漏」一段（说明这是「同一条事实两个副本」的老坑），
+    回滚说明由「两条反向 UPDATE」改为「三条反向 UPDATE」。
+
+【9.3 follow-up ②：同步设计文档的 PM 文案】
+  文件：docs/agent-platform/16-内置Agent角色与提示词库.md
+  只改 **PM 的 scope / 职责 / 协同文案**，让文档与新代码一致；共 7 处：
+    (1) §2.1 五角色总览表 PM 行「定位一句话」→ 新 scopeSummary；
+    (2) §2.1 PM 行「核心产出物」→ 与 ROLE_BOUNDARIES.deliverables 一致（进度与风险、协调记录；
+        旧文档多写的「任务拆解」与新纪律「PM 不拆解」相悖）；
+    (3) §2.2 协作流正文「拆解编排/进度/风险/阻塞协调」→「派发/进度/风险/阻塞协调」；
+    (4) §2.2 mermaid PROJM 节点「流程控制：拆解/…」→「流程控制：派发/…」；
+    (5) §4.1 角色定位引号内的定位 → 新 scopeSummary；
+    (6) §4.2 提示词全文：身份行 →「只负责流程控制，不产出具体交付物」；
+        「任务拆解编排」条目 →「环节推进：…不自行拆解任务、不制定实施计划」+
+        新增「产出是派发与核验，不是交付物：…」；
+    (7) §4.2 工作方式「接收任务后先给出拆解与分工」→「接收任务后先确认实施计划（计划员产出…）」；
+        §4.2 协同方式新增「派发优先于动手 / 串行派活 / 做完即停」三条。
+  **刻意未改**（按编排者要求，记录在案而非顺手修）：
+    · §2.1 PM 行的「bash deny」与 §4.1/§4.3 的 bash 描述——代码自 2026-09-23 起是 **allow**
+      （实测 agent permission.bash=deny 会让免费模型 403；见 agent.constants.ts 的带日期注释），
+      文档仍写 deny ⇒ **既有漂移，本批不动**；
+    · 文档「默认主 Agent = 产品经理」的措辞与 seed 实际绑定（线上团队主 Agent 常常就是 PM）
+      不一致 ⇒ **既有漂移，本批不动**；
+    · 文档「五角色」框架与代码现役 7 岗（另加 vteam-plan / vteam-librarian）⇒ 既有漂移，不动；
+    · §4.2 的「## 权限」段（bash deny / 文件写禁止）⇒ 属权限表述，与上一条同类，不动。
+
+【9.4 守卫 spec 的改动（pm-coordination-discipline.migration.spec.ts）】
+  改动的断言：
+    ② 「可执行语句恰好两条」→ **三条**（全部 UPDATE，无 DDL）；
+    ⑤ 表集合由 ['agent_roles','execution_policies'] → 改为**多重集**
+       ['agent_roles','execution_policies','execution_policies']（execution_policies 占两条：
+       config 与 description），另加 distinct 集合断言；
+    ⑥ 幂等：新增第三条的守卫集合检查（accepted = {旧 v1, 旧 v2}，不含新值；含 IS NULL 分支）；
+    ⑧ 三处副本同文：扩展为**迁移内两份同文**——description 字面量 === scopeSummary 字面量
+       === 常量 === seed 镜像。
+  新增的断言：
+    ④b 第三条改 execution_policies.description：同一行（`id` = 'ep_project_manager'）、
+        带 `updated_at` = NOW(3)、守卫只认「NULL 或历史两版出厂文案」、
+        且**显式禁止** `description <> ...` 这种宽判据。
+  文件头的「断言九件事」清单同步改为十件事（新增 4b）。
+
+【9.5 follow-up 后的最终验证】
+  [V12] npx jest src（全量，含 platform-mcp）
+Test Suites: 189 passed, 189 total
+Tests:       4505 passed, 4505 total
+Snapshots:   1 passed, 1 total
+
+  [V13] npx jest src --testPathIgnorePatterns=platform-mcp
+Test Suites: 169 passed, 169 total
+Tests:       3865 passed, 3865 total
+Snapshots:   1 passed, 1 total
+
+  [V14] npx tsc --noEmit -p tsconfig.json
+  （无输出 = 零错误）
+
+  [V15] npm run lint:check（仓库基线 68 problems / 0 errors）
+  931:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 68 problems (0 errors, 68 warnings)
+
+  （Batch A 的 platform-mcp.service.ts 的 3 个 prettier error 已随其合入消失 ⇒ 回到基线 68/0）
+
+---------- [V10] 变异检查 ③：把迁移第三条 UPDATE 的 description 字面量改成「另一条事实」 ----------
+FAIL src/prisma/pm-coordination-discipline.migration.spec.ts
+    ✓ ① 迁移目录恰好一个，字典序晚于上一批与 baseline (1 ms)
+    ✓ ② 可执行语句恰好三条，且都是 UPDATE（无 INSERT/DELETE/DDL） (1 ms)
+    ✓ ③ 第一条改 agent_roles.role_prompt，行选择器是 key = project_manager (1 ms)
+    ✓ ④ 第二条改 execution_policies.config 的 correction.scopeSummary，行选择器是 ep_project_manager
+    ✓ ④b 第三条改 execution_policies.description，同一行、同一句话（seed 落库即 scopeSummary） (9 ms)
+    ✓ ⑤ 不碰其他岗位：可执行 SQL 里没有别的内置 role key，也没有别的表
+    ✕ ⑥ 幂等：三条的 WHERE 只认「出厂旧值」，新值不在其中 ⇒ 重跑 0 行受影响 (2 ms)
+    ✓ ⑦ 守卫认的是**出厂旧正文**，用户改过的正文不会被覆盖
+    ✕ ⑧ 三处副本同文：常量 === seed 镜像 === 迁移字面量（且迁移内两份同文） (2 ms)
+    ✓ ⑨ baseline 未被编辑：基线里既没有新正文，列形态也没变 (1 ms)
+Tests:       2 failed, 8 passed, 10 total
+
+---------- [V11] 变异检查 ③还原后（应全绿） ----------
+PASS src/prisma/pm-coordination-discipline.migration.spec.ts
+Tests:       10 passed, 10 total
+
+================================================================================
+十、一句话总结
+================================================================================
+  纪律不再只写在记忆里，而是写进了**岗位权威定义**（agent_roles.role_prompt，
+  每次派发以【岗位职责】注入）与**平台级【职责边界】段**（config.correction.scopeSummary），
+  两者都是祈使句 + 具体工具（vteam_notify_agent / vteam_group_post）+ 具体回执（stage=end），
+  并用一条**三条 UPDATE 的幂等 migration**回填存量部署——包括同一条事实的第二个副本
+  （execution_policies.description），因为 seed 的 update:{} 不会推送到存量。
+  本批**未收窄任何权限**。
+================================================================================

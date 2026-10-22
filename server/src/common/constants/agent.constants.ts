@@ -476,7 +476,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
 
   'vteam-project_manager': defineBoundary({
     scopeSummary:
-      '流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。',
+      '流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。',
     deliverables: ['进度与风险', '协调记录'],
     handoffTo: {
       requirements: 'vteam-product',

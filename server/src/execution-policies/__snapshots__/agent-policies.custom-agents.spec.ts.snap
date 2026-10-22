@@ -86,7 +86,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
       },
     },
     {
-      "description": "流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。",
+      "description": "流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。",
       "mode": "primary",
       "name": "vteam-project_manager",
       "permission": {
