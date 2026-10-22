@@ -353,7 +353,10 @@ export class ArtifactsService implements OnModuleInit {
           filePath: source.filePath,
           sha256: source.sha256,
           acceptedFlag: false,
-          authorAgentId: null,
+          // 恢复的是**同一份交付物的副本** ⇒ 作者沿用源版本作者（而非写 NULL）：
+          // 写 NULL 会让该产出物在协调度指标里同时落进「未归属」桶，
+          // 掩盖「这个岗位产出了交付物」的事实（假阴性）。
+          authorAgentId: source.authorAgentId ?? null,
           changeNote: `restore from v${version}`,
         },
       });
@@ -401,6 +404,16 @@ export class ArtifactsService implements OnModuleInit {
       sha256: string;
       title?: string;
       category?: string;
+      /**
+       * 作者 Agent id（落 `artifact_versions.author_agent_id`）。
+       *
+       * agent 提交路径（submit_artifact doc/file）**必须**传：产出物作者是协调度
+       * 指标（coordination-metrics.service.ts `pm_artifact_count`）唯一的归岗依据，
+       * 写 NULL 等于让指标永远看不见这个产出物（假阴性）。
+       * 缺省 ⇒ NULL：人工上传（POST /uploads）与系统侧兜底归档（计划目录扫描）
+       * 本来就没有 agent 作者，NULL 才是诚实值。
+       */
+      authorAgentId?: string;
     },
     category?: string,
   ): Promise<{
@@ -447,7 +460,7 @@ export class ArtifactsService implements OnModuleInit {
             filePath: args.fileRef,
             sha256: args.sha256,
             acceptedFlag: false,
-            authorAgentId: null,
+            authorAgentId: args.authorAgentId ?? null,
             changeNote: null,
           },
         });
@@ -481,7 +494,7 @@ export class ArtifactsService implements OnModuleInit {
           filePath: args.fileRef,
           sha256: args.sha256,
           acceptedFlag: false,
-          authorAgentId: null,
+          authorAgentId: args.authorAgentId ?? null,
           changeNote: null,
         },
       });
