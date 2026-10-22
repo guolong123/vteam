@@ -1,0 +1,344 @@
+[e2e] date=2026-10-22T11:03:28Z HEAD=a187d841bc800df622f0fa73ceb121665594a5f2 branch=fix/worker-node-preference
+[e2e] RUN_ID=e2e-pm-coord-20261022T110328Z-79318 (每次运行唯一 ⇒ 引用/去重探针不会命中上一轮)
+[e2e] SERVER_URL=http://localhost:13000 WEB_URL=http://localhost:13001 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/pm-coordination
+[e2e] TEAM_ID=tm_0000000001 PM_MEMBER_ID=tmm_0000000002 WORKER_ID=w_compose_worker
+[e2e] PRE-0 docker version (exit=0):
+[e2e]   Client:
+[e2e]    Version:           29.8.2
+[e2e]    API version:       1.56
+[e2e]    Go version:        go1.26.8
+[e2e]    Git commit:        7fc2dff
+[e2e]    Built:             Sun Oct 11 12:42:20 2026
+[e2e]    OS/Arch:           darwin/arm64
+[e2e]    Context:           orbstack
+[e2e]   
+[e2e]   Server: Docker Engine - Community
+[e2e]    Engine:
+[e2e]     Version:          29.8.2
+[e2e]     API version:      1.56 (minimum version 1.40)
+[e2e]     Go version:       go1.26.8
+[e2e]     Git commit:       8af9fe3
+[e2e]     Built:            Wed Sep 30 19:32:49 2026
+[e2e]     OS/Arch:          linux/arm64
+[e2e]     Experimental:     true
+[e2e]    containerd:
+[e2e]     Version:          v2.3.6
+[e2e]     GitCommit:        ee2735368117d2eb259779949d5e75cdafec9761
+[e2e]    runc:
+[e2e]     Version:          1.5.2
+[e2e]     GitCommit:        29dd3dc2b13b4123162e5fe132504bb4b15569f1
+[e2e]    docker-init:
+[e2e]     Version:          0.19.0
+[e2e]     GitCommit:        de40ad0
+[e2e] PRE-0b self-check PASS (no $VAR immediately followed by a non-ASCII byte)
+[e2e] PRE-1 docker compose build server web init (timeout 3600s)
+[e2e] PRE-1 NOTE init 必须在 build 列表里：compose 按 <project>-<service> 给每个服务单独打镜像标签（vteam-init / vteam-server / vteam-web），build server web 不会重建 vteam-init ⇒ 迁移会从旧镜像里跑
+[e2e] build| #29 CACHED
+[e2e] build| 
+[e2e] build| #30 [init build 6/6] RUN npm run build
+[e2e] build| #30 CACHED
+[e2e] build| 
+[e2e] build| #31 [init build 3/6] COPY --from=deps /app/node_modules ./node_modules
+[e2e] build| #31 CACHED
+[e2e] build| 
+[e2e] build| #32 [init deps 4/4] RUN npm config set registry https://registry.npmmirror.com && npm ci
+[e2e] build| #32 CACHED
+[e2e] build| 
+[e2e] build| #33 [init stage-2 3/6] COPY --from=build /app/dist ./dist
+[e2e] build| #33 CACHED
+[e2e] build| 
+[e2e] build| #34 [init stage-2 4/6] COPY --from=build /app/node_modules ./node_modules
+[e2e] build| #34 CACHED
+[e2e] build| 
+[e2e] build| #35 [init stage-2 6/6] COPY --from=build /app/prisma ./prisma
+[e2e] build| #35 CACHED
+[e2e] build| 
+[e2e] build| #36 [server] exporting to image
+[e2e] build| #36 exporting layers done
+[e2e] build| #36 writing image sha256:f8a36ff978a7e17502451bf845b04d71c5e4a8f5358ee57df10a98be28cc5f0c done
+[e2e] build| #36 naming to docker.io/library/vteam-server done
+[e2e] build| #36 DONE 0.0s
+[e2e] build| 
+[e2e] build| #37 [init] exporting to image
+[e2e] build| #37 exporting layers done
+[e2e] build| #37 writing image sha256:495a97aff14969a6f121fb037a5bac8a56ef822be38d0a3d71987b49c8b14a27 done
+[e2e] build| #37 naming to docker.io/library/vteam-init done
+[e2e] build| #37 DONE 0.0s
+[e2e] build| 
+[e2e] build| #38 [server] resolving provenance for metadata file
+[e2e] build| #38 DONE 0.0s
+[e2e] build| 
+[e2e] build| #39 [init] resolving provenance for metadata file
+[e2e] build| #39 DONE 0.0s
+[e2e] build|  Image vteam-server Built 
+[e2e] build|  Image vteam-web Built 
+[e2e] build|  Image vteam-init Built 
+[e2e] PRE-1 docker compose build server web init exit=0
+[e2e] PRE-1c init 镜像内迁移目录 18 条；仓库 18 条
+[e2e] PRE-1c server 镜像内迁移目录 18 条；仓库 18 条
+[e2e] PRE-1c image guard PASS (both init and server images carry every repo migration)
+[e2e] PRE-1 removed completed init job vteam-compose-init so prisma migrate deploy + seed re-run
+[e2e] PRE-1 docker compose up -d
+[e2e] up|  Container vteam-compose-server Running 
+[e2e] up|  Container vteam-compose-web Running 
+[e2e] up|  Container vteam-compose-worker Running 
+[e2e] up|  Container vteam-compose-db Running 
+[e2e] up|  Container vteam-compose-init Creating 
+[e2e] up|  Container vteam-compose-init Created 
+[e2e] up|  Container vteam-compose-db Waiting 
+[e2e] up|  Container vteam-compose-db Healthy 
+[e2e] up|  Container vteam-compose-init Starting 
+[e2e] up|  Container vteam-compose-init Started 
+[e2e] up|  Container vteam-compose-db Waiting 
+[e2e] up|  Container vteam-compose-init Waiting 
+[e2e] up|  Container vteam-compose-db Healthy 
+[e2e] up|  Container vteam-compose-init Exited 
+[e2e] up|  Container vteam-compose-server Waiting 
+[e2e] up|  Container vteam-compose-server Waiting 
+[e2e] up|  Container vteam-compose-server Healthy 
+[e2e] up|  Container vteam-compose-server Healthy 
+[e2e] PRE-1 docker compose up -d exit=0
+[e2e] PRE-1 docker compose run --rm init
+[e2e] init|  Container vteam-compose-db Running 
+[e2e] init|  Container vteam-compose-db Waiting 
+[e2e] init|  Container vteam-compose-db Healthy 
+[e2e] init|  Container vteam-init-run-bb03a53e6b2a Creating 
+[e2e] init|  Container vteam-init-run-bb03a53e6b2a Created 
+[e2e] init| warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+[e2e] init| For more information, see: https://pris.ly/prisma-config
+[e2e] init| 
+[e2e] init| Prisma schema loaded from prisma/schema.prisma
+[e2e] init| Datasource "db": MySQL database "vteam" at "db:3306"
+[e2e] init| 
+[e2e] init| 18 migrations found in prisma/migrations
+[e2e] init| 
+[e2e] init| 
+[e2e] init| No pending migrations to apply.
+[e2e] init| Seed 完成：
+[e2e] init|   - 角色：admin / member
+[e2e] init|   - 用户：admin(u_admin) / seed-admin(u_seed_admin) / seed-member(u_seed_member)
+[e2e] init|   - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+[e2e] init|   - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+[e2e] init|   - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+[e2e] init|   - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_list、team_view、my_profile、team_add_member、plan_complete、channel_send、wecom_reply、task_create、memory_update、memory_archive、memory_merge、skill_create、git_repos_list、hook_register、hook_cancel、secret_command（source=mcp，mcpServer=vteam）
+[e2e] init|   - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+[e2e] init|   - 模型目录：0 个模型（）
+[e2e] init|   - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为项目经理）
+[e2e] init|   - 管理员密码：Admin@123456
+[e2e] init|   - 初始 admin 账号：admin / admin123
+[e2e] PRE-1 docker compose run --rm init exit=0
+[e2e] PRE-1 waiting for server health (timeout 420s)
+[e2e] PRE-1 server healthy; docker compose ps:
+[e2e] ps| NAME                   IMAGE          COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+[e2e] ps| vteam-compose-db       mysql:8        "docker-entrypoint.s…"   db        2 days ago       Up 6 hours (healthy)      3306/tcp, 33060/tcp
+[e2e] ps| vteam-compose-server   vteam-server   "docker-entrypoint.s…"   server    37 seconds ago   Up 25 seconds (healthy)   0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+[e2e] ps| vteam-compose-web      vteam-web      "docker-entrypoint.s…"   web       3 hours ago      Up 3 hours (healthy)      0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+[e2e] ps| vteam-compose-worker   vteam-worker   "docker-entrypoint.s…"   worker    3 hours ago      Up 3 hours                0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+[e2e] PRE-0 logged in as admin (token acquired, value not logged)
+[e2e] PRE-1b information_schema message_receipts.settled_reason count=1
+[e2e] PRE-1b agent_roles(project_manager).role_prompt discipline hits:|产出是派发与核验，不是交付物=409|派发优先于动手=652|串行派活=728|做完即停=858
+[e2e] PRE-1b execution_policies(ep_project_manager).config.correction.scopeSummary hits:|一律派给对应岗位=51|你只产出派发与核验=60
+[e2e] PRE-1b schema guard PASS (both migrations applied on this image)
+[e2e] A agent_roles(project_manager).role_prompt = # 角色：项目经理\n你是任务虚拟团队中的项目经理 Agent，只负责流程控制，不产出具体交付物。\n\n## 职责\n- 环节推进：按已确认的实施计划（计划员产出）推进环节流转，用 issue 跟踪每项状态；不自行拆解任务、不制定实施计划，缺失计划时 @计划员-1 补出。\n- 计划完工：任务交付齐备或进入待验收时，若计划仍处于执行中，须调 vteam_plan_complete 标记计划完工（executing→completed）；平台真值源是 DB plans.status，改计划文件无效，不要 @计划员-1 去改文件。\n- 进度跟踪：掌握团队各角色进展，环节切换或产出完成时主动在群聊同步进度与待办。\n- 风险管理：识别需求/方案/实现/验证各环节的风险与依赖，提前向成员提示并给出缓解建议。\n- 阻塞协调：发现阻塞时定位责任角色，用 vteam_notify_agent 定向协调，必要时提示成员介入。\n- 产出是派发与核验，不是交付物：需求、方案、实现代码、测试用例、计划一律由归属岗位产出（需求→产品经理、方案→架构师、实现→开发者、用例→测试者、计划→计划员）；你的产出只有派发记录、进度与风险信息、核验结论，不代写内容本身。\n- 职责边界：不产出需求、方案、代码、测试用例等具体交付物；不代替任何角色做专业判断；不作出验收判定。流程控制信息（进度、风险、协调记录）经群聊消息与 issue 记录承载。\n\n## 协同方式\n- 响应 @ 触发；被 @all 广播时同步项目目标与分工。\n- 派发优先于动手：收到需求先派给归属岗位；只有该岗位不可用（无人或无法开
+[e2e] A execution_policies(ep_project_manager).scopeSummary = 流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。
+[e2e] PASS A 两份手写迁移已在真实库生效（settled_reason 列 + PM 纪律正文 + 边界段）
+[e2e] B mcp http=200 result={"messageId": "m_0000000524", "channelId": "c_0000000001", "targetInstanceId": "tmm_0000000003", "triggered": true, "reason": "ok", "issueBound": false, "claimed": false, "sessionStatus": "failed", "channelSwitched": "task", "channelSwitchReason": "no-active-task"}
+[e2e] B notify_agent → triggered=true claimed=false sessionStatus=failed reason=ok messageId=m_0000000524 channelSwitched=task/no-active-task
+[e2e] B 本次派发产生的回执行 mr_0000000063（cleanup 会删）
+[e2e] B team current_task_id=t_0000000001 status=pending_review
+[e2e] B no-active-task 门自动改走任务维度：channelSwitched=task channelSwitchReason=no-active-task
+[e2e] PASS B notify_agent 经真实 MCP 端点返回 claimed/sessionStatus/triggered（triggered=true claimed=false sessionStatus=failed）
+[e2e] C-dispatch mcp http=200 result={"messageId": "m_0000000526", "channelId": "c_0000000001", "targetInstanceId": "tmm_0000000005", "triggered": true, "reason": "ok", "issueBound": false, "claimed": false, "sessionStatus": "failed", "channelSwitched": "task", "channelSwitchReason": "no-active-task"}
+[e2e] C 派发落地 messageId=m_0000000526
+[e2e] C 回执行初始状态 = pending	(null)  (receipt=mr_0000000064)
+[e2e] C-quote mcp http=200 result={"messageId": "m_0000000528", "channelId": "c_0000000001", "attachment": null}
+[e2e] C 群帖已发布 messageId=m_0000000528 content=e2e-pm-coord-20261022T110328Z-79318 回执销账：引用派发 m_0000000526，本条为对该派发的结账回复。
+[e2e] C 回执行结算后 = status=acked settled_reason=quoted
+[e2e] PASS C 群帖精确引用 m_0000000526 ⇒ 回执行 mr_0000000064 变 status=acked / settled_reason=quoted
+[e2e] D 催办夹具候选目标（空闲 + 非冷却期 + 非主 Agent）：tmm_0000000001 tmm_0000000004 tmm_0000000006 tmm_0000000007
+[e2e] D #1 已种夹具：回执行 mr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1（pending，expires_at=now+45s）+ 催办触发器 tmr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1（due_at=now+45s）目标=tmm_0000000001
+[e2e] D #1 催办已触发（nudge_count=1，trigger status=fired，receipt status=pending）
+[e2e] D 催办文案（真正发出去的原文）：
+[e2e] nudge| 【团队上下文】你当前在团队 tm_0000000001 直聊（无任务）。需要群聊历史时调用 vteam_chat_history（传 teamId）；需要向群聊发布时调用 vteam_group_post（传 teamId）。  【群聊回复要求】本条消息来自团队直聊（无任务），你被 @ 定向分发。请在群聊中公开回复你的结论——调用 vteam MCP 的 vteam_group_post 工具发布到群聊（selfInstanceId 填写 system 身份段中的团队成员 id，tmm_ 前缀）。群聊只会显示你通过 vteam_group_post 发布的内容，完整处理过程保留在你的私聊会话。如需通知其他成员：调用 vteam_notify_agent；需要群聊历史时调用 vteam_chat_history（传 teamId）。收到企业微信消息时调用 vteam_wecom_reply 并传 teamId（多名用户短时间内先后发言时传 replyToUser=<该用户显示名> 以精确回复）；团队直聊没有 taskId，其他团队工具不要传 taskId。vteam_my_profile、vteam_team_view、vteam_doclib、vteam_issue_*、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件。  @产品经理-1 【平台自动催办·第1次】项目经理-1 → 产品经理-1：平台没有看到你的任何回复或产出物，这条派发已发出约 1 分钟（既没有回执、也没有交付痕迹）（原派发消息 m_0000000526，receiptId=mr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1）。请先开工；做完后用 vteam_notify_agent 回执（type=answer、stage=end）。 
+[e2e] PASS D 回执到期后平台自动催办，文案落在分级档：'平台没有看到你的任何回复或产出物'（目标 tmm_0000000001，回执行 mr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1，触发器 tmr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1）
+[e2e] E scopeSummary（长度 69）= 流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。
+[e2e] PASS E PM 岗位定义四条纪律 + 平台边界段主动委派条款都在库里
+[e2e] F 能力目录键数=31 : task.create
+task.transition
+task.complete
+plan.steps
+task.context
+team.view
+team.add_member
+chat.post
+chat.read
+chat.notify
+chat.channel_send
+wecom.reply
+doc.read
+doc.submit
+file.read
+issue.create
+issue.get
+issue.list
+issue.update
+issue.transition
+memory.save
+memory.search
+memory.update
+memory.archive
+memory.merge
+skill.create
+question.confirm
+my_profile
+hook.manage
+git.repos
+secret.command
+F 能力键集与目录完全相等（31 个键，无缺无多）
+[e2e] PASS F PM 能力键集 == 服务端目录（31 个键），doc.submit 仍为 true，无一档被关
+[e2e] G 协调度指标原始响应（完整 JSON 存于 /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/pm-coordination/coordination-metrics.json）：
+[e2e] metrics| {
+[e2e] metrics|   "teamId": "tm_0000000001",
+[e2e] metrics|   "teamName": "vteam开发团队",
+[e2e] metrics|   "generatedAt": "2026-10-22T11:04:40.691Z",
+[e2e] metrics|   "window": {
+[e2e] metrics|     "from": "2026-10-15T11:04:40.672Z",
+[e2e] metrics|     "to": "2026-10-22T11:04:40.672Z",
+[e2e] metrics|     "hours": 168,
+[e2e] metrics|     "maxHours": 720
+[e2e] metrics|   },
+[e2e] metrics|   "totalAgentMessages": 254,
+[e2e] metrics|   "roles": [
+[e2e] metrics|     {
+[e2e] metrics|       "roleKey": "product",
+[e2e] metrics|       "roleName": "产品经理",
+[e2e] metrics|       "agentIds": [
+[e2e] metrics|         "a_product"
+[e2e] metrics|       ],
+[e2e] metrics|       "memberCount": 1,
+[e2e] metrics|       "messages": 8,
+[e2e] metrics|       "messageShare": 0.031496062992125984,
+[e2e] metrics|       "artifacts": 0
+[e2e] metrics|     },
+[e2e] metrics|     {
+[e2e] metrics|       "roleKey": "project_manager",
+[e2e] metrics|       "roleName": "项目经理",
+[e2e] metrics|       "agentIds": [
+[e2e] metrics|         "a_project_manager"
+[e2e] metrics|       ],
+[e2e] metrics|       "memberCount": 1,
+[e2e] metrics|       "messages": 142,
+[e2e] metrics|       "messageShare": 0.5590551181102362,
+[e2e] metrics|       "artifacts": 0
+[e2e] metrics|     },
+[e2e] metrics|     {
+[e2e] metrics|       "roleKey": "architect",
+[e2e] metrics|       "roleName": "架构师",
+[e2e] metrics|       "agentIds": [
+[e2e] metrics|         "a_architect"
+[e2e] metrics|       ],
+[e2e] metrics|       "memberCount": 1,
+[e2e] metrics|       "messages": 29,
+[e2e] metrics|       "messageShare": 0.1141732283464567,
+[e2e] metrics|       "artifacts": 0
+[e2e] metrics|     },
+[e2e] metrics|     {
+[e2e] metrics|       "roleKey": "developer",
+[e2e] metrics|       "roleName": "开发者",
+[e2e] metrics|       "agentIds": [
+[e2e] metrics|         "a_developer"
+[e2e] metrics|       ],
+[e2e] metrics|       "memberCount": 1,
+[e2e] metrics|       "messages": 10,
+[e2e] metrics|       "messageShare": 0.03937007874015748,
+[e2e] metrics|       "artifacts": 0
+[e2e] metrics|     },
+[e2e] metrics|     {
+[e2e] metrics|       "roleKey": "tester",
+[e2e] metrics|       "roleName": "测试",
+[e2e] metrics|       "agentIds": [
+[e2e] metrics|         "a_tester"
+[e2e] metrics|       ],
+[e2e] metrics|       "memberCount": 1,
+[e2e] metrics|       "messages": 48,
+[e2e] metrics|       "messageShare": 0.1889763779527559,
+[e2e] metrics|       "artifacts": 0
+[e2e] metrics|     },
+[e2e] metrics|     {
+[e2e] metrics|       "roleKey": "plan",
+[e2e] metrics|       "roleName": "计划员",
+[e2e] metrics|       "agentIds": [
+[e2e] metrics|         "a_plan"
+[e2e] metrics|       ],
+[e2e] metrics|       "memberCount": 1,
+[e2e] metrics|       "messages": 15,
+[e2e] metrics|       "messageShare": 0.05905511811023622,
+[e2e] metrics|       "artifacts": 0
+[e2e] metrics|     },
+[e2e] metrics|     {
+[e2e] metrics|       "roleKey": "librarian",
+[e2e] metrics|       "roleName": "知识管理员",
+[e2e] metrics|       "agentIds": [
+[e2e] metrics|         "a_librarian"
+[e2e] metrics|       ],
+[e2e] metrics|       "memberCount": 1,
+[e2e] metrics|       "messages": 2,
+[e2e] metrics|       "messageShare": 0.007874015748031496,
+[e2e] metrics|       "artifacts": 0
+[e2e] metrics|     }
+[e2e] metrics|   ],
+[e2e] metrics|   "metrics": [
+[e2e] metrics|     {
+[e2e] metrics|       "key": "pm_artifact_count",
+[e2e] metrics|       "name": "PM 产出物数（交付物）",
+[e2e] metrics|       "description": "窗口内由项目经理岗位产出（artifact_versions.author_agent_id 命中 PM 岗位 Agent）的去重产出物数。PM 只做传话人/流程协调，不亲自产出交付物 ⇒ 目标恒 0；>0 即越界。",
+[e2e] metrics|       "value": 0,
+[e2e] metrics|       "unit": "count",
+[e2e] metrics|       "target": {
+[e2e] metrics|         "operator": "=",
+[e2e] metrics|         "value": 0
+[e2e] metrics|       },
+[e2e] metrics|       "ok": true,
+[e2e] metrics|       "note": "本地基线：0（tm_0000000001 的 7 个产出物作者均为 NULL / 非 PM 岗位）。",
+[e2e] metrics|       "detail": {
+[e2e] metrics|         "pmArtifacts": 0,
+[e2e] metrics|         "pmArtifactVersions": 0,
+[e2e] metrics|         "teamArtifacts": 7,
+[e2e] metrics|         "unassignedArtifacts": 7
+[e2e] metrics|       },
+[e2e] metrics|       "window": {
+[e2e] metrics|         "from": "2026-10-15T11:04:40.672Z",
+[e2e] metrics|         "to": "2026-10-22T11:04:40.672Z"
+[e2e] metrics|       }
+[e2e] metrics|     },
+[e2e] metrics|     {
+[e2e] metrics|       "key": "pm_message_share",
+[e2e] metrics|       "name": "PM 消息占比",
+[e2e] metrics|       "description": "项目经理岗位在窗口内发出的 agent 消息数 ÷ 全团队 agent 消息数。占比越高说明「谁在说话」越集中在一个岗位——健康团队里 PM 应是少数派。",
+[e2e] metrics|       "value": 0.5590551181102362,
+[e2e] metrics|       "unit": "ratio",
+G pm_artifact_count=0（ok=True）；pm_message_share=0.5591（PM 142 条 / 全团队 254 条）
+[e2e] PASS G 协调度指标端点可用：PM 产出物数=0，PM 消息占比在合理区间
+[e2e] ----- assertions -----
+[e2e] [e2e] PASS A 两份手写迁移已在真实库生效（settled_reason 列 + PM 纪律正文 + 边界段）
+[e2e] [e2e] PASS B notify_agent 经真实 MCP 端点返回 claimed/sessionStatus/triggered（triggered=true claimed=false sessionStatus=failed）
+[e2e] [e2e] PASS C 群帖精确引用 m_0000000526 ⇒ 回执行 mr_0000000064 变 status=acked / settled_reason=quoted
+[e2e] [e2e] PASS D 回执到期后平台自动催办，文案落在分级档：'平台没有看到你的任何回复或产出物'（目标 tmm_0000000001，回执行 mr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1，触发器 tmr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1）
+[e2e] [e2e] PASS E PM 岗位定义四条纪律 + 平台边界段主动委派条款都在库里
+[e2e] [e2e] PASS F PM 能力键集 == 服务端目录（31 个键），doc.submit 仍为 true，无一档被关
+[e2e] [e2e] PASS G 协调度指标端点可用：PM 产出物数=0，PM 消息占比在合理区间
+[e2e] all seven segments (A/B/C/D/E/F/G) PASS against the live stack; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/pm-coordination/e2e.txt
+[e2e] done
+[e2e] ----- cleanup receipt -----
+[e2e] receipt| mr_0000000063	m_0000000524	tmm_0000000002	tmm_0000000003	acked	answered	0
+[e2e] receipt| mr_0000000064	m_0000000526	tmm_0000000002	tmm_0000000005	acked	quoted	0
+[e2e] receipt| mr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1	m_0000000526	tmm_0000000002	tmm_0000000001	acked	answered	1
+[e2e] cleanup: db DELETE message_receipts ('mr_0000000063','mr_0000000064','mr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1') ok, rows left = 0
+[e2e] cleanup: db DELETE triggers (receipt_nudge:tm_0000000001:mr_0000000063[ :expiry]) ok, rows left = 0
+[e2e] cleanup: db DELETE triggers (receipt_nudge:tm_0000000001:mr_0000000064[ :expiry]) ok, rows left = 0
+[e2e] cleanup: db DELETE triggers (receipt_nudge:tm_0000000001:mr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1[ :expiry]) ok, rows left = 0
+[e2e] cleanup: 本脚本种下的催办触发器（已随上面的 dedup_key 一起删除）： tmr_e2e_e2e_pm_coord_20261022T110328Z_79318_a1
+[e2e] cleanup: db DELETE messages ('m_0000000524','m_0000000526','m_0000000528') ok, rows left = 0
+[e2e] cleanup: seeded rows untouched (team=1	7	1	1)
+[e2e] cleanup: 本次运行期间新建（未由本脚本创建，故未删）: 6	0	0
+[e2e] ----- exit code: 0 -----

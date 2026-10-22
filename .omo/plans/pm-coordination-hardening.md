@@ -144,13 +144,17 @@ D 催办分级 / E 纪律落库 / F 权限未被收窄 / G 协调度指标），
 
 当前状态（证据：`.omo/evidence/pm-coordination/e2e.txt`）：
 
-- **A PASS** —— 两份手写迁移在真实库生效（`message_receipts.settled_reason` 列 + PM 纪律正文 + 边界段）。
-- **B PASS** —— `notify_agent` 经真实 MCP 端点返回 `claimed` / `sessionStatus` / `triggered`。
-- **C PASS** —— 群帖精确引用派发 `messageId` ⇒ 回执行翻成 `status=acked` / `settled_reason=quoted`。
-- **D FAIL（测试设计问题，非产品缺陷）** —— 线上成员**答得太快** ⇒ 回执在超时前就合法结账
-  （`status=acked settled_reason=answered`）⇒ 催办**本就不该发生** ⇒ 自然观测不到分级文案。
-  ⇒ D 段需要「让目标不回复」的隔离夹具（或把 `receiptTimeoutMin` 调到分钟级以上）才能真正验。
-- **E / F / G 未跑** —— 脚本的「summary guard」要求 A..G 全 PASS 才算通过，D 失败即中止。
+- **A–G 全 PASS（2026-10-22 复跑，exit 0）** —— A 迁移生效 / B 派发返回值 / C 引用即销账 /
+  D 催办分级 / E 纪律落库 / F 权限未被收窄 / G 协调度指标，七段全绿。
+- **D 段最终形态**：不再「派发给 live 成员然后盼它不回」（成员答得很快 ⇒ 回执合法结账
+  `settled_reason=answered` ⇒ 催办本就不该发生，旧设计必然失败）。改为**直接种 pending
+  回执 + `receipt_nudge` 触发器、不派发**（没人被唤醒 ⇒ 回执必然留 pending），并把
+  `expires_at` 设成 `== due_at`（**完全贴平台真实形态**，靠 PR #68 的宽限窗保证催办先赢）。
+  实测抓到分级文案原文：`【平台自动催办·第1次】项目经理-1 → 产品经理-1：平台没有看到你的
+  任何回复或产出物…（原派发消息 m_…，receiptId=mr_…）` ⇒ `not-started` 档被正确分类下发。
+- 该段最初只能靠「把 `expires_at` 往后挪 90s」从外面绕过去才稳定观测到催办 —— **那个绕行
+  本身就是平台有病的 tell**（催办与到期清扫同一瞬间赛车，清扫赢则催办被静默吞掉，即批次
+  A4 的催办在生产上被削弱）。PR #68 修好后绕行已移除。
 
 ## 5 · B-3 的载体选择（2026-10-22 实测）
 
