@@ -110,7 +110,15 @@ describe('TeamsService', () => {
         aggregate: jest.fn(),
       },
       task: { groupBy: jest.fn().mockResolvedValue([]) },
-      session: { groupBy: jest.fn().mockResolvedValue([]) },
+      // ⚠️ session 只能有一个键：两次合并（远端加 groupBy、本分支加 findMany）若各写一个
+      // session 键，后写的会**整块覆盖**先写的 ⇒ groupBy 变 undefined，远端
+      // lastActivityAt 用例会直接抛 TypeError。故合并到同一个对象里。
+      // - groupBy：团队群聊最近活动时间（lastActivityAt）
+      // - findMany：成员「当前运行节点」投影（currentWorkerId），默认无团队会话 ⇒ 该字段 null
+      session: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       teamUserMember: {
         create: jest.fn(),
         findFirst: jest.fn(),
@@ -736,6 +744,39 @@ describe('TeamsService', () => {
             skip: 0,
           }),
         );
+      });
+    });
+
+    it('列表成员行含 currentWorkerId：整页一次会话查询（每团队一次 ⇒ N+1）', async () => {
+      prisma.$transaction.mockResolvedValue([
+        2,
+        [
+          teamRow({ id: 'tm_0000000001', members: [teamMemberRow()] }),
+          teamRow({
+            id: 'tm_0000000002',
+            members: [
+              teamMemberRow({ id: 'tmm_0000000002', agentId: 'a_developer' }),
+            ],
+          }),
+        ],
+      ]);
+      prisma.session.findMany.mockResolvedValue([
+        { teamMemberId: 'tmm_0000000001', workerId: 'w_0000000001' },
+        { teamMemberId: 'tmm_0000000002', workerId: 'w_0000000002' },
+      ]);
+
+      const result = await service.findAll({ page: 1, pageSize: 20 } as any);
+
+      expect(result.items[0].members[0].currentWorkerId).toBe('w_0000000001');
+      expect(result.items[1].members[0].currentWorkerId).toBe('w_0000000002');
+      // 整页只查一次会话（不是每团队一次，也不是每成员一次）
+      expect(prisma.session.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.session.findMany).toHaveBeenCalledWith({
+        where: {
+          teamId: { in: ['tm_0000000001', 'tm_0000000002'] },
+          taskId: null,
+        },
+        select: { teamMemberId: true, workerId: true },
       });
     });
   });
@@ -2132,6 +2173,65 @@ describe('TeamsService', () => {
       const result: any = await service.findOne('tm_0000000001');
 
       expect(result.members[0].preferredWorkerId).toBe('w_0000000001');
+    });
+
+    it('团队 DTO 成员行含 currentWorkerId（团队会话当前绑定的 worker）', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({ members: [teamMemberRow()] }),
+      );
+      prisma.session.findMany.mockResolvedValue([
+        { teamMemberId: 'tmm_0000000001', workerId: 'w_0000000002' },
+      ]);
+
+      const result: any = await service.findOne('tm_0000000001');
+
+      expect(result.members[0].currentWorkerId).toBe('w_0000000002');
+      // 只查团队会话行（Session.taskId 为空）
+      expect(prisma.session.findMany).toHaveBeenCalledWith({
+        where: { teamId: { in: ['tm_0000000001'] }, taskId: null },
+        select: { teamMemberId: true, workerId: true },
+      });
+    });
+
+    it('currentWorkerId：成员尚无会话 → null（字段恒存在，不省略）', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({ members: [teamMemberRow()] }),
+      );
+      prisma.session.findMany.mockResolvedValue([]);
+
+      const result: any = await service.findOne('tm_0000000001');
+
+      expect(result.members[0]).toHaveProperty('currentWorkerId', null);
+      expect(Object.keys(result.members[0])).toContain('currentWorkerId');
+    });
+
+    it('currentWorkerId：会话存在但未绑定 worker → null', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({ members: [teamMemberRow()] }),
+      );
+      prisma.session.findMany.mockResolvedValue([
+        { teamMemberId: 'tmm_0000000001', workerId: null },
+      ]);
+
+      const result: any = await service.findOne('tm_0000000001');
+
+      expect(result.members[0].currentWorkerId).toBeNull();
+    });
+
+    it('currentWorkerId 与 preferredWorkerId 是两个维度（偏好改了、实际未迁移时都可见）', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({
+          members: [teamMemberRow({ preferredWorkerId: 'w_0000000009' })],
+        }),
+      );
+      prisma.session.findMany.mockResolvedValue([
+        { teamMemberId: 'tmm_0000000001', workerId: 'w_0000000002' },
+      ]);
+
+      const result: any = await service.findOne('tm_0000000001');
+
+      expect(result.members[0].preferredWorkerId).toBe('w_0000000009');
+      expect(result.members[0].currentWorkerId).toBe('w_0000000002');
     });
 
     it('空更新 → 直接返回 findOne，不进事务', async () => {

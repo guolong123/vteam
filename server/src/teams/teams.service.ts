@@ -298,12 +298,17 @@ export class TeamsService implements OnModuleInit {
     const activeCounts = await this.activeTaskCounts(rows);
     // 团队群聊最近活动时间（单次 groupBy 批量取回，与 activeTaskCounts 同形 ⇒ 无 N+1）。
     const lastActivity = await this.lastActivityByTeam(rows);
+    // 成员「当前运行节点」：整页团队一次性查会话（每页 1 次查询，不按团队/成员循环查库）。
+    const currentWorkerMap = await this.currentWorkerByMember(
+      rows.map((t) => t.id),
+    );
     return {
       items: rows.map((t) =>
         this.toTeamDto(
           t,
           activeCounts.get(t.id) ?? 0,
           lastActivity.get(t.id) ?? null,
+          currentWorkerMap,
         ),
       ),
       total,
@@ -386,7 +391,14 @@ export class TeamsService implements OnModuleInit {
       });
     }
     const activeCounts = await this.activeTaskCounts([team]);
-    return this.toTeamDto(team, activeCounts.get(id) ?? 0);
+    // 成员「当前运行节点」：团队会话行（Session.taskId 为空）的 workerId。
+    const currentWorkerMap = await this.currentWorkerByMember([team.id]);
+    return this.toTeamDto(
+      team,
+      activeCounts.get(id) ?? 0,
+      null,
+      currentWorkerMap,
+    );
   }
 
   async update(id: string, dto: UpdateTeamDto) {
@@ -1492,10 +1504,47 @@ export class TeamsService implements OnModuleInit {
       : `/data/vteam-worker/${base}`;
   }
 
+  /**
+   * 成员「当前运行节点」（currentWorkerId）查询：teamMemberId → workerId 映射。
+   *
+   * 取的是**团队会话行**：`Session.taskId` 为空的行（uk_sessions_team_member 唯一键只约束
+   * task-less 行 ⇒ 每个 (teamId, teamMemberId) 至多一行团队会话，映射天然无歧义）。
+   * workerId = 会话当前绑定的 worker（null = 会话存在但未绑定节点 / 成员尚无会话）。
+   *
+   * ⚠️ 查询次数约束：必须「一次查整批」——findAll 传整页 teamIds，绝不在成员循环里查库（N+1）。
+   * 这是纯只读投影（不改任何写路径 / 不改 preferredWorkerId 语义）。
+   */
+  private async currentWorkerByMember(
+    teamIds: string[],
+  ): Promise<Map<string, string | null>> {
+    const map = new Map<string, string | null>();
+    const ids = (teamIds ?? []).filter(
+      (id): id is string => typeof id === 'string' && id.length > 0,
+    );
+    if (ids.length === 0) return map;
+    const rows = (await this.prisma.session.findMany({
+      where: { teamId: { in: ids }, taskId: null },
+      select: { teamMemberId: true, workerId: true },
+    })) as
+      | {
+          teamMemberId: string | null;
+          workerId: string | null;
+        }[]
+      | null;
+    for (const r of rows ?? []) {
+      // 同一成员理论上只有一行团队会话；防御性取首条，避免重复行导致映射漂移。
+      if (r?.teamMemberId && !map.has(r.teamMemberId)) {
+        map.set(r.teamMemberId, r.workerId ?? null);
+      }
+    }
+    return map;
+  }
+
   private toTeamDto(
     team: any,
     activeTaskCount = 0,
     lastActivityAt: Date | null = null,
+    currentWorkerMap?: Map<string, string | null>,
   ) {
     const members = (team.members ?? []).map((m: any) => ({
       id: m.id,
@@ -1509,6 +1558,12 @@ export class TeamsService implements OnModuleInit {
       // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
       // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
       preferredWorkerId: m.preferredWorkerId ?? null,
+      // 成员会话**当前实际绑定**的 worker（运行节点）；null = 尚无会话 / 会话未绑定节点。
+      // 与 preferredWorkerId（配置偏好）是两个维度：用户改偏好后，实际绑定可能尚未迁移，
+      // 缺此字段前端只能看到偏好值，无法区分「已生效」与「未生效」。
+      // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
+      // ⚠️ 恒返回（拿不到就 null），不得条件省略——否则另一侧投影的 null 会把它覆盖掉。
+      currentWorkerId: currentWorkerMap?.get(m.id) ?? null,
       // opencode 原生 agent 选择（null = 用 opencode 默认 agent）——前端成员面板据此
       // 渲染/高亮当前选择；缺此字段会导致「切换后回显丢失」。
       opencodeAgentName: m.opencodeAgentName,

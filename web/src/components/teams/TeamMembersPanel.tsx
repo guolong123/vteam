@@ -123,12 +123,13 @@ export function TeamMembersPanel({
   resetPendingInstanceId,
   onChangeModel,
   onChangeWorker,
+  teamPreferredWorkerId,
   onSetMainAgent,
   onSelectMember,
   selectedKey,
   footerText,
 }: {
-  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null; overrideModelId?: string | null; preferredWorkerId?: string | null }[];
+  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null; overrideModelId?: string | null; preferredWorkerId?: string | null; currentWorkerId?: string | null }[];
   loadingAgentIds: Set<string>;
   sessionStatusByAgent: Record<string, string>;
   agentOptions: AgentOption[];
@@ -146,6 +147,8 @@ export function TeamMembersPanel({
   onChangeModel?: (instanceId: string, modelId: string | null) => void;
   /** 成员级首选 worker 节点：null = 跟随团队级选择（chip 虚线态「跟随团队」）。 */
   onChangeWorker?: (instanceId: string, workerId: string | null) => void;
+  /** 团队级首选 worker 节点（null = 未配置）：成员未显式指定时的实际生效偏好。 */
+  teamPreferredWorkerId?: string | null;
   onSetMainAgent?: (memberId: string) => void;
   onSelectMember?: (instanceId: string, agentId: string) => void;
   selectedKey?: string | null;
@@ -371,6 +374,23 @@ export function TeamMembersPanel({
                   : "就绪";
           // 实际生效模型：实例覆盖优先，否则模板默认；都没有才回退"跟随模板"
           const effectiveModel = a.overrideModelId ?? templateModelByAgent.get(a.id) ?? null;
+          // 运行节点（currentWorkerId）：成员会话当前实际绑定的 worker，与「首选」可能不同——
+          // 服务端在下一次派发时才把会话迁到首选节点，且仅当目标节点当前可用；
+          // 故不一致时用琥珀色标注「待切换」，一致时按中性色静默展示。
+          const effectivePreferredWorkerId = a.preferredWorkerId ?? teamPreferredWorkerId ?? null;
+          const runningWorkerId = a.currentWorkerId ?? null;
+          const pendingWorkerId =
+            runningWorkerId && effectivePreferredWorkerId && runningWorkerId !== effectivePreferredWorkerId
+              ? effectivePreferredWorkerId
+              : null;
+          const runningWorkerText = runningWorkerId
+            ? pendingWorkerId
+              ? `运行中：${workerLabel(runningWorkerId)} · 待切换到 ${workerLabel(pendingWorkerId)}`
+              : `运行中：${workerLabel(runningWorkerId)}`
+            : null;
+          const workerChipTitle = a.preferredWorkerId
+            ? `Worker 节点：${workerLabel(a.preferredWorkerId)}（点击更换）`
+            : "跟随团队（点击设置 Worker 节点）";
           const resetPending = resetPendingInstanceId === (a.instanceId ?? a.id);
           const togglePending = togglePendingInstanceId === (a.instanceId ?? a.id);
           return (
@@ -532,9 +552,9 @@ export function TeamMembersPanel({
                     setOpenMenu(null);
                   }}
                   title={
-                    a.preferredWorkerId
-                      ? `Worker 节点：${workerLabel(a.preferredWorkerId)}（点击更换）`
-                      : "跟随团队（点击设置 Worker 节点）"
+                    runningWorkerId
+                      ? `${workerChipTitle} · 运行中：${workerLabel(runningWorkerId)}`
+                      : workerChipTitle
                   }
                   style={{
                     marginTop: 4,
@@ -559,6 +579,23 @@ export function TeamMembersPanel({
                   </span>
                   <span style={{ fontSize: 8 }}>▼</span>
                 </button>
+                {runningWorkerText && (
+                  <span
+                    data-testid={`agent-worker-running-${a.instanceId ?? a.id}`}
+                    style={{
+                      display: "block",
+                      marginTop: 2,
+                      fontSize: 10,
+                      lineHeight: 1.3,
+                      color: pendingWorkerId ? "#D97706" : neutral[500],
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {runningWorkerText}
+                  </span>
+                )}
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, position: "relative" }}>
                 <button

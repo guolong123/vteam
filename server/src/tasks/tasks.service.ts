@@ -1905,7 +1905,10 @@ export class TasksService implements OnModuleInit {
     const teamId = (task as any).teamId ?? null;
     let members: TeamMemberView[] = [];
     let mainMemberId: string | null = null;
-    const sessionByMember = new Map<string, { id: string; status: string }>();
+    const sessionByMember = new Map<
+      string,
+      { id: string; status: string; workerId: string | null }
+    >();
     if (teamId) {
       const team = await (this.prisma as any).team.findUnique({
         where: { id: teamId },
@@ -1925,9 +1928,35 @@ export class TasksService implements OnModuleInit {
           where: {
             teamMemberId: { in: members.map((m) => m.id) },
             status: { not: SESSION_STATUS.archived },
+            // ⚠️ 只取**团队会话**（task_id 为空）：dispatcher 实际跑的就是这一行。
+            //  · Session.teamMemberKey 是 STORED 生成列：task_id 空 ⇒ team_id|team_member_id，
+            //    否则 NULL；DB 唯一索引 uk_sessions_team_member 只约束 task-less 行
+            //    ⇒ 每个 (teamId, teamMemberId) 至多一行团队会话，取行无歧义。
+            //  · SessionLifecycleService.ensureTeamSession 按 teamMemberKey 查/建，
+            //    且建行一律 taskId: null（session-lifecycle 的 create / ensureTeamSession /
+            //    resetTeamSessionsInTx、teams.service 的 reset 路径全部写 taskId: null）
+            //    ⇒ 真正在跑的就是这行。
+            //  · taskId 非空的行是会话统一化改造前的**遗留行**；不加此过滤且无 orderBy 时
+            //    会随机命中遗留行 ⇒ sessionStatus / sessionId 指向错的会话，
+            //    且 currentWorkerId 会与团队 DTO 投影（teams.service 侧已按 taskId: null 取）
+            //    不一致（反发散不变量被打破）。此处显式过滤 taskId: null 消除该歧义。
+            taskId: null,
           },
-          select: { id: true, status: true, teamMemberId: true },
-        })) as { id: string; status: string; teamMemberId: string }[] | null;
+          // workerId 一并取回：实例的「当前运行节点」直接复用本次查询结果（零额外查询）。
+          select: {
+            id: true,
+            status: true,
+            teamMemberId: true,
+            workerId: true,
+          },
+        })) as
+          | {
+              id: string;
+              status: string;
+              teamMemberId: string;
+              workerId: string | null;
+            }[]
+          | null;
         for (const s of sessions ?? []) {
           if (s?.teamMemberId && !sessionByMember.has(s.teamMemberId)) {
             sessionByMember.set(s.teamMemberId, s);
@@ -1969,6 +1998,13 @@ export class TasksService implements OnModuleInit {
           // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
           // 正确值被 null 覆盖，表现为「切换后回显丢失」（同上方 opencodeAgentName 旧坑）。
           preferredWorkerId: m.preferredWorkerId ?? null,
+          // 成员会话**当前实际绑定**的 worker（运行节点）；null = 尚无会话 / 会话未绑定节点。
+          // 与 preferredWorkerId（配置偏好）是两个维度：改偏好后实际绑定可能尚未迁移，
+          // 缺此字段前端只能看到偏好值，无法区分「已生效」与「未生效」。
+          // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
+          // 正确值被 null 覆盖（同上方 preferredWorkerId 旧坑）。
+          // ⚠️ 恒返回（拿不到就 null），不得条件省略。
+          currentWorkerId: s?.workerId ?? null,
           sessionStatus: s?.status ?? null,
           sessionId: s?.id ?? null,
         };

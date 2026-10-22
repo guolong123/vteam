@@ -1163,6 +1163,8 @@ describe('TasksService', () => {
           opencodeAgentName: null,
           // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
           preferredWorkerId: null,
+          // 成员会话当前实际绑定的 worker（运行节点）：必须与团队 DTO 同步，缺一侧会被 null 覆盖
+          currentWorkerId: null,
           sessionStatus: null,
           sessionId: null,
         },
@@ -1181,6 +1183,8 @@ describe('TasksService', () => {
           opencodeAgentName: null,
           // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
           preferredWorkerId: null,
+          // 成员会话当前实际绑定的 worker（运行节点）：必须与团队 DTO 同步，缺一侧会被 null 覆盖
+          currentWorkerId: null,
           sessionStatus: null,
           sessionId: null,
         },
@@ -1355,11 +1359,14 @@ describe('TasksService', () => {
           id: 's_0000000041',
           status: 'running',
           teamMemberId: 'tmm_0000000001',
+          // 团队会话行（task_id 为空）——toTaskDto 只解析 taskId: null 的行
+          taskId: null,
         },
         {
           id: 's_0000000042',
           status: 'idle',
           teamMemberId: 'tmm_0000000002',
+          taskId: null,
         },
       ]);
 
@@ -1380,6 +1387,155 @@ describe('TasksService', () => {
       for (const inst of result.instances) {
         expect(inst.id.startsWith('tmm_')).toBe(true);
       }
+    });
+
+    it('instances 携带 currentWorkerId（成员会话当前绑定的 worker = 运行节点）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      });
+      prisma.teamMember.findMany.mockResolvedValue([
+        tmmRow('tmm_0000000001', 'a_product'),
+        tmmRow('tmm_0000000002', 'a_developer'),
+      ]);
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([
+        {
+          id: 's_0000000041',
+          status: 'running',
+          teamMemberId: 'tmm_0000000001',
+          workerId: 'w_0000000001',
+          taskId: null,
+        },
+        {
+          id: 's_0000000042',
+          status: 'idle',
+          teamMemberId: 'tmm_0000000002',
+          workerId: null,
+          taskId: null,
+        },
+      ]);
+
+      const result = await service.findOne('t_0000000001');
+
+      expect(
+        result.instances.find((i: any) => i.id === 'tmm_0000000001'),
+      ).toMatchObject({ currentWorkerId: 'w_0000000001' });
+      // 会话存在但未绑定 worker → null（不是省略字段）
+      expect(
+        result.instances.find((i: any) => i.id === 'tmm_0000000002'),
+      ).toMatchObject({ currentWorkerId: null });
+      expect(Object.keys(result.instances[0])).toContain('currentWorkerId');
+    });
+
+    it('instances 无会话时 currentWorkerId = null（字段恒存在）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      });
+      prisma.teamMember.findMany.mockResolvedValue([
+        tmmRow('tmm_0000000001', 'a_product'),
+      ]);
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+
+      const result = await service.findOne('t_0000000001');
+
+      expect(result.instances[0]).toHaveProperty('currentWorkerId', null);
+    });
+
+    it('currentWorkerId 复用同一次会话查询（不额外查库：零额外查询）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      });
+      prisma.teamMember.findMany.mockResolvedValue([
+        tmmRow('tmm_0000000001', 'a_product'),
+      ]);
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([
+        {
+          id: 's_0000000041',
+          status: 'running',
+          teamMemberId: 'tmm_0000000001',
+          workerId: 'w_0000000001',
+          taskId: null,
+        },
+      ]);
+
+      await service.findOne('t_0000000001');
+
+      expect((prisma.session as any).findMany).toHaveBeenCalledTimes(1);
+      expect((prisma.session as any).findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({ workerId: true }),
+        }),
+      );
+    });
+
+    it('遗留 taskId 非空的会话行被过滤：只解析团队会话（sessionId/sessionStatus/currentWorkerId 同源）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      });
+      prisma.teamMember.findMany.mockResolvedValue([
+        tmmRow('tmm_0000000001', 'a_product'),
+      ]);
+      // 模拟 Prisma 的 where 过滤：mock 必须真的按 taskId/status 过滤，
+      // 否则「代码里删掉 taskId: null」这个回归在本用例里测不出来。
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockImplementation(async (args: any) => {
+          const rows = [
+            // 遗留行（会话统一化改造前，task_id 非空）—— 排在前面，无 orderBy 时旧代码会误命中它
+            {
+              id: 's_legacy',
+              status: 'running',
+              teamMemberId: 'tmm_0000000001',
+              workerId: 'w_legacy',
+              taskId: 't_0000000001',
+            },
+            // 团队会话行（task_id 为空）—— dispatcher 实际跑的就是这行
+            {
+              id: 's_team',
+              status: 'active',
+              teamMemberId: 'tmm_0000000001',
+              workerId: 'w_team',
+              taskId: null,
+            },
+          ];
+          let out = rows;
+          if (args?.where?.taskId === null) {
+            out = out.filter((r: any) => (r.taskId ?? null) === null);
+          }
+          if (args?.where?.status?.not) {
+            out = out.filter((r: any) => r.status !== args.where.status.not);
+          }
+          return out;
+        });
+
+      const result = await service.findOne('t_0000000001');
+
+      const inst = result.instances.find((i: any) => i.id === 'tmm_0000000001');
+      // 三个字段必须同源于「团队会话」这一行，遗留行被完全忽略
+      expect(inst.sessionId).toBe('s_team');
+      expect(inst.sessionStatus).toBe('active');
+      expect(inst.currentWorkerId).toBe('w_team');
+      // 查询确实带了 taskId: null 过滤（反发散：与团队 DTO 投影取同一集合）
+      expect((prisma.session as any).findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ taskId: null }),
+        }),
+      );
     });
 
     it('详情 DTO 暴露 resetAfterComplete：显式设置与入参一致，未设置缺省 false', async () => {
@@ -5140,6 +5296,87 @@ describe('TasksService', () => {
       expect(taskValue).toBe('w_0000000001');
       // 反发散断言：两侧必须同值。只投影一处 ⇒ 另一侧读到 undefined/null ⇒ 本断言转红
       expect(taskValue).toBe(teamValue);
+    });
+  });
+
+  describe('currentWorkerId 投影同步（任务实例 vs 团队 DTO，反发散）', () => {
+    /** 与上方 preferredWorkerId 同步用例同源的成员行（两个投影的唯一派生源）。 */
+    const syncedMemberRow = () => ({
+      id: 'tmm_0000000001',
+      teamId: 'tm_0000000001',
+      agentId: 'a_product',
+      alias: '产品经理-1',
+      seq: 1,
+      workDir: '/data/vteam-worker/产品经理',
+      overrideModelId: null,
+      opencodeAgentName: null,
+      preferredWorkerId: 'w_0000000009',
+      agent: { id: 'a_product', name: '产品经理' },
+      role: { id: 'r_product', key: 'product', name: '产品经理' },
+    });
+
+    it('两侧返回同一 currentWorkerId（web 只读一个字段，不受 payload 来源影响）', async () => {
+      const teams = new TeamsService(
+        prisma as any,
+        idGen as any,
+        realtime as any,
+        { listAgents: jest.fn().mockResolvedValue([]) } as any,
+        { assignWorker: jest.fn().mockResolvedValue(null) } as any,
+      );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        name: 'team-alpha',
+        mainAgentMemberId: 'tmm_0000000001',
+        version: 1,
+        members: [syncedMemberRow()],
+        userMembers: [],
+        queues: [],
+      } as any);
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      prisma.teamMember.findMany.mockResolvedValue([syncedMemberRow()]);
+      // 同一张会话表的两种取法：团队侧按 teamId 取任务会话行，任务侧按 teamMemberId 取成员会话行。
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockImplementation(async (args: any) => {
+          if (args?.where?.teamId) {
+            return [
+              { teamMemberId: 'tmm_0000000001', workerId: 'w_0000000002' },
+            ];
+          }
+          return [
+            {
+              id: 's_0000000041',
+              status: 'running',
+              teamMemberId: 'tmm_0000000001',
+              workerId: 'w_0000000002',
+            },
+          ];
+        });
+
+      const teamDto: any = await teams.findOne('tm_0000000001');
+      const taskDto = await service.findOne('t_0000000001');
+
+      const teamValue = teamDto.members.find(
+        (m: any) => m.id === 'tmm_0000000001',
+      ).currentWorkerId;
+      const taskValue = (taskDto.instances as any[]).find(
+        (i) => i.id === 'tmm_0000000001',
+      )!.currentWorkerId;
+      expect(teamValue).toBe('w_0000000002');
+      expect(taskValue).toBe('w_0000000002');
+      // 反发散断言：两侧必须同值。只投影一处 ⇒ 另一侧读到 undefined/null ⇒ 本断言转红
+      expect(taskValue).toBe(teamValue);
+      // 偏好（配置）与实际（运行）是两个维度，两侧都同时可见
+      expect(
+        teamDto.members.find((m: any) => m.id === 'tmm_0000000001')
+          .preferredWorkerId,
+      ).toBe('w_0000000009');
+      expect(
+        (taskDto.instances as any[]).find((i) => i.id === 'tmm_0000000001')!
+          .preferredWorkerId,
+      ).toBe('w_0000000009');
     });
   });
 });
