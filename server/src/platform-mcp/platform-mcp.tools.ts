@@ -212,12 +212,20 @@ const notifyAgentSchema = z.object({
     .preprocess((v) => v === true || v === 'true', z.boolean())
     .optional()
     .describe(
-      '强行绕过计划门禁/issue 锁（须同时给非空 forceReason 留审计行，否则仍被拦）',
+      '强行绕过计划门禁/issue 锁的**布尔开关**（只认 true，字符串 "true" 亦可）：**必须同时给顶层 forceReason 且其非空**才真正生效，否则门禁照拦不误。⚠️ 不要写成 force:{reason:"..."}——本参数的 JSON Schema 渲染成 {"type":"object"} 只是 zod preprocess 的副作用，平台实际只认布尔；传对象会被静默归一为 false（不报错、也不绕过），你会以为强制已生效而实际被门禁拦下。',
     ),
   forceReason: z
     .string()
     .optional()
-    .describe('force 绕过的审计原因（落回执行 forceReason 列）'),
+    .describe(
+      'force 绕过的**审计原因**（**顶层独立参数**，不要嵌套进 force 里）：与 force=true 同时给出且非空才生效（缺省/空串 = force 无效，门禁照拦）；落回执行 forceReason 列留审计行。',
+    ),
+  supersede: z
+    .boolean()
+    .optional()
+    .describe(
+      '本次派发是「对我此前发给同一目标的在途派发的更正」：为 true 时不被内容去重（dedup）吞掉，新消息正文引用原派发 messageId（返回 origMessageId + superseded:true）并以本条为准。与 force 完全不同：force 是「审计留痕地强行绕过门禁」（须给 forceReason），supersede 是「更正我自己上一条派发」的语义——**不绕过任何门禁**（路由 403 / 节流 / issue 锁 / 计划哈希门 / 评审三元组门照拦），也不需要 forceReason；没有可替换的在途派发时 supersede 退化为普通派发（去重照旧生效）。两者互补：supersede 破去重、force 破门禁——更正若还被 issue 锁拦（reason=duplicate），需同时给 force=true + forceReason 走审计豁免。',
+    ),
   planHash: z
     .string()
     .optional()
@@ -1321,7 +1329,7 @@ function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
     {
       name: 'notify_agent',
       description:
-        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）直接 403（PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION，消息不落库不广播），请先通知主 Agent 由其中转。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, origMessageId?}：reason 词汇 ok|duplicate|dedup|throttled|plan-gated|review-triplet|join-pending（成功 reason=ok；子 Agent 回执（answer、目标为主 Agent，任意 stage/kind）永不在主 Agent 上开执行 turn，返回 triggered:false+reason=join-pending（消息已落库已广播、回执照记，主 Agent 只在 fan-out 收敛 drain 时被唤醒，需立即打断请用 question/help）；被 @ storm 节流 triggered=false+reason=throttled，kind=review 缺三元组 triggered=false+reason=review-triplet+精确 hint，修订不开始；窗口内重复发送 triggered=false+reason=dedup 并回既有 messageId）。拦截语义：除 join-pending 外任何 triggered=false 都表示本次调用未在群聊发布任何消息（messageId 为 null，dedup/duplicate 回既有在途 messageId 除外），triggered:false 不是投递失败，请勿重发，请按 reason 与 hint 处理。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
+        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）直接 403（PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION，消息不落库不广播），请先通知主 Agent 由其中转。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, claimed, sessionStatus, origMessageId?, superseded?, channelSwitched?, channelSwitchReason?}。【triggered 与 claimed 是两件事，别混用】triggered=true 只表示「消息已落库」（投递成功），**不代表目标已开工**；claimed=true 才表示「平台已受理派发且目标有可消费的活会话」——目标会话是 failed/archived 时它不会消费这条派发（此时 claimed=false、sessionStatus 显式给出原因，别在这里干等，先恢复目标会话再重派）；sessionStatus=null 表示目标尚无团队会话行（首次派发，平台会在派发时创建），不是投递失败。reason 词汇 ok|duplicate|dedup|throttled|plan-gated|review-triplet|no-active-task|join-pending（成功 reason=ok；子 Agent 回执（answer、目标为主 Agent，任意 stage/kind）永不在主 Agent 上开执行 turn，返回 triggered:false+reason=join-pending（消息已落库已广播、回执照记，主 Agent 只在 fan-out 收敛 drain 时被唤醒，需立即打断请用 question/help）；被 @ storm 节流 triggered=false+reason=throttled，kind=review 缺三元组 triggered=false+reason=review-triplet+精确 hint，修订不开始；窗口内重复发送 triggered=false+reason=dedup 并回既有 messageId）。拦截语义：除 join-pending 外任何 triggered=false 都表示本次调用未在群聊发布任何消息（messageId 为 null，dedup/duplicate 回既有在途 messageId 除外），triggered:false 不是投递失败，请勿重发，请按 reason 与 hint 处理。更正同一目标的在途派发用 supersede=true（不被 dedup 吞，新消息引用原 messageId）；force 是「审计留痕地强行绕过门禁」的**布尔开关**，须与**顶层独立参数** forceReason 同时给且非空才生效（不要写 force:{reason:"..."}：对象会被静默归一为 false，不报错也不绕过）。团队维度被 no-active-task 拦下时，若团队有 currentTaskId，平台会**自动改走任务维度**重派（返回 channelSwitched:"task" + channelSwitchReason:"no-active-task"，同一次调用只落一条消息）；否则按 hint 走（hint 会给出真实可执行的下一步，任务维度 taskId 是团队维度被拦时的替代通道）。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
       inputSchema: notifyAgentSchema,
       handler: (ctx, args) => service.notifyAgent(ctx, args as NotifyAgentArgs),
     },
