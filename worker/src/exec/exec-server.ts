@@ -36,6 +36,7 @@ import {
 import { ServeEventStream } from '../driver/serve-event-stream';
 import {
   RunTerminalGate,
+  V2RunEventScope,
   V2StreamAccumulator,
   assembleAssistantText,
   deriveUpstreamIdentity,
@@ -2596,6 +2597,10 @@ export class ExecServer {
     // ——v2 /api/event 是 volatile 实时总线（不重放历史帧），续用旧缓冲会拼出一段
     // 从未存在过的正文。
     const accumulator = new V2StreamAccumulator();
+    // 事件归属闸门（按任务隔离）：只承认「用户 prompt 入队之后启动的执行」的终态。
+    // 同一会话首次下发前的 move 也是一个独立执行，它的 succeeded 不是本轮结束——
+    // 不挡会把运行提前收口，导致权限/问题事件永远不上送（见 V2RunEventScope）。
+    const runScope = new V2RunEventScope();
     let sseStream: ServeEventStream | null = null;
     if (sseEnabled && this.driver.baseUrl) {
       sseStream = new ServeEventStream({
@@ -2603,7 +2608,7 @@ export class ExecServer {
         serverPassword: this.driver.authPassword,
         logger: this.logger,
         onEvent: (frame) => {
-          this.handleV2Event(frame, sessionID, ctx, accumulator, gate, enqueueParts, detector);
+          this.handleV2Event(frame, sessionID, ctx, accumulator, gate, enqueueParts, detector, runScope);
         },
         onMalformed: (info) => {
           this.logger.warn(
@@ -2725,7 +2730,8 @@ export class ExecServer {
   /**
    * v2 事件 → vteam 事件的桥接（映射表见 `v2-event-map.ts`）。
    *
-   * 三步：① 按会话过滤（/api/event 是全局总线）→ ② 查映射表 → ③ 上送（附上游身份）。
+   * 四步：① 按会话过滤（/api/event 是全局总线）→ ② 本轮归属闸门（只认用户 prompt
+   * 启动的执行）→ ③ 查映射表 → ④ 上送（附上游身份）。
    *
    * 终态事件（`session.execution.*`）**不在这里发送**——交给 `RunTerminalGate` 统一
    * 收口，否则事件路与消息轮询路会各发一次完成事件。
@@ -2738,13 +2744,16 @@ export class ExecServer {
     gate: RunTerminalGate,
     enqueueParts: (parts: DriverContent[], upstream?: UpstreamEventIdentity) => void,
     detector: PendingQuestionDetector,
+    runScope: V2RunEventScope,
   ): void {
     // ① 全局总线过滤：只处理本任务会话的事件（无会话 id 的帧无法归属 → 丢弃）
     const frameSession = resolveV2SessionId(frame);
     if (frameSession === '' || frameSession !== sessionID) {
       return;
     }
-    // ② 映射（表驱动；未映射的事件 = 「已知未支持」清单里的条目，丢弃即可）
+    // ② 本轮归属：move/建会话等基础设施执行的终态不得结束本轮（见 V2RunEventScope）
+    const scope = runScope.observe(frame);
+    // ③ 映射（表驱动；未映射的事件 = 「已知未支持」清单里的条目，丢弃即可）
     const outcomes = mapV2Event(frame, { sessionId: sessionID, accumulator });
     if (outcomes.length === 0) {
       return;
@@ -2757,6 +2766,16 @@ export class ExecServer {
         continue;
       }
       if (outcome.terminal !== undefined) {
+        if (!scope.allowTerminal) {
+          // move（首次下发前切目录）/建会话等基础设施执行的成功不算本轮结束：
+          // 放过去会立刻收口本轮（SSE 关闭 + 停止轮询），真正的 prompt 执行与
+          // 其权限/问题请求就再也没人上报了。
+          this.logger.info(
+            `[sse-forward] 忽略本轮 prompt 之前的执行终态（session=${sessionID}，type=${frame.type}）：` +
+              'move/建会话等基础设施执行，不代表本轮结束',
+          );
+          continue;
+        }
         // 终态：交终态闸门（不直接发送）
         gate.noteEvent(
           {
@@ -2767,7 +2786,7 @@ export class ExecServer {
         );
         continue;
       }
-      // ③ 上送（附上游身份 → server 可跨 worker 重启去重）
+      // ④ 上送（附上游身份 → server 可跨 worker 重启去重）
       if (outcome.type === WORKER_EVENT_TYPES.MESSAGE_PART_DELTA) {
         // 流式增量走串行链（与轮询路同一条链，保证顺序）
         const parts = outcome.payload.parts;
