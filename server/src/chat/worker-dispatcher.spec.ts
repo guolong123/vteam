@@ -2274,6 +2274,27 @@ describe('WorkerDispatcher', () => {
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('wecom_reply');
     });
 
+    it('GLOBAL 点名 vteam_tool_schema 自省工具：参数别靠报错反推', () => {
+      // 批次 B-3：只读自省通道早已存在（PLATFORM_MCP_READONLY_TOOLS=['tool_schema']
+      // ⇒ 能力门恒放行；7 个内置岗位 toolAllows 均 allow），但此前没有任何提示词
+      // 提到它 ⇒ agent 只能靠「最小调用 + 校验报错」反推参数（记忆 me_0000000231）。
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【工具自省】');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_tool_schema');
+      // 计划员岗位屏蔽【记忆管理】段时走 GLOBAL_BASE_LINES ⇒ 同一提示仍在场
+      const plan: AgentIdentityInfo = {
+        id: 'a_plan',
+        name: '计划员',
+        role: 'plan',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      };
+      const planTools = resolveConstantPolicySource('vteam-plan')!.config.tools;
+      const planS = buildSystemInstructions(plan, { resolvedTools: planTools });
+      expect(planS).not.toContain('【记忆管理】');
+      expect(planS).toContain('vteam_tool_schema');
+    });
+
     it('GLOBAL 常量含【记忆管理】段：引导经 memory_list/memory_save 按需存取记忆（21 篇按需注入哲学）', () => {
       // 三个 sentinel 全部在 join 后的 GLOBAL prompt 中（机器可断言，非"模型会调用工具"行为）
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【记忆管理】');
