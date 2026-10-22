@@ -870,12 +870,16 @@ describe('ArtifactsService', () => {
         status: 'archived',
         artifact: { id: 'art_0000000001' },
       });
-      expect(appendSpy).toHaveBeenCalledWith('t_0000000001', {
-        taskId: 't_0000000001',
-        type: 'text',
-        title: '结论',
-        content: '通过',
-      });
+      expect(appendSpy).toHaveBeenCalledWith(
+        't_0000000001',
+        {
+          taskId: 't_0000000001',
+          type: 'text',
+          title: '结论',
+          content: '通过',
+        },
+        {},
+      );
       appendSpy.mockRestore();
     });
   });
