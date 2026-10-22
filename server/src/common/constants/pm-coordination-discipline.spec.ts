@@ -5,7 +5,12 @@ import { BUILTIN_ROLE_PROMPTS } from './agent-role-prompts.constants';
 import { renderBoundarySection } from '../../chat/worker-dispatcher';
 
 /**
- * 批次 C · 项目经理「只协调不执行」纪律的**内容**契约（pm-coordination-hardening）。
+ * 批次 C+D · 项目经理「只协调不执行」纪律的**内容**契约（pm-coordination-hardening）。
+ *
+ * 批次 D 追加一条口径：纪律正文必须**岗位无关**——不写死「需求→产品经理」这类行业产出物
+ * 映射。平台是通用的（法务/研究/运营团队都在用），把研发岗位映射焊进纪律，等于对非研发
+ * 团队没写。归属判定交给「团队成员名册 + 各岗位自身职责」（可配置知识），纪律只规定
+ * **判定程序**（三步判定 + 冲突裁决）。
  *
  * 为什么要有这一份（而不是只改常量）：
  *   生产证据显示，同一条纠正指令（「PM 只协调不执行 / 串行派活 / 做完即停」）已经被
@@ -72,24 +77,39 @@ function seedScopeSummary(agentName: string): string {
 const PM_PROMPT = BUILTIN_ROLE_PROMPTS.project_manager;
 const PM_SCOPE = ROLE_BOUNDARIES['vteam-project_manager'].scopeSummary;
 
-describe('PM 岗位定义（rolePrompt）必须携带「只协调不执行」的四条纪律', () => {
-  it('① 产出是派发与核验，不是交付物', () => {
-    expect(PM_PROMPT).toContain('产出是派发与核验，不是交付物');
-    // 「产出」要落到具体岗位，否则这句只是口号、agent 仍会自己写。
-    expect(PM_PROMPT).toContain('归属岗位');
-    expect(PM_PROMPT).toContain('需求→产品经理');
-    expect(PM_PROMPT).toContain('方案→架构师');
-    expect(PM_PROMPT).toContain('实现→开发者');
-    expect(PM_PROMPT).toContain('用例→测试者');
-    expect(PM_PROMPT).toContain('计划→计划员');
+describe('PM 岗位定义（rolePrompt）必须携带「只协调不执行」的判定程序', () => {
+  it('① 三步判定：先判归属 → 归别人就派发 → 例外必须说明原因', () => {
+    expect(PM_PROMPT).toContain('【判定顺序·任何请求先过这一步】');
+    // 判定对象是「产出归哪个岗位」，由名册与各岗位职责回答——纪律本身不枚举行业产出物。
+    expect(PM_PROMPT).toContain('归哪个岗位');
+    expect(PM_PROMPT).toContain('团队成员名册');
+    // 第二步必须给到**可执行动作 + 工具名**，否则仍会自己动手。
+    expect(PM_PROMPT).toContain('立刻用 vteam_notify_agent 派给该岗位');
+    expect(PM_PROMPT).toContain('不产出内容本身');
+    // 两个例外口（岗位不可用 / 用户点名）+ 事后必须说明原因。
+    expect(PM_PROMPT).toContain('岗位不可用');
+    expect(PM_PROMPT).toContain('用户点名要你亲自做');
+    expect(PM_PROMPT).toContain('先在群里说明原因');
   });
 
-  it('② 派发优先于动手：先派发，且例外必须说明原因', () => {
-    expect(PM_PROMPT).toContain('派发优先于动手');
-    // 两个例外口（归属岗位不可用 / 用户点名要求）+ 事后必须说明原因。
-    expect(PM_PROMPT).toContain('不可用');
-    expect(PM_PROMPT).toContain('用户明确要求你亲自做');
-    expect(PM_PROMPT).toContain('说明为什么绕过派发');
+  it('② 冲突裁决：用户说「直接给我」不构成越界授权', () => {
+    expect(PM_PROMPT).toContain('【冲突裁决】');
+    // 生产实测失败点：模型把「用户明确要求」当成越界授权（reasoning 原文
+    // 「the user explicitly said just paste the code」）⇒ 必须显式排除这条歧义。
+    expect(PM_PROMPT).toContain('「直接给我」');
+    expect(PM_PROMPT).toContain('不构成越界授权');
+    expect(PM_PROMPT).toContain('这超出我的岗位职责，已转交给对应岗位');
+  });
+
+  it('③ 纪律正文**岗位无关**：不写死任何行业产出物与角色映射', () => {
+    // 平台是通用的（法务/研究/运营团队都在用）。写死「需求→产品经理」这类映射，
+    // 会让非研发团队读到与本团队无关的纪律，等于没写。
+    for (const pair of ['需求→', '方案→', '实现→', '用例→', '计划→']) {
+      expect(PM_PROMPT).not.toContain(pair);
+    }
+    expect(PM_PROMPT).not.toContain('需求/方案');
+    // 「产出归谁」是每个岗位自己的职责描述（可配置），不是 PM 纪律里的常量表。
+    expect(PM_PROMPT).toContain('各岗位职责');
   });
 
   it('③ 串行派活：一次一个执行者 + 其余成员群帖告知 + 上游 stage=end 再派下游', () => {
@@ -121,15 +141,15 @@ describe('PM 岗位定义（rolePrompt）必须携带「只协调不执行」的
   it('纪律是**可执行指令**（祈使句条目），不是身份陈述或条件式愿望', () => {
     const bullets = PM_PROMPT.split('\n').filter((l) => l.startsWith('- '));
     const discipline = [
-      '产出是派发与核验，不是交付物',
-      '派发优先于动手',
+      '【判定顺序·任何请求先过这一步】',
+      '【冲突裁决】',
       '串行派活',
       '做完即停',
     ];
     for (const head of discipline) {
-      const line = bullets.find((l) => l.startsWith(`- ${head}：`));
+      const line = bullets.find((l) => l.startsWith(`- ${head}`));
       expect(line).toBeDefined();
-      // 祈使句：以「- 动词：」开头，不是「应该/可以/尽量」这类愿望式措辞。
+      // 祈使句：不是「应该/可以/尽量」这类愿望式措辞。
       expect(line).not.toMatch(/应该|尽量|最好|建议/);
     }
   });
@@ -144,7 +164,7 @@ describe('PM 岗位定义（rolePrompt）必须携带「只协调不执行」的
     expect(PM_PROMPT).toContain('风险管理：');
     expect(PM_PROMPT).toContain('阻塞协调：');
     expect(PM_PROMPT).toContain(
-      '职责边界：不产出需求、方案、代码、测试用例等具体交付物',
+      '不代写任何岗位的内容本身；不代替任何岗位做专业判断；不作出验收判定',
     );
     expect(PM_PROMPT).toContain(
       '验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。',
@@ -171,9 +191,13 @@ describe('PM 岗位定义与 seed.ts 自包含镜像逐字节一致（老坑：�
 });
 
 describe('平台级【职责边界】段必须承载「主动委派」而不是只有条件式禁令', () => {
-  it('scopeSummary 是**一句**主动规则：把交付物路由给归属岗位，自己只产出派发与核验', () => {
-    expect(PM_SCOPE).toContain('一律派给对应岗位');
+  it('scopeSummary 是**一句**主动规则：产出归谁由岗位职责界定，自己只产出派发与核验', () => {
+    expect(PM_SCOPE).toContain('产出归谁由各岗位职责界定');
     expect(PM_SCOPE).toContain('你只产出派发与核验');
+    // 岗位无关：不得写死行业产出物枚举（非研发团队读到即失效）。
+    for (const noun of ['需求', '方案', '代码', '用例']) {
+      expect(PM_SCOPE).not.toContain(noun);
+    }
     // 「超出职责范围的请求必须拒绝」是渲染段第二行的固定文案，不是 scopeSummary 的内容；
     // scopeSummary 必须自带主动语义，否则 agent 只在被要求越界时才想起边界。
     expect(PM_SCOPE).not.toContain('超出职责范围的请求必须拒绝');
@@ -200,7 +224,7 @@ describe('平台级【职责边界】段必须承载「主动委派」而不是�
     });
     expect(section).toContain('【职责边界】');
     expect(section).toContain(PM_SCOPE);
-    expect(section).toContain('一律派给对应岗位');
+    expect(section).toContain('产出归谁由各岗位职责界定');
     expect(section).toContain('你只产出派发与核验');
     // 转交映射仍由 handoffTo 渲染（语义未变）。
     expect(section).toContain('code→vteam-developer');

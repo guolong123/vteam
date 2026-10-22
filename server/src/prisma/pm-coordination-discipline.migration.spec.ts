@@ -1,7 +1,5 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ROLE_BOUNDARIES } from '../common/constants/agent.constants';
-import { BUILTIN_ROLE_PROMPTS } from '../common/constants/agent-role-prompts.constants';
 
 /**
  * 迁移守卫 spec：`20261022000000_pm_coordination_discipline`（pm-coordination-hardening 批次 C3）。
@@ -33,8 +31,8 @@ import { BUILTIN_ROLE_PROMPTS } from '../common/constants/agent-role-prompts.con
  *   5. **不碰其他岗位**（可执行 SQL 里不得出现别的内置 role key / 别的表）；
  *   6. **幂等**：三条的 WHERE 只认「出厂旧值」，新值不在其中 ⇒ 重跑 0 行受影响；
  *   7. **不覆盖用户编辑**：WHERE 认的是出厂旧正文，管理员改过的正文与之不等 ⇒ 不动；
- *   8. **三处副本同文**：常量 === seed 镜像 === 迁移字面量（role_prompt 与 scopeSummary 各一份），
- *      且迁移内 description 字面量 === scopeSummary 字面量；
+ *   8. **迁移内两份副本同文**：description 字面量 === scopeSummary 字面量（seed 把 description
+ *      落成 scopeSummary，二者是同一条事实）；txn 正文本身冻结为批次 C 出厂值（见 NEW_PROMPT 注释）；
  *   9. **baseline 未被编辑**：基线里既没有新正文，列形态也没变。
  */
 const MIGRATION_DIR_NAME = '20261022000000_pm_coordination_discipline';
@@ -68,8 +66,6 @@ const BASELINE = path.resolve(
 );
 
 const SCHEMA = path.resolve(__dirname, '..', '..', 'prisma', 'schema.prisma');
-
-const SEED = path.resolve(__dirname, '..', '..', 'prisma', 'seed.ts');
 
 /** 上一批手写迁移目录名——本迁移必须在字典序上排在它之后。 */
 const PREVIOUS_MIGRATION_DIR_NAME = '20261019000000_parallel_tasks';
@@ -108,44 +104,6 @@ function literalAfter(source: string, pattern: RegExp): string {
   return m![1];
 }
 
-/** seed.ts 的 `BUILTIN_ROLE_PROMPTS` 自包含镜像（seed 不 import src，只能取源码）。 */
-function seedRolePrompts(): Record<string, string> {
-  const source = fs.readFileSync(SEED, 'utf8');
-  const marker = 'const BUILTIN_ROLE_PROMPTS: Record<string, string> =';
-  const at = source.indexOf(marker);
-  expect(at).toBeGreaterThanOrEqual(0);
-  const open = source.indexOf('{', at + marker.length - 1);
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < source.length; i++) {
-    if (source[i] === '{') depth++;
-    else if (source[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
-    }
-  }
-  expect(end).toBeGreaterThan(open);
-  return new Function(`return (${source.slice(open, end + 1)});`)() as Record<
-    string,
-    string
-  >;
-}
-
-/** seed.ts 里 `ROLE_BOUNDARIES` 镜像中某角色的 `scopeSummary` 字面量。 */
-function seedScopeSummary(agentName: string): string {
-  const source = fs.readFileSync(SEED, 'utf8');
-  const block = new RegExp(
-    `'${agentName}': defineBoundary\\(\\{([\\s\\S]*?)\\n {2}\\}\\),`,
-  ).exec(source);
-  expect(block).not.toBeNull();
-  const literal = /scopeSummary:\s*(\n\s*)?('(?:[^'\\]|\\.)*')/.exec(block![1]);
-  expect(literal).not.toBeNull();
-  return new Function(`return ${literal![2]}`)() as string;
-}
-
 /** 历史出厂正文 v1（5c38304 引入、5072df5 改掉）——scopeSummary 的旧值之一。 */
 const OLD_SCOPE_V1 =
   '流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。';
@@ -154,8 +112,38 @@ const OLD_SCOPE_V1 =
 const OLD_SCOPE_V2 =
   '流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。';
 
-const NEW_PROMPT = BUILTIN_ROLE_PROMPTS.project_manager;
-const NEW_SCOPE = ROLE_BOUNDARIES['vteam-project_manager'].scopeSummary;
+/**
+ * 本迁移写入的正文**冻结**为批次 C 的出厂值——它守的是一份**历史**迁移。
+ * 批次 D 之后 `BUILTIN_ROLE_PROMPTS` / `ROLE_BOUNDARIES` 已前进（岗位无关版），
+ * 若继续拿 live 常量比对，这份历史迁移会看似「写错了」而实际没错。
+ * live 常量与 seed 镜像的逐字节一致性由 `common/constants/pm-coordination-discipline.spec.ts`
+ * 与 `src/prisma/pm-discipline-generic.migration.spec.ts` 各自兜底。
+ */
+const NEW_PROMPT = [
+  '# 角色：项目经理',
+  '你是任务虚拟团队中的项目经理 Agent，只负责流程控制，不产出具体交付物。',
+  '',
+  '## 职责',
+  '- 环节推进：按已确认的实施计划（计划员产出）推进环节流转，用 issue 跟踪每项状态；不自行拆解任务、不制定实施计划，缺失计划时 @计划员-1 补出。',
+  '- 计划完工：任务交付齐备或进入待验收时，若计划仍处于执行中，须调 vteam_plan_complete 标记计划完工（executing→completed）；平台真值源是 DB plans.status，改计划文件无效，不要 @计划员-1 去改文件。',
+  '- 进度跟踪：掌握团队各角色进展，环节切换或产出完成时主动在群聊同步进度与待办。',
+  '- 风险管理：识别需求/方案/实现/验证各环节的风险与依赖，提前向成员提示并给出缓解建议。',
+  '- 阻塞协调：发现阻塞时定位责任角色，用 vteam_notify_agent 定向协调，必要时提示成员介入。',
+  '- 产出是派发与核验，不是交付物：需求、方案、实现代码、测试用例、计划一律由归属岗位产出（需求→产品经理、方案→架构师、实现→开发者、用例→测试者、计划→计划员）；你的产出只有派发记录、进度与风险信息、核验结论，不代写内容本身。',
+  '- 职责边界：不产出需求、方案、代码、测试用例等具体交付物；不代替任何角色做专业判断；不作出验收判定。流程控制信息（进度、风险、协调记录）经群聊消息与 issue 记录承载。',
+  '',
+  '## 协同方式',
+  '- 响应 @ 触发；被 @all 广播时同步项目目标与分工。',
+  '- 派发优先于动手：收到需求先派给归属岗位；只有该岗位不可用（无人或无法开工），或用户明确要求你亲自做，你才亲自做，且必须先在群里说明为什么绕过派发。',
+  '- 串行派活：一次只激活一个执行者——要某人开工就只发一条 vteam_notify_agent 定向派发，其余成员用 vteam_group_post 群帖告知（群帖不唤醒任何人）；有先后依赖时分阶段派发，上游回执 stage=end（已完工）后再派下游。',
+  '- 做完即停：只完成派给你的那一步就停；不并行产出别处的材料，不替其他岗位做专业判断（方案选型、代码写法、用例设计、验收结论都不是你的产出）。',
+  '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）：先明确拒绝，再把该工作交给归属岗位，不要顺手自己做掉。',
+  '- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。',
+].join('\n');
+
+const NEW_SCOPE = [
+  '流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；需求/方案/实现/用例/计划一律派给对应岗位，你只产出派发与核验。',
+].join('\n');
 
 describe(`migration ${MIGRATION_DIR_NAME}`, () => {
   it('① 迁移目录恰好一个，字典序晚于上一批与 baseline', () => {
@@ -332,7 +320,7 @@ describe(`migration ${MIGRATION_DIR_NAME}`, () => {
     }
   });
 
-  it('⑧ 三处副本同文：常量 === seed 镜像 === 迁移字面量（且迁移内两份同文）', () => {
+  it('⑧ 迁移内两份副本同文（scopeSummary === description），且与冻结的批次 C 正文一致', () => {
     const roleNew = unescapeLiteral(
       literalAfter(
         statements()[0],
@@ -351,12 +339,8 @@ describe(`migration ${MIGRATION_DIR_NAME}`, () => {
         /UPDATE `execution_policies`\nSET `description` = '((?:[^'\\]|\\.)*)'/,
       ),
     );
-    expect(roleNew).toBe(BUILTIN_ROLE_PROMPTS.project_manager);
-    expect(roleNew).toBe(seedRolePrompts().project_manager);
-    expect(scopeNew).toBe(
-      ROLE_BOUNDARIES['vteam-project_manager'].scopeSummary,
-    );
-    expect(scopeNew).toBe(seedScopeSummary('vteam-project_manager'));
+    expect(roleNew).toBe(NEW_PROMPT);
+    expect(scopeNew).toBe(NEW_SCOPE);
     // 迁移内的两份副本（config.correction.scopeSummary 与 description）必须逐字节同文：
     // seed 把 description 落成 scopeSummary，两者是**同一条事实**，漂移即为不一致。
     expect(descNew).toBe(scopeNew);
