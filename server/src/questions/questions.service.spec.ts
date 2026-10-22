@@ -133,6 +133,42 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       });
     });
 
+    it('托管团队 + 请求方是**主 Agent 本人** → managedMode 必须为 false（否则前端不弹窗、后端不许自确认 = 永久挂死）', async () => {
+      prisma.agentQuestion.findMany.mockResolvedValue([
+        aqRow({ kind: 'permission', content: { type: 'external_directory' } }),
+      ]);
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1', teamId: 'tm_1' }]);
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', teamId: 'tm_1', teamMemberId: 'tmm_main' },
+      ]);
+      prisma.team.findMany.mockResolvedValue([
+        { id: 'tm_1', managedMode: true, mainAgentMemberId: 'tmm_main' },
+      ]);
+
+      const list = await service.findAll({ taskId: 't_1', status: 'pending' });
+
+      expect(list).toHaveLength(1);
+      expect(list[0].managedMode).toBe(false);
+    });
+
+    it('托管团队 + 请求方是普通成员 → managedMode 保持 true（托管仍由主 Agent 代确认）', async () => {
+      prisma.agentQuestion.findMany.mockResolvedValue([
+        aqRow({ kind: 'permission', content: { type: 'external_directory' } }),
+      ]);
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1', teamId: 'tm_1' }]);
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', teamId: 'tm_1', teamMemberId: 'tmm_member' },
+      ]);
+      prisma.team.findMany.mockResolvedValue([
+        { id: 'tm_1', managedMode: true, mainAgentMemberId: 'tmm_main' },
+      ]);
+
+      const list = await service.findAll({ taskId: 't_1', status: 'pending' });
+
+      expect(list).toHaveLength(1);
+      expect(list[0].managedMode).toBe(true);
+    });
+
     it('pending 超 TTL → 惰性过期落库 expired + emit 收敛 + 重查过滤（僵尸弹窗不无限）', async () => {
       const stale = aqRow({
         id: 'aq_stale',
