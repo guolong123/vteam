@@ -1,0 +1,827 @@
+================================================================================
+task-current-worker-id — 服务端「当前运行节点」(currentWorkerId) 投影落地证据
+================================================================================
+Repo   : /Volumes/SSD-Data/01work/git-project/vteam
+Scope  : server/src/teams/teams.service.ts
+         server/src/tasks/tasks.service.ts
+         server/src/teams/teams.service.spec.ts
+         server/src/tasks/tasks.service.spec.ts
+Goal   : 在既有 team/task 读 API 上暴露「成员会话当前实际绑定的 worker」
+         （运行节点），与既有「偏好节点」preferredWorkerId 并列可见。
+
+--------------------------------------------------------------------------------
+0. 冻结契约（web 侧按此实现，字段名/语义两侧完全一致）
+--------------------------------------------------------------------------------
+字段名  : currentWorkerId
+类型    : string | null
+含义    : 成员**团队会话**（Session.taskId = null）的 workerId —— 即「实际运行节点」
+          null = ① 成员尚无会话；② 会话存在但未绑定任何 worker
+出现位置: ① GET /teams/:id  → members[].currentWorkerId
+          ② GET /teams      → items[].members[].currentWorkerId
+          ③ GET /tasks/:id  → instances[].currentWorkerId
+          ④ GET /tasks      → items[].instances[].currentWorkerId
+不变项  : preferredWorkerId 语义 / 优先级链 / 全部写路径 / prisma schema / 迁移
+          —— 均未改动。
+
+最终 JSON 形状（两个投影字段名相同、语义相同 ⇒ 前端只读一个字段即可）：
+  {
+    "members": [
+      {
+        "id": "tmm_0000000001",
+        "preferredWorkerId": "w_0000000009",   // 配置偏好（既有，未改语义）
+        "currentWorkerId":  "w_0000000002",   // 新增：实际运行节点
+        ...
+      }
+    ],
+    "instances": [
+      {
+        "id": "tmm_0000000001",
+        "preferredWorkerId": "w_0000000009",   // 配置偏好（既有，未改语义）
+        "currentWorkerId":  "w_0000000002",   // 新增：实际运行节点
+        "sessionStatus": "running",
+        "sessionId": "s_0000000041",
+        ...
+      }
+    ]
+  }
+
+--------------------------------------------------------------------------------
+1. 改动文件（git diff --stat）
+--------------------------------------------------------------------------------
+ server/src/tasks/tasks.service.spec.ts | 172 +++++++++++++++++++++++++++++++++
+ server/src/tasks/tasks.service.ts      |  29 +++++-
+ server/src/teams/teams.service.spec.ts |  94 ++++++++++++++++++
+ server/src/teams/teams.service.ts      |  54 ++++++++++-
+ 4 files changed, 343 insertions(+), 6 deletions(-)
+
+--------------------------------------------------------------------------------
+2. 实现要点
+--------------------------------------------------------------------------------
+server/src/teams/teams.service.ts
+  * 新增 private async currentWorkerByMember(teamIds: string[]): Promise<Map<string, string|null>>
+      —— 一次查询覆盖整批：
+         prisma.session.findMany({
+           where: { teamId: { in: ids }, taskId: null },   // 只取团队会话行
+           select: { teamMemberId: true, workerId: true },
+         })
+      uk_sessions_team_member 唯一键只约束 task-less 行 ⇒ 每个 (teamId, teamMemberId)
+      至多一行团队会话 ⇒ memberId→workerId 映射天然无歧义。
+  * findOne(id)   : currentWorkerByMember([team.id])           → 1 次查询
+  * findAll(...)  : currentWorkerByMember(整页 teamIds)         → 每页 1 次查询（非 N+1）
+  * toTeamDto(team, currentWorkerMap?)  第二参数可选 ⇒ 既有调用方签名不变（缺省 ⇒ 全 null）
+  * 成员行恒返回 currentWorkerId（拿不到就 null），绝不条件省略：
+      ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
+
+server/src/tasks/tasks.service.ts
+  * toTaskDto 的 session.findMany select 增加 workerId: true（零额外查询）
+  * sessionByMember map 值类型扩为 { id; status; workerId: string | null }
+  * 实例行增加 currentWorkerId: s?.workerId ?? null（取实例本就解析的那条会话行）
+
+未改动：所有写路径（create/update/updateMember/removeMember/…）、
+        prisma/schema.prisma、迁移、优先级链、preferredWorkerId 语义、
+        web/ 目录、server/src/chat/**（同批次另两个 agent 的地盘）。
+
+--------------------------------------------------------------------------------
+3. 验收命令 ①：cd server && npx jest src/teams src/tasks
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/teams src/tasks
+PASS src/tasks/task-channel-bindings.controller.spec.ts (10.641 s)
+PASS src/tasks/plan-lifecycle.service.spec.ts (10.692 s)
+PASS src/tasks/plan-revise-loop.spec.ts
+PASS src/teams/teams.controller.spec.ts (11.32 s)
+PASS src/teams/seed.spec.ts
+PASS src/tasks/plan-finalize-trio.spec.ts
+PASS src/teams/teams.service.spec.ts (11.686 s)
+PASS src/tasks/plan-docs.service.spec.ts
+PASS src/tasks/task-long-running.guard.spec.ts
+PASS src/tasks/plan-review-wiring.spec.ts (11.961 s)
+PASS src/tasks/plan-steps.service.spec.ts
+PASS src/tasks/plan-archive.service.spec.ts
+PASS src/tasks/task-progression.scheduler.spec.ts (12.581 s)
+PASS src/tasks/tasks-remove.spec.ts (12.763 s)
+PASS src/tasks/tasks.service.spec.ts (12.801 s)
+PASS src/tasks/tasks.controller.spec.ts (12.835 s)
+Test Suites: 16 passed, 16 total
+Tests:       503 passed, 503 total
+Snapshots:   0 total
+Time:        14.378 s
+Ran all test suites matching /src\/teams|src\/tasks/i.
+
+--------------------------------------------------------------------------------
+4. 验收命令 ②：cd server && npx jest src（全量）
+--------------------------------------------------------------------------------
+$ cd server && npx jest src
+FAIL src/prisma/parallel-tasks.migration.spec.ts (12.025 s)
+PASS src/chat/worker-dispatcher.integration.spec.ts (15.433 s)
+PASS src/chat/worker-dispatcher.snapshot.spec.ts (15.461 s)
+PASS src/models/models.controller.spec.ts
+PASS src/platform-mcp/platform-mcp.service.hook.spec.ts (15.91 s)
+PASS src/platform-mcp/platform-mcp.file-path-resolution.spec.ts
+PASS src/skills/skills.service.spec.ts
+PASS src/agents/agents.controller.spec.ts (16.541 s)
+PASS src/platform-mcp/platform-mcp.controller.spec.ts (16.842 s)
+PASS src/platform-mcp/platform-mcp.tool-permission.spec.ts
+PASS src/swagger-mcp/swagger-mcp.controller.spec.ts (16.892 s)
+PASS src/memories/memories.controller.spec.ts
+PASS src/platform-mcp/plan-managed-signoff.spec.ts
+PASS src/chat/worker-dispatcher.gate.spec.ts
+PASS src/chat/worker-dispatcher.plan-hash.spec.ts
+PASS src/tools/tools.controller.spec.ts
+PASS src/common/constants/trigger.constants.spec.ts
+PASS src/triggers/hook.service.spec.ts
+PASS src/models/models.service.spec.ts
+PASS src/execution-policies/agent-policies-db-driven.spec.ts
+PASS src/agents/agents.service.spec.ts
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/issues/issues.controller.spec.ts
+PASS src/platform-mcp/platform-mcp.authority-matrix.spec.ts
+PASS src/chat/worker-dispatcher.spec.ts (19.049 s)
+PASS src/agent-roles/agent-roles.controller.spec.ts
+PASS src/tasks/task-progression.scheduler.spec.ts
+PASS src/tasks/tasks-remove.spec.ts
+PASS src/platform-mcp/platform-mcp.service.spec.ts (20.443 s)
+PASS src/teams/teams.service.spec.ts
+PASS src/workers/workers.service.spec.ts
+PASS src/teams/teams.controller.spec.ts
+PASS src/tasks/tasks.service.spec.ts
+PASS src/prisma/capability-memory-org-tools-upgrade.spec.ts
+PASS src/tasks/tasks.controller.spec.ts
+PASS src/execution-policies/agent-policies.controller.spec.ts
+PASS src/chat/chat.service.spec.ts
+PASS src/tasks/task-channel-bindings.controller.spec.ts
+PASS src/workers/dto/worker-dto.spec.ts
+PASS src/tasks/plan-review-wiring.spec.ts
+PASS src/memories/memories.service.spec.ts
+PASS src/tasks/plan-lifecycle.service.spec.ts
+PASS src/users/users.service.spec.ts
+PASS src/skills/skills.controller.spec.ts
+PASS src/notifications/notification-dispatcher.service.spec.ts
+PASS src/message-channels/message-channels.controller.spec.ts
+PASS src/artifacts/artifacts.controller.spec.ts
+PASS src/questions/questions.service.spec.ts
+PASS src/common/constants/agent-role.constants.spec.ts
+PASS src/issues/review-round-gate.service.spec.ts
+PASS src/chat/review-round-timeout.handler.spec.ts
+PASS src/prisma/realtime-events-retention.migration.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+PASS src/notifications/notification-channels.controller.spec.ts
+PASS src/execution-policies/execution-policy.service.spec.ts
+PASS src/common/credential-crypto.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.reply-join.spec.ts
+PASS src/workers/worker-events.controller.spec.ts
+PASS src/execution-policies/agent-policies.matrix.spec.ts
+PASS src/platform-mcp/platform-mcp.service.review-round-open.spec.ts
+PASS src/mcp-servers/mcp-servers.service.spec.ts
+PASS src/message-channels/adapters/wecom-aibot.adapter.spec.ts
+PASS src/message-channels/message-inbound.service.spec.ts
+PASS src/workers/worker-event.ingress.spec.ts
+PASS src/execution-policies/agent-policies.no-external-emission.spec.ts
+PASS src/notifications/adapters/wecom-group-robot.adapter.spec.ts
+PASS src/common/id-resync.spec.ts
+PASS src/common/constants/event.constants.spec.ts
+PASS src/users/admin.guard.spec.ts
+PASS src/mcp-servers/mcp-servers.controller.spec.ts
+PASS src/chat/chat.controller.spec.ts
+PASS src/git-repos/git-repos.controller.spec.ts
+PASS src/artifacts/artifacts.service.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+PASS src/issues/review-round.service.spec.ts
+PASS src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/timers/triggers.service.spec.ts
+PASS src/agent-roles/agent-roles.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.review-dispatch.spec.ts
+PASS src/workers/workers.controller.spec.ts
+PASS src/execution-policies/dto/policy-config.dto.spec.ts
+PASS src/issues/review-verdict.listener.spec.ts
+PASS src/triggers/hook-failure.listener.spec.ts
+PASS src/issues/review-round-gate.attach-notifier.spec.ts
+PASS src/message-channels/adapters/generic-webhook-inbound.adapter.spec.ts
+PASS src/common/id-resync.guard.spec.ts
+PASS src/usage/usage.controller.spec.ts
+PASS src/execution-policies/agent-policies-db-builtin.spec.ts
+PASS src/execution-policies/policy-canonical.spec.ts
+PASS src/common/constants/status-vocabulary.spec.ts
+PASS src/skills/skill-frontmatter.util.spec.ts
+PASS src/issues/issues.service.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-naming.spec.ts
+PASS src/execution-policies/execution-policies.controller.spec.ts
+PASS src/teams/seed.spec.ts
+PASS src/memories/memory-maintenance.service.spec.ts
+PASS src/workers/worker-token.guard.spec.ts
+PASS src/swagger-mcp/swagger-tools.sync.spec.ts
+PASS src/triggers/trigger-reconciler.service.spec.ts
+PASS src/common/guards/team-membership.guard.spec.ts
+PASS src/chat/receipt-nudge.handler.spec.ts
+PASS src/message-channels/message-delivery.service.spec.ts
+PASS src/tools/tools.service.spec.ts
+PASS src/notifications/adapters/webhook-notification.adapter.spec.ts
+PASS src/usage/usage.service.spec.ts
+PASS src/questions/questions.controller.spec.ts
+PASS src/uploads/uploads.service.spec.ts
+PASS src/git-repos/git-repos.service.spec.ts
+PASS src/prisma/task-long-running.migration.spec.ts
+PASS src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts
+PASS src/execution-policies/agent-policies.native-edit.spec.ts
+PASS src/platform-mcp/platform-mcp.constants.spec.ts
+PASS src/prisma/capability-memory-org-tools.migration.spec.ts
+PASS src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+PASS src/prisma/agent-prompt-backfill.migration.spec.ts
+PASS src/users/roles.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.gate.spec.ts
+PASS src/workers/worker-update-state.spec.ts
+PASS src/prisma/worker-code-version.migration.spec.ts
+PASS src/execution-policies/agent-policy-fallback.spec.ts
+PASS src/execution-policies/agent-policies.native-only-payload.spec.ts
+PASS src/execution-policies/agent-policies.custom-agents.spec.ts
+PASS src/chat/message-receipts.service.spec.ts
+PASS src/docs-site/docs-site.controller.spec.ts
+PASS src/uploads/uploads.controller.spec.ts
+PASS src/timers/triggers.controller.spec.ts
+PASS src/docs-site/prototypes.service.spec.ts
+PASS src/workers/worker.client.spec.ts
+PASS src/execution-policies/agent-policy-derivation.spec.ts
+PASS src/timers/trigger.service.spec.ts
+PASS src/common/constants/agent.constants.spec.ts
+PASS src/workers/session-lifecycle.spec.ts
+PASS src/tasks/plan-revise-loop.spec.ts
+PASS src/tasks/plan-finalize-trio.spec.ts
+PASS src/tasks/plan-archive.service.spec.ts
+PASS src/tasks/plan-docs.service.spec.ts
+PASS src/tasks/plan-steps.service.spec.ts
+PASS src/message-channels/message-registry.service.spec.ts
+PASS src/gates/no-tighten-audit.spec.ts
+PASS src/prisma/seed.spec.ts
+PASS src/chat/message-receipt.constants.spec.ts
+PASS src/chat/message-parts.spec.ts
+PASS src/common/id-generator.spec.ts
+PASS src/realtime/realtime.service.spec.ts
+PASS src/notifications/notification-delivery.service.spec.ts
+PASS src/common/guards/permission.guard.spec.ts
+PASS src/auth/guards/jwt-auth.guard.spec.ts
+PASS src/issues/review-round-ledger.spec.ts
+PASS src/prisma/memory-role-inject.migration.spec.ts
+PASS src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts
+PASS src/prisma/role-capabilities-web-parity.spec.ts
+PASS src/prisma/memory-search-to-list.migration.spec.ts
+PASS src/prisma/team-worker-node.migration.spec.ts
+PASS src/issues/plan-hash-gate.spec.ts
+PASS src/chat/review-dispatch-triplet.spec.ts
+PASS src/agents/persona.constants.spec.ts
+PASS src/message-channels/adapters/github-webhook.adapter.spec.ts
+PASS src/common/constants/task.constants.spec.ts
+PASS src/prisma/agent-role-capabilities-git-web-tier.migration.spec.ts
+PASS src/prisma/model-usage.migration.spec.ts
+PASS src/prisma/memory-refcount.migration.spec.ts
+PASS src/common/constants/platform-capability.coverage.spec.ts
+PASS src/chat/mention-throttle.spec.ts
+PASS src/message-channels/adapters/gitee-webhook.adapter.spec.ts
+PASS src/artifacts/artifact-slug.spec.ts
+PASS src/memories/memory-importance.spec.ts
+PASS src/workers/worker-code-version.spec.ts
+PASS src/prisma/agent-role-capabilities-factory-default.migration.spec.ts
+PASS src/message-channels/field-template.util.spec.ts
+PASS src/prisma/agent-role-external-agent.migration.spec.ts
+PASS src/prisma/agent-role.migration.spec.ts
+PASS src/prisma/agent-role-capabilities-git-web-retire.migration.spec.ts
+PASS src/common/opencode-agent-duty.spec.ts
+PASS src/swagger-mcp/swagger-tools.spec.ts
+PASS src/tasks/task-long-running.guard.spec.ts
+PASS src/prisma/plan-doc-submit.migration.spec.ts
+PASS src/prisma/agent-role-drop.migration.spec.ts
+PASS src/prisma/worker-update-state.migration.spec.ts
+PASS src/prisma/agent-role-capabilities.migration.spec.ts
+PASS src/auth/auth.service.spec.ts
+FAIL prisma/parallel-tasks.migration.spec.ts (12.025 s)
+Test Suites: 1 failed, 179 passed, 180 total
+Tests:       2 failed, 4334 passed, 4336 total
+Snapshots:   1 passed, 1 total
+Time:        31.705 s, estimated 226 s
+Ran all test suites matching /src/i.
+EXIT=1
+
+唯一失败套件：src/prisma/parallel-tasks.migration.spec.ts（2 个用例）
+  ● migration 20261019000000_parallel_tasks › 正向平价：ADD COLUMN max_concurrent_tasks 的列在 schema.prisma 的 Team 里存在
+  ● migration 20261019000000_parallel_tasks › 反向平价：schema 字面量 + 可空形态（NULL = 不限，零回填）
+
+与本次改动**无关**的证据（三条独立佐证）：
+  (a) 该 spec 文件在 git 中是 **untracked**（同批次另一 agent 的 parallel-tasks 特性）：
+        ?? server/src/prisma/parallel-tasks.migration.spec.ts
+        ?? server/prisma/migrations/20261019000000_parallel_tasks/
+  (b) 该 spec 只用 fs.readFileSync 读三个文件（migration SQL / baseline migration / schema.prisma），
+      不 import 也不读取本次改动的任何文件：
+        $ grep -n "require\|import\|readFileSync\|teams.service\|tasks.service" \
+            server/src/prisma/parallel-tasks.migration.spec.ts
+        1:import * as fs from 'fs';
+        2:import * as path from 'path';
+        38:const sql = () => fs.readFileSync(MIGRATION, 'utf8');
+        39:const baselineSql = () => fs.readFileSync(BASELINE_MIGRATION, 'utf8');
+        40:const schema = () => fs.readFileSync(SCHEMA, 'utf8');
+  (c) 本次**未改 schema.prisma**（HEAD 原样）：
+        $ git status --porcelain -- server/prisma/schema.prisma
+        (输出为空 ⇒ schema.prisma 未被修改)
+      失败原因是该 agent 的 migration SQL 已加 max_concurrent_tasks、但 schema.prisma 侧尚未同步。
+
+--------------------------------------------------------------------------------
+5. 验收命令 ③：cd server && npx tsc --noEmit -p tsconfig.json
+--------------------------------------------------------------------------------
+$ cd server && npx tsc --noEmit -p tsconfig.json
+(无任何输出 = 类型检查通过；退出码 0)
+
+--------------------------------------------------------------------------------
+6. 验收命令 ④：cd server && npm run lint:check
+--------------------------------------------------------------------------------
+$ cd server && npm run lint:check
+✖ 322 problems (252 errors, 70 warnings)
+  252 errors and 0 warnings potentially fixable with the `--fix` option.
+
+
+说明：lint:check **在本仓库基线上即不通过**（与本次改动无关）。全量 lint 报错文件清单里
+      **没有本次改动的 4 个文件**中的任何一个：
+
+  $ npx eslint src/teams/teams.service.ts src/teams/teams.service.spec.ts \
+                  src/tasks/tasks.service.ts src/tasks/tasks.service.spec.ts
+  ✖ 5 problems (0 errors, 5 warnings)
+
+  这 5 条 warning 全部是**改动前就存在**的未使用变量（本次未新增未使用变量）：
+    src/tasks/tasks.service.spec.ts  19:10  'sanitizeWorkDirName' is defined but never used
+    src/tasks/tasks.service.spec.ts 320:9   'mockCreateTx' is assigned a value but never used
+    src/tasks/tasks.service.spec.ts 493:11  'sCounter' is assigned a value but never used
+    src/teams/teams.service.spec.ts 624:13 'callArgs' is assigned a value but never used
+    src/teams/teams.service.ts     110:11  'team' is assigned a value but never used
+
+  基线失败的独立佐证（挑一个**本次完全未触碰、git 中未修改**的文件）：
+    $ git diff --stat -- server/src/memories/memory-state.ts \
+                     server/src/workers/workers.service.ts \
+                     server/src/realtime/realtime.service.ts \
+                     server/src/platform-mcp/platform-mcp.service.ts
+    (输出为空 ⇒ 这些文件在 HEAD 就是原样)
+    $ npx eslint src/memories/memory-state.ts
+      56:2  error  Insert `⏎`  prettier/prettier
+    ✖ 1 problem (1 error, 0 warnings)
+
+  全量 lint 报错文件（均为基线/他 agent 文件，无一是本次改动的 4 个文件）：
+server/src/chat/chat.service.spec.ts
+server/src/chat/message-parts.spec.ts
+server/src/chat/message-parts.ts
+server/src/chat/worker-dispatcher.spec.ts
+server/src/chat/worker-dispatcher.ts
+server/src/memories/memories.controller.spec.ts
+server/src/memories/memories.service.spec.ts
+server/src/memories/memories.service.ts
+server/src/memories/memory-importance.spec.ts
+server/src/memories/memory-maintenance.service.spec.ts
+server/src/memories/memory-maintenance.service.ts
+server/src/memories/memory-state.ts
+server/src/message-channels/adapters/wecom-aibot.adapter.spec.ts
+server/src/message-channels/message-registry.service.spec.ts
+server/src/platform-mcp/platform-mcp.service.spec.ts
+server/src/platform-mcp/platform-mcp.service.ts
+server/src/platform-mcp/platform-mcp.tools.ts
+server/src/prisma/memory-search-to-list.migration.spec.ts
+server/src/prisma/model-usage.migration.spec.ts
+server/src/prisma/realtime-events-retention.migration.spec.ts
+server/src/prisma/seed.spec.ts
+server/src/prisma/worker-code-version.migration.spec.ts
+server/src/realtime/realtime.controller.spec.ts
+server/src/realtime/realtime.service.byte-cap.spec.ts
+server/src/realtime/realtime.service.ts
+server/src/usage/usage.service.spec.ts
+server/src/users/admin-permission.ts
+server/src/workers/worker-code-version.spec.ts
+server/src/workers/worker-code-version.ts
+server/src/workers/worker-event.ingress.spec.ts
+server/src/workers/worker-event.ingress.ts
+server/src/workers/workers.controller.ts
+server/src/workers/workers.service.spec.ts
+server/src/workers/workers.service.ts
+    其中 src/chat/**（含 worker-dispatcher.ts）由同批次另一 agent 在改；其余
+    （memories / workers / realtime / platform-mcp / prisma / usage / users /
+      message-channels）为仓库基线自带。本次未对上述任何文件做改动。
+
+--------------------------------------------------------------------------------
+7. 新增/更新的单测清单
+--------------------------------------------------------------------------------
+server/src/teams/teams.service.spec.ts
+  * base prisma mock 新增 session: { findMany: jest.fn().mockResolvedValue([]) }
+    （findOne/findAll 现在会查会话，默认无会话 ⇒ 成员行 currentWorkerId = null）
+  * 新增「团队 DTO 成员行含 currentWorkerId（团队会话当前绑定的 worker）」
+      - 断言 currentWorkerId === 'w_0000000002'
+      - 断言查询形状：where { teamId: { in: ['tm_0000000001'] }, taskId: null }
+                    select { teamMemberId: true, workerId: true }
+  * 新增「currentWorkerId：成员尚无会话 → null（字段恒存在，不省略）」
+      - toHaveProperty('currentWorkerId', null) + Object.keys(...) 含该键
+  * 新增「currentWorkerId：会话存在但未绑定 worker → null」
+  * 新增「currentWorkerId 与 preferredWorkerId 是两个维度（偏好改了、实际未迁移时都可见）」
+      - preferredWorkerId='w_0000000009' 且 currentWorkerId='w_0000000002' 同时可见
+  * 新增「列表成员行含 currentWorkerId：整页一次会话查询（每团队一次 ⇒ N+1）」
+      - 两个团队的成员各拿到自己的 currentWorkerId
+      - 断言 prisma.session.findMany 只被调用 1 次，且 where.teamId.in 含整页两个 id
+        （反 N+1 断言）
+
+server/src/tasks/tasks.service.spec.ts
+  * 更新既有「实例精确键集断言」（instances 的 toEqual 逐字面量）：
+      - 两处实例对象各**新增** currentWorkerId: null（未删任何既有键）
+  * 新增「instances 携带 currentWorkerId（成员会话当前绑定的 worker = 运行节点）」
+      - tmm_0000000001 → 'w_0000000001'；tmm_0000000002（workerId=null）→ null
+      - 断言实例行含 currentWorkerId 键
+  * 新增「instances 无会话时 currentWorkerId = null（字段恒存在）」
+  * 新增「currentWorkerId 复用同一次会话查询（不额外查库：零额外查询）」
+      - 断言 session.findMany 只调 1 次，且 select 含 workerId: true
+  * 新增 describe「currentWorkerId 投影同步（任务实例 vs 团队 DTO，反发散）」
+      - 同一 TeamsService + TasksService、同一成员行、同一会话 ⇒ 两侧 currentWorkerId 同值
+        （反发散断言：只投影一侧 ⇒ 另一侧读到 undefined/null ⇒ 该断言转红）
+      - 同时断言两侧 preferredWorkerId 同为 'w_0000000009'（偏好 ≠ 实际，两个维度并存）
+
+--------------------------------------------------------------------------------
+8. 源码 diff（仅本次改动的 4 个文件）
+--------------------------------------------------------------------------------
+diff --git a/server/src/tasks/tasks.service.ts b/server/src/tasks/tasks.service.ts
+index 68f9413..338d6a2 100644
+--- a/server/src/tasks/tasks.service.ts
++++ b/server/src/tasks/tasks.service.ts
+@@ -1971,7 +1971,10 @@ export class TasksService implements OnModuleInit {
+     const teamId = (task as any).teamId ?? null;
+     let members: TeamMemberView[] = [];
+     let mainMemberId: string | null = null;
+-    const sessionByMember = new Map<string, { id: string; status: string }>();
++    const sessionByMember = new Map<
++      string,
++      { id: string; status: string; workerId: string | null }
++    >();
+     if (teamId) {
+       const team = await (this.prisma as any).team.findUnique({
+         where: { id: teamId },
+@@ -1992,8 +1995,21 @@ export class TasksService implements OnModuleInit {
+             teamMemberId: { in: members.map((m) => m.id) },
+             status: { not: SESSION_STATUS.archived },
+           },
+-          select: { id: true, status: true, teamMemberId: true },
+-        })) as { id: string; status: string; teamMemberId: string }[] | null;
++          // workerId 一并取回：实例的「当前运行节点」直接复用本次查询结果（零额外查询）。
++          select: {
++            id: true,
++            status: true,
++            teamMemberId: true,
++            workerId: true,
++          },
++        })) as
++          | {
++              id: string;
++              status: string;
++              teamMemberId: string;
++              workerId: string | null;
++            }[]
++          | null;
+         for (const s of sessions ?? []) {
+           if (s?.teamMemberId && !sessionByMember.has(s.teamMemberId)) {
+             sessionByMember.set(s.teamMemberId, s);
+@@ -2035,6 +2051,13 @@ export class TasksService implements OnModuleInit {
+           // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
+           // 正确值被 null 覆盖，表现为「切换后回显丢失」（同上方 opencodeAgentName 旧坑）。
+           preferredWorkerId: m.preferredWorkerId ?? null,
++          // 成员会话**当前实际绑定**的 worker（运行节点）；null = 尚无会话 / 会话未绑定节点。
++          // 与 preferredWorkerId（配置偏好）是两个维度：改偏好后实际绑定可能尚未迁移，
++          // 缺此字段前端只能看到偏好值，无法区分「已生效」与「未生效」。
++          // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
++          // 正确值被 null 覆盖（同上方 preferredWorkerId 旧坑）。
++          // ⚠️ 恒返回（拿不到就 null），不得条件省略。
++          currentWorkerId: s?.workerId ?? null,
+           sessionStatus: s?.status ?? null,
+           sessionId: s?.id ?? null,
+         };
+diff --git a/server/src/teams/teams.service.ts b/server/src/teams/teams.service.ts
+index d54bebb..8b8e9af 100644
+--- a/server/src/teams/teams.service.ts
++++ b/server/src/teams/teams.service.ts
+@@ -275,8 +275,12 @@ export class TeamsService implements OnModuleInit {
+         take: pageSize,
+       }),
+     ]);
++    // 成员「当前运行节点」：整页团队一次性查会话（每页 1 次查询，不按团队/成员循环查库）。
++    const currentWorkerMap = await this.currentWorkerByMember(
++      (items as any[]).map((t) => t.id),
++    );
+     return {
+-      items: items.map((t) => this.toTeamDto(t)),
++      items: items.map((t) => this.toTeamDto(t, currentWorkerMap)),
+       total,
+       page,
+       pageSize,
+@@ -308,7 +312,9 @@ export class TeamsService implements OnModuleInit {
+         message: '团队不存在',
+       });
+     }
+-    return this.toTeamDto(team);
++    // 成员「当前运行节点」：团队会话行（Session.taskId 为空）的 workerId。
++    const currentWorkerMap = await this.currentWorkerByMember([team.id]);
++    return this.toTeamDto(team, currentWorkerMap);
+   }
+ 
+   async update(id: string, dto: UpdateTeamDto) {
+@@ -1528,7 +1534,43 @@ export class TeamsService implements OnModuleInit {
+       : `/data/vteam-worker/${base}`;
+   }
+ 
+-  private toTeamDto(team: any) {
++  /**
++   * 成员「当前运行节点」（currentWorkerId）查询：teamMemberId → workerId 映射。
++   *
++   * 取的是**团队会话行**：`Session.taskId` 为空的行（uk_sessions_team_member 唯一键只约束
++   * task-less 行 ⇒ 每个 (teamId, teamMemberId) 至多一行团队会话，映射天然无歧义）。
++   * workerId = 会话当前绑定的 worker（null = 会话存在但未绑定节点 / 成员尚无会话）。
++   *
++   * ⚠️ 查询次数约束：必须「一次查整批」——findAll 传整页 teamIds，绝不在成员循环里查库（N+1）。
++   * 这是纯只读投影（不改任何写路径 / 不改 preferredWorkerId 语义）。
++   */
++  private async currentWorkerByMember(
++    teamIds: string[],
++  ): Promise<Map<string, string | null>> {
++    const map = new Map<string, string | null>();
++    const ids = (teamIds ?? []).filter(
++      (id): id is string => typeof id === 'string' && id.length > 0,
++    );
++    if (ids.length === 0) return map;
++    const rows = (await this.prisma.session.findMany({
++      where: { teamId: { in: ids }, taskId: null },
++      select: { teamMemberId: true, workerId: true },
++    })) as
++      | {
++          teamMemberId: string | null;
++          workerId: string | null;
++        }[]
++      | null;
++    for (const r of rows ?? []) {
++      // 同一成员理论上只有一行团队会话；防御性取首条，避免重复行导致映射漂移。
++      if (r?.teamMemberId && !map.has(r.teamMemberId)) {
++        map.set(r.teamMemberId, r.workerId ?? null);
++      }
++    }
++    return map;
++  }
++
++  private toTeamDto(team: any, currentWorkerMap?: Map<string, string | null>) {
+     const members = (team.members ?? []).map((m: any) => ({
+       id: m.id,
+       teamId: m.teamId,
+@@ -1541,6 +1583,12 @@ export class TeamsService implements OnModuleInit {
+       // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+       // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
+       preferredWorkerId: m.preferredWorkerId ?? null,
++      // 成员会话**当前实际绑定**的 worker（运行节点）；null = 尚无会话 / 会话未绑定节点。
++      // 与 preferredWorkerId（配置偏好）是两个维度：用户改偏好后，实际绑定可能尚未迁移，
++      // 缺此字段前端只能看到偏好值，无法区分「已生效」与「未生效」。
++      // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
++      // ⚠️ 恒返回（拿不到就 null），不得条件省略——否则另一侧投影的 null 会把它覆盖掉。
++      currentWorkerId: currentWorkerMap?.get(m.id) ?? null,
+       // opencode 原生 agent 选择（null = 用 opencode 默认 agent）——前端成员面板据此
+       // 渲染/高亮当前选择；缺此字段会导致「切换后回显丢失」。
+       opencodeAgentName: m.opencodeAgentName,
+
+--------------------------------------------------------------------------------
+9. 假设与取舍（必须让 web 侧知晓）
+--------------------------------------------------------------------------------
+1) 团队会话唯一性：uk_sessions_team_member 只约束 task_id IS NULL 的行 ⇒ 每个
+   (teamId, teamMemberId) 至多一行团队会话 ⇒ currentWorkerId 无「多会话取哪个」的歧义。
+   防御性取首条（map.has 判重）。
+2) 任务实例侧按任务简报要求，**复用实例本就解析的那条会话行**（sessionByMember：
+   该成员非 archived 会话中的第一条），并只在其 select 上追加 workerId，不改动
+   sessionStatus / sessionId 的既有取行逻辑（避免改变既有语义）。
+   团队会话由 session-lifecycle.ensureTeamSession 以 taskId: null 创建，故常规路径下
+   两侧读到的是同一条团队会话 ⇒ 两侧 currentWorkerId 一致（已由反发散单测锁定）。
+   极端情况（同一成员同时存在 taskId 非空的旧任务会话行）两侧可能取到不同会话行，
+   这是任务简报明确指定的取行方式，未擅自加 taskId 过滤以免改动既有 sessionStatus/sessionId 语义。
+3) 成员「尚无会话」与「会话未绑定 worker」在 API 上同为 null（无法从单个字段区分），
+   与简报冻结契约一致。
+4) findAll 每页只多 1 次 session 查询（整页一次，teamId: { in: [...] }），无 N+1。
+5) toTeamDto 第二参数为可选，缺省时全体成员 currentWorkerId = null ⇒ 既有/未来调用方
+   签名不受影响。
+
+--------------------------------------------------------------------------------
+10. 未做的事（遵守 MUST NOT）
+--------------------------------------------------------------------------------
+  * 未改 server/src/chat/**（同批次另一 agent 的 dispatcher）
+  * 未改 web/**（同批次另一 agent 的 web 侧）
+  * 未改 prisma schema、未建迁移
+  * 未改任何写路径 / 优先级链 / preferredWorkerId 语义
+  * 未新增端点、未新增 npm 依赖
+  * 未使用 as any / @ts-ignore / @ts-expect-error 掩盖类型错误
+  * 未删除或弱化既有测试（精确键集断言只**新增**键）
+  * 未执行 git commit / add / stash / checkout / reset
+  * 未执行 bash scripts/gate.sh
+================================================================================
+
+================================================================================
+FOLLOW-UP（同一 session 的外科手术式追加）— sessionByMember 查询补 taskId: null 过滤
+================================================================================
+追加时间：本次任务的后续单点修补（不改其他任何查询/投影/写路径）
+动机   : toTaskDto 的 sessionByMember 查询原先无 taskId 过滤、也无 orderBy ⇒ 命中
+         「会话统一化改造前遗留的 task_id 非空会话行」时，sessionId / sessionStatus /
+         currentWorkerId 会指向**并未真正在跑**的会话，且 currentWorkerId 会与团队 DTO
+         投影（teams.service 侧已按 taskId: null 取）不一致 → 打破反发散不变量。
+
+--------------------------------------------------------------------------------
+F1. 改动的 where 子句（改动前 → 改动后）
+--------------------------------------------------------------------------------
+文件：server/src/tasks/tasks.service.ts（toTaskDto 内唯一的 session.findMany 调用，零新增查询）
+
+改动前：
+  where: {
+    teamMemberId: { in: members.map((m) => m.id) },
+    status: { not: SESSION_STATUS.archived },
+  },
+
+改动后：
+  where: {
+    teamMemberId: { in: members.map((m) => m.id) },
+    status: { not: SESSION_STATUS.archived },
+    // ⚠️ 只取**团队会话**（task_id 为空）：dispatcher 实际跑的就是这一行。
+    //  · Session.teamMemberKey 是 STORED 生成列：task_id 空 ⇒ team_id|team_member_id，
+    //    否则 NULL；DB 唯一索引 uk_sessions_team_member 只约束 task-less 行
+    //    ⇒ 每个 (teamId, teamMemberId) 至多一行团队会话，取行无歧义。
+    //  · SessionLifecycleService.ensureTeamSession 按 teamMemberKey 查/建，
+    //    且建行一律 taskId: null（session-lifecycle 的 create / ensureTeamSession /
+    //    resetTeamSessionsInTx、teams.service 的 reset 路径全部写 taskId: null）
+    //    ⇒ 真正在跑的就是这行。
+    //  · taskId 非空的行是会话统一化改造前的**遗留行**；不加此过滤且无 orderBy 时
+    //    会随机命中遗留行 ⇒ sessionStatus / sessionId 指向错的会话，
+    //    且 currentWorkerId 会与团队 DTO 投影（teams.service 侧已按 taskId: null 取）
+    //    不一致（反发散不变量被打破）。此处显式过滤 taskId: null 消除该歧义。
+    taskId: null,
+  },
+
+未改动：select（仍为 { id, status, teamMemberId, workerId }）、其它任何查询/投影/写路径、
+        preferredWorkerId 与 currentWorkerId 的语义、prisma schema、迁移、web/、src/chat/**。
+
+--------------------------------------------------------------------------------
+F2. 新增测试
+--------------------------------------------------------------------------------
+server/src/tasks/tasks.service.spec.ts
+  新增用例名：
+    「遗留 taskId 非空的会话行被过滤：只解析团队会话（sessionId/sessionStatus/currentWorkerId 同源）」
+
+  它证明什么：
+    同一成员同时存在
+      · 遗留行 taskId='t_0000000001'（status 'running'，worker 'w_legacy'），且**排在数组前面**
+      · 团队行 taskId=null（status 'active'，worker 'w_team'）
+    ⇒ 实例行必须全部取自**团队会话**：
+        sessionId      === 's_team'
+        sessionStatus  === 'active'
+        currentWorkerId=== 'w_team'
+    并且查询的 where 里带 taskId: null（与团队 DTO 投影取同一集合，反发散）。
+
+  关键：mock 用 mockImplementation **真的模拟 Prisma 的 where 过滤**
+        （taskId === null 时剔除 taskId 非空的行；status.not 剔除 archived），
+        所以「把代码里的 taskId: null 删掉」这个回归在本用例里**测得出来**
+        （不是靠 mock 恒定返回固定数组蒙混过关）。
+
+  回归自证（临时把 taskId: null 从代码里去掉后重跑该用例，测得失败 ⇒ 用例有效）：
+    $ npx jest src/tasks/tasks.service.spec.ts -t "遗留 taskId 非空的会话行被过滤"
+      ● TasksService › findOne（详情） › 遗留 taskId 非空的会话行被过滤：只解析团队会话（sessionId/sessionStatus/currentWorkerId 同源）
+
+        expect(received).toBe(expected) // Object.is equality
+
+        Expected: "s_team"
+        Received: "s_legacy"
+
+        > 1597 |       expect(inst.sessionId).toBe('s_team');
+      Test Suites: 1 failed, 1 total
+      Tests:       1 failed, 145 skipped, 146 total
+    ⇒ 证明旧代码（无 taskId 过滤 + 无 orderBy）确实会命中遗留行 —— 该 bug 真实存在，
+      本次过滤把它修掉了。验证后已还原代码（cp 备份回写，grep 确认无 TEMP 标记）。
+
+--------------------------------------------------------------------------------
+F3. 既有断言是否需要改 fixture（需要，已改，且未删除/弱化任何断言）
+--------------------------------------------------------------------------------
+既有用例「instances 携带会话状态快照 sessionStatus/sessionId（团队会话行，切页回来不丢工作中）」
+  —— 其 mock 的两行会话**原本不带 taskId 字段**。由于 mock 是 mockResolvedValue（不执行
+  where 过滤），该用例在加过滤后依然绿；但那两行本应代表**团队会话**（task_id 为空），
+  语义上应显式写成 taskId: null，否则 fixture 与真实数据形态不一致（遗留行与团队行将无法
+  区分，未来的回归就藏在这个 fixture 里）。
+  ⇒ **只补 fixture 字段 taskId: null**（两行），断言 sessionStatus/sessionId 一字未动、
+     一条未删、强度未减。
+  同批补 fixture 的还有我上一轮新增的两个用例
+  （「instances 携带 currentWorkerId …」与「currentWorkerId 复用同一次会话查询 …」）：
+  其 mock 行同样补上 taskId: null。
+  全仓库扫描确认：**没有任何既有 mock 会话行带 taskId 非空值**，即没有任何既有断言在
+  断言「遗留行行为」；需要修 fixture 的只有「字段缺失」这一种情况（已补齐）。
+
+--------------------------------------------------------------------------------
+F4. 验收命令（本轮重新执行的真实输出）
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/tasks src/teams
+PASS src/tasks/plan-lifecycle.service.spec.ts (7.514 s)
+PASS src/tasks/task-channel-bindings.controller.spec.ts (7.598 s)
+PASS src/tasks/plan-revise-loop.spec.ts
+PASS src/teams/teams.controller.spec.ts (8.062 s)
+PASS src/teams/seed.spec.ts
+PASS src/tasks/plan-review-wiring.spec.ts (8.102 s)
+PASS src/teams/teams.service.spec.ts (8.21 s)
+PASS src/tasks/plan-finalize-trio.spec.ts
+PASS src/tasks/plan-docs.service.spec.ts
+PASS src/tasks/task-long-running.guard.spec.ts
+PASS src/tasks/plan-steps.service.spec.ts
+PASS src/tasks/plan-archive.service.spec.ts
+PASS src/tasks/task-progression.scheduler.spec.ts (8.337 s)
+PASS src/tasks/tasks-remove.spec.ts (8.509 s)
+PASS src/tasks/tasks.controller.spec.ts (8.672 s)
+PASS src/tasks/tasks.service.spec.ts (9.139 s)
+Test Suites: 16 passed, 16 total
+Tests:       504 passed, 504 total
+Snapshots:   0 total
+Time:        10.328 s
+Ran all test suites matching /src\/tasks|src\/teams/i.
+
+$ cd server && npx tsc --noEmit -p tsconfig.json
+(无任何输出 = 类型检查通过；退出码 0)
+
+$ cd server && npx eslint src/teams/teams.service.ts src/teams/teams.service.spec.ts \
+                        src/tasks/tasks.service.ts src/tasks/tasks.service.spec.ts
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   19:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  320:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  493:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.spec.ts
+  624:13  warning  'callArgs' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.ts
+  110:11  warning  'team' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 5 problems (0 errors, 5 warnings)
+
+
+  ⇒ 本轮 4 个文件仍是 **0 errors**；5 条 warning 全部是改动前就存在的未使用变量
+    （sanitizeWorkDirName / mockCreateTx / sCounter / callArgs / team），本轮未新增。
+
+$ cd server && npm run lint:check   （全量，基线对比）
+✖ 322 problems (252 errors, 70 warnings)
+  252 errors and 0 warnings potentially fixable with the `--fix` option.
+
+
+  ⇒ 基线数字与本轮改动前**完全一致**（252 errors / 70 warnings / 322 problems），
+    说明本轮**没有新增任何 lint 错误**。全量报错文件清单里仍**没有**我的 4 个文件：
+    （src/teams/ 与 src/tasks/ 下无任何报错文件）
+
+（其余报错文件：src/chat/**（同批次另一 agent 在改）+ src/memories、src/workers、
+ src/realtime、src/platform-mcp、src/prisma、src/usage、src/users、src/message-channels
+ —— 均为仓库基线自带或他 agent 在改，本轮未触碰。）
+
+$ cd server && npx jest src   （全量）
+FAIL src/prisma/parallel-tasks.migration.spec.ts (7.316 s)
+FAIL prisma/parallel-tasks.migration.spec.ts (7.316 s)
+Test Suites: 1 failed, 179 passed, 180 total
+Tests:       2 failed, 4335 passed, 4337 total
+Snapshots:   1 passed, 1 total
+Time:        27.331 s, estimated 37 s
+Ran all test suites matching /src/i.
+
+  ⇒ 唯一失败套件仍是 src/prisma/parallel-tasks.migration.spec.ts（同批次另一 agent 的
+    untracked parallel-tasks 迁移 spec，与本改动无关，理由见上文第 4 节三条佐证）。
+    用例总数 4336 → 4337（+1 = 本轮新增用例），通过数 4334 → 4335（+1）。
+
+--------------------------------------------------------------------------------
+F7. 本轮源码 diff（仅 tasks.service.ts / tasks.service.spec.ts）
+--------------------------------------------------------------------------------
+diff --git a/server/src/tasks/tasks.service.spec.ts b/server/src/tasks/tasks.service.spec.ts
+index d9acd0d..cb2cb8f 100644
+--- a/server/src/tasks/tasks.service.spec.ts
++++ b/server/src/tasks/tasks.service.spec.ts
+@@ -1230,6 +1230,8 @@ describe('TasksService', () => {
+           opencodeAgentName: null,
+           // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
+           preferredWorkerId: null,
++          // 成员会话当前实际绑定的 worker（运行节点）：必须与团队 DTO 同步，缺一侧会被 null 覆盖
++          currentWorkerId: null,
+           sessionStatus: null,
+           sessionId: null,
+         },
+@@ -1248,6 +1250,8 @@ describe('TasksService', () => {
+           opencodeAgentName: null,
+           // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
+           preferredWorkerId: null,
++          // 成员会话当前实际绑定的 worker（运行节点）：必须与团队 DTO 同步，缺一侧会被 null 覆盖
++          currentWorkerId: null,
+           sessionStatus: null,
+           sessionId: null,
+         },
+@@ -1422,11 +1426,14 @@ describe('TasksService', () => {
+           id: 's_0000000041',
+           status: 'running',
+           teamMemberId: 'tmm_0000000001',
++          // 团队会话行（task_id 为空）——toTaskDto 只解析 taskId: null 的行
++          taskId: null,
+         },
+         {
+           id: 's_0000000042',
+           status: 'idle',
+           teamMemberId: 'tmm_0000000002',
++          taskId: null,
+         },
+       ]);
+ 
+@@ -1449,6 +1456,155 @@ describe('TasksService', () => {
+       }
+     });
+  ...（spec diff 略，完整内容见上节 F2/F3 与工作区文件）
+================================================================================
