@@ -21,18 +21,32 @@ import {
 export class WorkerAgentPoliciesDto {
   @ApiProperty({
     description:
-      'agent 策略注入是否成功（成功写入 agent 节=true，失败/中性化=false）',
+      'agent 策略**本轮**是否刷新成功（成功写入 agent 节=true；本轮未刷新=拉取失败/形状非法/角色集为空=false）。' +
+      '⚠️ false **不等于**「没有受管块」——批次 D-1 起中性化路径改为**保留**上次受管块。',
   })
   @IsBoolean()
   enabled: boolean;
 
   @ApiProperty({
-    description: '本次写入 opencode.json agent 节的 agent 名列表',
+    description:
+      'agent 名清单。**语义随 stale 变**：stale 缺席/false = 本轮写入 opencode.json 的 agent 节的名；' +
+      'stale=true = **上次已知**的名（受管块仍保留在 worker 本地、内容未改写；从未成功注入过则为空数组）。',
     type: [String],
   })
   @IsArray()
   @IsString({ each: true })
   names: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'true = 本轮**未刷新** agent 策略，且受管块**保留在 worker 本地**（批次 D-2）。' +
+      '此时 names 是「上次已知」清单：能力位门据此**放行**点名（该轮跑在**上次已知**的角色权限集上，' +
+      '既不收窄也不放大）——批次 D 的「陈旧即不派发」并不成立（派发照旧发生，丢的是 agent 名 ⇒ ' +
+      '退回引擎默认 agent ⇒ 角色 permissions[] 失效 ⇒ 权限放大）。缺席/false = 本轮新鲜。',
+  })
+  @IsOptional()
+  @IsBoolean()
+  stale?: boolean;
 
   @ApiPropertyOptional({ description: '能力位生成时间（ISO 8601，可选）' })
   @IsOptional()

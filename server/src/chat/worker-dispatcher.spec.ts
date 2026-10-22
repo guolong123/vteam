@@ -10198,6 +10198,98 @@ describe('WorkerDispatcher', () => {
       });
     });
 
+    /**
+     * 批次 D-2/D-3：**陈旧**的 agent 策略报告 ⇒ 仍点名角色 agent（权限不放大）+ 留痕。
+     *
+     * ⚠️ 改前的行为：门把 `enabled:false` 一律判成「不支持」⇒ 派发时**丢掉 agent 名**
+     * ⇒ opencode 跑**引擎默认 agent** ⇒ 角色声明的 `permissions[]`（edit deny / bash ask /
+     * MCP deny）**对该轮不生效** ⇒ 平台声明的权限与运行时行为**分叉**（权限放大）。
+     * 改后：受管块按批次 D-1 仍**保留在 worker 本地** ⇒ 点名该 agent 就落到**上次已知**的
+     * 角色权限集上（既不收窄也不放大），并在派发侧打日志说明这是陈旧权限集。
+     */
+    describe('批次 D-2/D-3 dispatch：陈旧策略报告 → 仍点名角色 agent + 日志留痕', () => {
+      const capsWithStale = (names: string[], stale: boolean | undefined) => {
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_0000000001',
+          status: 'online',
+          capabilities: {
+            maxInstances: 1,
+            agentPolicies: {
+              enabled: false,
+              names,
+              ...(stale !== undefined ? { stale } : {}),
+            },
+          },
+          defaultModelId: null,
+        } as any);
+      };
+      const selectMemberAgent = (name: string | null) => {
+        (prisma as any).teamMember.findFirst.mockImplementation(
+          async (q: any) =>
+            q?.select?.opencodeAgentName !== undefined
+              ? { opencodeAgentName: name }
+              : { overrideModelId: null },
+        );
+      };
+      const execPayload = () => workerClient.execute.mock.calls[0][1] as any;
+      const withTask = () =>
+        teamRequest({
+          taskContext: { taskId: 't_0000000001' },
+        }) as any;
+
+      it('陈旧报告 + 上次已知名含候选 → 下发 vteam-product（角色权限不失效）', async () => {
+        capsWithStale(['vteam-product', 'vteam-plan'], true);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-product');
+      });
+
+      it('陈旧报告 → logger.warn 留痕（含 agent 名 + 「上次已知」权限集口径）', async () => {
+        capsWithStale(['vteam-product', 'vteam-plan'], true);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        const warnSpy = jest.spyOn(d['logger'], 'warn');
+        await d.dispatch(withTask());
+        const text = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
+        expect(text).toContain('陈旧');
+        expect(text).toContain('vteam-product');
+        expect(text).toContain('上次已知');
+      });
+
+      it('陈旧报告但上次已知名**不含**候选 → 仍省略 agent 键（不点名不存在的 agent）', async () => {
+        capsWithStale(['vteam-plan'], true);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
+      });
+
+      it('新鲜报告 → 不打陈旧留痕日志（留痕只在真的靠陈旧放行时出现）', async () => {
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_0000000001',
+          status: 'online',
+          capabilities: {
+            maxInstances: 1,
+            agentPolicies: {
+              enabled: true,
+              names: ['vteam-product', 'vteam-plan'],
+            },
+          },
+          defaultModelId: null,
+        } as any);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        const warnSpy = jest.spyOn(d['logger'], 'warn');
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-product');
+        const text = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
+        expect(text).not.toContain('陈旧');
+      });
+    });
+
     describe('Todo custom-agent dispatch：agentKey → vteam-<agentKey>（能力位门控不绕过）', () => {
       const capsWith = (enabled: boolean, names: string[]) => {
         prisma.worker.findUnique.mockResolvedValue({

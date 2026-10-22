@@ -1,0 +1,255 @@
+批次 D2 · 陈旧 worker 的 agent 命名（stale-agent-naming）证据
+日期：2026-10-22
+仓库：/Volumes/SSD-Data/01work/git-project/vteam
+计划：.omo/plans/pm-coordination-hardening.md（批次 D 的收尾批次 D-2）
+
+────────────────────────────────────────────────────────────────────────
+0. 本批要闭合的缺陷（批次 D 报出来但**没有**修的那条）
+────────────────────────────────────────────────────────────────────────
+批次 D-1 修了**配置侧**的 fail-open：`/agent-policies` 拉取失败时，worker 改为
+**保留**上次注入的受管 agent 块（不再删除）⇒ 权限集**既不收窄也不放大**。
+
+但**派发侧**仍在放大权限，且批次 D 无法修（派发属另一批次）：
+
+1) server/src/chat/worker-dispatcher.ts（改前 ~2931-2950）
+     const resolvedAgentName: string | null =
+       opencodeAgentName ??                                   // 成员显式绑定的外部 agent
+       (policyCandidateAgent &&
+       workerSupportsAgentPolicies(worker, policyCandidateAgent)
+         ? policyCandidateAgent
+         : null);
+     ...
+     ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),   // 两者皆无 → 省略 agent 键
+   省略 agent 键 ⇒ opencode 跑**引擎默认 agent** ⇒ 角色 `permissions[]`
+   （edit deny / bash ask / MCP denies）**对该轮不生效** ⇒ 平台声明的权限与
+   运行时行为分叉 ⇒ **权限放大**。
+
+2) server/src/workers/workers.service.ts（改前 ~225-243）——门：
+     const gate = caps.agentPolicies;
+     if (!gate || gate.enabled !== true) return false;
+     return Array.isArray(gate.names) && gate.names.includes(agentName);
+   批次 D 的失败上报是 `{ enabled: false, names: [] }` ⇒ 门返回 false ⇒
+   agent 名被丢掉 ⇒ 回到 (1) 的放大路径。
+
+3) **信息在源头就被销毁了**：失败上报 `names: []` ⇒ server 分不清
+   「本地**仍有**受管块（批次 D 保留的）」与「从来就没有过 agent 策略支持」。
+   批次 D 特意保留的 `manifest.agentNames` 里其实**还留着**上次成功写入的名。
+
+4) 文档缺陷：批次 D 在 worker/src/protocol/worker-protocol.ts 写「陈旧即不派发」——
+   **代码从来不是这样**：派发照旧发生，被丢掉的只是 agent 名，而丢名字**正是**放大动作。
+
+本批（D2）三件事：
+  D2-1 worker 失败上报**上次已知名** + `stale: true`（信息不再在源头销毁）；
+  D2-2 server 的门在 `stale:true` 且候选名在上次已知名内时**放行**；
+  D2-3 派发侧在「靠陈旧报告放行」时**留痕**（该轮跑的是上次已知权限集）；
+  D2-4 改掉批次 D 那句不成立的注释。
+
+────────────────────────────────────────────────────────────────────────
+1. D2-1：worker 上报形状（改前 → 改后）
+────────────────────────────────────────────────────────────────────────
+改前（批次 D）：
+  成功        → { enabled: true,  names: <本次写入名> }
+  失败中性化  → { enabled: false, names: [] }                 ← 信息被销毁
+改后（本批）：
+  成功        → { enabled: true,  names: <本次写入名> }        （**不带** stale = 新鲜）
+  失败中性化  → { enabled: false, names: <上次已知名>, stale: true }
+
+上次已知名从哪来：worker/src/resources/injector.ts 的
+  `writeNeutralized()` 读 manifest 的 **agentNames** 键（批次 D-1 特意保留的那个键：
+  "受管块名字**不清零**：块仍在 opencode.json 里（未删除、未改写）"）。
+  首次注入（**从未**成功注入过）⇒ manifest.agentNames 为空 ⇒ `names: []` + `stale: true`
+  （这仍然是**诚实**的：本轮确实未刷新，且本地确实没有受管块）。
+
+传播链（否则 server 看不到 stale）：
+  injector.writeNeutralized → InjectReport.agentPolicies
+    → worker/src/index.ts buildCapabilities（透传 stale，缺席则不带）
+      → capabilities.agentPolicies（注册上报）
+        → server/src/workers/dto/register-worker.dto.ts WorkerAgentPoliciesDto.stale
+          （⚠️ 全局 ValidationPipe 是 whitelist:true —— DTO 不声明 stale 会被**静默剥离**）
+            → server/src/workers/workers.service.ts workerSupportsAgentPolicies
+
+────────────────────────────────────────────────────────────────────────
+2. D2-2：server 能力位门真值表
+────────────────────────────────────────────────────────────────────────
+判定式（改后）：
+  gate = capabilities.agentPolicies（无该字段 ⇒ null）
+  names = Array.isArray(gate.names) ? gate.names : []
+  放行 ⇔ names 含 agentName  且  (gate.enabled === true 或 gate.stale === true)
+
+  ┌────────────────────────────────────────────────┬───────────┬──────────────┐
+  │ worker 上报                                      │ 门的结果    │ 说明          │
+  ├────────────────────────────────────────────────┼───────────┼──────────────┤
+  │ 无 agentPolicies 字段（旧 worker）                 │ false     │ 不变（非本批回归面）│
+  │ enabled:true, names 含候选                        │ true      │ 不变          │
+  │ enabled:true, names 不含候选                      │ false     │ 不变          │
+  │ enabled:true, names 非数组                        │ false     │ 不变          │
+  │ enabled:1（非布尔）, names 含候选                  │ false     │ 不变          │
+  │ enabled:false, names 含候选，**无** stale（批次 D-1 旧形状）│ false     │ 不变（不猜本地有没有块）│
+  │ enabled:false, names=[]（批次 D-1 旧形状）          │ false     │ 不变          │
+  │ enabled:false, names 含候选, **stale:true**        │ **true**  │ ★本批新增    │
+  │ enabled:false, names 不含候选, stale:true          │ false     │ ★本批新增（点名会 agent-not-found）│
+  │ enabled:false, names=[], stale:true（首次注入）      │ false     │ ★本批新增    │
+  │ enabled:false, names 非数组, stale:true            │ false     │ ★本批新增    │
+  │ enabled:false, names 含候选, stale:'yes'（非布尔）   │ false     │ ★本批新增（只认布尔 true）│
+  └────────────────────────────────────────────────┴───────────┴──────────────┘
+
+────────────────────────────────────────────────────────────────────────
+3. D2-3：派发侧留痕
+────────────────────────────────────────────────────────────────────────
+触发点：server/src/chat/worker-dispatcher.ts 的 agent 名决策处
+  （`resolvePolicyAgentCandidate` → 能力位门 → `resolvedAgentName`）。
+条件：resolvedAgentName 非空 **且** 无成员显式外部绑定 **且** 本轮确实靠陈旧报告放行
+      **且** workerAgentPoliciesStale(worker) === true。
+日志（this.logger.warn）：
+  worker=<workerId> 的 agent 策略**陈旧**（本轮未刷新 /agent-policies，受管块保留在本地）
+  → 仍点名 <agent>：该轮跑在**上次已知**的角色权限集上（既未收窄也未放大），
+  但可能已过期，请确认控制面可达。
+
+────────────────────────────────────────────────────────────────────────
+4. D2-4：批次 D 那句不成立的注释（改前 → 改后）
+────────────────────────────────────────────────────────────────────────
+改前（worker/src/protocol/worker-protocol.ts，批次 D 加的）：
+  「…`enabled:false` 只表示「策略**陈旧**」⇒ server 的 `workerSupportsAgentPolicies`
+    据此不派发需要策略的 agent（陈旧即不派发）。」
+
+改后（本批）：
+  「…`enabled:false` 只表示「本轮**未刷新**」。
+   ⚠️ 批次 D-2（**修正批次 D 注释里那句不成立的保护**）：批次 D 的注释写「陈旧即不派发」，
+   但代码**从来不是**这样——派发照旧发生，只是能力位门把 **agent 名丢掉** ⇒ opencode 跑
+   **引擎默认 agent** ⇒ 角色的 `permissions[]`（edit deny / bash ask / MCP deny）**对该轮
+   完全不生效** ⇒ 权限被**放大**（fail-open）。批次 D-2 的实际行为：…
+     server 的能力位门在 `stale:true` 且候选名在 `names` 内时**放行** ⇒ 该轮仍点名角色
+     agent ⇒ 跑在**保留的**（上次已知）角色权限集上，既不收窄也不放大；派发侧另有日志留痕。」
+
+worker/src/resources/injector.ts 的同款注释（InjectReport.agentPolicies / writeNeutralized）
+也一并改正（原文同样写着「不派发需要策略的 agent（stale-true 防护在派发侧）」）。
+
+────────────────────────────────────────────────────────────────────────
+5. 派发到**陈旧** worker 的前后对比（结论）
+────────────────────────────────────────────────────────────────────────
+改前：opencode 跑**引擎默认 agent**（payload 里**没有** agent 键）
+      ⇒ 该角色的 `permissions[]`（edit deny / bash ask / MCP denies）**完全没生效**
+      ⇒ 实际权限**比平台声明的更宽**（放大，fail-open）。
+改后：opencode 跑**角色 agent**（payload 里带 agent 键 = 该角色的 agent 名）
+      ⇒ 该轮落在**保留在 worker 本地的受管块**上 ⇒ 角色的 `permissions[]` 生效
+      ⇒ 实际权限 = 平台声明的那一套（**上次已知**的版本，不是本轮的），**不放大**。
+      ⚠️ 陈旧时适用的是**上次已知**的权限集（可能已过期）——这由 D2-3 的日志留痕，
+         以及控制面恢复可达后的下一次成功刷新来收敛。
+
+────────────────────────────────────────────────────────────────────────
+6. 命令与结果（真实输出）
+────────────────────────────────────────────────────────────────────────
+
+$ cd worker && npm run typecheck
+> worker@0.0.1 typecheck
+> tsc --noEmit
+(无输出 = 通过)
+
+$ cd worker && npm test
+Test Suites: 3 skipped, 41 passed, 41 of 44 total
+Tests:       8 skipped, 1298 passed, 1306 total
+Snapshots:   0 total
+Time:        46.052 s
+Ran all test suites.
+
+$ cd worker && npm run build
+> worker@0.0.1 build
+> tsc
+(无输出 = 通过)
+
+$ cd server && npx jest src/workers src/chat
+Test Suites: 27 passed, 27 total
+Tests:       1132 passed, 1132 total
+
+$ cd server && npx jest --runInBand          （全量，确认没有波及其它套件）
+Test Suites: 196 passed, 196 total
+Tests:       1 skipped, 4622 passed, 4623 total
+
+$ cd server && npx tsc --noEmit -p tsconfig.json
+(无输出 = 通过；退出码 0)
+
+$ cd server && npm run lint:check
+✖ 68 problems (0 errors, 68 warnings)
+（仓库基线 = 68 problems / 0 errors ⇒ **无新增** error）
+
+────────────────────────────────────────────────────────────────────────
+7. 变异证据（改坏 ⇒ 恰好 N 个新用例转红 ⇒ 还原 ⇒ 复绿）
+────────────────────────────────────────────────────────────────────────
+
+【D2-1 变异】worker/src/resources/injector.ts
+  writeNeutralized 的返回改成
+    agentPolicies: { enabled: false, names: [], stale: true }      ← 退回批次 D 的形状
+  期望：报「上次已知名」的用例转红。
+
+$ cd worker && npx jest src/resources/injector.spec.ts src/index.spec.ts
+  ● ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无 guard 制品） › (c) 空 agent 集 → 中性化**保留**上次受管块（权限集不变），manifest 记陈旧，用户文件与 plugin 条目不受影响
+  ● ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无 guard 制品） › (d) 拉取失败后再成功：受管块保留（未刷新）→ 成功注入刷新并清陈旧标记，无 guard 残留
+  ● ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无 guard 制品） › (d2) 批次 D-2：连续两轮拉取失败 → 每轮都报**上次已知**的 agent 名 + stale=true（名字不得被清零）
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       3 failed, 169 passed, 172 total
+⇒ **3 个新用例转红**
+
+还原后：
+Test Suites: 2 passed, 2 total
+Tests:       172 passed, 172 total
+⇒ 复绿
+
+【D2-2 变异】server/src/workers/workers.service.ts
+  门的放行条件改成
+    return gate.enabled === true;            ← 删掉 stale 分支（退回批次 D 的门）
+  期望：门的陈旧用例 + 派发侧的陈旧用例转红。
+
+$ cd server && npx jest src/workers/workers.service.spec.ts src/chat/worker-dispatcher.spec.ts
+  ● WorkerDispatcher › dispatch team-mode（无任务团队直聊） › 批次 D-2/D-3 dispatch：陈旧策略报告 → 仍点名角色 agent + 日志留痕 › 陈旧报告 + 上次已知名含候选 → 下发 vteam-product（角色权限不失效）
+  ● WorkerDispatcher › dispatch team-mode（无任务团队直聊） › 批次 D-2/D-3 dispatch：陈旧策略报告 → 仍点名角色 agent + 日志留痕 › 陈旧报告 → logger.warn 留痕（含 agent 名 + 「上次已知」权限集口径）
+  ● WorkersService › workerSupportsAgentPolicies（批次 D-2：陈旧报告 + 上次已知名 → 仍放行） › 陈旧报告（stale=true）且 names 含候选 → true（点名落到保留的权限集上）
+Test Suites: 2 failed, 2 total
+Tests:       3 failed, 540 passed, 543 total
+⇒ **3 个新用例转红**（1 个门用例 + 2 个派发用例）
+
+还原后：
+Test Suites: 2 passed, 2 total
+Tests:       543 passed, 543 total
+⇒ 复绿
+
+【D2-3 变异】server/src/chat/worker-dispatcher.ts
+  陈旧留痕的 if 条件前置 false（= 不再打这条日志）
+  期望：留痕用例转红（**点名行为不变**——决策逻辑不动，只有可观测被关掉）。
+
+$ cd server && npx jest src/chat/worker-dispatcher.spec.ts
+  ● WorkerDispatcher › dispatch team-mode（无任务团队直聊） › 批次 D-2/D-3 dispatch：陈旧策略报告 → 仍点名角色 agent + 日志留痕 › 陈旧报告 → logger.warn 留痕（含 agent 名 + 「上次已知」权限集口径）
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 347 passed, 348 total
+⇒ **1 个新用例转红**
+
+还原后：
+Test Suites: 1 passed, 1 total
+Tests:       348 passed, 348 total
+⇒ 复绿
+
+────────────────────────────────────────────────────────────────────────
+8. 约束自查
+────────────────────────────────────────────────────────────────────────
+- **未收窄任何权限**：本批 diff 不含任何 `AgentRole.capabilities` / `bashEffect` /
+  `toolAllows` / `writeGlobs` 变更，也不含 seed / 常量目录改动
+  （`git diff --name-only` 仅 10 个文件，见下）。
+- 未触碰 server/src/teams/**、message-receipts.service.ts、receipt-nudge.handler.ts、
+  platform-mcp/**、server/src/common/constants/**、server/prisma/seed.ts。
+- 未新增/修改任何 migration，未改 prisma schema，未新增 npm 依赖。
+- 未使用 `as any` / `@ts-ignore` / `@ts-expect-error`  silencing 类型错误
+  （spec 里沿用该文件既有的 `as any` mock 写法）。
+- 未删除/弱化/跳过任何既有测试（既有 3 处中性化断言按**新契约**更新为
+  「上次已知名 + stale:true」，断言强度未降：反而从 `names: []` 变成具体名单）。
+- 未跑 git commit/add/stash/checkout/reset；未跑 scripts/gate.sh。
+
+改动文件：
+  server/src/chat/worker-dispatcher.ts
+  server/src/chat/worker-dispatcher.spec.ts
+  server/src/workers/dto/register-worker.dto.ts
+  server/src/workers/workers.service.ts
+  server/src/workers/workers.service.spec.ts
+  worker/src/index.ts
+  worker/src/index.spec.ts
+  worker/src/protocol/worker-protocol.ts
+  worker/src/resources/injector.ts
+  worker/src/resources/injector.spec.ts

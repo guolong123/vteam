@@ -209,6 +209,32 @@ describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
     names.push('vteam-evil');
     expect(caps.agentPolicies?.names).toEqual(['vteam-plan']);
   });
+
+  it('批次 D-2：中性化报告的 stale + 上次已知名**透传**进 capabilities（server 的门靠它放行点名）', async () => {
+    const report: InjectReport = {
+      skills: [],
+      tools: [],
+      mcpServers: [],
+      agentPolicies: { enabled: false, names: ['vteam-developer'], stale: true },
+    };
+    const caps = await buildCapabilities(4199, 'http://worker', report);
+    expect(caps.agentPolicies).toEqual({
+      enabled: false,
+      names: ['vteam-developer'],
+      stale: true,
+    });
+  });
+
+  it('批次 D-2：新鲜报告**不带** stale 键（缺席 = 新鲜）', async () => {
+    const report: InjectReport = {
+      skills: [],
+      tools: [],
+      mcpServers: [],
+      agentPolicies: { enabled: true, names: ['vteam-developer'] },
+    };
+    const caps = await buildCapabilities(4199, 'http://worker', report);
+    expect('stale' in (caps.agentPolicies ?? {})).toBe(false);
+  });
 });
 
 describe('resolveModels（C2：serve 模型列表探测与降级）', () => {
