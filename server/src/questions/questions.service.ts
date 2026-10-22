@@ -176,7 +176,14 @@ export class QuestionsService {
     return this.toDtos(rows);
   }
 
-  /** 批量行 → DTO：按团队归属一次查询关联团队 managedMode（托管标记，前端据此过滤弹窗）。 */
+  /** 批量行 → DTO：按团队归属一次查询关联团队 managedMode（托管标记，前端据此过滤弹窗）。
+   *
+   * ⚠️ 托管对**主 Agent 本人**的请求必须失效（否则死锁）：托管语义是「主 Agent 代用户确认」，
+   * 而主 Agent 无法自确认（`QUESTION_SELF_CONFIRMATION_FORBIDDEN`）⇒ 若仍标记 managedMode，
+   * 前端会把它从弹窗队列里过滤掉、后端又没人能确认 ⇒ 用户看不到弹窗、会话永久挂死。
+   * 故此处按「请求方成员 == team.mainAgentMemberId」把 managedMode 降级为 false，
+   * 让请求回到用户弹窗。（实测：PM 自己触发 external_directory 权限后 aq_… 一直 pending）
+   */
   private async toDtos(rows: AgentQuestion[]): Promise<AgentQuestionDto[]> {
     const taskIds = [...new Set(rows.map((r) => r.taskId).filter(Boolean))];
     const sessionIds = [
@@ -192,7 +199,7 @@ export class QuestionsService {
       sessionIds.length > 0
         ? await this.prisma.session.findMany({
             where: { id: { in: sessionIds } },
-            select: { id: true, teamId: true },
+            select: { id: true, teamId: true, teamMemberId: true },
           })
         : [],
     ]);
@@ -201,6 +208,12 @@ export class QuestionsService {
     );
     const teamBySession = new Map(
       sessions.map((s) => [s.id, (s as { teamId?: string | null }).teamId]),
+    );
+    const memberBySession = new Map(
+      sessions.map((s) => [
+        s.id,
+        (s as { teamMemberId?: string | null }).teamMemberId ?? null,
+      ]),
     );
     const teamIds = [
       ...new Set(
@@ -217,19 +230,36 @@ export class QuestionsService {
       teamIds.length > 0
         ? ((await (this.prisma as any).team.findMany({
             where: { id: { in: teamIds } },
-            select: { id: true, managedMode: true },
-          })) as Array<{ id: string; managedMode?: boolean | null }>)
+            select: { id: true, managedMode: true, mainAgentMemberId: true },
+          })) as Array<{
+            id: string;
+            managedMode?: boolean | null;
+            mainAgentMemberId?: string | null;
+          }>)
         : [];
     const managedByTeam = new Map(
       teams.map((t) => [t.id, t.managedMode ?? false]),
+    );
+    const mainAgentByTeam = new Map(
+      teams.map((t) => [t.id, t.mainAgentMemberId ?? null]),
     );
     return rows.map((r) => {
       const teamId =
         teamBySession.get(r.sessionId) ??
         (r.taskId ? teamByTask.get(r.taskId) : undefined);
+      const mainAgentMemberId = teamId
+        ? (mainAgentByTeam.get(teamId) ?? null)
+        : null;
+      const requesterMemberId = memberBySession.get(r.sessionId) ?? null;
+      const isMainAgentOwn =
+        !!mainAgentMemberId &&
+        !!requesterMemberId &&
+        requesterMemberId === mainAgentMemberId;
       return this.toDto(
         r,
-        teamId ? (managedByTeam.get(teamId) ?? false) : false,
+        !isMainAgentOwn && teamId
+          ? (managedByTeam.get(teamId) ?? false)
+          : false,
       );
     });
   }
@@ -647,7 +677,13 @@ export class QuestionsService {
     return null;
   }
 
-  /** 托管开关读团队行：team.managedMode；有归属但团队行缺失 → 404；无归属 → false。 */
+  /**
+   * 托管开关读团队行：team.managedMode；有归属但团队行缺失 → 404；无归属 → false。
+   *
+   * ⚠️ 与 `toDtos` 同一条不变式：**主 Agent 本人的请求不算托管**。托管是「主 Agent 代用户
+   * 确认」，主 Agent 无法自确认（`QUESTION_SELF_CONFIRMATION_FORBIDDEN`）⇒ 若仍报 managedMode，
+   * 前端会把它挡在弹窗外、后端又无人可确认 ⇒ 会话永久挂死且用户看不到任何弹窗。
+   */
   private async managedModeOf(
     taskId: string | null,
     sessionId?: string | null,
@@ -658,15 +694,31 @@ export class QuestionsService {
     }
     const team = (await (this.prisma as any).team.findUnique({
       where: { id: teamId },
-      select: { managedMode: true },
-    })) as { managedMode?: boolean | null } | null;
+      select: { managedMode: true, mainAgentMemberId: true },
+    })) as {
+      managedMode?: boolean | null;
+      mainAgentMemberId?: string | null;
+    } | null;
     if (!team) {
       throw new NotFoundException({
         code: QUESTIONS_ERRORS.QUESTION_TEAM_NOT_FOUND,
         message: '团队不存在',
       });
     }
-    return team.managedMode ?? false;
+    if (!(team.managedMode ?? false)) {
+      return false;
+    }
+    const mainAgentMemberId = team.mainAgentMemberId ?? null;
+    if (mainAgentMemberId && sessionId) {
+      const session = (await (this.prisma as any).session.findUnique({
+        where: { id: sessionId },
+        select: { teamMemberId: true },
+      })) as { teamMemberId?: string | null } | null;
+      if (session?.teamMemberId === mainAgentMemberId) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** 问题事件 scope：团队域（session-unification Todo 9）；无团队归属回退 global。 */
