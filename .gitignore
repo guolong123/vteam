@@ -44,6 +44,13 @@ coverage/
 # and several legacy evidence .sql backups are already tracked. Do NOT add a blanket *.sql here.
 .omo/evidence/**/*.sql
 
+# evidence JSON (jest regenerates probe/matrix evidence → running the test suite dirties the
+# working tree; see .omo/plans/pm-coordination-hardening.md item 9 / Batch F).
+# NOTE: scoped to .omo/evidence on purpose — package.json / tsconfig.json / chart values /
+# e2e evidence JSON elsewhere MUST stay tracked. Do NOT add a blanket *.json here.
+# .txt/.md evidence receipts remain tracked.
+.omo/evidence/**/*.json
+
 # md-docs: standalone git repo (own remote gitee.com/guojongg/mddocs), not part of this tree
 md-docs/
 
