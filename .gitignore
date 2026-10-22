@@ -51,6 +51,14 @@ coverage/
 # .txt/.md evidence receipts remain tracked.
 .omo/evidence/**/*.json
 
+# 冻结基线：断言「基线一致性」的 spec 直接读它们（见
+# server/src/execution-policies/__fixtures__/policy-fixtures.ts 的 BLOCKER-1 说明：
+# 「基线文件必须随仓库提交，否则干净检出下测试不可复现」）⇒ 必须保持入库，
+# 不能被上面那条 *.json 规则吃掉（否则干净检出下 spec 直接 ENOENT 失败）。
+!.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+!.omo/evidence/vteam-role-behavior-abstraction/before-boundary.json
+!.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json
+
 # md-docs: standalone git repo (own remote gitee.com/guojongg/mddocs), not part of this tree
 md-docs/
 
