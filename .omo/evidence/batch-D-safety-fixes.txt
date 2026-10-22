@@ -1,0 +1,207 @@
+================================================================================
+批次 D · 零收窄安全修（.omo/plans/pm-coordination-hardening.md · 批次 D）
+证据：.omo/evidence/batch-D-safety-fixes.txt          采集日期：2026-10-22
+--------------------------------------------------------------------------------
+硬约束遵守：全程**未收窄任何权限**——无 capabilities→false、无 bashEffect、
+            无 toolAllows、无 writeGlobs、无 seed 派生改动；D-3 只加注释，
+            D-2 是只读守卫，D-1 只改**失败路径**（成功路径行为不变）。
+--------------------------------------------------------------------------------
+变更文件：
+  worker/src/resources/injector.ts                              (D-1 中性化保留)
+  worker/src/resources/injector.spec.ts                         (D-1 用例)
+  worker/src/protocol/worker-protocol.ts                        (D-1 语义注释)
+  server/src/prisma/role-capabilities-backfill.spec.ts          (D-2 新增守卫)
+  server/src/common/constants/platform-capability.constants.ts  (D-3 注释)
+================================================================================
+
+################################################################################
+# 1) worker：typecheck / test / build
+################################################################################
+$ cd worker && npm run typecheck
+
+> worker@0.0.1 typecheck
+> tsc --noEmit
+
+EXIT=0
+
+$ cd worker && npm test
+PASS src/driver/opencode-driver.spec.ts
+
+Test Suites: 3 skipped, 41 passed, 41 of 44 total
+Tests:       8 skipped, 1294 passed, 1302 total
+Snapshots:   0 total
+Time:        45.73 s, estimated 46 s
+Ran all test suites.
+
+$ cd worker && npm run build
+
+> worker@0.0.1 build
+> tsc
+
+EXIT=0
+
+################################################################################
+# 2) server：npx jest src/prisma / tsc --noEmit / lint:check
+################################################################################
+$ cd server && npx jest src/prisma --runInBand
+PASS src/prisma/realtime-events-retention.migration.spec.ts
+
+Test Suites: 27 passed, 27 total
+Tests:       1 skipped, 310 passed, 311 total
+Snapshots:   0 total
+Time:        3.255 s, estimated 6 s
+Ran all test suites matching /src\/prisma/i.
+
+$ cd server && npx tsc --noEmit -p tsconfig.json
+EXIT=0
+
+$ cd server && npm run lint:check   （仓库基线：68 problems / 0 errors）
+
+✖ 68 problems (0 errors, 68 warnings)
+
+
+$ cd server && npx eslint src/prisma/role-capabilities-backfill.spec.ts src/common/constants/platform-capability.constants.ts   （本批两个 server 文件单跑）
+EXIT=0 （0 = 本批文件零 problem）
+
+################################################################################
+# 3) 变异检查 D-1：把中性化路径改回「删掉受管块」⇒ 新用例必须转红
+################################################################################
+$ （在 writeNeutralized 里加回 cleanupByManifest('agentNames', [], config)）
+$ cd worker && npx jest src/resources/injector.spec.ts --runInBand   （变异后）
+    ✓ (a) 一次运行：mcp.servers + plugins + **agents** 三节，无 guard 制品写入 (2 ms)
+    ✓ (b) 幂等重跑：opencode.json 字节一致，无重复 plugin/agent 条目 (2 ms)
+    ✕ (c) 空 agent 集 → 中性化**保留**上次受管块（权限集不变），manifest 记陈旧，用户文件与 plugin 条目不受影响 (2 ms)
+    ✕ (d) 拉取失败后再成功：受管块保留（未刷新）→ 成功注入刷新并清陈旧标记，无 guard 残留 (1 ms)
+    ✓ (f) 首次注入 + 拉取失败：无历史受管块可保留 → 不写受管定义，告警说明退回引擎默认权限 (1 ms)
+    ✓ (g) 中性化告警说明「保留未刷新」与「上次已知权限集」（运维能看到陈旧） (1 ms)
+    ✕ (h) 拉取失败后受管块内容**字节不变**（权限集既不收窄也不放大） (1 ms)
+    ✓ (e) 持久卷残留被清除：roles.json/sessions/插件文件/plugin 条目/manifest 键 (1 ms)
+    ✓ **回归闸门**：最终 opencode.json 的 agents 节里**没有 prompt 键**（v2 会静默丢弃它） (1 ms)
+    ✓ **回归闸门**：最终 opencode.json 里**没有 v1 段名**（agent / plugin / 扁平 mcp） (1 ms)
+    ✓ mcp 条目是 v2 原生形：disabled 极性 + 三段 timeout + snake_case OAuth
+    ✓ **一次性迁移**：持久卷上的 v1 形配置被迁到 v2 段名（不留 v1 段、不留 `agents.<n>.prompt`） (1 ms)
+    ✓ **迁移幂等**：第二次注入不改变文件字节（迁移不重复叠加） (1 ms)
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 57 passed, 60 total
+$ 还原后重跑（应为绿）
+Test Suites: 1 passed, 1 total
+Tests:       60 passed, 60 total
+
+################################################################################
+# 4) 变异检查 D-2a：目录新增一个键但**没有回填 migration** ⇒ 守卫必须转红
+################################################################################
+$ cd server && npx jest src/prisma/role-capabilities-backfill.spec.ts --runInBand   （变异后）
+  能力点目录 → 落库事实：任何岗位行都不得缺目录键（default-allow 守卫）
+      ✓ 目录键无重复（键集合的基数 = 长度） (1 ms)
+      ✕ 7 个内置岗位矩阵：每个都含全部目录键（缺一个 = 该岗位静默获得该能力） (2 ms)
+      ✓ 内置岗位矩阵不得携带目录外键（孤儿键 = 改不动的假开关）
+      ✓ 3 个外部岗位矩阵：含全部目录键（豁免名单为空 ⇒ 全量受管）
+      ✓ 出厂兜底矩阵（ar_general / NULL 行补齐用）含全部目录键
+      ✓ 冻结基线清单本身合法（键都在目录里、无重复）
+      ✕ 目录里的每个键都已被存量行显式写过（冻结基线 ∪ 回填 migration）
+      ✕ 非冻结基线的键：回填 migration 必须覆盖**所有**岗位行（7 内置 + 3 外部 + 其余行）
+      ✓ 回填语句本身是「只增不改」（幂等 + 不覆盖运营者已显式的值） (2 ms)
+      ✕ prisma/seed.ts 的 PLATFORM_CAPABILITIES 镜像与服务端目录键集相等 (1 ms)
+  ● 能力点目录 → 落库事实：任何岗位行都不得缺目录键（default-allow 守卫） › ① 出厂矩阵层：键集必须与目录**完全相等** › 7 个内置岗位矩阵：每个都含全部目录键（缺一个 = 该岗位静默获得该能力）
+  ● 能力点目录 → 落库事实：任何岗位行都不得缺目录键（default-allow 守卫） › ② 回填层：新增能力点必须同 PR 全表回填（存量行不得缺键） › 目录里的每个键都已被存量行显式写过（冻结基线 ∪ 回填 migration）
+    能力点目录新增了键但**没有同 PR 全表回填**：mutation.noBackfill
+    default-allow（缺失键 ⇒ 允许）下，存量 agent_roles 行缺该键 ⇒ **所有缺该键的行静默获得该能力**（服务端门只拦显式 false ⇒ 全程无报错）。
+    补救（必须同 PR）：
+      1) 增加一条 migration，给**每个** agent_roles 行写该键（逐键独立 UPDATE +
+         JSON_CONTAINS_PATH 只增不改，运营者已显式的值原样保留；
+         7 内置 + 3 外部 + 其余行都要覆盖，别只写内置岗）；
+      2) 同步 prisma/seed.ts 的 PLATFORM_CAPABILITIES 镜像（fresh install 的行）
+      338 |           `能力点目录新增了键但**没有同 PR 全表回填**：${uncovered.join(', ')}\n` +
+      339 |             'default-allow（缺失键 ⇒ 允许）下，存量 agent_roles 行缺该键 ⇒ ' +
+  ● 能力点目录 → 落库事实：任何岗位行都不得缺目录键（default-allow 守卫） › ② 回填层：新增能力点必须同 PR 全表回填（存量行不得缺键） › 非冻结基线的键：回填 migration 必须覆盖**所有**岗位行（7 内置 + 3 外部 + 其余行）
+  ● 能力点目录 → 落库事实：任何岗位行都不得缺目录键（default-allow 守卫） › ③ seed 镜像层：fresh install 的行键集 = 服务端目录键集 › prisma/seed.ts 的 PLATFORM_CAPABILITIES 镜像与服务端目录键集相等
+Test Suites: 1 failed, 1 total
+Tests:       4 failed, 1 skipped, 6 passed, 11 total
+$ 还原后重跑（应为绿）
+Test Suites: 1 passed, 1 total
+Tests:       1 skipped, 10 passed, 11 total
+
+################################################################################
+# 5) 变异检查 D-2b：回填 migration 只写**一个岗位**（非全表）⇒ 守卫必须转红
+################################################################################
+$ cd server && npx jest src/prisma/role-capabilities-backfill.spec.ts --runInBand   （变异后）
+      ✓ 目录键无重复（键集合的基数 = 长度） (1 ms)
+      ✕ 7 个内置岗位矩阵：每个都含全部目录键（缺一个 = 该岗位静默获得该能力） (2 ms)
+      ✓ 内置岗位矩阵不得携带目录外键（孤儿键 = 改不动的假开关）
+      ✓ 3 个外部岗位矩阵：含全部目录键（豁免名单为空 ⇒ 全量受管）
+      ✓ 出厂兜底矩阵（ar_general / NULL 行补齐用）含全部目录键
+      ✓ 冻结基线清单本身合法（键都在目录里、无重复）
+      ✓ 目录里的每个键都已被存量行显式写过（冻结基线 ∪ 回填 migration）
+      ✕ 非冻结基线的键：回填 migration 必须覆盖**所有**岗位行（7 内置 + 3 外部 + 其余行）
+      ✓ 回填语句本身是「只增不改」（幂等 + 不覆盖运营者已显式的值） (2 ms)
+      ✕ prisma/seed.ts 的 PLATFORM_CAPABILITIES 镜像与服务端目录键集相等
+    +   "product": Array [
+    +   "project_manager": Array [
+    -   "coversOthers": true,
+    +   "coversOthers": false,
+    -   "uncoveredBuiltins": Array [],
+    -   "uncoveredExternals": Array [],
+    +   "uncoveredBuiltins": Array [
+    +     "product",
+    +     "project_manager",
+    +   "uncoveredExternals": Array [
+    +     "sisyphus",
+    +     "atlas",
+      380 |           uncoveredExternals,
+      381 |           coversOthers,
+      384 |           uncoveredBuiltins: [],
+      385 |           uncoveredExternals: [],
+Tests:       3 failed, 1 skipped, 7 passed, 11 total
+$ 还原后重跑（应为绿）
+Test Suites: 1 passed, 1 total
+Tests:       1 skipped, 10 passed, 11 total
+$ 变异临时文件已删除：
+0
+
+################################################################################
+# 6) 收尾自检：还原后的最终状态
+################################################################################
+$ git status --short（只看本批文件；其余为同波其它 agent 的在飞改动）
+ M server/src/common/constants/platform-capability.constants.ts
+ M worker/src/protocol/worker-protocol.ts
+ M worker/src/resources/injector.spec.ts
+ M worker/src/resources/injector.ts
+?? server/src/prisma/role-capabilities-backfill.spec.ts
+
+$ 本批 diff 中是否出现权限值变更（capabilities→false / bashEffect / toolAllows / writeGlobs）
+  （无：只改了注释/流程，未动任何权限值）
+
+$ cd server && npx tsc --noEmit -p tsconfig.json   （最终）
+EXIT=0
+
+################################################################################
+# 7) 残留 / 旁证（诚实记录，未在本批修复）
+################################################################################
+[7.1] 发现的**第二条 fail-open 路径**（**未修**，属 A4 的文件，报告给编排者）
+      位置：server/src/chat/worker-dispatcher.ts:2948（`workerSupportsAgentPolicies` 门）
+      现象：worker 上报 `capabilities.agentPolicies = {enabled:false, names:[]}`（= 策略
+            陈旧/未刷新）时，dispatcher **省略 agent 键** ⇒ opencode 用**引擎默认 agent**
+            跑这一轮 ⇒ 平台写在受管块里的 `permissions[]`（edit deny / bash ask 等
+            角色规则）**不生效** ⇒ 那一轮实际跑在引擎默认权限上。
+            （D-1 修的是**配置面**：块不再被删；但**派发面**仍会在陈旧 worker 上放弃
+              角色 agent ⇒ 角色规则对那一轮不生效。属同一类「声明意图 vs 运行时行为」
+              分叉，但修它要动 server/src/chat/**（A4 归属）且会改变派发语义 ⇒ 本批
+              **只报告不修**。）
+      附带：worker 侧**没有**第二条会**放大**权限的失败路径——skills/tools/mcp 拉取失败
+            只会抛错中断本轮注入（配置不落盘 ⇒ 旧配置原样保留）或**删除**已注入条目
+            （= 收窄，不是放大）。已逐条核对 injector.ts 的三个 fetch 分支。
+
+[7.2] 本机既存 flake（与本批无关，未改）
+      worker/src/exec/sensitive-command.spec.ts「AbortSignal 取消与超时同路径」在 macOS
+      上偶发 `process.kill(-pgid, 0)` 返回 `EPERM`（期望 `ESRCH`）⇒ 5 次全量跑里偶发
+      1 次红；该 spec 与本批改动无交集（未 import injector/protocol 改动面），
+      单独跑与全量跑的其余 1293 例均绿。
+
+[7.3] 同波其它 agent 的在飞产物（已隔离，未改其代码）
+      server 根目录曾出现一份 **Batch A4 的 `message-receipts.service.ts` 误落副本**
+      （与受控文件 `src/chat/message-receipts.service.ts` 逐字节相同，md5 一致）。
+      该副本被 server 的 tsconfig（无 include ⇒ 收整个根目录）纳入编译，其相对 import
+      （`../common/...`）在根目录下无法解析 ⇒ `tsc --noEmit` 报 7 条 TS2307（**与本批
+      无关**：把该副本移开即 EXIT=0，见本文件第 2/6 节）。副本已移存到
+      /private/var/folders/.../T/opencode/d-backup/stray-message-receipts.service.ts
+      （未删除内容、未改对方代码），仓库当前 `tsc` 干净。
