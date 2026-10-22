@@ -3141,12 +3141,16 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(artifactsService.append).toHaveBeenCalledWith(taskId, {
+      expect(artifactsService.append).toHaveBeenCalledWith(
         taskId,
-        type: 'text',
-        title: '实现说明',
-        content: '已完成',
-      });
+        {
+          taskId,
+          type: 'text',
+          title: '实现说明',
+          content: '已完成',
+        },
+        { authorAgentId: null },
+      );
       expect(result).toEqual({
         artifactId: 'a_1',
         version: 1,
@@ -3170,13 +3174,17 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(artifactsService.append).toHaveBeenCalledWith(taskId, {
+      expect(artifactsService.append).toHaveBeenCalledWith(
         taskId,
-        type: 'text',
-        title: '登录用例',
-        content: '用例正文',
-        category: '测试用例',
-      });
+        {
+          taskId,
+          type: 'text',
+          title: '登录用例',
+          content: '用例正文',
+          category: '测试用例',
+        },
+        { authorAgentId: null },
+      );
       expect(result).toEqual({
         artifactId: 'a_2',
         version: 1,
@@ -3199,12 +3207,16 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(artifactsService.append).toHaveBeenCalledWith(taskId, {
+      expect(artifactsService.append).toHaveBeenCalledWith(
         taskId,
-        type: 'text',
-        title: '实现说明',
-        content: '已完成',
-      });
+        {
+          taskId,
+          type: 'text',
+          title: '实现说明',
+          content: '已完成',
+        },
+        { authorAgentId: null },
+      );
     });
 
     it('category 非法 → 400 PLATFORM_MCP_ARTIFACT_INVALID（不触达 append）', async () => {
@@ -3256,6 +3268,147 @@ describe('PlatformMcpService', () => {
         version: 1,
         status: 'created',
       });
+    });
+
+    it('作者归属：成员行可解析 → append 收到该成员的模板 Agent id', async () => {
+      allowWorker();
+      prisma.teamMember.findUnique.mockResolvedValue({
+        agentId: 'a_project_manager',
+      });
+      artifactsService.append.mockResolvedValue({
+        status: 'archived',
+        artifact: { id: 'a_1', currentVersion: 1 },
+      });
+
+      await service.submitArtifact(ctx, {
+        taskId,
+        type: 'text',
+        title: '实现说明',
+        content: '已完成',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(prisma.teamMember.findUnique).toHaveBeenCalledWith({
+        where: { id: senderInstanceId },
+        select: { agentId: true },
+      });
+      expect(artifactsService.append).toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({ title: '实现说明' }),
+        { authorAgentId: 'a_project_manager' },
+      );
+    });
+
+    it('作者归属：成员行缺失 → 作者为 null 且**不抛错**（缺作者不能搞失败提交）', async () => {
+      allowWorker();
+      prisma.teamMember.findUnique.mockResolvedValue(null);
+      artifactsService.append.mockResolvedValue({
+        status: 'archived',
+        artifact: { id: 'a_1', currentVersion: 1 },
+      });
+
+      const result = await service.submitArtifact(ctx, {
+        taskId,
+        type: 'text',
+        title: '实现说明',
+        content: '已完成',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(artifactsService.append).toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({ title: '实现说明' }),
+        { authorAgentId: null },
+      );
+      expect(result).toEqual({
+        artifactId: 'a_1',
+        version: 1,
+        status: 'created',
+      });
+    });
+
+    it('作者归属：成员行查询抛错 → 降级为 null 且提交仍成功', async () => {
+      allowWorker();
+      prisma.teamMember.findUnique.mockRejectedValue(new Error('db down'));
+      artifactsService.append.mockResolvedValue({
+        status: 'archived',
+        artifact: { id: 'a_1', currentVersion: 1 },
+      });
+
+      const result = await service.submitArtifact(ctx, {
+        taskId,
+        type: 'text',
+        title: '实现说明',
+        content: '已完成',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(artifactsService.append).toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({ title: '实现说明' }),
+        { authorAgentId: null },
+      );
+      expect(result.status).toBe('created');
+    });
+
+    it('作者归属：doc/file → archiveFile 收到同一 Agent id', async () => {
+      allowWorker();
+      prisma.teamMember.findUnique.mockResolvedValue({
+        agentId: 'a_project_manager',
+      });
+      prisma.worker.findUnique.mockResolvedValue({ capabilities: {} });
+      workerClient.fetchFile.mockResolvedValue(Buffer.from('设计稿 bytes'));
+      artifactsService.archiveFile.mockResolvedValue({
+        artifactId: 'art_2',
+        version: 1,
+        status: 'created',
+      });
+
+      await service.submitArtifact(ctx, {
+        taskId,
+        type: 'file',
+        title: '架构设计稿',
+        fileRef: '/tmp/opencode/design.md',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(artifactsService.archiveFile).toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({
+          title: '架构设计稿',
+          authorAgentId: 'a_project_manager',
+        }),
+        undefined,
+      );
+    });
+
+    it('作者归属：doc/file 且成员行缺失 → archiveFile 的 authorAgentId 为 undefined（落库为 NULL）', async () => {
+      allowWorker();
+      prisma.teamMember.findUnique.mockResolvedValue(null);
+      prisma.worker.findUnique.mockResolvedValue({ capabilities: {} });
+      workerClient.fetchFile.mockResolvedValue(Buffer.from('设计稿 bytes'));
+      artifactsService.archiveFile.mockResolvedValue({
+        artifactId: 'art_2',
+        version: 1,
+        status: 'created',
+      });
+
+      await service.submitArtifact(ctx, {
+        taskId,
+        type: 'file',
+        title: '架构设计稿',
+        fileRef: '/tmp/opencode/design.md',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(artifactsService.archiveFile).toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({
+          title: '架构设计稿',
+          authorAgentId: undefined,
+        }),
+        undefined,
+      );
     });
 
     it('text：append 已存在同内容（duplicate）→ status 透传 duplicate', async () => {

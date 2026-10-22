@@ -1032,11 +1032,50 @@ export class PlatformMcpService implements OnModuleInit {
    * 调用方实例 → 模板 Agent：授权表以模板 agentId 键控，实例 id 需经成员行换算。
    */
   private async resolveCallerAgentId(callerId: string): Promise<string> {
+    return (await this.resolveMemberAgentId(callerId)) ?? callerId;
+  }
+
+  /**
+   * 成员实例 id → 模板 Agent id 的**唯一查法**（team_members 行取 agent_id）。
+   * 成员行缺失 ⇒ null（不猜、不回退成实例 id）。
+   */
+  private async resolveMemberAgentId(memberId: string): Promise<string | null> {
     const member = await this.prisma.teamMember.findUnique({
-      where: { id: callerId },
+      where: { id: memberId },
       select: { agentId: true },
     });
-    return member?.agentId ?? callerId;
+    return member?.agentId ?? null;
+  }
+
+  /**
+   * 产出物作者 Agent 解析（提交者实例 id → 模板 Agent id；解析不到 ⇒ null）。
+   *
+   * 沿用既有成员解析（`resolveMemberAgentId`，与 `resolveCallerAgentId` 同一查法）：
+   * team_members 行的 agent_id 就是执行该成员的模板 Agent。
+   *
+   * 与 `resolveCallerAgentId` 的唯一差别：**查不到 ⇒ null**（而不是回退成实例 id）。
+   * 理由有二：
+   * 1. `artifact_versions.author_agent_id` 是 **Agent 外键**（schema.prisma
+   *    `author Agent? @relation("ArtifactAuthor", ...)`），塞实例 id（tmm_…）会撞 FK；
+   * 2. 协调度指标按 **Agent id** 归岗，实例 id 本就归不了岗，写进去只会把产出物
+   *    推进「未归属」桶，掩盖「谁产出了交付物」（见 coordination-metrics.service.ts）。
+   *
+   * **绝不抛错**：解析失败降级为 null（等价于人工提交），缺作者不能把一次正常的
+   * 产出物提交搞失败。
+   */
+  private async resolveArtifactAuthorAgentId(
+    instanceId: string,
+  ): Promise<string | null> {
+    try {
+      return await this.resolveMemberAgentId(instanceId);
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] 产出物作者解析失败（降级为 NULL）instance=${instanceId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -3725,6 +3764,10 @@ export class PlatformMcpService implements OnModuleInit {
    *   contentRef=落盘 URL、title 取工具入参）。拉取失败（worker 不存在 404 /
    *   fetchFile 非 2xx 的 WorkerUnavailableException 503）原样上抛——read_file 语义，
    *   提交失败必须让调用方（模型）知道。
+   * - **作者归属**：三类产出物一律记录提交者对应的模板 Agent id
+   *   （`artifact_versions.author_agent_id`），解析路径 = 调用方实例 id →
+   *   team_members 行 → agent_id；解析不到 ⇒ NULL（不抛错）。
+   *   该列是协调度指标「PM 产出物数」唯一的归岗依据，缺失即假阴性。
    * 参数校验失败（text 缺 content / doc/file 缺 fileRef）→ 400 `ARTIFACT_INVALID`。
    */
   async submitArtifact(
@@ -3743,7 +3786,14 @@ export class PlatformMcpService implements OnModuleInit {
     version: number;
     status: 'created' | 'appended' | 'duplicate';
   }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    const instanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
+    // 产出物作者（Agent id）：按提交者实例 id 解析（团队成员行 → 模板 Agent）。
+    // 解析不到 ⇒ null（不抛错）：缺作者不能把一次正常的提交搞失败。
+    const authorAgentId = await this.resolveArtifactAuthorAgentId(instanceId);
 
     if (
       args.category !== undefined &&
@@ -3763,13 +3813,17 @@ export class PlatformMcpService implements OnModuleInit {
           message: 'type=text 时 content 必填',
         });
       }
-      const result = await this.artifactsService.append(args.taskId, {
-        taskId: args.taskId,
-        type: 'text',
-        title: args.title,
-        content: args.content,
-        ...(args.category !== undefined ? { category: args.category } : {}),
-      });
+      const result = await this.artifactsService.append(
+        args.taskId,
+        {
+          taskId: args.taskId,
+          type: 'text',
+          title: args.title,
+          content: args.content,
+          ...(args.category !== undefined ? { category: args.category } : {}),
+        },
+        { authorAgentId },
+      );
       // 批次 A4：产出物正文/标题精确引用了派发 messageId ⇒ 该派发回执行结账
       // （引用即销账，me_0000000237；**只减不增**，me_0000000030）。
       await this.settleReceiptsAfterDelivery({
@@ -3793,6 +3847,7 @@ export class PlatformMcpService implements OnModuleInit {
       args.title,
       args.fileRef,
       args.category,
+      authorAgentId,
     );
     // 文件型产出物正文在文件里，平台只能看到标题 ⇒ 引用只可能写在标题上。
     await this.settleReceiptsAfterDelivery({
@@ -7962,6 +8017,7 @@ export class PlatformMcpService implements OnModuleInit {
     title: string,
     fileRef: string,
     category?: string,
+    authorAgentId?: string | null,
   ): Promise<{
     artifactId: string;
     version: number;
@@ -8003,6 +8059,7 @@ export class PlatformMcpService implements OnModuleInit {
         storedName: stored.name,
         sha256,
         title,
+        authorAgentId: authorAgentId ?? undefined,
       },
       category,
     );

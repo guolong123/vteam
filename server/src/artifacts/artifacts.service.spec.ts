@@ -1935,4 +1935,229 @@ describe('ArtifactsService', () => {
       expect(result.total).toBe(1);
     });
   });
+
+  describe('产出物作者归属（artifact_versions.author_agent_id）', () => {
+    it('append：meta.authorAgentId 落到新建版本行', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '验收结论',
+        currentVersion: 1,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000001',
+        version: 1,
+        contentRef: '通过',
+        filePath: null,
+        sha256: sha('通过'),
+        acceptedFlag: false,
+        authorAgentId: 'a_project_manager',
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      await service.append(
+        't_0000000001',
+        {
+          taskId: 't_0000000001',
+          type: 'text',
+          title: '验收结论',
+          content: '通过',
+        },
+        { authorAgentId: 'a_project_manager' },
+      );
+
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          version: 1,
+          authorAgentId: 'a_project_manager',
+        }),
+      });
+    });
+
+    it('append：meta 缺省（人工/API 提交）→ 版本行 authorAgentId 为 NULL', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '验收结论',
+        currentVersion: 1,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000001',
+        version: 1,
+        contentRef: '通过',
+        filePath: null,
+        sha256: sha('通过'),
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      await service.append('t_0000000001', {
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '验收结论',
+        content: '通过',
+      });
+
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ authorAgentId: null }),
+      });
+    });
+
+    it('archiveFile：authorAgentId 落到新建版本行（submit_artifact doc/file 路径）', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+      });
+
+      await service.archiveFile('t_0000000001', {
+        fileRef: '报告.docx',
+        storedUrl: '/uploads/uuid-1.docx',
+        storedName: '报告.docx',
+        sha256: sha('文件内容'),
+        title: '需求文档',
+        authorAgentId: 'a_project_manager',
+      });
+
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          version: 1,
+          authorAgentId: 'a_project_manager',
+        }),
+      });
+    });
+
+    it('archiveFile：authorAgentId 落到追加版本行', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue({
+        id: 'art_0000000001',
+        title: '需求文档',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        acceptedFlag: false,
+      });
+      prisma.artifact.update.mockResolvedValue({
+        id: 'art_0000000001',
+        currentVersion: 2,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000002',
+      });
+
+      await service.archiveFile('t_0000000001', {
+        fileRef: '报告.docx',
+        storedUrl: '/uploads/uuid-2.docx',
+        storedName: '报告.docx',
+        sha256: sha('v2 内容'),
+        title: '需求文档',
+        authorAgentId: 'a_project_manager',
+      });
+
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          version: 2,
+          authorAgentId: 'a_project_manager',
+        }),
+      });
+    });
+
+    it('archiveFile：不传 authorAgentId（人工上传路径）→ 版本行为 NULL', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+      });
+
+      await service.archiveFile('t_0000000001', {
+        fileRef: '报告.docx',
+        storedUrl: '/uploads/uuid-1.docx',
+        storedName: '报告.docx',
+        sha256: sha('文件内容'),
+        title: '需求文档',
+      });
+
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ authorAgentId: null }),
+      });
+    });
+
+    it('restore：作者沿用源版本作者（不写 NULL，产出物归属不被抹掉）', async () => {
+      prisma.artifact.findUnique.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '验收结论',
+        currentVersion: 2,
+      });
+      prisma.artifactVersion.findFirst.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000001',
+        version: 1,
+        contentRef: '旧内容',
+        filePath: null,
+        sha256: sha('旧内容'),
+        acceptedFlag: false,
+        authorAgentId: 'a_project_manager',
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        acceptedFlag: false,
+      });
+      prisma.artifact.update.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '验收结论',
+        currentVersion: 3,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000003',
+        artifactId: 'art_0000000001',
+        version: 3,
+        contentRef: '旧内容',
+        filePath: null,
+        sha256: sha('旧内容'),
+        acceptedFlag: false,
+        authorAgentId: 'a_project_manager',
+        changeNote: 'restore from v1',
+        createdAt: FIXED_DATE,
+      });
+
+      await service.restore('art_0000000001', 1);
+
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          version: 3,
+          authorAgentId: 'a_project_manager',
+        }),
+      });
+    });
+  });
 });
