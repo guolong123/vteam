@@ -148,18 +148,19 @@ fi
 # PM 岗位定义的四条纪律（server/src/common/constants/agent-role-prompts.constants.ts
 # 的 BUILTIN_ROLE_PROMPTS.project_manager；守卫 spec：
 # server/src/common/constants/pm-coordination-discipline.spec.ts 的
-# '① 产出是派发与核验，不是交付物' / '② 派发优先于动手' / '③ 串行派活' / '④ 做完即停'）
+# '① 三步判定' / '② 冲突裁决' / '③ 串行派活' / '④ 做完即停'）
+# 批次 D：纪律正文岗位无关（不写死「需求→产品经理」这类行业映射），只保留判定程序。
 PM_DISCIPLINE_HEADS=(
-  "产出是派发与核验，不是交付物"
-  "派发优先于动手"
+  "【判定顺序·任何请求先过这一步】"
+  "【冲突裁决】"
   "串行派活"
   "做完即停"
 )
 # 平台级【职责边界】段的主动委派条款
 # （server/src/common/constants/agent.constants.ts 的
 #  ROLE_BOUNDARIES['vteam-project_manager'].scopeSummary；
-#  守卫 spec 断言它含 '一律派给对应岗位' 与 '你只产出派发与核验'）
-PM_SCOPE_CLAUSES=("一律派给对应岗位" "你只产出派发与核验")
+#  守卫 spec 断言它含 '产出归谁由各岗位职责界定' 与 '你只产出派发与核验'）
+PM_SCOPE_CLAUSES=("产出归谁由各岗位职责界定" "你只产出派发与核验")
 # 催办文案四档（server/src/chat/receipt-nudge.handler.ts 的 buildNudgeDiagnosis：
 #   not-started / delivered-unsettled / receipt-not-landed / unknown）
 GRADED_NUDGE_CASES=(
@@ -1024,7 +1025,7 @@ for clause in "${PM_SCOPE_CLAUSES[@]}"; do
   [[ "$hit" =~ ^[1-9] ]] || E_FAILS="$E_FAILS [缺:$clause]"
 done
 # 纪律必须是**祈使句条目**（"- 纪律名：..."），不是身份陈述
-dbq "SELECT COUNT(*) FROM agent_roles WHERE \`key\`='$PM_ROLE_KEY' AND role_prompt LIKE '%- 产出是派发与核验，不是交付物：%' AND role_prompt LIKE '%- 派发优先于动手：%' AND role_prompt LIKE '%- 串行派活：%' AND role_prompt LIKE '%- 做完即停：%';" || true
+dbq "SELECT COUNT(*) FROM agent_roles WHERE \`key\`='$PM_ROLE_KEY' AND role_prompt LIKE '%- 【判定顺序·任何请求先过这一步】%' AND role_prompt LIKE '%- 【冲突裁决】%' AND role_prompt LIKE '%- 串行派活：%' AND role_prompt LIKE '%- 做完即停：%';" || true
 if [[ "$(dbval)" != "1" ]]; then
   E_FAILS="$E_FAILS [四条纪律不是祈使句条目]"
 fi
