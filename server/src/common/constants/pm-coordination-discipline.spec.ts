@@ -217,7 +217,7 @@ describe('平台级【职责边界】段必须承载「主动委派」而不是�
     expect(denial.length).toBeLessThanOrEqual(240);
   });
 
-  it('renderBoundarySection 渲染出的【职责边界】段含主动委派条款', () => {
+  it('renderBoundarySection 渲染出的【职责边界】段：通用入口不带任何行业分工映射', () => {
     const section = renderBoundarySection({
       scopeSummary: PM_SCOPE,
       handoff: ROLE_BOUNDARIES['vteam-project_manager'].handoffTo,
@@ -226,10 +226,21 @@ describe('平台级【职责边界】段必须承载「主动委派」而不是�
     expect(section).toContain(PM_SCOPE);
     expect(section).toContain('产出归谁由各岗位职责界定');
     expect(section).toContain('你只产出派发与核验');
-    // 转交映射仍由 handoffTo 渲染（语义未变）。
-    expect(section).toContain('code→vteam-developer');
-    expect(section).toContain('test→vteam-tester');
-    // 越界处理段仍是既有固定文案（本批不改渲染器）。
+    // PM 的 handoffTo 出厂即空表：渲染不得出现任何 `scope→vteam-*` 行业映射，
+    // 也不得吐出空括号 `（）`（收尾固定为「…转交对应角色。」）。
+    expect(ROLE_BOUNDARIES['vteam-project_manager'].handoffTo).toEqual({});
+    expect(section).not.toContain('→vteam-');
+    expect(section).not.toContain('（）');
+    expect(section.endsWith('转交对应角色。')).toBe(true);
+    // 越界处理段仍是既有固定文案（本批不改文案，只改「空映射时省略括号」）。
     expect(section).toContain('越界处理：超出上述职责范围的请求必须拒绝');
+  });
+
+  it('renderBoundarySection 对**非空**映射仍渲染括号（其它岗位行为不变）', () => {
+    const section = renderBoundarySection({
+      scopeSummary: '编码实现',
+      handoff: { test: 'vteam-tester' },
+    });
+    expect(section).toContain('（test→vteam-tester）');
   });
 });

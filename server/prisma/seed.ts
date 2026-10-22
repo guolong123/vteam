@@ -418,13 +418,10 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     scopeSummary:
       '流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；产出归谁由各岗位职责界定，你只产出派发与核验。',
     deliverables: ['进度与风险', '协调记录'],
-    handoffTo: {
-      requirements: 'vteam-product',
-      design: 'vteam-architect',
-      code: 'vteam-developer',
-      test: 'vteam-tester',
-      plan: 'vteam-plan',
-    },
+    // 空表是刻意的（见 src/common/constants/agent.constants.ts 同一处注释）：
+    // PM 是通用入口，写死任何一种行业分工都会与「产出归谁由各岗位职责界定」矛盾；
+    // 越界话术的转交目标由 worker guard 兜底成「对应职责角色」。
+    handoffTo: {},
     writeGlobs: [],
     readGlobs: ['*'],
     bashEffect: 'allow',

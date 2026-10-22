@@ -228,3 +228,37 @@ UPDATE，守卫覆盖 NULL/空串/批次 C 之前/批次 C 全部出厂值）+ 2
   群里回复「写代码属于开发者-1 的岗位产出，**我不代写代码**」→ 澄清口径 →
   用户确认后建任务 `t_0000000007`、计划 executing、**派发 `mr_0000000063`
   （tmm_0000000002 → tmm_0000000004）**，群贴 `@开发者-1【派发 · is_0000000013 · t_0000000007】`。
+
+---
+
+## 批次 E（2026-10-22）· 出厂分工映射中性化（清空 PM 的 handoffTo）
+
+**触发**：批次 D 把 PM 的**纪律正文**改成岗位无关，但 `ROLE_BOUNDARIES['vteam-project_manager'].handoffTo`
+仍是一张**研发分工表**，渲染进每次派发的【职责边界】段：
+
+```
+…通过 vteam_notify_agent 或群聊 @ 转交对应角色（requirements→vteam-product、design→vteam-architect、code→vteam-developer、test→vteam-tester、plan→vteam-plan）。
+```
+
+**为什么算缺陷**：PM 是**通用入口**（任意团队的第一接收人）。纪律说「产出归谁由各岗位职责界定」，
+边界段却把研发岗位映射硬塞回模型视野 ⇒ 自相矛盾，模型会退回「代码→开发者」的固定反射；
+非研发团队读到的是与本团队无关的分工。
+
+**改法**：
+- `handoffTo: {}`（空表刻意为之；带注释说明，防止后来者"顺手补回"）。
+- `renderBoundarySection` 对空映射**省略括号**（收尾「…转交对应角色。」），不再吐 `（）`；
+  非空映射渲染不变（其它 6 个岗位逐字节一致）。
+- 越界话术兜底：worker `buildDenyMessage` 在映射为空时用「对应职责角色」⇒ 不会空白。
+- 新迁移 `20261024000000_pm_handoff_neutral`：只清 `ep_project_manager` 的
+  `config.correction.handoff`，守卫**逐 scope 比对出厂 5 项表**（管理员自定义过则不覆盖），幂等。
+- 基线重基线化（`before-boundary.json` 的 PM 段）；新增迁移守卫 spec。
+
+**为什么只改 PM 不动其它 6 个岗位**：内置角色本身就是研发团队模板（产品/架构/开发/测试/计划/知识），
+它们的 `deliverables`、`scopeSummary`、role_prompt 也都是研发语义 ⇒ 单独把它们的 handoff 清空
+只会造成「角色是研发、映射是空」的新不一致。PM 不同：它是**任意请求的入口**，也是唯一
+已被改造成岗位无关的角色。若将来要把内置角色整体中性化，应连 `deliverables`/role_prompt 一起做，
+不在本批范围。
+
+**验证**：本地 compose 迁移已应用；库值 `correction.handoff = {}`（其它 6 个岗位不变）；
+四条纪律祈使句 4/4 命中、行业映射残留 0、scopeSummary 59 字含两条主动条款；
+jest 198 suites / 4669 passed；tsc clean；lint 68 warnings / 0 errors。
