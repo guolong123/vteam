@@ -984,6 +984,14 @@ export async function buildCapabilities(
     agentPolicies: {
       enabled: injected.agentPolicies.enabled,
       names: [...injected.agentPolicies.names],
+      // 批次 D-2：`stale` 必须透传——server 的能力位门靠它区分「本地**仍有**受管块
+      // （保留 ⇒ 点名该 agent 仍落到角色权限集上）」与「从来就没有过受管块」；
+      // 丢掉它 = server 认为该 worker 无受管块 ⇒ 派发时省略 agent 名 ⇒ opencode 退回
+      // **引擎默认 agent** ⇒ 角色 `permissions[]` 不生效 ⇒ **权限放大**。
+      // 成功路径不带该键（缺席 = 新鲜），故此处只在存在时透传。
+      ...(injected.agentPolicies.stale !== undefined
+        ? { stale: injected.agentPolicies.stale }
+        : {}),
     },
   };
 }

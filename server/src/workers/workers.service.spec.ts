@@ -18,6 +18,7 @@ import {
 import { WorkersService } from './workers.service';
 import {
   WORKER_COMMAND_TYPES,
+  workerAgentPoliciesStale,
   workerSupportsAgentPolicies,
 } from './workers.service';
 
@@ -2515,6 +2516,166 @@ describe('WorkersService', () => {
           'vteam-developer',
         ),
       ).toBe(false);
+    });
+  });
+
+  /**
+   * 批次 D-2：能力位门的**陈旧**语义（真值表）。
+   *
+   * ⚠️ 为什么陈旧要放行：批次 D-1 起中性化路径**保留**受管块（权限集不放大）；但门若把
+   * `enabled:false` 一律判成「不支持」⇒ 派发时**丢掉 agent 名** ⇒ opencode 退回**引擎默认
+   * agent** ⇒ 角色 `permissions[]` 对该轮**不生效** ⇒ 权限**放大**（平台声明 ≠ 运行时行为）。
+   * 受管块既然还在本地，点名该 agent 就落到**上次已知**的角色权限集上 ⇒ 门须放行。
+   */
+  describe('workerSupportsAgentPolicies（批次 D-2：陈旧报告 + 上次已知名 → 仍放行）', () => {
+    const STALE_NAMES = ['vteam-developer', 'vteam-tester'];
+
+    it('陈旧报告（stale=true）且 names 含候选 → true（点名落到保留的权限集上）', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: {
+                enabled: false,
+                names: STALE_NAMES,
+                stale: true,
+              },
+            },
+          },
+          'vteam-developer',
+        ),
+      ).toBe(true);
+    });
+
+    it('陈旧报告但 names **不含**候选 → false（该 agent 从未定义给它，点名会 agent-not-found）', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: {
+                enabled: false,
+                names: STALE_NAMES,
+                stale: true,
+              },
+            },
+          },
+          'vteam-unknown',
+        ),
+      ).toBe(false);
+    });
+
+    it('陈旧报告但 names 为空（从未成功注入过 ⇒ 本地无受管块）→ false', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: { enabled: false, names: [], stale: true },
+            },
+          },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+    });
+
+    it('enabled=false 且**无** stale 标记（批次 D-1 旧形状）→ false（不猜本地有没有受管块）', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: { enabled: false, names: STALE_NAMES },
+            },
+          },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+    });
+
+    it('旧 worker（**无** agentPolicies 字段）→ false（该路径不变，非本批回归面）', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { maxInstances: 5, skills: [], tools: [] } },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+    });
+
+    it('残缺形状：陈旧 + names 非数组 → false', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          {
+            capabilities: {
+              agentPolicies: {
+                enabled: false,
+                names: 'vteam-developer',
+                stale: true,
+              },
+            },
+          },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+    });
+
+    it('残缺形状：陈旧 + stale 非 true（truthy 字符串）→ false（只认布尔 true）', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          {
+            capabilities: {
+              agentPolicies: {
+                enabled: false,
+                names: STALE_NAMES,
+                stale: 'yes',
+              },
+            },
+          },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+    });
+
+    it('新鲜报告（enabled=true + names 含候选）→ true（行为不变）', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: { enabled: true, names: STALE_NAMES },
+            },
+          },
+          'vteam-developer',
+        ),
+      ).toBe(true);
+    });
+
+    it('workerAgentPoliciesStale：只认 stale === true（新鲜/缺席/旧 worker 均 false）', () => {
+      expect(
+        workerAgentPoliciesStale({
+          capabilities: {
+            agentPolicies: { enabled: false, names: STALE_NAMES, stale: true },
+          },
+        }),
+      ).toBe(true);
+      expect(
+        workerAgentPoliciesStale({
+          capabilities: {
+            agentPolicies: { enabled: true, names: STALE_NAMES },
+          },
+        }),
+      ).toBe(false);
+      expect(
+        workerAgentPoliciesStale({
+          capabilities: {
+            agentPolicies: { enabled: false, names: STALE_NAMES },
+          },
+        }),
+      ).toBe(false);
+      expect(workerAgentPoliciesStale({ capabilities: {} })).toBe(false);
+      expect(workerAgentPoliciesStale(null)).toBe(false);
+      expect(workerAgentPoliciesStale(undefined)).toBe(false);
     });
   });
 

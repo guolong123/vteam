@@ -224,22 +224,85 @@ export interface WorkerCommand {
 type HealthTimer = ReturnType<typeof setInterval>;
 
 /**
+ * worker 上报的 agent 策略能力位形状（**全部按 unknown 读**：它是 JSON，形状不可信）。
+ */
+type AgentPoliciesGateShape = {
+  enabled?: unknown;
+  names?: unknown;
+  stale?: unknown;
+};
+
+/**
+ * 读 worker 上报的 agent 策略能力位（**形状容错**：任何残缺形状都当"没有"）。
+ *
+ * ⚠️ 抽出来是因为**判定**（`workerSupportsAgentPolicies`）与**可观测**（陈旧与否）要读
+ * 同一个形状：派发侧需要知道「这次放行是靠**本轮**的名字还是靠**上次已知**的名字」
+ * （批次 D-3 的留痕），二者必须同源，否则日志会撒谎。
+ */
+function readAgentPoliciesGate(
+  worker: { capabilities?: unknown } | null | undefined,
+): AgentPoliciesGateShape | null {
+  const caps = (worker?.capabilities ?? {}) as Partial<{
+    agentPolicies?: AgentPoliciesGateShape;
+  }>;
+  const gate = caps.agentPolicies;
+  if (!gate || typeof gate !== 'object') {
+    return null;
+  }
+  return gate;
+}
+
+/**
  * Todo 14 能力位门（含名称校验，供 Todo 13 dispatch 选用策略 agent 前调用）。
- * 判定式：`capabilities.agentPolicies?.enabled === true && Array.isArray(names) && names.includes(agentName)`。
- * 旧 worker（无 agentPolicies 字段）/残缺形状一律返回 false（stale-true 防护：仅 enabled=true 不够，候选名必须在本次写入清单内）。
+ *
+ * 判定式（批次 D-2 修订）：
+ * - `enabled === true`（本轮刷新成功）→ 候选名必须在**本轮** `names` 内；
+ * - `stale === true`（本轮未刷新、但受管块按批次 D-1 **保留在本地**）→ 候选名必须在
+ *   **上次已知**的 `names` 内即放行；
+ * - 其余（旧 worker 无 `agentPolicies` 字段 / `enabled:false` 且无 `stale` / 残缺形状）→ false。
+ *
+ * ⚠️ **为什么陈旧也要放行**（批次 D-2 修的正是这点）：批次 D-1 把「拉取失败 ⇒ 删受管块」
+ * 改成「保留受管块」，权限集因此**不再放大**；但能力位门仍把 `enabled:false` 一律判成
+ * 「不支持」⇒ 派发时**丢掉 agent 名** ⇒ opencode 跑**引擎默认 agent** ⇒ 角色声明的
+ * `permissions[]`（edit deny / bash ask / MCP deny）**对该轮完全不生效** ⇒
+ * 「平台声明的权限」与「运行时实际权限」分叉（权限**放大**，fail-open）。
+ * 受管块既然还**在本地**，点名该 agent 就会落到**上次已知**的角色权限集上 ⇒
+ * 既不收窄也不放大 ⇒ 门必须放行（陈旧与否由派发侧打日志留痕，见批次 D-3）。
+ *
+ * ⚠️ **不放宽的两处**（防止门变成"什么都能派"）：
+ * - `names` 不含候选名 → 放行会点名一个**不存在**的 agent（opencode 报 agent-not-found，
+ *   整轮空转）⇒ 仍 false；
+ * - 从来没有 `agentPolicies` 字段的旧 worker → 不知它有没有受管块 ⇒ 仍 false
+ *   （**不**改成"假定有"，那会让所有旧 worker 的角色 agent 都被点名）。
  */
 export function workerSupportsAgentPolicies(
   worker: { capabilities?: unknown } | null | undefined,
   agentName: string,
 ): boolean {
-  const caps = (worker?.capabilities ?? {}) as Partial<{
-    agentPolicies?: { enabled?: unknown; names?: unknown };
-  }>;
-  const gate = caps.agentPolicies;
-  if (!gate || gate.enabled !== true) {
+  const gate = readAgentPoliciesGate(worker);
+  if (!gate) {
     return false;
   }
-  return Array.isArray(gate.names) && gate.names.includes(agentName);
+  const names = Array.isArray(gate.names) ? gate.names : [];
+  if (!names.includes(agentName)) {
+    return false;
+  }
+  // 本轮刷新成功 → 用本轮清单；本轮未刷新但受管块保留在本地 → 用上次已知清单。
+  return gate.enabled === true || gate.stale === true;
+}
+
+/**
+ * worker 的 agent 策略报告是否**陈旧**（本轮未刷新、受管块保留在本地 ⇒ 该轮跑在
+ * **上次已知**的角色权限集上）。
+ *
+ * ⚠️ 只用于**可观测**（派发侧留痕，批次 D-3）：判定本身在 `workerSupportsAgentPolicies`
+ * 里，两者读同一份形状（`readAgentPoliciesGate`）。
+ */
+export function workerAgentPoliciesStale(
+  worker: { capabilities?: unknown } | null | undefined,
+): boolean {
+  const gate = readAgentPoliciesGate(worker);
+  return gate?.stale === true;
 }
 
 /**

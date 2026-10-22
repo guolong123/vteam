@@ -68,15 +68,32 @@ export interface WorkerCapabilities {
   execPort?: number;
   /**
    * 角色 agent 策略能力位（Todo 14：由 injector `injectAll()` 结果驱动）。
-   * - 成功写入 agent 节 → `{ enabled: true, names: 本次写入名 }`；
-   * - 拉取失败/角色集为空（本轮**未刷新**）→ `{ enabled: false, names: [] }`。
+   * - 成功写入 agent 节 → `{ enabled: true, names: 本次写入名 }`（**不带** `stale` = 新鲜）；
+   * - 拉取失败/形状非法/角色集为空（本轮**未刷新**）→
+   *   `{ enabled: false, names: <上次已知名>, stale: true }`（批次 D-2）。
    * 旧 worker 无此字段 → server 视为 false（向后兼容，加法可选字段）。
    *
    * ⚠️ 批次 D-1：`enabled:false` **不再**意味着「受管块被删除」——中性化路径改为**保留**
-   * 上次受管块（权限集不变），`enabled:false` 只表示「策略**陈旧**」⇒ server 的
-   * `workerSupportsAgentPolicies` 据此不派发需要策略的 agent（陈旧即不派发）。
+   * 上次受管块（权限集不变），`enabled:false` 只表示「本轮**未刷新**」。
+   *
+   * ⚠️ 批次 D-2（**修正批次 D 注释里那句不成立的保护**）：批次 D 的注释写「陈旧即不派发」，
+   * 但代码**从来不是**这样——派发照旧发生，只是能力位门把 **agent 名丢掉** ⇒ opencode 跑
+   * **引擎默认 agent** ⇒ 角色的 `permissions[]`（edit deny / bash ask / MCP deny）**对该轮
+   * 完全不生效** ⇒ 权限被**放大**（fail-open）。批次 D-2 的实际行为：
+   * - `names` = **上次已知**的 agent 名（受管块仍在 worker 本地，内容未改写），
+   *   `stale: true` 明示「这是上次已知的权限集，不是本轮的」；
+   * - server 的能力位门（`workerSupportsAgentPolicies`）在 `stale:true` 且候选名在
+   *   `names` 内时**放行** ⇒ 该轮仍点名角色 agent ⇒ 跑在**保留的**（上次已知）角色权限集上，
+   *   既不收窄也不放大；派发侧另有日志留痕（批次 D-3）。
+   * - `names` 不含候选名（该 agent 从未被定义给它）→ 门仍不放行。
    */
-  agentPolicies?: { enabled: boolean; names: string[]; generatedAt?: string };
+  agentPolicies?: {
+    enabled: boolean;
+    names: string[];
+    /** true = 本轮未刷新且受管块**保留在本地**（缺席/false = 本轮新鲜）。 */
+    stale?: boolean;
+    generatedAt?: string;
+  };
 }
 
 /** 负载快照（对齐 schema Worker.load Json 与 server WorkerLoadDto）。 */

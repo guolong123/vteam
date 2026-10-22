@@ -59,6 +59,7 @@ import {
 } from '../workers/worker-event.ingress';
 import {
   AssignmentRequirement,
+  workerAgentPoliciesStale,
   workerSupportsAgentPolicies,
   WorkersService,
 } from '../workers/workers.service';
@@ -2935,19 +2936,39 @@ export class WorkerDispatcher
     // 执行 agent 优先级：成员显式绑定的外部 agent（opencodeAgentName，含岗位外部槽位
     // 预填）是用户的选择，无条件胜出；无外部绑定时才用内部策略候选——目标 Agent 行经
     // resolvePolicyAgentCandidate 映射出 `vteam-<agentKey>`（todo 10 起只认 agentKey，
-    // 非法/缺席 → 无候选），且仍受 worker 能力位 `enabled && names.includes(候选)` 门控
-    // （能力位只门控内部候选，不门控外部绑定）；两者皆无 → 省略 agent 键，由引擎默认
-    // （与引入前逐字节一致）。
+    // 非法/缺席 → 无候选），且仍受 worker 能力位门控（能力位只门控内部候选，不门控
+    // 外部绑定）；两者皆无 → 省略 agent 键，由引擎默认。
     // 是否"计划模式"是所绑定 agent 自身的属性：用户要用计划 agent 就直接绑定计划 agent，
     // 平台不代选、也不注入计划指令。
+    //
+    // ⚠️ **能力位门在「陈旧」时也放行**（批次 D-2）：worker 本轮没刷新 `/agent-policies`
+    // 时，受管 agent 块按批次 D-1 **保留在 worker 本地**（内容未改写）⇒ 点名该 agent
+    // 仍会落到角色的 `permissions[]` 上（**上次已知**的那一套）⇒ 权限既不收窄也不放大。
+    // 批次 D-2 之前这里会**丢掉 agent 名** ⇒ opencode 退回**引擎默认 agent** ⇒ 角色权限
+    // 对该轮**不生效** ⇒ 权限**放大**（平台声明 ≠ 运行时行为）。因此陈旧时必须点名。
     const policyCandidateAgent: string | null =
       resolvePolicyAgentCandidate(agentIdentity);
+    const policyCandidateSupported =
+      policyCandidateAgent !== null &&
+      workerSupportsAgentPolicies(worker, policyCandidateAgent);
     const resolvedAgentName: string | null =
       opencodeAgentName ??
-      (policyCandidateAgent &&
-      workerSupportsAgentPolicies(worker, policyCandidateAgent)
-        ? policyCandidateAgent
-        : null);
+      (policyCandidateSupported ? policyCandidateAgent : null);
+    // 陈旧留痕（批次 D-3）：本次点名靠的是**上次已知**的权限集，不是本轮的——运维必须
+    // 看得出"这一轮跑的是陈旧权限集"。只在本轮**确实**依赖陈旧报告时记（外部显式绑定
+    // 胜出时与陈旧无关，不记）。
+    if (
+      resolvedAgentName !== null &&
+      !opencodeAgentName &&
+      policyCandidateSupported &&
+      workerAgentPoliciesStale(worker)
+    ) {
+      this.logger.warn(
+        `worker=${workerId} 的 agent 策略**陈旧**（本轮未刷新 /agent-policies，受管块保留在本地）` +
+          `→ 仍点名 ${resolvedAgentName}：该轮跑在**上次已知**的角色权限集上（既未收窄也未放大），` +
+          '但可能已过期，请确认控制面可达。',
+      );
+    }
     // Todo 11（2026-09-21 起岗位权威）：目标成员的职责边界段由**岗位**绑定策略的 correction
     // 提供（不再按 agent 名白名单读取常量，也不再读执行 Agent 的策略）——内置岗位走绑定
     // 策略（出厂 correction == 常量，输出逐字节一致），自定义岗位的自定义 correction 同样注入。

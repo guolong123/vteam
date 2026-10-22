@@ -31,6 +31,11 @@
  * （fail-open）。改为保留 ⇒ 权限集**既不收窄也不放大**（agent 跑在**上次已知**权限集上）。
  * 首次注入（无历史受管块）无块可保留，行为同前（不写入受管定义），但必须显式告警。
  *
+ * ⚠️ **上报也要跟上（批次 D-2）**：中性化路径把**上次已知名**（manifest 的 `agentNames`）
+ * 连同 `stale: true` 一并上报——否则 server 分不清「本地仍有受管块」与「从来就没有过」
+ * ⇒ 派发时丢掉 agent 名 ⇒ opencode 退回引擎默认 agent ⇒ 角色权限**放大**（详见
+ * `InjectReport.agentPolicies` 的说明）。
+ *
  * worker 独立进程铁律：不 import server 代码（apiUrl/WORKER_TOKEN_HEADER 复用 registry-client 常量）。
  */
 
@@ -75,6 +80,26 @@ export interface ResourceInjectorOptions {
   logger?: ResourceLogger;
 }
 
+/**
+ * agent 策略**上报形状**（注入器产出 → 能力位 → server 的能力位门）。
+ *
+ * ⚠️ `stale` 的诚实性要求（批次 D-2）：**只有**「本轮没刷新、且受管块按 D-1 被保留」
+ * 的中性化路径才允许 `stale: true`；成功路径**一律不带**该键（缺席 = 新鲜）。
+ * 谎报 `stale: true`（比如块已被清理却声称保留）会让 server 点名一个**不存在**的
+ * agent ⇒ opencode 报「agent not found」⇒ 整轮空转。
+ */
+export interface AgentPoliciesReport {
+  /** true = 本轮成功写入受管块；false = 本轮**未刷新**（≠「没有受管块」）。 */
+  enabled: boolean;
+  /**
+   * agent 名清单：`stale` 缺席 = 本轮写入名；`stale: true` = **上次已知**名
+   * （受管块仍在本地，内容未改写）。
+   */
+  names: string[];
+  /** true = 本轮未刷新且受管块**保留在本地**（= 跑在**上次已知**权限集上）。 */
+  stale?: boolean;
+}
+
 export interface InjectReport {
   skills: string[];
   tools: string[];
@@ -87,16 +112,29 @@ export interface InjectReport {
   mcpServers: string[];
   /**
    * agent 策略注入结果（Todo 14 上报能力位的成功/报告信号）：
-   * - 成功（`/agent-policies` 拉取成功且角色集非空）→ `{ enabled: true, names: 本次写入名 }`；
-   * - 失败中性化（拉取失败或角色集为空）→ `{ enabled: false, names: [] }`。
+   * - 成功（`/agent-policies` 拉取成功且角色集非空）→ `{ enabled: true, names: 本次写入名 }`
+   *   （**不带** `stale` = 本轮新鲜）；
+   * - 失败中性化（拉取失败 / 形状非法 / 角色集为空）→
+   *   `{ enabled: false, names: <上次已知名>, stale: true }`。
    *
    * ⚠️ `enabled: false` 的语义 = **本轮没有刷新** agent 策略（不是「没有受管块」）。
-   * 批次 D-1 起失败中性化**保留**上次受管块（权限集不变），但平台侧的能力位门
-   * （`workerSupportsAgentPolicies`）据此判定该 worker 的策略**已陈旧** ⇒ 不派发
-   * 需要策略的 agent（stale-true 防护在派发侧，不在配置侧）。陈旧事实另记在
-   * manifest 的 `agentPoliciesStale` 键 + 注入器告警日志里。
+   * 批次 D-1 起失败中性化**保留**上次受管块（权限集不变）；批次 D-2 起中性化路径
+   * 把**上次已知名**（manifest 的 `agentNames`）一并报上来 ⇒ server 才分得清
+   * 「这个 worker 本地**仍有**受管块（保留）」与「它从来就没有过受管块」。
+   *
+   * ⚠️ `names` 的两种含义（看 `stale`）：
+   * - `stale` 缺席/false = **本轮**写入的 agent 名（新鲜）；
+   * - `stale: true` = **上次已知**的 agent 名（受管块仍在 worker 本地，内容未改写），
+   *   从未成功注入过则为空数组（= 本地根本没有受管块，agent 跑的是**引擎默认权限**）。
+   *
+   * ⚠️ **不要**据此宣称「陈旧即不派发」：批次 D-2 前，server 的能力位门
+   * （`workerSupportsAgentPolicies`）把 `enabled:false` 一律判成「不支持」⇒ 派发时
+   * **丢掉 agent 名** ⇒ opencode 退回**引擎默认 agent** ⇒ 角色的 `permissions[]`
+   * （edit deny / bash ask / MCP deny）**对该轮不生效** ⇒ 权限被**放大**。
+   * D2-2 起：陈旧报告里**含**该 agent 名时，门**放行**（受管块还在本地 ⇒ 点名仍落到
+   * 角色的权限集上，**上次已知**的那一套），并由派发侧打日志留痕（见 D2-3）。
    */
-  agentPolicies: { enabled: boolean; names: string[] };
+  agentPolicies: { enabled: boolean; names: string[]; stale?: boolean };
 }
 
 /**
@@ -627,7 +665,7 @@ export class ResourceInjector {
    */
   applyAgentPolicies(
     policies: AgentPoliciesResponse | null,
-  ): { enabled: boolean; names: string[] } {
+  ): AgentPoliciesReport {
     const configPath = path.join(this.workDir, 'opencode.json');
     const config = this.readConfig(configPath);
     this.migrateLegacySections(config);
@@ -670,7 +708,7 @@ export class ResourceInjector {
    */
   async injectMcpAndAgents(
     policies: AgentPoliciesResponse | null,
-  ): Promise<{ mcpServers: string[]; agentPolicies: { enabled: boolean; names: string[] } }> {
+  ): Promise<{ mcpServers: string[]; agentPolicies: AgentPoliciesReport }> {
     const servers = await this.fetchAll<McpServerRecord>('/mcp-servers', {
       enabled: 'true',
     });
@@ -681,7 +719,7 @@ export class ResourceInjector {
   async applyMcpAndAgents(
     servers: McpServerRecord[],
     policies: AgentPoliciesResponse | null,
-  ): Promise<{ mcpServers: string[]; agentPolicies: { enabled: boolean; names: string[] } }> {
+  ): Promise<{ mcpServers: string[]; agentPolicies: AgentPoliciesReport }> {
     const configPath = path.join(this.workDir, 'opencode.json');
     const config = this.readConfig(configPath);
     this.migrateLegacySections(config);
@@ -730,13 +768,25 @@ export class ResourceInjector {
    * 首次注入（无历史受管块）无块可保留：opencode.json 里不写受管定义（= 引擎默认权限，
    * 与改前一致），但必须显式告警说明「没有上次已知权限集可用」。
    *
+   * **上报形状（批次 D-2）**：`{ enabled: false, names: <上次已知名>, stale: true }`。
+   * `names` 报**上次已知**名（= manifest 的 `agentNames`，D-1 特意保留的那个键），
+   * 不是空数组——server 必须靠它分清「本地**仍有**受管块（保留 ⇒ 点名仍落到角色权限集
+   * 上）」与「从来就没有过受管块（首次注入 ⇒ 点名会 agent-not-found）」：
+   * - 报空数组 ⇒ server 以为该 worker 没有任何受管块 ⇒ 派发时丢掉 agent 名 ⇒
+   *   opencode 退回**引擎默认 agent** ⇒ 角色 `permissions[]` 不生效 ⇒ **权限放大**；
+   * - 报上次已知名 + `stale:true` ⇒ server 可安全点名（跑在**上次已知**权限集上，
+   *   既不收窄也不放大），并打日志说明这是陈旧权限集（D2-2/D2-3）。
+   *
+   * 首次注入（`preserved` 为空）⇒ `names: []` + `stale: true` 仍然是**诚实**的：
+   * 「本轮未刷新，且本地确实没有受管块」。
+   *
    * 不抛错：策略拉取失败**不得**中断注入链（skills/tools/mcp 照常注入）。
    */
   private writeNeutralized(
     config: Record<string, unknown>,
     configPath: string,
     mcpNames: string[],
-  ): { mcpServers: string[]; agentPolicies: { enabled: boolean; names: string[] } } {
+  ): { mcpServers: string[]; agentPolicies: AgentPoliciesReport } {
     const manifest = this.readManifest();
     // 受管块名字**不清零**：块仍在 opencode.json 里（未删除、未改写）。
     const preserved = manifest.agentNames ?? [];
@@ -766,7 +816,10 @@ export class ResourceInjector {
           '首次注入前请确保控制面可达。',
       );
     }
-    return { mcpServers: mcpNames, agentPolicies: { enabled: false, names: [] } };
+    return {
+      mcpServers: mcpNames,
+      agentPolicies: { enabled: false, names: preserved, stale: true },
+    };
   }
 
   /**

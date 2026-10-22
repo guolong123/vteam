@@ -1529,7 +1529,13 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     fs.writeFileSync(path.join(workDir, '.opencode', 'plugins', 'manual-tool.ts'), '// user\n', 'utf8');
 
     const report = await injectorForPolicies(workDir, { agents: [] }).injectAll();
-    expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
+    // 批次 D-2：中性化上报**上次已知**的 agent 名 + stale=true（server 据此才知道
+    // 「本地仍有受管块」⇒ 可以安全点名 ⇒ 角色权限不失效）。
+    expect(report.agentPolicies).toEqual({
+      enabled: false,
+      names: ['vteam-developer', 'vteam-tester'],
+      stale: true,
+    });
 
     const cfg = readConfig(workDir);
     // 批次 D-1：受管块**保留**（删掉 = 退回引擎默认权限 = 权限放大，fail-open）。
@@ -1556,7 +1562,11 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
       return okFetch(input, init);
     });
     const report = await injectorForPolicies(workDir, POLICIES, failingFetch).injectAll();
-    expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
+    expect(report.agentPolicies).toEqual({
+      enabled: false,
+      names: ['vteam-developer', 'vteam-tester'],
+      stale: true,
+    });
     // 批次 D-1：失败后受管块仍在（权限集不变），不再是「删掉 ⇒ 退回引擎默认」。
     expect(readConfig(workDir).agents?.['vteam-developer']).toEqual(V2_ENTRY);
     expect(readManifest(workDir).agentPoliciesStale).toBe(true);
@@ -1569,6 +1579,50 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     // 成功注入 ⇒ 块已刷新 ⇒ 陈旧标记清零（否则标记撒谎）。
     expect(readManifest(workDir).agentPoliciesStale).toBe(false);
     expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
+  });
+
+  it('(d2) 批次 D-2：连续两轮拉取失败 → 每轮都报**上次已知**的 agent 名 + stale=true（名字不得被清零）', async () => {
+    const workDir = workDirFor();
+    await injectorForPolicies(workDir, POLICIES).injectAll();
+
+    const okFetch = makeFetch(routesWith(POLICIES));
+    const failingFetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/agent-policies') {
+        return { ok: false, status: 500, statusText: 'boom', json: async () => ({}) } as unknown as Response;
+      }
+      return okFetch(input, init);
+    });
+
+    const first = await injectorForPolicies(workDir, POLICIES, failingFetch).injectAll();
+    expect(first.agentPolicies).toEqual({
+      enabled: false,
+      names: ['vteam-developer', 'vteam-tester'],
+      stale: true,
+    });
+    // 第二轮：manifest.agentNames 仍保留（D-1 的记账）⇒ 上报的名不得退化成 []。
+    // 若退化成 []，server 会以为该 worker 没有受管块 ⇒ 派发时丢掉 agent 名 ⇒
+    // opencode 退回引擎默认 agent ⇒ 角色 permissions[] 失效 ⇒ 权限放大。
+    const second = await injectorForPolicies(workDir, POLICIES, failingFetch).injectAll();
+    expect(second.agentPolicies).toEqual({
+      enabled: false,
+      names: ['vteam-developer', 'vteam-tester'],
+      stale: true,
+    });
+    expect(readManifest(workDir).agentNames).toEqual([
+      'vteam-developer',
+      'vteam-tester',
+    ]);
+  });
+
+  it('(d3) 批次 D-2：成功路径**不带** stale 键（缺席 = 新鲜；谎报 stale 会让 server 点名陈旧名）', async () => {
+    const workDir = workDirFor();
+    const report = await injectorForPolicies(workDir, POLICIES).injectAll();
+    expect(report.agentPolicies).toEqual({
+      enabled: true,
+      names: ['vteam-developer', 'vteam-tester'],
+    });
+    expect('stale' in report.agentPolicies).toBe(false);
   });
 
   it('(f) 首次注入 + 拉取失败：无历史受管块可保留 → 不写受管定义，告警说明退回引擎默认权限', async () => {
@@ -1591,7 +1645,9 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     });
 
     const report = await injector.injectAll();
-    expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
+    // 首次注入：**从来没有**成功注入过 ⇒ 无「上次已知」名 ⇒ names=[]（但 stale 仍为 true：
+    // 本轮确实未刷新，且本地确实没有受管块）。
+    expect(report.agentPolicies).toEqual({ enabled: false, names: [], stale: true });
     // 首次注入无块可保留 ⇒ opencode.json 里没有受管 agent 定义（= 引擎默认权限，与改前一致）。
     expect(readConfig(workDir).agents?.['vteam-developer']).toBeUndefined();
     expect(readManifest(workDir).agentNames ?? []).toEqual([]);
