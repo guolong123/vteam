@@ -1,0 +1,286 @@
+==========================================================================
+批次 A4 · 回执销账 + 催办分级 —— 证据
+计划：.omo/plans/pm-coordination-hardening.md（批次 A4）
+仓库：/Volumes/SSD-Data/01work/git-project/vteam
+日期：2026-10-22
+==========================================================================
+
+本批改动的文件：
+  server/prisma/schema.prisma                                   （+ settled_reason 列）
+  server/prisma/migrations/20261022120000_receipt_settlement_reason/migration.sql
+  server/src/prisma/receipt-settlement-reason.migration.spec.ts   （迁移守卫）
+  server/src/chat/message-receipt.constants.ts                    （+ 结账原因词表）
+  server/src/chat/message-receipts.service.ts                     （结算底座：引用即销账/应答结账/supersede 销账）
+  server/src/chat/receipt-nudge.handler.ts                        （催办文案分级 + 催办前应答结账）
+  server/src/platform-mcp/platform-mcp.service.ts                 （仅回执记账段：三个结算钩子）
+  server/src/chat/message-receipts.service.settlement.spec.ts     （新增）
+  server/src/chat/receipt-nudge.handler.grade.spec.ts             （新增）
+  server/src/platform-mcp/platform-mcp.service.receipt-settlement.spec.ts （新增）
+
+==========================================================================
+[1] npx jest src/chat src/platform-mcp    （brief 指定的域内测试）
+==========================================================================
+PASS src/platform-mcp/platform-mcp.service.wake-body.spec.ts (7.588 s)
+PASS src/platform-mcp/plan-managed-signoff.spec.ts (7.944 s)
+PASS src/chat/worker-dispatcher.snapshot.spec.ts
+PASS src/platform-mcp/platform-mcp.service.hook.spec.ts (7.949 s)
+PASS src/chat/chat.service.spec.ts (8.07 s)
+PASS src/chat/message-receipts.service.settlement.spec.ts
+PASS src/platform-mcp/platform-mcp.service.reply-join.spec.ts (8.188 s)
+PASS src/chat/worker-dispatcher.plan-hash.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-permission.spec.ts (8.298 s)
+PASS src/chat/worker-dispatcher.integration.spec.ts
+PASS src/platform-mcp/platform-mcp.file-path-resolution.spec.ts
+PASS src/chat/message-receipts.service.spec.ts
+PASS src/chat/review-dispatch-triplet.spec.ts
+PASS src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+PASS src/platform-mcp/platform-mcp.service.receipt-settlement.spec.ts
+PASS src/platform-mcp/platform-mcp.service.review-dispatch.spec.ts
+PASS src/chat/worker-dispatcher.termination-notice.spec.ts
+PASS src/platform-mcp/platform-mcp.controller.spec.ts (8.888 s)
+PASS src/chat/review-round-timeout.handler.spec.ts
+PASS src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts
+PASS src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/platform-mcp/platform-mcp.service.dispatch-channel.spec.ts
+PASS src/platform-mcp/platform-mcp.service.review-round-open.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-enum.spec.ts
+PASS src/chat/chat.controller.spec.ts
+PASS src/chat/worker-dispatcher.spec.ts (9.89 s)
+PASS src/platform-mcp/platform-mcp.tool-schema.spec.ts
+PASS src/chat/mention-throttle.spec.ts
+PASS src/platform-mcp/platform-mcp.authority-matrix.spec.ts
+PASS src/chat/message-parts.spec.ts
+PASS src/platform-mcp/platform-mcp.constants.spec.ts
+PASS src/chat/worker-dispatcher.gate.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-naming.spec.ts
+PASS src/chat/receipt-nudge.handler.spec.ts
+PASS src/chat/receipt-nudge.handler.grade.spec.ts
+PASS src/platform-mcp/platform-mcp.service.gate.spec.ts
+PASS src/chat/message-receipt.constants.spec.ts
+PASS src/platform-mcp/platform-mcp.service.spec.ts (12.827 s)
+Test Suites: 38 passed, 38 total
+Tests:       1305 passed, 1305 total
+Time:        14.136 s
+
+==========================================================================
+[2] npx jest src/prisma    （迁移守卫 spec：schema↔DDL 双向平价）
+==========================================================================
+PASS src/prisma/plan-doc-submit.migration.spec.ts (7.534 s)
+PASS src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts
+PASS src/prisma/agent-role-drop.migration.spec.ts (7.551 s)
+PASS src/prisma/role-capabilities-backfill.spec.ts (7.668 s)
+PASS src/prisma/worker-update-state.migration.spec.ts
+PASS src/prisma/pm-coordination-discipline.migration.spec.ts
+PASS src/prisma/memory-role-inject.migration.spec.ts
+PASS src/prisma/capability-memory-org-tools.migration.spec.ts
+PASS src/prisma/agent-prompt-backfill.migration.spec.ts
+PASS src/prisma/worker-code-version.migration.spec.ts
+PASS src/prisma/role-capabilities-web-parity.spec.ts
+PASS src/prisma/task-long-running.migration.spec.ts
+PASS src/prisma/agent-role.migration.spec.ts
+PASS src/prisma/agent-role-external-agent.migration.spec.ts
+PASS src/prisma/parallel-tasks.migration.spec.ts
+PASS src/prisma/team-worker-node.migration.spec.ts
+PASS src/prisma/agent-role-capabilities-git-web-tier.migration.spec.ts (8.15 s)
+PASS src/prisma/memory-refcount.migration.spec.ts
+PASS src/prisma/memory-search-to-list.migration.spec.ts (8.222 s)
+PASS src/prisma/agent-role-capabilities-git-web-retire.migration.spec.ts
+PASS src/prisma/model-usage.migration.spec.ts
+PASS src/prisma/receipt-settlement-reason.migration.spec.ts
+PASS src/prisma/agent-role-capabilities-factory-default.migration.spec.ts
+PASS src/prisma/agent-role-capabilities.migration.spec.ts (8.413 s)
+PASS src/prisma/realtime-events-retention.migration.spec.ts (8.406 s)
+PASS src/prisma/capability-memory-org-tools-upgrade.spec.ts (8.794 s)
+PASS src/prisma/seed.spec.ts (8.737 s)
+Test Suites: 27 passed, 27 total
+Tests:       1 skipped, 310 passed, 311 total
+
+==========================================================================
+[3] npx tsc --noEmit -p tsconfig.json    （类型检查）
+==========================================================================
+exit=0   （0 且无任何输出行 = 干净）
+
+==========================================================================
+[4] npm run lint:check    （仓库基线：68 problems / 0 errors）
+==========================================================================
+
+✖ 68 problems (0 errors, 68 warnings)
+
+
+--- 本批 A4 触及的 8 个文件单独 lint（本批 0 error；唯一 warning 是 platform-mcp.service.ts 里
+    既有的未用 import，与本批改动无关，基线即存在）---
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.ts
+  96:3  warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 1 problem (0 errors, 1 warning)
+
+
+==========================================================================
+[5] 变异检查（破坏新逻辑 → 对应新测试转红 → 还原 → 转绿）
+==========================================================================
+
+---------- A4-1 引用即销账：把「逐字精确」退化成「固定 10 位窗口」 ----------
+--- 变异内容（mut-a4-1.py，作用于 message-receipts.service.ts）---
+orig = s
+old = "const MESSAGE_ID_TOKEN_RE =\n  /(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9]*_\\d+)(?![A-Za-z0-9_])/g;"
+new = "const MESSAGE_ID_TOKEN_RE =\n  /(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9]*_\\d{1,10})/g;"
+s = s.replace(old, new)
+--- 变异后 jest（期望转红）---
+      ✓ 正文精确引用派发 messageId → 该回执行结账（settled_reason=quoted） (5 ms)
+      ✓ **绝不新增回执行**（me_0000000030：销账是减法）
+      ✓ 负例：不相关的消息（引用了别的 messageId）→ 不销账 (1 ms)
+      ✕ 负例：部分匹配（m_00000001001 含 m_0000000100）→ 不销账（只认逐字相等） (1 ms)
+      ✓ 负例：第三方引用（既不是派发方也不是被指派人）→ 不销账
+      ✓ 幂等：重复结算第二次是 no-op（至多结一次、不重复广播） (1 ms)
+      ✓ 并发结算：条件更新只放行一个赢家（updateMany 的 where 带 status=pending） (1 ms)
+      ✓ 抽出逐字相等的消息 id 候选
+      ✕ 不把更长的 id 截成短的（m_00000001001 ≠ m_0000000100） (1 ms)
+      ✓ 非 id 词（无下划线数字尾巴）不产出候选
+      ✓ 主 Agent 在提问之后、同一频道发言 → 提问回执结账（question-answered） (1 ms)
+      ✓ 负例：发言者不是主 Agent → 不结账
+      ✓ 负例：发言早于提问 → 不结账 (1 ms)
+      ✓ 负例：不在同一频道 → 不结账
+      ✓ 拉取式兜底：主 Agent 在提问频道里答过话 → 结账（覆盖非 MCP 落消息的答复） (1 ms)
+      ✓ 拉取式兜底：主 Agent 还没答过 → 不结账
+      ✓ 旧派发的 pending 回执行结账（settled_reason=superseded）且不新增行 (1 ms)
+      ✓ 幂等：重复销账第二次 no-op（至多结一次）
+      ✓ 旧派发没有 pending 回执行 → 零写库（no-op） (1 ms)
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 17 passed, 19 total
+--- 还原后 jest（期望转绿）---
+Test Suites: 1 passed, 1 total
+Tests:       19 passed, 19 total
+
+---------- A4-2 应答后结账：去掉「同一频道」判据 ----------
+--- 变异内容（mut-a4-2.py，作用于 message-receipts.service.ts）---
+orig = s
+old = "      if (!q || q.channelId !== input.channelId) {"
+new = "      if (!q) {"
+s = s.replace(old, new)
+--- 变异后 jest（期望转红）---
+      ✓ 正文精确引用派发 messageId → 该回执行结账（settled_reason=quoted） (6 ms)
+      ✓ **绝不新增回执行**（me_0000000030：销账是减法） (1 ms)
+      ✓ 负例：不相关的消息（引用了别的 messageId）→ 不销账
+      ✓ 负例：部分匹配（m_00000001001 含 m_0000000100）→ 不销账（只认逐字相等） (1 ms)
+      ✓ 负例：第三方引用（既不是派发方也不是被指派人）→ 不销账 (1 ms)
+      ✓ 幂等：重复结算第二次是 no-op（至多结一次、不重复广播）
+      ✓ 并发结算：条件更新只放行一个赢家（updateMany 的 where 带 status=pending） (1 ms)
+      ✓ 抽出逐字相等的消息 id 候选
+      ✓ 不把更长的 id 截成短的（m_00000001001 ≠ m_0000000100） (1 ms)
+      ✓ 非 id 词（无下划线数字尾巴）不产出候选
+      ✓ 主 Agent 在提问之后、同一频道发言 → 提问回执结账（question-answered） (1 ms)
+      ✓ 负例：发言者不是主 Agent → 不结账 (1 ms)
+      ✓ 负例：发言早于提问 → 不结账
+      ✕ 负例：不在同一频道 → 不结账 (1 ms)
+      ✓ 拉取式兜底：主 Agent 在提问频道里答过话 → 结账（覆盖非 MCP 落消息的答复） (1 ms)
+      ✓ 拉取式兜底：主 Agent 还没答过 → 不结账
+      ✓ 旧派发的 pending 回执行结账（settled_reason=superseded）且不新增行 (1 ms)
+      ✓ 幂等：重复销账第二次 no-op（至多结一次）
+      ✓ 旧派发没有 pending 回执行 → 零写库（no-op）
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 18 passed, 19 total
+--- 还原后 jest（期望转绿）---
+Test Suites: 1 passed, 1 total
+Tests:       19 passed, 19 total
+
+---------- A4-3 催办分级：态势判据恒返回「未开工」 ----------
+--- 变异内容（mut-a4-3.py，作用于 receipt-nudge.handler.ts）---
+orig = s
+old = "      return registered > 0 ? 'delivered-unsettled' : 'receipt-not-landed';"
+new = "      return 'not-started';"
+s = s.replace(old, new)
+--- 变异后 jest（期望转红）---
+      ✓ 未开工：说清「没看到任何交付痕迹」+ 给出开工与回执动作 (5 ms)
+      ✓ 已交付未销账：说清「账上有交付、结账是平台的锅」+ 给出销账动作 (1 ms)
+      ✓ 回执未送达：说清「账本查不到你的回执记录」+ 劝退用 notify 清账 (1 ms)
+      ✓ 证不出来（unknown）：走通用文案，不假装知道
+      ✓ 缺省（不带 nudgeCase）→ 通用文案（既有调用方兼容）
+      ✓ 无回信、无产出物 → 未开工 (1 ms)
+      ✕ 有回信但账本查不到回执行 → 回执未送达 (1 ms)
+      ✕ 有回信且账本查得到回执行 → 已交付未销账 (1 ms)
+      ✓ 没有回信但有产出物 → 回执未送达（有交付、账上没回执） (1 ms)
+      ✓ 探针读错 → 回落 unknown（通用文案），不假装知道 (1 ms)
+      ✓ 催办仍然照发（分级只改文案，不改催办节律） (1 ms)
+      ✓ 催办前扫描发现该回执已被主 Agent 应答结账 → 不催办、不写库 (1 ms)
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 10 passed, 12 total
+--- 还原后 jest（期望转绿）---
+Test Suites: 1 passed, 1 total
+Tests:       12 passed, 12 total
+
+---------- A4-4 supersede 销账：直接 return 0（不销账） ----------
+--- 变异内容（mut-a4-4.py，作用于 message-receipts.service.ts）---
+orig = s
+old = """  async settleSupersededDispatch(input: {
+    /** 被替换掉的旧派发消息 id。 */
+    messageId: string;
+    /** 团队归属（可空=不限）。 */
+    teamId?: string | null;
+  }): Promise<number> {
+    if (!input.messageId) {"""
+new = """  async settleSupersededDispatch(input: {
+    /** 被替换掉的旧派发消息 id。 */
+    messageId: string;
+    /** 团队归属（可空=不限）。 */
+    teamId?: string | null;
+  }): Promise<number> {
+    if (input.messageId) {
+      return 0;
+    }
+    if (!input.messageId) {"""
+s = s.replace(old, new)
+--- 变异后 jest（期望转红）---
+    ✓ ① schema.prisma 的 MessageReceipt 声明 settledReason 且 @map 到 settled_reason (2 ms)
+    ✓ ② baseline 的 message_receipts 建表块不含 settled_reason（否则重复加列 → ERROR 1060） (1 ms)
+    ✓ ③ 本迁移必须含 ALTER TABLE `message_receipts` ADD COLUMN `settled_reason`
+    ✓ ④ 列形态与 Prisma 自产 migrate diff 输出一致（离线等价性）
+    ✓ ⑤ 零 UPDATE / INSERT / DELETE / FOREIGN KEY / IF EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ 只加一列：不碰 status 词表、不动既有列/索引/约束
+    ✓ ⑦ 迁移目录恰好一个，且字典序晚于 baseline 与上一批迁移 (1 ms)
+    ✓ ⑧ 不得编辑 baseline（反转方向的静默 no-op 防线）
+      ✓ 正文精确引用派发 messageId → 该回执行结账（settled_reason=quoted） (6 ms)
+      ✓ **绝不新增回执行**（me_0000000030：销账是减法） (1 ms)
+      ✓ 负例：不相关的消息（引用了别的 messageId）→ 不销账 (1 ms)
+      ✓ 负例：部分匹配（m_00000001001 含 m_0000000100）→ 不销账（只认逐字相等）
+      ✓ 负例：第三方引用（既不是派发方也不是被指派人）→ 不销账 (1 ms)
+      ✓ 幂等：重复结算第二次是 no-op（至多结一次、不重复广播） (1 ms)
+      ✓ 并发结算：条件更新只放行一个赢家（updateMany 的 where 带 status=pending）
+      ✓ 抽出逐字相等的消息 id 候选 (1 ms)
+      ✓ 不把更长的 id 截成短的（m_00000001001 ≠ m_0000000100）
+      ✓ 非 id 词（无下划线数字尾巴）不产出候选 (1 ms)
+      ✓ 主 Agent 在提问之后、同一频道发言 → 提问回执结账（question-answered）
+      ✓ 负例：发言者不是主 Agent → 不结账 (1 ms)
+      ✓ 负例：发言早于提问 → 不结账
+      ✓ 负例：不在同一频道 → 不结账 (1 ms)
+      ✓ 拉取式兜底：主 Agent 在提问频道里答过话 → 结账（覆盖非 MCP 落消息的答复）
+      ✓ 拉取式兜底：主 Agent 还没答过 → 不结账 (1 ms)
+      ✕ 旧派发的 pending 回执行结账（settled_reason=superseded）且不新增行 (1 ms)
+      ✕ 幂等：重复销账第二次 no-op（至多结一次） (1 ms)
+      ✓ 旧派发没有 pending 回执行 → 零写库（no-op） (1 ms)
+      ✓ 群帖正文精确引用派发 messageId → 该回执行结账（settled_reason=quoted），账本一行不多 (7 ms)
+      ✓ 负例：群帖正文不引用派发 messageId → 不结账 (2 ms)
+      ✓ 负例：引用了**别的**消息 id → 不结账（精确匹配） (1 ms)
+      ✓ 产出物正文引用派发 messageId → 结账（quoted） (1 ms)
+      ✓ 负例：产出物正文不引用派发 messageId → 不结账 (1 ms)
+      ✓ 主 Agent 群帖应答 → 它收到的提问回执行结账（question-answered） (1 ms)
+      ✓ 负例：子 Agent 群帖（不是主 Agent）→ 不结主 Agent 的提问回执 (1 ms)
+      ✕ supersede 派发 → 旧派发的 pending 回执行结账（superseded） (2 ms)
+Test Suites: 2 failed, 1 passed, 3 total
+Tests:       3 failed, 32 passed, 35 total
+--- 还原后 jest（期望转绿）---
+Test Suites: 3 passed, 3 total
+Tests:       35 passed, 35 total
+
+==========================================================================
+[6] 账本基数（me_0000000030：销账只减不增）
+==========================================================================
+本批新增的三条结算路径（引用即销账 / 应答后结账 / supersede 销账）全部只做
+条件 UPDATE（updateMany where {id, status=pending}），**没有任何 create**；
+对应断言（每个用例都跑）：
+    expect(prisma.messageReceipt.create).not.toHaveBeenCalled();
+账本行数对照：
+    批次 A4 之前：一次派发 = 1 行（pending）；销账 = 0 行 ⇒ 1 行，且**永不结**（恒被催办）
+    批次 A4 之后：一次派发 = 1 行（pending）；销账 = 0 行 ⇒ 1 行，且**落到终态**（acked）
+    唯一仍会加行的路径仍是既有那几条（notify_agent 每次调用 +1、force 审计行、join 审计行）——
+    本批**没有新增任何加行路径**，也没有引入「用派发去销账」的回路。

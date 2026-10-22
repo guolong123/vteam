@@ -28,6 +28,29 @@ export const MESSAGE_RECEIPT_KINDS = {
 export type MessageReceiptKind =
   (typeof MESSAGE_RECEIPT_KINDS)[keyof typeof MESSAGE_RECEIPT_KINDS];
 
+/**
+ * 结账原因（批次 A4）：`status='acked'` 时写明「这条回执凭什么结的」。
+ *
+ * 为什么需要（me_0000000030 的反面）：批次 A4 之前账本只有**加法**（每次 notify_agent
+ * 加一行），status 词表只有 pending|acked|expired ⇒ 一行被结掉之后，无从分辨它是
+ * 「目标回了执」还是「平台按引用/应答/被替换替它结的」。本枚举让「减法」可审计。
+ *
+ * 取值域刻意**不含** expired：过期由 status 自身表达，不重复记账。
+ */
+export const MESSAGE_RECEIPT_SETTLED_REASONS = {
+  /** 目标回了执（notify_agent type=answer → ackPendingFor）。 */
+  answered: 'answered',
+  /** 正文精确引用了派发 messageId → 引用即销账（me_0000000237）。 */
+  quoted: 'quoted',
+  /** 主 Agent 已应答该 question/help 回执（me_0000000061）。 */
+  questionAnswered: 'question-answered',
+  /** 派发被 supersede 替换，旧派发永不会有人回（批次 A 的更正语义）。 */
+  superseded: 'superseded',
+} as const;
+
+export type MessageReceiptSettledReason =
+  (typeof MESSAGE_RECEIPT_SETTLED_REASONS)[keyof typeof MESSAGE_RECEIPT_SETTLED_REASONS];
+
 export interface BuildMessageReceiptDedupKeyInput {
   fromInstanceId: string;
   toInstanceId: string;

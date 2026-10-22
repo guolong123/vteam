@@ -439,6 +439,12 @@ model MessageReceipt {
   forceReason    String?   @map("force_reason") // force 绕过审计原因
   createdAt      DateTime  @default(now()) @map("created_at")
   ackedAt        DateTime? @map("acked_at") // 清账时间
+  // 结账原因（批次 A4）：acked 时写明「为什么结的」——answered=目标回了执；
+  // quoted=正文精确引用了派发 messageId（引用即销账，me_0000000237）；
+  // question-answered=主 Agent 已应答 question/help 回执（me_0000000061）；
+  // superseded=派发被更正替换（批次 A 的 supersede，旧派发永不会有人回，me_0000000030 的减法面）。
+  // expired 行留 NULL——status 已说明过期；本列**只**用于审计「谁以什么依据结的账」。
+  settledReason  String?   @map("settled_reason")
 
   @@index([toInstanceId, status], map: "idx_message_receipts_to_status")
   @@index([teamId, status], map: "idx_message_receipts_team_status")
