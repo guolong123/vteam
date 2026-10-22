@@ -252,9 +252,15 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     expect(buildReadPermission()).toEqual({ '*': 'allow' });
   });
 
-  it('handoffTo 目标 ⊆ 协作角色，且无 UI 设计目标', () => {
+  it('handoffTo 目标 ⊆ 协作角色，且无 UI 设计目标（PM 出厂为空表）', () => {
     for (const name of ROLE_NAMES) {
       const targets = Object.values(ROLE_BOUNDARIES[name].handoffTo);
+      // PM 是**通用入口**（任意团队的第一接收人），不写死任何行业分工表：
+      // 空表是刻意的，归属判定交给团队成员名册 + 各岗位职责（见批次 E）。
+      if (name === 'vteam-project_manager') {
+        expect(targets).toHaveLength(0);
+        continue;
+      }
       expect(targets.length).toBeGreaterThan(0);
       for (const target of targets) {
         expect(COORDINATION_ROLES).toContain(target);

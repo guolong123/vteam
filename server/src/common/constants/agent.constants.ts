@@ -478,13 +478,12 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     scopeSummary:
       '流程控制：进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不越权验收；产出归谁由各岗位职责界定，你只产出派发与核验。',
     deliverables: ['进度与风险', '协调记录'],
-    handoffTo: {
-      requirements: 'vteam-product',
-      design: 'vteam-architect',
-      code: 'vteam-developer',
-      test: 'vteam-tester',
-      plan: 'vteam-plan',
-    },
+    // 空表是刻意的：PM 是**通用入口**（任意团队的第一接收人），而这张表只能写成某一种
+    // 行业分工（研发：需求→产品、代码→开发…）。填了就与「产出归谁由各岗位职责界定」
+    // 互相矛盾——模型读到映射会退回枚举，反而压过岗位判定。
+    // 归属判定交给团队成员名册 + 各岗位自身职责（可配置）；越界话术的转交目标
+    // 由 worker guard 兜底成「对应职责角色」（见 role-guard-plugin buildDenyMessage）。
+    handoffTo: {},
     writeGlobs: [],
     readGlobs: ['*'],
     bashEffect: 'allow',

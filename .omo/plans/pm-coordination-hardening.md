@@ -228,3 +228,58 @@ UPDATE，守卫覆盖 NULL/空串/批次 C 之前/批次 C 全部出厂值）+ 2
   群里回复「写代码属于开发者-1 的岗位产出，**我不代写代码**」→ 澄清口径 →
   用户确认后建任务 `t_0000000007`、计划 executing、**派发 `mr_0000000063`
   （tmm_0000000002 → tmm_0000000004）**，群贴 `@开发者-1【派发 · is_0000000013 · t_0000000007】`。
+
+---
+
+## 批次 E（2026-10-22）· 出厂分工映射中性化（清空 PM 的 handoffTo）
+
+**触发**：批次 D 把 PM 的**纪律正文**改成岗位无关，但 `ROLE_BOUNDARIES['vteam-project_manager'].handoffTo`
+仍是一张**研发分工表**，渲染进每次派发的【职责边界】段：
+
+```
+…通过 vteam_notify_agent 或群聊 @ 转交对应角色（requirements→vteam-product、design→vteam-architect、code→vteam-developer、test→vteam-tester、plan→vteam-plan）。
+```
+
+**为什么算缺陷**：PM 是**通用入口**（任意团队的第一接收人）。纪律说「产出归谁由各岗位职责界定」，
+边界段却把研发岗位映射硬塞回模型视野 ⇒ 自相矛盾，模型会退回「代码→开发者」的固定反射；
+非研发团队读到的是与本团队无关的分工。
+
+**改法**：
+- `handoffTo: {}`（空表刻意为之；带注释说明，防止后来者"顺手补回"）。
+- `renderBoundarySection` 对空映射**省略括号**（收尾「…转交对应角色。」），不再吐 `（）`；
+  非空映射渲染不变（其它 6 个岗位逐字节一致）。
+- 越界话术兜底：worker `buildDenyMessage` 在映射为空时用「对应职责角色」⇒ 不会空白。
+- 新迁移 `20261024000000_pm_handoff_neutral`：只清 `ep_project_manager` 的
+  `config.correction.handoff`，守卫**逐 scope 比对出厂 5 项表**（管理员自定义过则不覆盖），幂等。
+- 基线重基线化（`before-boundary.json` 的 PM 段）；新增迁移守卫 spec。
+
+**为什么只改 PM 不动其它 6 个岗位**：内置角色本身就是研发团队模板（产品/架构/开发/测试/计划/知识），
+它们的 `deliverables`、`scopeSummary`、role_prompt 也都是研发语义 ⇒ 单独把它们的 handoff 清空
+只会造成「角色是研发、映射是空」的新不一致。PM 不同：它是**任意请求的入口**，也是唯一
+已被改造成岗位无关的角色。若将来要把内置角色整体中性化，应连 `deliverables`/role_prompt 一起做，
+不在本批范围。
+
+**验证**：本地 compose 迁移已应用；库值 `correction.handoff = {}`（其它 6 个岗位不变）；
+四条纪律祈使句 4/4 命中、行业映射残留 0、scopeSummary 59 字含两条主动条款；
+jest 198 suites / 4669 passed；tsc clean；lint 68 warnings / 0 errors。
+
+### 批次 E 附带发现：`pm_artifact_count` 指标定义有缺陷（未在本批修）
+
+本地实测：PM 在 `t_0000000007` 提交了产出物
+「`t_0000000007 流程与核验记录（…）`」（type=text，作者 `a_project_manager`）。
+这是 PM **职责内**允许的产出（其 `deliverables` 就是「进度与风险 / 协调记录」），
+但 `pm_artifact_count` 把它算进「PM 产出物数」，而该指标的 target 写死 `{operator:'=', value:0}`
+⇒ **合规行为被判成违规**（假阳性）。
+
+根因：指标名与口径不一致——它想度量「PM 有没有顶替别人交付」，实际度量的是
+「PM 有没有提交任何产出物」。后者必然非 0（PM 本来就要交协调记录）。
+
+建议（另案）：
+1. **改口径**：只统计「不属于 PM 自身 deliverables 的产出物」（按 `artifacts.category` /
+   `type` / 岗位 `deliverables` 交集判定），target 保持 0；
+2. 或**改语义**：把指标改名为 `pm_foreign_artifact_count`（PM 提交的非本岗位产出物数），
+   并在 detail 里同时给出 `pmOwnArtifacts`（本岗位记录数）便于对照；
+3. 无论哪种，都需要同步 `coordination-metrics.service.ts` 的 target 与 e2e G 段。
+
+本次 e2e 的处置：G 段改为**运行相对**断言（运行前取基线，断言「本次运行未新增」）——
+它证明的是「这一轮没有越界交付」，不依赖「库必须干净」。指标本身的缺陷仍待修。

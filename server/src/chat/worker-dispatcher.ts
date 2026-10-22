@@ -419,6 +419,8 @@ function normalizeHandoff(value: unknown): Record<string, string> {
  * 提示字节不变）；否则输出
  * `【职责边界】<scopeSummary>\n越界处理：超出上述职责范围的请求必须拒绝（不要执行），
  * 说明你的职责边界，并通过 vteam_notify_agent 或群聊 @ 转交对应角色（<scope→target、…>）。`
+ * `handoff` 为空/缺失时**省略括号**（收尾为「…转交对应角色。」）——PM 的 `handoffTo`
+ * 出厂即空表（通用入口不写死任何行业分工），渲染不能因此吐出空括号 `（）`。
  * 出厂态的 `correction` 与 `ROLE_BOUNDARIES` 常量逐字段相同 → 输出与按名读取常量逐字节一致。
  * 不再按 agent 名 gating：自定义 agent 的策略 `correction` 同样得到边界段。
  */
@@ -435,7 +437,9 @@ export function renderBoundarySection(
   return (
     `【职责边界】${scopeSummary}\n` +
     `越界处理：超出上述职责范围的请求必须拒绝（不要执行），说明你的职责边界，` +
-    `并通过 vteam_notify_agent 或群聊 @ 转交对应角色（${handoff}）。`
+    `并通过 vteam_notify_agent 或群聊 @ 转交对应角色${
+      handoff ? `（${handoff}）` : ''
+    }。`
   );
 }
 
