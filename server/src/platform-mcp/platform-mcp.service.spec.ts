@@ -78,6 +78,7 @@ describe('PlatformMcpService', () => {
   let prisma: {
     session: {
       findFirst: jest.Mock;
+      findUnique: jest.Mock;
       findMany: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
@@ -230,6 +231,8 @@ describe('PlatformMcpService', () => {
     prisma = {
       session: {
         findFirst: jest.fn(),
+        // 批次 A1：目标团队会话状态探针（uk_sessions_team_member = teamId|memberId）。
+        findUnique: jest.fn().mockResolvedValue({ status: 'running' }),
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -2179,6 +2182,8 @@ describe('PlatformMcpService', () => {
         triggered: true,
         reason: 'ok',
         issueBound: false,
+        claimed: true,
+        sessionStatus: 'running',
       });
     });
 
@@ -2223,6 +2228,8 @@ describe('PlatformMcpService', () => {
         triggered: true,
         reason: 'ok',
         issueBound: false,
+        claimed: true,
+        sessionStatus: 'running',
       });
     });
 
@@ -2336,6 +2343,8 @@ describe('PlatformMcpService', () => {
         reason: 'throttled',
         hint: expect.stringContaining('请勿重发'),
         issueBound: false,
+        claimed: false,
+        sessionStatus: 'running',
       });
     });
 
@@ -2376,6 +2385,8 @@ describe('PlatformMcpService', () => {
         triggered: true,
         reason: 'ok',
         issueBound: false,
+        claimed: true,
+        sessionStatus: 'running',
       });
     });
 
@@ -2419,6 +2430,8 @@ describe('PlatformMcpService', () => {
         reason: 'throttled',
         hint: expect.stringContaining('请勿重发'),
         issueBound: false,
+        claimed: false,
+        sessionStatus: 'running',
       });
     });
 
@@ -2447,6 +2460,8 @@ describe('PlatformMcpService', () => {
         triggered: true,
         reason: 'ok',
         issueBound: false,
+        claimed: true,
+        sessionStatus: 'running',
       });
     });
 
@@ -2684,6 +2699,8 @@ describe('PlatformMcpService', () => {
           reason: 'dedup',
           hint: expect.stringContaining('请勿重发'),
           issueBound: false,
+          claimed: false,
+          sessionStatus: 'running',
         });
         expect(prisma.message.create).not.toHaveBeenCalled();
         expect(realtime.broadcast).not.toHaveBeenCalled();

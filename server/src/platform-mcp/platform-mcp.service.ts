@@ -185,9 +185,76 @@ const WECOM_CHAT_ANCHOR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const NOTIFY_NOT_PUBLISHED_HINT =
   '本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。';
 
-/** 主 agent 门禁拦截提示：定向派活关闭时，逼主 agent 先建任务并流转到进行中。 */
-const NOTIFY_NO_ACTIVE_TASK_HINT =
-  '团队当前没有进行中的任务，定向派活已关闭：本次调用未发布。请先让主 agent 调用 vteam_task_create 创建真实任务并流转到进行中（task_transition），再派活给子 agent；子 agent 向上汇报（目标为主 agent）不受影响。';
+/**
+ * A3：团队维度「无进行中任务」死路的**可执行**提示（me_0000000236）。
+ *
+ * 为什么必须换掉旧文案：旧文案只让调用方「去创建任务并流转到进行中」，而线上真实
+ * 死路是——任务**已经存在**（pending_review 等非进行中态），且状态机不允许回退到
+ * in_progress（409）；照旧文案再去「创建一个任务」只会造出第二个任务、依然派不出去，
+ * 提示本身把调用方指进了不可达状态。
+ *
+ * 故本提示给真能走的下一步，并把**任务维度**（taskId）显式摆出来：团队维度的定向
+ * 派活门只卡团队维度，任务维度不走它——这才是「任务已存在但状态卡住」时的出路。
+ *
+ * @param currentTaskId 团队当前任务 id（无 → null：两种文案不同，有则给真实 id 备选）。
+ */
+function buildNoActiveTaskHint(currentTaskId: string | null): string {
+  const taskDimStep = currentTaskId
+    ? `① 改用**任务维度**派发——传 taskId=${currentTaskId}（团队维度的定向派活门只卡团队维度，任务维度不走它；该任务不在进行中也不影响，pending_review 之类状态不可回退到 in_progress，别指望改状态解决）；`
+    : '① 改用**任务维度**派发——传 taskId=<一个仍在进行中的任务 id>（团队维度的定向派活门只卡团队维度，任务维度不走它；团队没有 currentTaskId 时可指定团队里其它仍在进行中的任务）；';
+  return (
+    '团队当前没有进行中的任务，定向派活已关闭：本次调用未发布（triggered:false，不是投递失败，请勿重发）。' +
+    `可执行的下一步：${taskDimStep}` +
+    '② 若确实一个能用的任务都没有，再让主 agent 调用 vteam_task_create 创建任务并流转到进行中（新建任务只是最后一步——已有任务时新建只会造出第二个任务、依然派不出去）；' +
+    '③ 子 agent 向上汇报（目标为主 agent）不受本门限制。'
+  );
+}
+
+/**
+ * A2：supersede 的「在途派发」回退扫描窗口（消息表粗筛用）。
+ * 比内容去重窗口（60s）宽得多：更正往往发生在目标开工前后数分钟——内容去重窗口
+ * 早过了，但派发仍在途（目标还没回执），仍在可更正范围内。
+ */
+const NOTIFY_SUPERSEDE_WINDOW_MS = 30 * 60_000;
+
+/**
+ * A2：更正标记——把被替换的原派发 messageId 写进**可见正文**。
+ * 只写库里的隐藏字段没用：目标 agent 读到的就是这段正文，它必须知道「你收到的这条
+ * 是对上一条派发的更正、上一条作废」，否则两条指令并存、目标照旧的干（me_0000000238）。
+ */
+function buildSupersedeMarker(origMessageId: string): string {
+  return `【更正此前派发 ${origMessageId}：该条作废，以本条为准】`;
+}
+
+/**
+ * A2：mentions 里是否命中目标实例（JS 侧判定，避免 JSON path 方言；
+ * 与 findRecentIdenticalNotify 同口径：DB 只做粗筛，逐行判定放 JS）。
+ */
+function mentionsTargetInstance(
+  mentions: unknown,
+  instanceId: string,
+): boolean {
+  if (!Array.isArray(mentions)) return false;
+  return mentions.some((m) => {
+    if (typeof m !== 'object' || m === null) return false;
+    const rec = m as { type?: unknown; instanceId?: unknown };
+    return rec.type === 'agent' && rec.instanceId === instanceId;
+  });
+}
+
+/**
+ * A1：会话状态是否「可消费派发」。
+ * failed（watchdog 判死终态）与 archived（已归档）两态的会话不会消费这条派发——
+ * me_0000000080 就是目标会话 failed 时派发永不生效、调用方却只看到 triggered:true。
+ * 无会话行（null）也不算可消费：平台会在派发时新建会话，但此刻**没有活会话可作证**。
+ */
+function isClaimableSessionStatus(status: string | null): boolean {
+  return (
+    status !== null &&
+    status !== SESSION_STATUS.failed &&
+    status !== SESSION_STATUS.archived
+  );
+}
 
 /**
  * join-pending（reply-join 抑制分支）的人读提示：与拦截不同，本次调用
@@ -487,6 +554,13 @@ export type DispatchReason =
  *   dedup 命中时不写 origMessageId（messageId 本身即既有行）。
  * - review-triplet（todo 8）：kind=review 派发词缺三元组时拒绝触发并回精确 hint。
  * - dispatchAgentMention 内部返回保持 void，triggered 只在本层组装。
+ * - claimed（批次 A1）：平台已受理派发 **且** 目标存在可消费的活会话。failed/archived
+ *   的会话不会消费这条派发（me_0000000080：目标会话 failed 时派发永远不被消费，
+ *   调用方却只看到 triggered:true 而干等）——故 triggered 与 claimed 必须分开看。
+ * - sessionStatus（批次 A1）：目标团队会话状态（created/active/running/idle/frozen/
+ *   failed/archived）；目标无会话行 → null。
+ * - superseded/origMessageId（批次 A2）：本次派发替换了此前对同一目标的在途派发。
+ * - channelSwitched/channelSwitchReason（批次 A3）：团队维度被拦后自动改走任务维度。
  */
 export interface NotifyAgentResult {
   messageId: string | null;
@@ -500,6 +574,20 @@ export interface NotifyAgentResult {
   hint?: string;
   /** true=本次派发已绑定 issue；false=未带 issueId（提醒，不硬拦）。 */
   issueBound: boolean;
+  /**
+   * 批次 A1：平台已受理派发 **且** 目标有非 failed/非 archived 的活会话。
+   * false 可能只是「本次没派发出去」（拦截路径恒 false），也可能只是「目标会话已死」
+   * ——两者靠 sessionStatus 区分（null=尚无会话行；failed/archived=死信）。
+   */
+  claimed: boolean;
+  /** 批次 A1：目标团队会话状态；目标无会话行 → null。 */
+  sessionStatus: string | null;
+  /** 批次 A2：本次派发替换了此前对同一目标的在途派发（origMessageId 指向被替换那条）。 */
+  superseded?: boolean;
+  /** 批次 A3：团队维度被 no-active-task 拦下后自动改走了任务维度。 */
+  channelSwitched?: 'task';
+  /** 批次 A3：换道前的原始拦因（当前恒为 no-active-task）。 */
+  channelSwitchReason?: 'no-active-task';
 }
 
 /**
@@ -1708,6 +1796,16 @@ export class PlatformMcpService implements OnModuleInit {
       /** force 绕过的审计原因（落回执行 forceReason 列）。 */
       forceReason?: string;
       /**
+       * 一等「更正」语义（批次 A2，me_0000000238）：本次派发是「对我此前发给同一
+       * 目标的在途派发的更正」。为 true 时不被内容去重（dedup）吞掉，新消息正文
+       * 引用原派发 messageId（返回 origMessageId）并以本条为准。
+       *
+       * **不是 force**：force 是「审计留痕地强行绕过门禁」（须给非空 forceReason），
+       * supersede 不绕过任何门禁——路由 403 / 节流 / issue 锁 / 计划哈希门 / 评审
+       * 三元组门一律照旧（me_0000000238 的死路正因 force 败给 dedup 而非缺审计豁免）。
+       */
+      supersede?: boolean;
+      /**
        * 调用方携带的计划哈希（实际值，planVersion.hash sha1-8 口径；todo 3 执行认哈希）。
        * 与冻结哈希不一致即 plan-gated 拦截；缺省 → 哈希门禁未武装（原门禁语义不变）。
        */
@@ -1718,9 +1816,14 @@ export class PlatformMcpService implements OnModuleInit {
   ): Promise<NotifyAgentResult> {
     const exec = await this.resolveExecContext(ctx, args);
     const isTeam = exec.kind === 'team';
-    const effTaskId: string | null = isTeam ? null : exec.taskId;
+    // 入口维度的团队 id（收窄后落地）：批次 A3 要在**运行期**换维度，而判别联合的
+    // 收窄只在 const 布尔别名上成立——故先把值取出来，改道只动 eff* 变量。
+    const execTeamId: string | null = isTeam ? exec.teamId : null;
+    // eff* = **实际派发**维度：A3 把团队维度改写成任务维度后 effIsTeam=false。
+    let effIsTeam = isTeam;
+    let effTaskId: string | null = isTeam ? null : exec.taskId;
     const channel = isTeam
-      ? await this.findTeamGroupChannel(exec.teamId)
+      ? await this.findTeamGroupChannel(execTeamId as string)
       : await this.findGroupChannelForTask(effTaskId as string);
     if (!channel) {
       throw new NotFoundException({
@@ -1731,7 +1834,7 @@ export class PlatformMcpService implements OnModuleInit {
     // 目标实例行（agentId/alias/name）——@ 目标、消息 sender/mentions 归属依据。
     // 双维度统一查团队成员表（TeamMember）：任务维度经任务归属团队界定。
     const notifyTeamId = isTeam
-      ? exec.teamId
+      ? execTeamId
       : await this.teamIdOfTask(effTaskId as string);
     const targetInstance = notifyTeamId
       ? await this.prisma.teamMember.findFirst({
@@ -1752,6 +1855,20 @@ export class PlatformMcpService implements OnModuleInit {
         message: `目标实例 ${args.targetInstanceId} 不存在或不在任务团队`,
       });
     }
+    // 批次 A1：目标活会话状态探针（每次调用只查一次，读错 fail-open 回 null）。
+    // 口径与平台其余部分一致：团队会话行 = (teamId, teamMemberId) 的 task_id 为空行
+    // （SessionLifecycleService.ensureTeamSession 与 worker-dispatcher 的
+    // dispatchForTeamTarget 都按 uk_sessions_team_member = teamId|teamMemberId 解析它）。
+    let sessionStatusCache: string | null | undefined;
+    const probeSessionStatus = async (): Promise<string | null> => {
+      if (sessionStatusCache === undefined) {
+        sessionStatusCache = await this.resolveTargetSessionStatus(
+          notifyTeamId,
+          args.targetInstanceId,
+        );
+      }
+      return sessionStatusCache;
+    };
     // 主 Agent 路由门（落库前硬拦：本块之后才 create message + broadcast）。
     // 主 Agent 可通知任何人；任何人可通知主 Agent；非主成员之间互通知
     // （含 self-notify）一律 403，被拦方请先通知主 Agent 由其中转。
@@ -1790,9 +1907,12 @@ export class PlatformMcpService implements OnModuleInit {
     const targetName =
       targetInstance.alias ?? targetInstance.agent.name ?? targetAgentId;
     // B：内容已以目标 mention 开头时不再补前缀（防 `@名 @名 …` 双 @ 显示）。
-    const text = startsWithTargetMention(args.content, targetName)
-      ? args.content
-      : `@${targetName} ${args.content}`;
+    // 批次 A2：mention 前缀与正文拆开——更正标记要插在「@目标」之后、正文之前，
+    // 而内容去重探针要比对**不含标记**的原文（否则去重窗口内永远命中不了）。
+    const mentionPrefix = startsWithTargetMention(args.content, targetName)
+      ? ''
+      : `@${targetName} `;
+    const text = `${mentionPrefix}${args.content}`;
     // kind 归一 + force 审计原因提前：后续所有门禁共用（落库前判定）。
     const kind: DispatchExecutionKind =
       !args.kind || args.kind === 'execution'
@@ -1817,7 +1937,7 @@ export class PlatformMcpService implements OnModuleInit {
     // notify_agent 为单显式目标，内容含 @all 也不展开 fan-out（仅触发 targetInstanceId）。
     // 团队维度节流键取 team:<teamId> 命名空间（与 t_ 任务键永不碰撞）。
     // todo5 豁免：内部 wake/round-notify 不咨询不记账（pair/task 预算只约束外部派发）。
-    const throttleKey = isTeam ? `team:${exec.teamId}` : (effTaskId as string);
+    const throttleKey = isTeam ? `team:${execTeamId}` : (effTaskId as string);
     const throttleExempt = isThrottleExemptKind(args.kind);
     const decision: MentionThrottleDecision = throttleExempt
       ? { allow: true }
@@ -1839,37 +1959,63 @@ export class PlatformMcpService implements OnModuleInit {
         reason: 'throttled',
         hint: NOTIFY_NOT_PUBLISHED_HINT,
         issueBound: !!args.issueId,
+        claimed: false,
+        sessionStatus: await probeSessionStatus(),
       };
     }
     // 主 agent 门禁：团队当前任务非进行中 → 定向派活关闭（目标非主即拦）。
     // 开门前只允许与主 agent 沟通；子 agent 向上汇报（target=主）永远放行。
-    // 被拦返回 triggered:false + reason=no-active-task，主 agent 凭 hint 先建任务
-    // （vteam_task_create）并流转到进行中。内部 wake/nudge 不走本工具，不受影响。
     // mainMemberId 缺失/判定异常 → fail-open 放行（避免未配置团队被砖）。
-    if (isTeam && exec.teamId) {
+    //
+    // 批次 A3（me_0000000236）：此门此前是**死路**——拦截提示只让调用方「去创建任务」，
+    // 而线上真实场景是任务**已经存在**（pending_review 等非进行中态）且状态机不允许
+    // 回退到 in_progress（409），照提示走只会造出第二个任务、依然派不出去。故：
+    // ① 团队有 currentTaskId → 自动改走**任务维度**重派（同一调用、同一目标、同一
+    //    频道；改道发生在落库之前 ⇒ 库里只会有一条消息，不会双发）；
+    // ② 团队没有 currentTaskId → 保持拦截，但提示换成真能走的下一步（点明任务维度）。
+    let channelSwitched: 'task' | undefined;
+    let channelSwitchReason: 'no-active-task' | undefined;
+    if (isTeam && execTeamId) {
+      let teamGateClosed = false;
       try {
-        const gateMain = await this.mainMemberOfTeam(exec.teamId);
+        const gateMain = await this.mainMemberOfTeam(execTeamId);
         if (gateMain && args.targetInstanceId !== gateMain) {
-          const gateOpen = await this.isTeamFanOutOpen(exec.teamId);
-          if (!gateOpen) {
-            this.logger.warn(
-              `[mcp] notify_agent 主 agent 门禁拦截 team=${exec.teamId} from=${args.selfInstanceId} to=${args.targetInstanceId}（未发布）`,
-            );
-            return {
-              messageId: null,
-              channelId: channel.id,
-              targetInstanceId: args.targetInstanceId,
-              triggered: false,
-              reason: 'no-active-task',
-              hint: NOTIFY_NO_ACTIVE_TASK_HINT,
-              issueBound: !!args.issueId,
-            };
-          }
+          teamGateClosed = !(await this.isTeamFanOutOpen(execTeamId));
         }
       } catch (err) {
         this.logger.warn(
-          `[mcp] notify_agent 主 agent 门禁检查失败 team=${exec.teamId}（fail-open 放行）: ${(err as Error)?.message ?? err}`,
+          `[mcp] notify_agent 主 agent 门禁检查失败 team=${execTeamId}（fail-open 放行）: ${(err as Error)?.message ?? err}`,
         );
+      }
+      if (teamGateClosed) {
+        const currentTaskId = await this.currentTaskIdOfTeam(execTeamId);
+        const switchable = currentTaskId
+          ? await this.canSwitchToTaskDimension(execTeamId, currentTaskId)
+          : false;
+        if (switchable && currentTaskId) {
+          effIsTeam = false;
+          effTaskId = currentTaskId;
+          channelSwitched = 'task';
+          channelSwitchReason = 'no-active-task';
+          this.logger.warn(
+            `[mcp] notify_agent 团队维度被 no-active-task 拦，自动改走任务维度重派 team=${execTeamId} task=${currentTaskId} from=${args.selfInstanceId} to=${args.targetInstanceId}`,
+          );
+        } else {
+          this.logger.warn(
+            `[mcp] notify_agent 主 agent 门禁拦截 team=${execTeamId} from=${args.selfInstanceId} to=${args.targetInstanceId}（未发布）`,
+          );
+          return {
+            messageId: null,
+            channelId: channel.id,
+            targetInstanceId: args.targetInstanceId,
+            triggered: false,
+            reason: 'no-active-task',
+            hint: buildNoActiveTaskHint(currentTaskId),
+            issueBound: !!args.issueId,
+            claimed: false,
+            sessionStatus: await probeSessionStatus(),
+          };
+        }
       }
     }
     if (args.issueId) {
@@ -1903,6 +2049,8 @@ export class PlatformMcpService implements OnModuleInit {
             : {}),
           hint: NOTIFY_NOT_PUBLISHED_HINT,
           issueBound: true,
+          claimed: false,
+          sessionStatus: await probeSessionStatus(),
         };
       }
     }
@@ -1935,6 +2083,8 @@ export class PlatformMcpService implements OnModuleInit {
             reason: 'plan-gated',
             hint: `${buildStalePlanHashHint(stale.expected, stale.actual)}；${NOTIFY_NOT_PUBLISHED_HINT}`,
             issueBound: !!args.issueId,
+            claimed: false,
+            sessionStatus: await probeSessionStatus(),
           };
         }
         forceBypassedPlanGate = true;
@@ -1959,36 +2109,58 @@ export class PlatformMcpService implements OnModuleInit {
           reason: 'review-triplet',
           hint: `${REVIEW_TRIPLET_HINT}；${NOTIFY_NOT_PUBLISHED_HINT}`,
           issueBound: !!args.issueId,
+          claimed: false,
+          sessionStatus: await probeSessionStatus(),
         };
       }
     }
     // A2 内容幂等：窗口内同发送者→同目标已有同归一化正文行时复用其
     // messageId，不新建行、不重触发。读错 fail-open（告警后继续落库）。
-    const dedupHit = await this.findRecentIdenticalNotify(
-      channel.id,
-      args.selfInstanceId,
-      text,
-    );
-    if (dedupHit) {
-      this.logger.warn(
-        `[mcp] notify_agent 内容幂等命中 from=${args.selfInstanceId} to=${args.targetInstanceId} reuse=${dedupHit}（未新建行）`,
+    //
+    // 批次 A2（me_0000000238）：supersede=true 且**确有**在途派发可替换时，
+    // 本门不再吞掉本次派发——新消息正文引用原派发 messageId 并以本条为准。
+    // 只放宽这一道门：路由 403 / 节流 / issue 锁 / 计划哈希门 / 评审三元组门照旧
+    // （supersede 不是 force，不给审计豁免；me_0000000238 的死路正因 force 败给
+    // dedup，而不是缺一次审计豁免）。没有可替换的在途派发时，supersede 退化为
+    // 普通派发（去重门照旧生效，防双发）。
+    let supersededMessageId: string | null = null;
+    if (args.supersede === true) {
+      supersededMessageId = await this.findInFlightDispatchTo(
+        channel.id,
+        args.selfInstanceId,
+        args.targetInstanceId,
       );
-      return {
-        messageId: dedupHit,
-        channelId: channel.id,
-        targetInstanceId: args.targetInstanceId,
-        triggered: false,
-        reason: 'dedup',
-        hint: NOTIFY_NOT_PUBLISHED_HINT,
-        issueBound: !!args.issueId,
-      };
     }
-    const senderAgentId = isTeam
-      ? await this.resolveTeamSenderAgentId(exec.teamId, exec.callerId)
-      : await this.resolveSenderAgentId(
-          effTaskId as string,
-          args.selfInstanceId,
+    if (!supersededMessageId) {
+      const dedupHit = await this.findRecentIdenticalNotify(
+        channel.id,
+        args.selfInstanceId,
+        text,
+      );
+      if (dedupHit) {
+        this.logger.warn(
+          `[mcp] notify_agent 内容幂等命中 from=${args.selfInstanceId} to=${args.targetInstanceId} reuse=${dedupHit}（未新建行）`,
         );
+        return {
+          messageId: dedupHit,
+          channelId: channel.id,
+          targetInstanceId: args.targetInstanceId,
+          triggered: false,
+          reason: 'dedup',
+          hint: NOTIFY_NOT_PUBLISHED_HINT,
+          issueBound: !!args.issueId,
+          claimed: false,
+          sessionStatus: await probeSessionStatus(),
+        };
+      }
+    }
+    const senderAgentId =
+      effIsTeam && execTeamId
+        ? await this.resolveTeamSenderAgentId(execTeamId, exec.callerId)
+        : await this.resolveSenderAgentId(
+            effTaskId as string,
+            args.selfInstanceId,
+          );
     const senderMember = notifyTeamId
       ? await this.prisma.teamMember.findFirst({
           where: { id: args.selfInstanceId, teamId: notifyTeamId },
@@ -1997,6 +2169,11 @@ export class PlatformMcpService implements OnModuleInit {
       : null;
     const senderName =
       senderMember?.alias ?? senderMember?.agent?.name ?? args.selfInstanceId;
+    // 批次 A2：更正派发的**可见正文**——更正标记插在「@目标」之后、正文之前，
+    // 目标 agent 读到的就是这段文字（它必须知道上一条已作废，否则两条指令并存）。
+    const finalText = supersededMessageId
+      ? `${mentionPrefix}${buildSupersedeMarker(supersededMessageId)}${args.content}`
+      : text;
     const message = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
@@ -2004,7 +2181,7 @@ export class PlatformMcpService implements OnModuleInit {
         senderType: SENDER_TYPE.agent,
         senderId: senderAgentId,
         senderInstanceId: args.selfInstanceId,
-        content: { text, parts: [] } as Prisma.InputJsonValue,
+        content: { text: finalText, parts: [] } as Prisma.InputJsonValue,
         mentions: [
           {
             type: 'agent',
@@ -2073,11 +2250,12 @@ export class PlatformMcpService implements OnModuleInit {
     }
     // 放行派发嵌入视角边界（todo 8，docs 33 §3.5；非 review 原样透传）。
     // join 抑制分支跳过：在主 Agent 上不开执行 turn（消息已落库已广播，回执照记）。
-    const dispatchText = kind === 'review' ? ensureRoleViewFooter(text) : text;
+    const dispatchText =
+      kind === 'review' ? ensureRoleViewFooter(finalText) : finalText;
     if (!isJoinReport) {
-      if (isTeam) {
+      if (effIsTeam && execTeamId) {
         await this.workerDispatcher.dispatchAgentMention({
-          teamId: exec.teamId,
+          teamId: execTeamId,
           channelId: channel.id,
           text: dispatchText,
           targetInstanceId: args.targetInstanceId,
@@ -2122,6 +2300,10 @@ export class PlatformMcpService implements OnModuleInit {
           assigneeName: targetName,
           fromName: senderName,
           content: args.content,
+          // 批次 A2：更正派发按**实际派发的正文**（含更正标记）组回执去重键——
+          // 否则同正文重发会撞上原派发的去重键、更正这条消息自己没有回执行
+          // （账本记的还是那条已被替换的旧派发）。summary 仍用原文，不带标记。
+          ...(supersededMessageId ? { dedupContent: finalText } : {}),
           issueId: args.issueId ?? null,
           receiptTimeoutMin: args.receiptTimeoutMin,
         });
@@ -2132,12 +2314,12 @@ export class PlatformMcpService implements OnModuleInit {
       await this.handleNotifyMatrix({
         notifyType,
         notifyStage,
-        isTeam,
+        isTeam: effIsTeam,
         effTaskId,
         notifyTeamId,
         mainMemberId: teamMainId,
         reporterInstanceId: args.selfInstanceId,
-        text,
+        text: finalText,
         kind,
         messageId: message.id,
       });
@@ -2152,8 +2334,17 @@ export class PlatformMcpService implements OnModuleInit {
         reason: 'join-pending',
         hint: JOIN_PENDING_HINT,
         issueBound: !!args.issueId,
+        // join 抑制 = 本次**没有**在主 Agent 上开执行 turn ⇒ 目标没开工，claimed 恒 false。
+        claimed: false,
+        sessionStatus: await probeSessionStatus(),
+        ...(supersededMessageId
+          ? { superseded: true, origMessageId: supersededMessageId }
+          : {}),
+        ...(channelSwitched ? { channelSwitched, channelSwitchReason } : {}),
       };
     }
+    // 批次 A1：claimed = 平台已受理 **且** 目标有可消费的活会话（failed/archived 不消费）。
+    const sessionStatus = await probeSessionStatus();
     return {
       messageId: message.id,
       channelId: channel.id,
@@ -2161,6 +2352,12 @@ export class PlatformMcpService implements OnModuleInit {
       triggered: true,
       reason: 'ok',
       issueBound: !!args.issueId,
+      claimed: isClaimableSessionStatus(sessionStatus),
+      sessionStatus,
+      ...(supersededMessageId
+        ? { superseded: true, origMessageId: supersededMessageId }
+        : {}),
+      ...(channelSwitched ? { channelSwitched, channelSwitchReason } : {}),
     };
   }
 
@@ -2562,6 +2759,128 @@ export class PlatformMcpService implements OnModuleInit {
       (team as { mainAgentMemberId?: string | null } | null)
         ?.mainAgentMemberId ?? null
     );
+  }
+
+  /**
+   * 团队当前任务 id（team.currentTaskId；无 → null）。
+   * 与 isTeamFanOutOpen 同源字段，但独立成方法：改道只需要「有没有可用的当前任务」，
+   * 不需要它此刻是否 in_progress（那正是把团队维度关掉的原因）。
+   */
+  private async currentTaskIdOfTeam(teamId: string): Promise<string | null> {
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { currentTaskId: true },
+    });
+    return (
+      (team as { currentTaskId?: string | null } | null)?.currentTaskId ?? null
+    );
+  }
+
+  /**
+   * A3：任务维度改道的前置校验——任务必须确实属于该团队。
+   * 归属串了会把派发落到别的团队频道（目标成员校验用的是团队成员表，跨团队即错人）。
+   */
+  private async canSwitchToTaskDimension(
+    teamId: string,
+    taskId: string,
+  ): Promise<boolean> {
+    try {
+      const taskTeamId = await this.teamIdOfTask(taskId);
+      return taskTeamId === teamId;
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] notify_agent 改道校验读任务失败 task=${taskId}（不换道）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * A1：目标成员的团队会话状态（团队会话行 = (teamId, teamMemberId) 的 task_id 为空行）。
+   *
+   * 口径与平台其余部分一致：`SessionLifecycleService.ensureTeamSession` 与
+   * `worker-dispatcher` 的 dispatchForTeamTarget 都按 uk_sessions_team_member
+   * （= teamId|teamMemberId）解析这一行，故此处直接按该唯一键查。
+   *
+   * 读错 fail-open 回 null（= 无会话可作证，不阻断派发）。
+   */
+  private async resolveTargetSessionStatus(
+    teamId: string | null,
+    teamMemberId: string,
+  ): Promise<string | null> {
+    if (!teamId) return null;
+    try {
+      const row = await this.prisma.session.findUnique({
+        where: { teamMemberKey: `${teamId}|${teamMemberId}` },
+        select: { status: true },
+      });
+      return (row as { status?: string | null } | null)?.status ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] notify_agent 目标会话状态探针读错 team=${teamId} member=${teamMemberId}（fail-open 回 null）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * A2：找出「同一发送者 → 同一目标」当前**在途**的派发消息 id（supersede 专用）。
+   *
+   * 在途口径优先取回执账本：pending 回执 = 目标还没回执 = 派发仍在途，精确且无窗口
+   * 依赖（这是「同一对」的语义，不是「最近一条」的语义）。账本无 pending 行时
+   * （kind≠execution / 回执已结）回退到消息表粗筛：窗口内由该发送者发给该目标的
+   * 最近一条派发（mentions 命中目标实例）。
+   *
+   * 读错一律 fail-open 回 null（= 没有可替换的在途派发，supersede 退化为普通派发）。
+   */
+  private async findInFlightDispatchTo(
+    channelId: string,
+    fromInstanceId: string,
+    toInstanceId: string,
+  ): Promise<string | null> {
+    try {
+      const pending = await this.prisma.messageReceipt.findFirst({
+        where: {
+          fromInstanceId,
+          toInstanceId,
+          status: MESSAGE_RECEIPT_STATUSES.pending,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { messageId: true },
+      });
+      const pendingMessageId =
+        (pending as { messageId?: string | null } | null)?.messageId ?? null;
+      if (pendingMessageId) return pendingMessageId;
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] notify_agent 在途派发探针（回执账本）读错 from=${fromInstanceId} to=${toInstanceId}（回退消息表粗筛）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    try {
+      const since = new Date(Date.now() - NOTIFY_SUPERSEDE_WINDOW_MS);
+      const rows = await this.prisma.message.findMany({
+        where: {
+          channelId,
+          senderInstanceId: fromInstanceId,
+          createdAt: { gte: since },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: NOTIFY_DEDUP_SCAN_LIMIT,
+        select: { id: true, mentions: true },
+      });
+      if (!Array.isArray(rows)) return null;
+      for (const row of rows as Array<{ id: string; mentions: unknown }>) {
+        if (mentionsTargetInstance(row?.mentions, toInstanceId)) {
+          return row.id;
+        }
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] notify_agent 在途派发探针（消息表）读错 from=${fromInstanceId} to=${toInstanceId}（fail-open 回 null）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -3093,6 +3412,12 @@ export class PlatformMcpService implements OnModuleInit {
     assigneeName: string;
     fromName?: string | null;
     content: string;
+    /**
+     * 回执去重键的正文来源（缺省 = content）。批次 A2 的更正派发按**实际派发的
+     * 正文**组键：同正文重发会撞上原派发的去重键（唯一约束），更正这条消息就
+     * 拿不到自己的回执行——账本记的还是那条已被替换的旧派发。
+     */
+    dedupContent?: string;
     issueId: string | null;
     receiptTimeoutMin?: number;
   }): Promise<void> {
@@ -3107,7 +3432,7 @@ export class PlatformMcpService implements OnModuleInit {
       const dedupKey = buildMessageReceiptDedupKey({
         fromInstanceId: input.fromInstanceId,
         toInstanceId: input.toInstanceId,
-        content: input.content,
+        content: input.dedupContent ?? input.content,
       });
       let receiptId: string;
       let dueAt: Date;

@@ -1,0 +1,204 @@
+================================================================================
+批次 A · 派发通道语义（notify_agent 可观测 / supersede / no-active-task 死路出口）
+仓库：vteam（NestJS + Prisma monorepo）  计划：.omo/plans/pm-coordination-hardening.md 批次 A
+日期：2026-10-22
+================================================================================
+
+【0】简报前提更正记录（brief premise corrected against source）
+--------------------------------------------------------------------------------
+简报原文写「force 是**对象** {reason}」——该前提经源码核对为**错误**，已按真实契约实现，
+未把错误版本写进任何工具描述或测试：
+
+  真实契约（server/src/platform-mcp/platform-mcp.tools.ts 的 notifyAgentSchema）：
+      force:       z.preprocess((v) => v === true || v === 'true', z.boolean()).optional()
+      forceReason: z.string().optional()
+  真实契约（server/src/platform-mcp/platform-mcp.service.ts 的 notifyAgent 入参）：
+      force?: boolean;      forceReason?: string;      —— 两个**独立顶层**字段
+  真实消费（service 约 1806 行）：
+      const forceReason = args.force === true && typeof args.forceReason === 'string'
+        && args.forceReason.trim() ? args.forceReason.trim() : null;
+
+  ⇒ force 是**布尔开关**（字符串 'true' 亦可），forceReason 是**独立顶层字符串参数**，
+    二者必须同时给且 forceReason 非空才生效。
+  ⇒ 陷阱：schema 的 preprocess 把 `v` 归一为 `v === true || v === 'true'`，所以传对象
+    force:{reason:"..."} **不报错**、被静默归一为 false → 门禁照拦，调用方却以为强制生效。
+  ⇒ 工具描述据此改写为真实形状（并显式警告不要写 force:{reason:...}）；
+    工具描述里**没有**任何「force 是对象」的表述。
+
+================================================================================
+【1】改动文件
+================================================================================
+  server/src/platform-mcp/platform-mcp.service.ts        A1/A2/A3 实现 + 返回契约扩展
+  server/src/platform-mcp/platform-mcp.tools.ts          supersede 参数 + force/forceReason
+                                                          参数描述 + 工具描述（triggered vs claimed）
+  server/src/platform-mcp/platform-mcp.service.spec.ts   既有 7 处 toEqual 断言补两个新字段
+                                                          （契约扩容，非削弱：断言意图不变）
+  server/src/platform-mcp/platform-mcp.service.dispatch-channel.spec.ts  【新增】19 个用例
+
+================================================================================
+【2】验证命令与真实输出
+================================================================================
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/platform-mcp
+--------------------------------------------------------------------------------
+PASS src/platform-mcp/platform-mcp.tool-enum.spec.ts (6.279 s)
+PASS src/platform-mcp/platform-mcp.service.plan-hash.spec.ts (6.59 s)
+PASS src/platform-mcp/platform-mcp.service.wake-body.spec.ts (6.704 s)
+PASS src/platform-mcp/platform-mcp.service.review-round-open.spec.ts (6.789 s)
+PASS src/platform-mcp/platform-mcp.service.dispatch-channel.spec.ts (6.786 s)
+PASS src/platform-mcp/platform-mcp.file-path-resolution.spec.ts
+PASS src/platform-mcp/platform-mcp.service.hook.spec.ts (7.002 s)
+PASS src/platform-mcp/platform-mcp.service.review-dispatch.spec.ts
+PASS src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts
+PASS src/platform-mcp/platform-mcp.service.reply-join.spec.ts
+PASS src/platform-mcp/platform-mcp.authority-matrix.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-permission.spec.ts (7.622 s)
+PASS src/platform-mcp/platform-mcp.constants.spec.ts
+PASS src/platform-mcp/plan-managed-signoff.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-naming.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-schema.spec.ts
+PASS src/platform-mcp/platform-mcp.controller.spec.ts (7.806 s)
+PASS src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/platform-mcp/platform-mcp.service.gate.spec.ts
+PASS src/platform-mcp/platform-mcp.service.spec.ts (8.189 s)
+
+Test Suites: 20 passed, 20 total
+Tests:       640 passed, 640 total
+Snapshots:   0 total
+Time:        8.999 s, estimated 14 s
+Ran all test suites matching /src\/platform-mcp/i.
+
+--------------------------------------------------------------------------------
+$ cd server && npx tsc --noEmit -p tsconfig.json
+--------------------------------------------------------------------------------
+(无输出 = clean)
+
+--------------------------------------------------------------------------------
+$ cd server && npm run lint:check   （仓库基线：68 problems / 0 errors）
+--------------------------------------------------------------------------------
+  931:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 68 problems (0 errors, 68 warnings)
+
+
+================================================================================
+【3】变异证据（临时改坏 ⇒ 对应用例转红 ⇒ 还原 ⇒ 转绿）
+================================================================================
+
+--------------------------------------------------------------------------------
+变异 A1：isClaimableSessionStatus 不再把 failed 判为不可消费（claimed 会误报 true）
+--------------------------------------------------------------------------------
+[mutation applied]
+      ✕ 目标会话 failed → triggered 仍为 true（消息落库）但 claimed=false + sessionStatus=failed（目标不会消费，别干等） (6 ms)
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 18 passed, 19 total
+[restored]
+Test Suites: 1 passed, 1 total
+Tests:       19 passed, 19 total
+
+--------------------------------------------------------------------------------
+变异 A2：supersede 不再查「在途派发」（去重门照旧吞掉更正）
+--------------------------------------------------------------------------------
+[mutation applied]
+      ✕ supersede=true + 同对在途派发 → 派发**替换**原派发（新消息引用原 messageId），不被去重吞掉 (2 ms)
+      ✕ supersede=true 且**正文完全相同**时同样不被去重吞掉（去重门只被 supersede 放行这一次） (1 ms)
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 17 passed, 19 total
+[restored]
+Test Suites: 1 passed, 1 total
+Tests:       19 passed, 19 total
+
+--------------------------------------------------------------------------------
+变异 A3：团队维度不再改走任务维度（死路回归）
+--------------------------------------------------------------------------------
+[mutation applied]
+      ✕ 团队有 currentTaskId（但不在进行中）→ 自动改走任务维度重派：triggered=true + channelSwitched=task + 只落一条消息 (1 ms)
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 18 passed, 19 total
+[restored]
+Test Suites: 1 passed, 1 total
+Tests:       19 passed, 19 total
+
+================================================================================
+【4】新增用例清单（platform-mcp.service.dispatch-channel.spec.ts，19 例）
+================================================================================
+    A1 · 返回值可观测（triggered=落库 vs claimed=开工）
+      ✓ 目标会话 failed → triggered 仍为 true（消息落库）但 claimed=false + sessionStatus=failed（目标不会消费，别干等） (25 ms)
+      ✓ 目标会话 archived → claimed=false + sessionStatus=archived (5 ms)
+      ✓ 目标会话健康（running）→ claimed=true + sessionStatus=running (7 ms)
+      ✓ 目标**没有**会话行 → sessionStatus=null + claimed=false（首次派发，平台会在派发时建会话；不是投递失败） (8 ms)
+      ✓ 拦截路径（去重）也带 claimed=false + sessionStatus（调用方据此判断目标死活） (5 ms)
+    A2 · 一等更正语义 supersede
+      ✓ supersede=true + 同对在途派发 → 派发**替换**原派发（新消息引用原 messageId），不被去重吞掉 (10 ms)
+      ✓ supersede=true 且**正文完全相同**时同样不被去重吞掉（去重门只被 supersede 放行这一次） (12 ms)
+      ✓ 不带 supersede → 去重照旧生效（reason=dedup + 回既有 messageId，零新行） (2 ms)
+      ✓ force + forceReason **也**败给去重（force 是门禁豁免，不是更正语义；me_0000000238 的死路正因如此） (3 ms)
+      ✓ supersede=true 但**没有**可替换的在途派发 → 退化为普通派发（去重照旧生效，不制造重复行） (2 ms)
+      ✓ supersede **不**绕过非主→非主路由 403（更正语义不是门禁豁免） (2 ms)
+      ✓ supersede **不**绕过 issue 锁（在途回执 + 同 assignee → 仍 reason=duplicate） (5 ms)
+    A3 · 团队维度 no-active-task 死路可解
+      ✓ 团队有 currentTaskId（但不在进行中）→ 自动改走任务维度重派：triggered=true + channelSwitched=task + 只落一条消息 (10 ms)
+      ✓ 团队**没有** currentTaskId → 保持拦截，但 hint 可执行：点明任务维度(taskId)才是替代通道，不把调用方指去「建任务」死路 (4 ms)
+      ✓ currentTaskId 存在但**不属于该团队** → 不换道（归属串了会把派发落到别的团队频道），保持拦截 (2 ms)
+      ✓ 团队当前任务**进行中** → 团队维度原样放行（不改道、不加 channelSwitched） (4 ms)
+    force 的真实契约（布尔开关 + 顶层 forceReason）
+      ✓ force=true + 非空 forceReason → 豁免生效（issue 锁被绕开，派发照发） (4 ms)
+      ✓ force=true 但**缺** forceReason → 豁免不生效（门禁照拦） (1 ms)
+      ✓ force 传对象 {reason} → schema 静默归一为 false（不报错），门禁照拦（别以为强制生效了） (28 ms)
+
+================================================================================
+【5】契约形状（本次新增/变更的精确形状）
+================================================================================
+
+A1 返回值（NotifyAgentResult，两个新字段在**所有**返回路径上恒存在）：
+    claimed: boolean            // 平台已受理派发 且 目标有非 failed/非 archived 的活会话
+    sessionStatus: string|null  // 目标团队会话状态（created|active|running|idle|frozen|failed|archived）
+                               // null = 目标尚无会话行（首次派发，平台会在派发时创建）
+    triggered 语义不变 = 「消息已落库」；reason 词汇新增 no-active-task（既有）。
+
+A2 参数（新增，缺省 false）：
+    supersede?: boolean
+    返回附加：superseded?: true、origMessageId?: string（被替换的那条在途派发）
+    更正标记写进**可见正文**：【更正此前派发 <origMessageId>：该条作废，以本条为准】
+
+A3 返回附加：
+    channelSwitched?: 'task'        // 团队维度被拦后改走了任务维度
+    channelSwitchReason?: 'no-active-task'
+
+================================================================================
+【6】已知残留 / 交回编排者确认
+================================================================================
+1. 旧回执行仍 pending：supersede 只替换**消息**，不改动旧回执行状态（账本状态词表
+   pending|acked|expired 无 superseded，且 message-receipts.service.ts /
+   receipt-nudge.handler.ts 属批次 A4 归属，本批未动）。更正标记里带原 messageId，
+   A4 的「引用即销账」可据此销掉旧行。
+2. force 的 JSON Schema 仍渲染成 {"type":"object"}（zod preprocess 的渲染副作用）。
+   本批只把**描述**改写真实形状（布尔 + 顶层 forceReason + 对象被静默忽略的警告），
+   未改 schema 形状（改它会动 tools/list 的 inputSchema 契约）——留给批次 B「工具契约
+   自描述」处理。
+3. A3 改道只换**通道**，不换**门禁集合**：团队维度本就不走计划哈希门，改道后仍不走
+   （改道目的是解死路，不是加新拦截）。节流配额仍按入口维度记一次（team:<teamId>）。
+4. A3 换道要求 currentTaskId 确实属于该团队（跨团队换道会把派发落到别的团队频道）。
+
+================================================================================
+【7】最终复跑（补完 supersede 描述的「supersede 破去重 / force 破门禁」互补提示后）
+================================================================================
+$ npx prettier --check src/platform-mcp/platform-mcp.tools.ts
+Checking formatting...
+All matched files use Prettier code style!
+
+$ npx jest src/platform-mcp
+Test Suites: 20 passed, 20 total
+Tests:       640 passed, 640 total
+
+$ npx tsc --noEmit -p tsconfig.json
+(无输出 = clean)
+
+$ npm run lint:check
+
+✖ 68 problems (0 errors, 68 warnings)
+
+
+$ npx jest src/gates src/chat   （门禁注册表覆盖的邻近套件，确认无回归）
+Test Suites: 16 passed, 16 total
+Tests:       665 passed, 665 total
