@@ -4,7 +4,10 @@ import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TriggerService } from '../timers/trigger.service';
-import { MessageReceiptsService } from './message-receipts.service';
+import {
+  MessageReceiptsService,
+  RECEIPT_EXPIRY_GRACE_MS,
+} from './message-receipts.service';
 import {
   buildAutoNudgeText,
   buildEscalationNotice,
@@ -386,5 +389,125 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
     expect(buildEscalationNotice(1, '项目经理-1', '开发者-1')).toBe(
       '【自动催办】项目经理-1 → 开发者-1：已自动催办1次仍无回执，请升级处理',
     );
+  });
+
+  /**
+   * 催办与到期清账抢的是**同一瞬间**（派发时 expiresAt = now+timeoutMin，
+   * 催办触发器 dueAt = expiresAt）：清账先赢 ⇒ 回执行已 expired ⇒ 催办 handler
+   * 重读发现 status≠pending ⇒ 静默 no-op ⇒ **这次催办永远发不出去**。
+   * 到期清账的宽限窗（RECEIPT_EXPIRY_GRACE_MS）让催办必然先拿到机会。
+   */
+  describe('催办 vs 到期清账的赛跑（宽限窗 ⇒ 催办必有机会）', () => {
+    interface RaceRow {
+      id: string;
+      messageId: string | null;
+      taskId: string | null;
+      teamId: string;
+      fromInstanceId: string;
+      toInstanceId: string;
+      status: string;
+      nudgeCount: number;
+      lastNudgedAt: Date | null;
+      expiresAt: Date;
+    }
+    const DUE_AT = new Date('2026-09-16T00:00:00Z');
+    let store: RaceRow[];
+
+    beforeEach(() => {
+      store = [
+        {
+          id: 'mr_1',
+          messageId: 'm_1',
+          taskId: 't_1',
+          teamId: 'tm_1',
+          fromInstanceId: 'tmm_pm',
+          toInstanceId: 'tmm_dev',
+          status: 'pending',
+          nudgeCount: 0,
+          lastNudgedAt: null,
+          expiresAt: DUE_AT,
+        },
+      ];
+      prisma.messageReceipt.findUnique.mockImplementation(
+        (args: { where: { id: string } }) =>
+          Promise.resolve(store.find((r) => r.id === args.where.id) ?? null),
+      );
+      // 只认「到期清账」那一种查询形状（status + expiresAt<=截止线）；其余查询
+      // （续号扫描、question 应答结账扫描）一律空集 ⇒ 本块只考察清账的判定线。
+      prisma.messageReceipt.findMany.mockImplementation(
+        (args: { where: { status?: string; expiresAt?: { lte?: Date } } }) => {
+          const lte = args.where.expiresAt?.lte;
+          if (!lte) return Promise.resolve([]);
+          return Promise.resolve(
+            store.filter(
+              (r) =>
+                (args.where.status === undefined ||
+                  r.status === args.where.status) &&
+                r.expiresAt.getTime() <= lte.getTime(),
+            ),
+          );
+        },
+      );
+      prisma.messageReceipt.update.mockImplementation(
+        (args: {
+          where: { id: string };
+          data: {
+            status?: string;
+            nudgeCount?: { increment: number };
+            lastNudgedAt?: Date;
+          };
+        }) => {
+          const target = store.find((r) => r.id === args.where.id);
+          if (!target) return Promise.resolve(null);
+          if (args.data.status) target.status = args.data.status;
+          if (args.data.nudgeCount?.increment) {
+            target.nudgeCount += args.data.nudgeCount.increment;
+          }
+          if (args.data.lastNudgedAt) {
+            target.lastNudgedAt = args.data.lastNudgedAt;
+          }
+          return Promise.resolve(target);
+        },
+      );
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+    });
+
+    it('清账 tick 恰好落在 due_at 那一刻：不得先判死 ⇒ 催办照发（PR #61 的催办不再被吞）', async () => {
+      const swept = await receipts.sweepExpiredReceipts(DUE_AT);
+
+      expect(swept).toBe(0);
+      expect(store[0].status).toBe('pending');
+
+      await handler.handle({ id: 'tmr_1', kind: RECEIPT_NUDGE_KIND, payload });
+
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+      expect(store[0].nudgeCount).toBe(1);
+    });
+
+    it('清账 tick 落在 due_at + 宽限窗之前：仍在宽限窗内 ⇒ 催办照发', async () => {
+      const swept = await receipts.sweepExpiredReceipts(
+        new Date(DUE_AT.getTime() + RECEIPT_EXPIRY_GRACE_MS - 1),
+      );
+
+      expect(swept).toBe(0);
+      expect(store[0].status).toBe('pending');
+
+      await handler.handle({ id: 'tmr_1', kind: RECEIPT_NUDGE_KIND, payload });
+
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+    });
+
+    it('清账 tick 落在宽限窗之外：回执行判 expired ⇒ 催办静默 no-op（没机会了，不假装催过）', async () => {
+      const swept = await receipts.sweepExpiredReceipts(
+        new Date(DUE_AT.getTime() + RECEIPT_EXPIRY_GRACE_MS + 1),
+      );
+
+      expect(swept).toBe(1);
+      expect(store[0].status).toBe('expired');
+
+      await handler.handle({ id: 'tmr_1', kind: RECEIPT_NUDGE_KIND, payload });
+
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
   });
 });

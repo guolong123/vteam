@@ -56,6 +56,33 @@ export const RECEIPT_EXPIRY_SWEEP_INTERVAL_MS_DEFAULT = 60_000;
 export const RECEIPT_EXPIRY_SWEEP_INTERVAL_MS_ENV =
   'RECEIPT_EXPIRY_SWEEP_INTERVAL_MS';
 
+/**
+ * 到期清账**宽限窗**（ms）：回执过了 expiresAt 之后**再多活一会儿**才允许清成 expired。
+ *
+ * 为什么必须有（催办与清账赛跑 ⇒ 催办被静默吞掉）：
+ *   派发时 `expiresAt = now + receiptTimeoutMin`，而催办触发器的 `dueAt` 直接取
+ *   `created.expiresAt`（platform-mcp.service.ts · scheduleReceiptNudge）⇒ 两者是
+ *   **同一瞬间**。两个互相独立的 ticker 各自醒来抢这同一瞬间：
+ *     · 催办 ticker：TIMER_SCAN_INTERVAL_MS 缺省 30_000ms（timers/trigger.service.ts）
+ *     · 到期清账 ticker：RECEIPT_EXPIRY_SWEEP_INTERVAL_MS 缺省 60_000ms（本文件上方）
+ *   清账若先赢 ⇒ 回执行已是 expired ⇒ 催办 handler 重读发现 status≠pending ⇒ 直接
+ *   `{done:true}` ⇒ **这次催办永远发不出去**，而平台毫无察觉（回执"已处理"了）。
+ *   （当年 e2e 正是靠"把 expires_at 挪到 due_at 之后 90s"才稳定观测到催办——那个
+ *     从外面打的绕行本身就是平台有病的 tell，见 scripts/e2e-pm-coordination.sh D 段。）
+ *
+ * 取值口径：宽限窗必须 **≥ 一个催办 ticker 周期**（否则清账照样可能抢先），
+ * 又要扛得住一次漏 tick ⇒ 取 60_000ms = 2 × 30_000ms（催办 ticker 缺省周期）。
+ *
+ * 语义边界（**不改动**任何已承诺的口径）：
+ *   · 回执超时语义不变：expiresAt 仍是 now + receiptTimeoutMin；
+ *   · 催办时刻不变：触发器 dueAt 仍是 expiresAt，催办仍在那一刻起、最迟一个
+ *     ticker 周期（30s）内发出；
+ *   · 只有"硬过期"被推迟到 expiresAt + 宽限窗 ⇒ 催办**必然**先于清账拿到机会。
+ * 不变式：宽限窗 ≥ 催办 ticker 周期。若日后调大 TIMER_SCAN_INTERVAL_MS，必须同步
+ * 调大本宽限窗。
+ */
+export const RECEIPT_EXPIRY_GRACE_MS = 60_000;
+
 export interface ReceiptEventPayload {
   receiptId: string;
   messageId: string | null;
@@ -749,10 +776,17 @@ export class MessageReceiptsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 超时清账：全部已到期 pending→expired，每条广播 receipt.expired。 */
+  /**
+   * 超时清账：全部「过了 expiresAt **且**又过了宽限窗」的 pending→expired，每条广播 receipt.expired。
+   *
+   * 判定线从 `expiresAt <= now` 挪到 `expiresAt <= now - 宽限窗`：催办（expiresAt
+   * 那一刻起、最迟一个 ticker 周期内发出）**必然**先于清账发生，催办不会再被清账
+   * 静默吞掉（赛跑分析与取值口径见 RECEIPT_EXPIRY_GRACE_MS 的注释）。
+   */
   async expireDue(now: Date = new Date()) {
+    const cutoff = new Date(now.getTime() - RECEIPT_EXPIRY_GRACE_MS);
     const due = (await this.prisma.messageReceipt.findMany({
-      where: { status: 'pending', expiresAt: { lte: now } },
+      where: { status: 'pending', expiresAt: { lte: cutoff } },
     })) as unknown as Array<{
       id: string;
       messageId: string | null;
