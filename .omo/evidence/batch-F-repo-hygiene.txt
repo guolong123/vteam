@@ -1,0 +1,170 @@
+==========================================================================
+Batch F — 仓库卫生：.omo/evidence/**/*.json 进 .gitignore + git rm --cached
+repo: /Volumes/SSD-Data/01work/git-project/vteam
+date: 2026-10-22 13:11:27 CST
+plan: .omo/plans/pm-coordination-hardening.md (item 9 / Batch F)
+==========================================================================
+
+==========================================================================
+[1] .gitignore 新增的 hunk (本批次唯一的内容改动)
+==========================================================================
+diff --git a/.gitignore b/.gitignore
+index 13a543d..a21324a 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -44,6 +44,13 @@ coverage/
+ # and several legacy evidence .sql backups are already tracked. Do NOT add a blanket *.sql here.
+ .omo/evidence/**/*.sql
+ 
++# evidence JSON (jest regenerates probe/matrix evidence → running the test suite dirties the
++# working tree; see .omo/plans/pm-coordination-hardening.md item 9 / Batch F).
++# NOTE: scoped to .omo/evidence on purpose — package.json / tsconfig.json / chart values /
++# e2e evidence JSON elsewhere MUST stay tracked. Do NOT add a blanket *.json here.
++# .txt/.md evidence receipts remain tracked.
++.omo/evidence/**/*.json
++
+ # md-docs: standalone git repo (own remote gitee.com/guojongg/mddocs), not part of this tree
+ md-docs/
+ 
+
+==========================================================================
+[2] 解跟踪前: 已跟踪的 .omo/evidence 下 JSON 清单与计数
+==========================================================================
+解跟踪前 (git ls-files 快照, 已保存用于复核):
+  $ git ls-files | grep -E '^\.omo/evidence/.*\.json$' | wc -l   ->  661
+  $ git ls-files '.omo/evidence/*.json' | wc -l        (pathspec, 递归)  ->  661
+  $ git ls-files '.omo/evidence/**/*.json' | wc -l     (pathspec, ** 形式)  ->  656
+
+两种 pathspec 的差集 = 5 个仅位于 .omo/evidence 顶层的文件 (** 形式不覆盖顶层):
+  .omo/evidence/api-contract.json
+  .omo/evidence/final-F3-proto-recheck.json
+  .omo/evidence/phase5-t8-perf-report.json
+  .omo/evidence/phase5-t9-playwright-compose.json
+  .omo/evidence/phase5-t9-playwright.json
+
+两者并集 = 661 = 本批次解跟踪的完整集合 (含顶层 5 个)。
+scope 断言 '^\.omo/evidence/.*\.json$' 越界数 (期望 0):
+0
+
+==========================================================================
+[3] git rm --cached (保留磁盘文件)
+==========================================================================
+$ git rm --cached --pathspec-from-file=<661 条 .omo/evidence/**/*.json> --pathspec-file-nul -q
+EXIT=0
+
+解跟踪后索引内剩余的 .omo/evidence JSON 数 (期望 0):
+0
+
+磁盘上仍存在的同一批文件 (期望 checked=661 missing=0):
+  checked=661 missing=0
+
+抽样确认文件仍在磁盘:
+.omo/evidence/api-contract.json
+.omo/evidence/phase5-t9-playwright.json
+.omo/evidence/plan-review-execution-gates/task-9/probe.json
+.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+
+==========================================================================
+[4] 规则作用域验证: 只忽略 .omo/evidence 下的 JSON，仓库其它 JSON 不受影响
+==========================================================================
+$ git check-ignore --no-index -v <evidence json>   (抽样)
+.gitignore:52:.omo/evidence/**/*.json	.omo/evidence/api-contract.json
+.gitignore:52:.omo/evidence/**/*.json	.omo/evidence/plan-review-execution-gates/task-9/probe.json
+.gitignore:52:.omo/evidence/**/*.json	.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+
+全部 661 个已解跟踪的 evidence JSON 命中新规则的文件数 (期望 661):
+661
+它们命中的规则集合 (应当只有 .gitignore:52 一条):
+.gitignore:52:.omo/evidence/**/*.json
+
+以下非 evidence 的 JSON / 文档必须 NOT-IGNORED:
+  package.json                               NOT-IGNORED (ok)
+  server/package.json                        NOT-IGNORED (ok)
+  web/package.json                           NOT-IGNORED (ok)
+  tsconfig.json                              NOT-IGNORED (ok)
+  server/tsconfig.json                       NOT-IGNORED (ok)
+  web/tsconfig.json                          NOT-IGNORED (ok)
+  .omo/plans/pm-coordination-hardening.md    NOT-IGNORED (ok)
+  .omo/evidence/batch-F-repo-hygiene.txt     NOT-IGNORED (ok)
+
+.sql 规则未被破坏: .omo/evidence 下已跟踪的 .sql 仍为 3 个, status 中 .sql 变更为 0 条:
+       3
+       0
+
+==========================================================================
+[5] 关键证明: 跑测试不再弄脏工作区
+==========================================================================
+--- 5a. jest 确实重写了该 evidence JSON (内容 hash 每次都变) ---
+被写入的文件: .omo/evidence/plan-review-execution-gates/task-9/probe.json
+  (由 server/src/prisma/seed.spec.ts 写盘, 见 seed.spec.ts:1615-1620)
+
+  第 1 次跑测试前 sha256 = df58c5d9415d4aae3f1a73a4aa6fb0588aa8ae7700f7b89c58453d107536ac8d
+  第 1 次跑测试后 sha256 = 8cc70dfa3a716fc7de8088f4ab7c551951d9d9971c6da08a8958331b65fa4bdd
+  第 2 次跑测试后 sha256 = 4b1bf5447072100b9539f2850b33d63618fa96c62b99bbdcb8c1e914585f9ac2
+  -> hash 每次都变 => jest 确实在写这些文件 (不是空跑 / 没被缓存)
+
+--- 5b. 跑测试后 git status --porcelain 中 .omo/evidence 的条目分类 ---
+$ git status --porcelain | grep -cE '^D  \.omo/evidence/.*\.json$'   # git rm --cached 产生的预期索引变更
+  661
+$ git status --porcelain | grep -cE '^ ?M.*\.omo/evidence/'            # worktree 被弄脏的 evidence 条目
+  0
+$ git status --porcelain | grep -cE '^\?\?.*\.omo/evidence/'           # 新出现的未跟踪 evidence 条目
+  1
+  -> 唯一的 ?? 是本批次自己新增的证据收据 (见 5c), 不是测试产物。
+
+--- 5c. 唯一的 ?? .omo/evidence 条目 (预期内) ---
+?? .omo/evidence/batch-F-repo-hygiene.txt
+  原因: 本文件是本批次的证据收据, 按仓库约定 .omo/evidence/*.txt 保持可入库
+        (新规则只覆盖 *.json, 未扩展到 .txt), 故它作为新文件出现在 status 中,
+        等待 orchestrator 提交。它与『跑测试弄脏工作区』无关。
+
+--- 5d. 决定性证据: 跑测试前后 git status 逐字节一致 ---
+$ git status --porcelain > snap1.txt
+$ (cd server && npx jest src/prisma)        # 24 suites / 282 tests passed
+$ git status --porcelain > snap2.txt
+$ diff snap1.txt snap2.txt
+  (无输出)
+  -> IDENTICAL: 跑一次测试后, 工作区状态与跑之前完全相同。
+
+--- 5e. 全部 git status (供审查) ---
+$ git status --porcelain | awk '{print $1}' | sort | uniq -c
+   4 ??
+ 661 D
+   1 M
+
+  ' M .gitignore'                        = 本批次唯一的内容改动
+  ' D .omo/evidence/**.json'  (661)      = git rm --cached 产生的预期索引变更 (待 orchestrator 提交)
+  '?? .omo/plans/*.md'          (3)      = 其它 agent 并发工作产生的未跟踪计划文档, 非本批次产生
+  '?? .omo/evidence/batch-F-repo-hygiene.txt' (1) = 本批次的证据收据 (见 5c)
+
+  注: 本批次运行期间, 其它 agent 并发修改了 server/prisma/seed.ts 与
+      server/src/common/constants/agent*.ts (角色 prompt 文案调整, 与本批次无关;
+      本批次未改动 server/** 任何文件)。这些 M 条目与 .omo/evidence/** 无关,
+      不影响本批次的结论。
+
+==========================================================================
+[6] 测试结果
+==========================================================================
+$ cd server && npx jest src/prisma
+  Test Suites: 24 passed, 24 total
+  Tests:       282 passed, 282 total
+  Snapshots:   0 total
+  Time:        10.914 s (2nd rerun; 1st run 15.436 s)
+  Ran all test suites matching /src\/prisma/i.
+
+$ cd server && npx jest src/platform-mcp/platform-mcp.authority-matrix
+  (另一个会写 evidence JSON 的 spec: .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json)
+  Test Suites: 1 passed, 1 total
+  Tests:       8 passed, 8 total
+  Time:        3.271 s
+
+==========================================================================
+[7] 约束遵守
+==========================================================================
+  * 未执行 git commit / git add -A / git add . / git stash / git checkout / git reset / git clean
+  * 唯一 git 写操作: git rm --cached (仅 .omo/evidence/**/*.json, 共 661 条)
+  * 未解跟踪 .omo/evidence 以外的任何文件 (scope 越界数 = 0)
+  * 未删除任何磁盘文件 (missing=0)
+  * 未改动 .omo/plans/** / server/** / web/**
+  * .gitignore 仅新增 1 条 scoped 规则, 未加裸 *.json / *.sql, .txt/.md 证据仍入库
+  * 未运行 scripts/gate.sh
