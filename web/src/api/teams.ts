@@ -18,6 +18,10 @@ export interface TeamMemberDto {
   overrideModelId?: string | null;
   /** 成员级首选 worker id（null = 跟随团队级选择）。 */
   preferredWorkerId?: string | null;
+  /** 成员会话当前实际绑定的 worker id（null = 尚无会话 / 未绑定任何节点）。
+   *  与 preferredWorkerId 可能不一致：服务端在下一次派发时才把会话迁到首选节点，
+   *  且仅当目标节点当前可用。 */
+  currentWorkerId?: string | null;
   /** opencode 原生 agent 名（null = 不指定，用引擎默认 agent）。 */
   opencodeAgentName?: string | null;
   agent?: { id: string; name: string; role: string | null };

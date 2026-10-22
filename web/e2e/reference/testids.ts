@@ -236,6 +236,7 @@ export const PAGES: PageTestidRef[] = [
       "question-secret-submit",
       "msg-tool-awaiting",
       "agent-worker-chip-<instanceId>",
+      "agent-worker-running-<instanceId>",
       "agent-worker-option-<instanceId>-follow-team",
       "agent-worker-option-<instanceId>-<workerId>",
     ],

@@ -58,6 +58,8 @@ type SessionAgent = {
   enabled: boolean | null;
   overrideModelId: string | null;
   preferredWorkerId: string | null;
+  /** 会话当前实际绑定的 worker 节点（null = 尚无会话 / 未绑定）。 */
+  currentWorkerId: string | null;
   opencodeAgentName: string | null;
 };
 
@@ -76,6 +78,13 @@ function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[]
       "preferredWorkerId" in instance && typeof instance.preferredWorkerId === "string"
         ? instance.preferredWorkerId
         : null;
+    // 会话当前实际绑定的 worker 节点：与上面的「首选」可能不同——服务端在下一次派发时
+    // 才把会话迁到首选节点，且仅当目标节点当前可用。沿用同样的 in 收窄读法，
+    // 服务端未下发该字段时回退 null（成员尚未跑过），不静默丢值。
+    const currentWorkerId =
+      "currentWorkerId" in instance && typeof instance.currentWorkerId === "string"
+        ? instance.currentWorkerId
+        : null;
     return {
       id: instance.agentId,
       instanceId: instance.id,
@@ -86,6 +95,7 @@ function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[]
       enabled: instance.enabled ?? true,
       overrideModelId: instance.overrideModelId ?? null,
       preferredWorkerId,
+      currentWorkerId,
       opencodeAgentName,
     };
   });
@@ -491,6 +501,7 @@ export default function TeamSessionPage() {
         enabled: true,
         overrideModelId: m.overrideModelId ?? null,
         preferredWorkerId: m.preferredWorkerId ?? null,
+        currentWorkerId: m.currentWorkerId ?? null,
         opencodeAgentName: (m as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
       };
     });
@@ -1550,6 +1561,7 @@ export default function TeamSessionPage() {
           resetPendingInstanceId={resetPendingInstanceId}
           onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
           onChangeWorker={(instanceId: string, workerId: string | null) => instanceWorkerMutation.mutate({ instanceId, workerId })}
+          teamPreferredWorkerId={team?.preferredWorkerId ?? null}
           onSetMainAgent={(memberId: string) => { if (!setMainAgentMutation.isPending) setMainAgentMutation.mutate(memberId); }}
           onSelectMember={(instanceId) => handlePrivateTab(instanceId)}
           selectedKey={selectedMemberKey}

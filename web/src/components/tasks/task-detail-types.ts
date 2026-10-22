@@ -24,6 +24,10 @@ export interface TaskInstance {
   sessionStatus: string | null;
   /** 实例会话 id。 */
   sessionId: string | null;
+  /** 会话当前实际绑定的 worker id（null = 尚无会话 / 未绑定任何节点）。
+   *  与成员级首选 worker 可能不一致：服务端在下一次派发时才迁移会话，
+   *  且仅当目标节点当前可用。 */
+  currentWorkerId?: string | null;
 }
 
 export interface TaskDetail {
@@ -137,4 +141,6 @@ export interface MemberView {
   overrideModelId?: string | null;
   /** 成员级首选 worker id（null = 跟随团队级选择）。 */
   preferredWorkerId?: string | null;
+  /** 成员会话当前实际绑定的 worker id（null = 尚无会话 / 未绑定任何节点）。 */
+  currentWorkerId?: string | null;
 }
