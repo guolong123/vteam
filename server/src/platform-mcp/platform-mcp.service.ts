@@ -1582,6 +1582,21 @@ export class PlatformMcpService implements OnModuleInit {
       { type: 'channel', id: channel.id },
     );
 
+    // 批次 A4：群帖是两条销账路径的触发面（**只减不增**，me_0000000030）：
+    //   ① 正文精确引用了派发 messageId ⇒ 该派发的 pending 回执行结账
+    //      （引用即销账，me_0000000237；治「群聊答复不算回执」的误报催办，me_0000000016）；
+    //   ② 发言者是主 Agent ⇒ 它收到的 question/help 回执行结账
+    //      （me_0000000061：主 Agent 明明答了，账本却一直 pending ⇒ 平台反催主 Agent）。
+    await this.settleReceiptsAfterDelivery({
+      teamId: isTeam
+        ? exec.teamId
+        : await this.teamIdOfTask(effTaskId as string),
+      channelId: channel.id,
+      actorInstanceId: instanceId,
+      content: args.content,
+      postedAt: message.createdAt ?? null,
+    });
+
     // group_post 为「通知/留痕」语义：@ 提及只落库（mentions 列）+ 频道广播，永不自动唤醒。
     // 2026-09-16 移除多 @ 自动触发：派发携带原文，平台无法理解「请开发修复、测试待命」，
     // 待命者照样被唤醒开工（实测一条 @3 人消息重发 10+ 次、测试-1 被唤醒 45 次）。
@@ -2307,6 +2322,33 @@ export class PlatformMcpService implements OnModuleInit {
           issueId: args.issueId ?? null,
           receiptTimeoutMin: args.receiptTimeoutMin,
         });
+      }
+    }
+
+    // 批次 A4：supersede 的旧派发销账。放在新回执行落库**之后**——结账会触发
+    // settled hook（drain 重查），先结后建会让 pending 短暂归零 ⇒ 主 Agent 被误唤醒。
+    if (supersededMessageId) {
+      await this.settleSupersededReceipt({
+        messageId: supersededMessageId,
+        teamId: notifyTeamId,
+      });
+    }
+    // 批次 A4：主 Agent 在本频道发言 ⇒ 它收到的 question/help 回执行结账
+    // （me_0000000061：主 Agent 已应答，账本却一直 pending ⇒ 平台反过去催它）。
+    // 判据在 receipts 服务内部（发言者必须是该团队主 Agent），这里只负责触发；
+    // 结账是补偿动作，失败只 warn，绝不阻断派发。
+    if (this.receipts && notifyTeamId) {
+      try {
+        await this.receipts.settleQuestionReceiptsAfterMainPost({
+          teamId: notifyTeamId,
+          channelId: channel.id,
+          actorInstanceId: args.selfInstanceId,
+          postedAt: message.createdAt ?? null,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[mcp] 主 Agent 应答结账失败（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -3522,6 +3564,91 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
+   * 批次 A4 结算钩子（消息/产出物落库之后调用）。
+   *
+   * 两条销账路径，都**只减不增**（me_0000000030：绝不能靠再发一次派发来"清"账——
+   * 每加一行账都在放大误报催办）：
+   *   ① 引用即销账：正文**精确**引用了派发 messageId ⇒ 该派发的 pending 回执行结账
+   *      （me_0000000237；治 me_0000000016 / me_0000000115 / me_0000000169
+   *      「群聊答复不算回执」造成的误报催办）；
+   *   ② 主 Agent 应答：发言者是团队主 Agent ⇒ 它收到的 question/help 回执行结账
+   *      （me_0000000061：主 Agent 明明答了，账本却一直 pending ⇒ 平台反过去催它）。
+   *
+   * 失败一律只 warn：销账是**补偿性**动作，绝不能因为它把正常投递搞挂。
+   */
+  private async settleReceiptsAfterDelivery(input: {
+    teamId: string | null;
+    /** 消息所在频道；产出物没有频道 ⇒ 空串（跳过路径②）。 */
+    channelId: string;
+    actorInstanceId: string;
+    content: string;
+    postedAt?: Date | null;
+  }): Promise<void> {
+    if (!this.receipts) {
+      return;
+    }
+    try {
+      await this.receipts.settleByReference({
+        teamId: input.teamId,
+        actorInstanceId: input.actorInstanceId,
+        content: input.content,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] 引用销账失败（不阻断投递）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (!input.channelId || !input.teamId) {
+      return;
+    }
+    try {
+      await this.receipts.settleQuestionReceiptsAfterMainPost({
+        teamId: input.teamId,
+        channelId: input.channelId,
+        actorInstanceId: input.actorInstanceId,
+        postedAt: input.postedAt ?? undefined,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] 主 Agent 应答结账失败（不阻断投递）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 批次 A4：被 supersede 替换掉的旧派发销账。
+   *
+   * 批次 A 的 supersede 让新派发**替换**旧派发（旧消息正文带「该条作废」标记），
+   * 但旧派发的回执行一直 pending——那条派发已作废，**永远不会有人回** ⇒ 必然被催办、
+   * 必然升级 ⇒ 必须销账（reason=superseded）。
+   *
+   * 只减不增：结的是**既有行**，不新建回执行（me_0000000030）。
+   */
+  private async settleSupersededReceipt(input: {
+    messageId: string;
+    teamId: string | null;
+  }): Promise<void> {
+    if (!this.receipts) {
+      return;
+    }
+    try {
+      const settled = await this.receipts.settleSupersededDispatch({
+        messageId: input.messageId,
+        teamId: input.teamId,
+      });
+      if (settled > 0) {
+        this.logger.log(
+          `[mcp] supersede：旧派发 ${input.messageId} 的 ${settled} 条回执行已销账（该派发已作废，不会有人回）`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] supersede 旧派发销账失败（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * read_file：读取任务产出物文件内容（agent B 读 agent A 传递的文件，可跨 worker）。
    * 1. **归档优先**：查该 taskId 已归档产出物（artifactVersion.filePath 非空），filePath
    *    归一化与 fileRef 归一化相等即命中（filePath 保存 agent 经 group_post 直发时的
@@ -3643,6 +3770,14 @@ export class PlatformMcpService implements OnModuleInit {
         content: args.content,
         ...(args.category !== undefined ? { category: args.category } : {}),
       });
+      // 批次 A4：产出物正文/标题精确引用了派发 messageId ⇒ 该派发回执行结账
+      // （引用即销账，me_0000000237；**只减不增**，me_0000000030）。
+      await this.settleReceiptsAfterDelivery({
+        teamId: await this.teamIdOfTask(args.taskId),
+        channelId: '',
+        actorInstanceId: args.selfInstanceId,
+        content: `${args.title}\n${args.content}`,
+      });
       return this.toSubmitResult(result);
     }
 
@@ -3652,13 +3787,21 @@ export class PlatformMcpService implements OnModuleInit {
         message: 'type=doc/file 时 fileRef 必填',
       });
     }
-    return this.submitFileArtifact(
+    const fileResult = await this.submitFileArtifact(
       ctx,
       args.taskId,
       args.title,
       args.fileRef,
       args.category,
     );
+    // 文件型产出物正文在文件里，平台只能看到标题 ⇒ 引用只可能写在标题上。
+    await this.settleReceiptsAfterDelivery({
+      teamId: await this.teamIdOfTask(args.taskId),
+      channelId: '',
+      actorInstanceId: args.selfInstanceId,
+      content: args.title,
+    });
+    return fileResult;
   }
 
   /**
