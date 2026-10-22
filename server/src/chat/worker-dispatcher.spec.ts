@@ -3720,6 +3720,245 @@ describe('WorkerDispatcher', () => {
   });
 
   // ------------------------------------------------------------------
+  // 首选 worker 迁移（已绑定会话跟随偏好换节点）
+  // 背景：团队会话按 (teamId, teamMemberId) 经 ensureTeamSession 永久复用，节点
+  // 只在**首次绑定**那一刻选一次 → 用户改了团队/成员的 worker 节点后，老会话仍
+  // 钉在老节点上跑（用户报「改了团队的 worker 节点不生效，还在老节点上跑」）。
+  // 本组断言分派链里的迁移步：绑定 ≠ 偏好 → 迁到首选节点；首选节点不可用 → 软
+  // 回退保持原绑定；在飞执行 → 不迁移，且本条消息直送在飞 opencode 会话
+  // （注入模式；迁移顺延到下一轮不在飞的分派）。
+  // ------------------------------------------------------------------
+  describe('首选 worker 迁移（已绑定会话跟随偏好换节点）', () => {
+    /** 各节点行：capabilities/defaultModelId 互不相同 → 可断言迁移后用的是新节点配置。 */
+    const WORKER_ROWS: Record<string, any> = {
+      w_old: {
+        id: 'w_old',
+        status: 'online',
+        capabilities: { maxInstances: 1 },
+        defaultModelId: 'opencode/old-model',
+      },
+      w_new: {
+        id: 'w_new',
+        status: 'online',
+        capabilities: { maxInstances: 4 },
+        defaultModelId: 'opencode/new-model',
+      },
+      w_auto: {
+        id: 'w_auto',
+        status: 'online',
+        capabilities: { maxInstances: 2 },
+        defaultModelId: 'opencode/auto-model',
+      },
+    };
+
+    /** 置顶两级：团队级 + 成员级（成员默认 null → 跟随团队）。 */
+    const mockPreference = (
+      teamPreferred: string | null,
+      memberPreferred: string | null = null,
+    ) => {
+      (prisma as any).teamMember.findFirst = jest
+        .fn()
+        .mockImplementation(async (q: any) =>
+          q?.select?.preferredWorkerId !== undefined
+            ? { preferredWorkerId: memberPreferred }
+            : { overrideModelId: null },
+        );
+      (prisma as any).team.findFirst = jest
+        .fn()
+        .mockResolvedValue({ preferredWorkerId: teamPreferred });
+    };
+
+    /** 已绑定到指定节点的健康会话（instanceRef=null 表示 opencode 会话尚未创建）。 */
+    const mockBoundSession = (
+      workerId: string,
+      instanceRef: string | null = 'ses_old',
+    ) => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId,
+        instanceRef,
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+    };
+
+    beforeEach(() => {
+      // 按 id 返回节点行 → 迁移后的重读自然拿到新节点行
+      prisma.worker.findUnique.mockImplementation(
+        async (q: any) => WORKER_ROWS[q?.where?.id] ?? null,
+      );
+      // agent 无默认模型 → 模型兜底来源只能是 worker 行的 defaultModelId
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_new' });
+    });
+
+    it('绑定在 w_old、团队首选 w_new → 迁移到 w_new（解绑 + 绑 pending + 在新节点重建 opencode 会话）', async () => {
+      mockBoundSession('w_old');
+      mockPreference('w_new');
+      workersService.assignWorker.mockResolvedValue('w_new');
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(sessionLifecycle.unbindSession).toHaveBeenCalledWith(
+        's_0000000001',
+      );
+      expect(sessionLifecycle.bindSessionToWorker).toHaveBeenCalledWith(
+        's_0000000001',
+        'w_new',
+        PENDING_INSTANCE_REF,
+      );
+      // 旧 instanceRef 属于旧节点 → 迁移后必须在新节点重建 opencode 会话
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_new' }),
+        expect.anything(),
+      );
+      // 执行也下发到新节点
+      expect(workerClient.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_new' }),
+        expect.objectContaining({ sessionId: 'ses_new' }),
+      );
+    });
+
+    it('首选节点不可用（置顶未过四道过滤 → assignWorker 裁决为第三个节点）→ 保持当前绑定，分派照常在原节点进行', async () => {
+      // instanceRef=null：opencode 会话尚未创建 → createSession 调用可观测
+      mockBoundSession('w_old', null);
+      mockPreference('w_new');
+      workersService.assignWorker.mockResolvedValue('w_auto');
+      const d = createDispatcher();
+      const warnSpy = jest.spyOn(d['logger'], 'warn');
+
+      await d.dispatch(request);
+
+      // 不迁移：不解绑、不绑到首选节点
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalledWith(
+        's_0000000001',
+        'w_new',
+        expect.anything(),
+      );
+      // 分派照常在原节点进行
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_old' }),
+        expect.anything(),
+      );
+      // 可观测：warn 必须同时点名首选节点与保留节点
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(
+        warned.some(
+          (m) =>
+            m.includes('preferred-worker-migrate') &&
+            m.includes('w_new') &&
+            m.includes('w_old'),
+        ),
+      ).toBe(true);
+      warnSpy.mockRestore();
+    });
+
+    it('当前绑定已等于首选 → 完全不迁移（不调调度器、不解绑）', async () => {
+      mockBoundSession('w_new');
+      mockPreference('w_new');
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalled();
+      // 复用原 opencode 会话继续跑
+      expect(workerClient.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_new' }),
+        expect.objectContaining({ sessionId: 'ses_old' }),
+      );
+    });
+
+    it('未设置首选（成员/团队皆空）→ 零回归：不调调度器、不解绑，保持现状', async () => {
+      mockBoundSession('w_old');
+      mockPreference(null, null);
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalled();
+      expect(workerClient.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_old' }),
+        expect.objectContaining({ sessionId: 'ses_old' }),
+      );
+    });
+
+    it('该成员在当前节点上有执行在飞 → 不迁移（不动绑定），消息直送在飞 opencode 会话（注入模式）', async () => {
+      // 场景：该成员在 w_old 上有执行在飞，且会话已有真实 opencode 会话
+      // （instanceRef='ses_old' 非空）⇒ 迁移门 c) 命中（在飞）→ 跳过迁移；
+      // 分派守卫（busyInFlight）走**注入模式**：消息直送 w_old 上那个在飞会话。
+      // ⚠️ 本用例只覆盖「有 instanceRef ⇒ 注入」这条路径；在飞但 instanceRef
+      // 缺失（异常态）时守卫会 warn「回退常规派发」并新建会话，不在本用例范围内。
+      mockBoundSession('w_old');
+      mockPreference('w_new');
+      workersService.assignWorker.mockResolvedValue('w_new');
+      const d = createDispatcher();
+      // 播种在飞状态：该成员正在 w_old 上执行（team 作用域）
+      d.registerExecution(
+        'w_old',
+        toExecutionScope(null, 'tm_0000000001'),
+        'tmm_0000000001',
+      );
+
+      await d.dispatch(request);
+
+      // 不迁移：不动绑定（既不解绑，也不绑到首选节点 w_new）
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalled();
+      expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalledWith(
+        's_0000000001',
+        'w_new',
+        expect.anything(),
+      );
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      // 消息直送**旧节点** w_old（不迁到 w_new）
+      expect(workerClient.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_old' }),
+        expect.objectContaining({
+          sessionId: 'ses_old',
+          inFlight: true,
+        }),
+      );
+      expect(workerClient.execute).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_new' }),
+        expect.anything(),
+      );
+      // 复用在飞的 opencode 会话 ⇒ 不新建会话（不建即不重置上下文）
+      expect(workerClient.createSession).not.toHaveBeenCalled();
+    });
+
+    it('迁移后模型取自新节点的 defaultModelId（不是旧节点的）', async () => {
+      mockBoundSession('w_old');
+      mockPreference('w_new');
+      workersService.assignWorker.mockResolvedValue('w_new');
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_new' }),
+        { providerID: 'opencode', modelID: 'new-model' },
+      );
+      // 旧节点的模型不得复用
+      expect(workerClient.createSession).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_new' }),
+        { providerID: 'opencode', modelID: 'old-model' },
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------
   // dispatch：按需注入（阶段 3 移除自动 doclib 注入，模型经 MCP 工具自主拉取）
   // ------------------------------------------------------------------
 

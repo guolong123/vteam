@@ -2402,16 +2402,29 @@ export class WorkerDispatcher
       ...(preferredWorkerId ? { preferredWorkerId } : {}),
     };
 
-    // 两条必须如实记住的语义（勿改）：
+    // 三条必须如实记住的语义（勿改）：
     // ① 置顶**同时治理离线重分配**：下面离线分支里第二次 assignWorker 复用同一个
-    //    assignmentReq，因此已绑定会话在其节点离线（:2328 判定）后会被拉回置顶
-    //    节点——这不是新分支，只是同一对象被复用。
-    // ② 改设置**不主动重绑健康会话**：上面 :2282 的 `session.workerId` 复用优先，
-    //    已在线绑定的会话不会被推去重绑；置顶只影响后续新绑定与离线重分配
-    //    （强制重绑仍走既有 reset-session 入口）。
+    //    assignmentReq，因此已绑定会话在其节点离线后会被拉回置顶节点——这不是新
+    //    分支，只是同一对象被复用。
+    // ② 置顶**也治理健康会话的迁移**（2026-10 反转旧语义）：团队会话按
+    //    (teamId, teamMemberId) 经 ensureTeamSession 永久复用，节点只在**首次
+    //    绑定**那一刻选一次 → 用户改了团队/成员的 worker 节点后，老会话仍钉在
+    //    老节点上跑（用户报「改了团队的 worker 节点不生效，还在老节点上跑」）。
+    //    故分派时若发现当前绑定与解析出的偏好不一致，就把会话迁到首选节点
+    //    （见下方「首选 worker 迁移」块）。旧语义「改设置不主动重绑健康会话」
+    //    已作废：那条守护栏正是本 bug 的成因。
+    // ③ 偏好**永远是软偏好**：首选节点离线/容量不足/版本或模型不匹配时，
+    //    assignWorker 会回退自动调度结果，此时保持当前绑定不动并 warn；绝不因
+    //    偏好抛「无可用 worker」、绝不把偏好升级成硬绑定。
+
+    // 本次分派是否已由 assignWorker 裁决过节点：首次绑定分支与离线重分配分支
+    // 各裁决一次，两处的裁决结果都已含置顶偏好 → 迁移块不得重复裁决（多一次
+    // 调度器调用，且会覆盖刚解绑重分配的语义）。
+    let workerResolvedByAssignWorker = false;
 
     if (!workerId || hasStalePending) {
       workerId = await this.workersService.assignWorker(assignmentReq);
+      workerResolvedByAssignWorker = true;
       if (!workerId) {
         throw new Error(
           '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
@@ -2442,6 +2455,7 @@ export class WorkerDispatcher
       );
       await this.sessionLifecycle.unbindSession(sessionId);
       workerId = await this.workersService.assignWorker(assignmentReq);
+      workerResolvedByAssignWorker = true;
       if (!workerId) {
         throw new Error(
           '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
@@ -2465,6 +2479,79 @@ export class WorkerDispatcher
         workerId,
         PENDING_INSTANCE_REF,
       );
+    }
+
+    // ── 首选 worker 迁移（语义②落地）────────────────────────────────────────
+    // 三道门同时成立才迁：
+    //  a) 本次分派尚未经 assignWorker 裁决过节点（workerResolvedByAssignWorker）
+    //     ——那一次裁决结果已含置顶偏好，再裁决既多余又会覆盖刚重分配的语义；
+    //  b) 有明确首选节点且与当前绑定不一致（workerId !== preferredWorkerId）
+    //     ——一致则无事可做；未设置首选则保持现状（优先级链第三档「现状」，
+    //     绝不反向迁回自动调度）；
+    //  c) 该成员在当前节点上没有执行在飞——迁移会换节点重建 opencode 会话，
+    //     在飞执行被换掉就丢上下文，故在飞时只跳过本次迁移（下次分派再迁）。
+    //     ⚠️ 在飞**不等于本次分派被丢弃**：分派守卫（busyInFlight）改为注入模式，
+    //     本条消息直送进**当前节点**上那个在飞的 opencode 会话（execute 带
+    //     inFlight 标记），当前回合照常跑完；迁移顺延到下一次**不在飞**的分派
+    //     ⇒ 上下文不丢、偏好最终也会落地。
+    // 迁移动作：unbindSession（软删旧 TaskGroupInstance + 清 workerId/instanceRef）
+    //  → bindSessionToWorker(PENDING) → 后续 createSession 在**新节点**重建
+    //  opencode 会话并回写真实 instanceRef。副作用（有意）：agent 引擎侧上下文
+    //  在新节点重启，平台侧消息历史（Message 表）不受影响。
+    if (
+      !workerResolvedByAssignWorker &&
+      preferredWorkerId &&
+      workerId !== preferredWorkerId &&
+      !this.isAgentExecuting(workerId, scope)?.has(teamMemberId)
+    ) {
+      const previousWorkerId = workerId;
+      const migratedWorkerId =
+        await this.workersService.assignWorker(assignmentReq);
+      if (migratedWorkerId && migratedWorkerId === preferredWorkerId) {
+        await this.sessionLifecycle.unbindSession(sessionId);
+        workerId = migratedWorkerId;
+        // 旧 instanceRef 属于旧节点，不能复用 → 强制在新节点重建 opencode 会话
+        opencodeSessionId = null;
+        await this.sessionLifecycle.bindSessionToWorker(
+          sessionId,
+          workerId,
+          PENDING_INSTANCE_REF,
+        );
+        // 重读新节点行：capabilities（能力位门控）与 defaultModelId（模型兜底
+        // 来源）必须来自新节点——沿用旧节点的值就是「跑在新节点、用旧节点配置」
+        const migratedRow = await this.prisma.worker.findUnique({
+          where: { id: workerId },
+          select: {
+            id: true,
+            status: true,
+            capabilities: true,
+            defaultModelId: true,
+          },
+        });
+        if (migratedRow) {
+          workerRow = migratedRow;
+        } else {
+          // 极罕见竞态：新节点行在迁移瞬间消失 → 不抛（偏好不得阻断分派），
+          // 沿用迁移前的行兜底；下一次分派会走「worker 不存在」分支自动重分配
+          this.logger.warn(
+            `[preferred-worker-migrate] 首选 worker ${workerId} 行在迁移后消失` +
+              `（member=${teamMemberId} session=${sessionId}），沿用迁移前行信息，后续分派将自动重分配`,
+          );
+        }
+        this.logger.warn(
+          `[preferred-worker-migrate] 成员 ${teamMemberId}（session=${sessionId}）` +
+            `从 worker ${previousWorkerId} 迁移到首选 worker ${workerId}` +
+            `（opencode 会话在新节点重建，平台侧消息历史保留）`,
+        );
+      } else {
+        // 软回退：首选节点当前不可用（离线/容量/版本/模型过滤未通过）→
+        // assignWorker 回退到自动调度结果（≠ 首选）→ 保持当前绑定不动
+        this.logger.warn(
+          `[preferred-worker-migrate] 成员 ${teamMemberId}（session=${sessionId}）` +
+            `首选 worker ${preferredWorkerId} 当前不可用（离线/容量/版本/模型过滤未通过，` +
+            `assignWorker 裁决为 ${migratedWorkerId ?? 'null'}），保持当前绑定 ${previousWorkerId} 不变`,
+        );
+      }
     }
     const worker: WorkerEndpointRef = {
       id: workerId,
