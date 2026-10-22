@@ -467,7 +467,21 @@ export const MEMORY_INSTRUCTION =
   '其余留 false，靠 vteam_memory_list 按需检索（注入占 prompt 预算）。' +
   '受众：team/global → 本团队主 Agent；role → 本团队该岗位全体 agent。';
 
-/** GLOBAL 前 6 行（【记忆管理】之前的不变段；与 MEMORY_INSTRUCTION 拼出完整 GLOBAL）。 */
+/**
+ * GLOBAL_BASE_LINES：【记忆管理】之前的平台协议段（与 MEMORY_INSTRUCTION 拼出完整 GLOBAL）。
+ *
+ * 末行【工具自省】是批次 B-3 的载体：只读自省通道**早已存在**
+ * （`PLATFORM_MCP_READONLY_TOOLS = ['tool_schema']` ⇒ 能力门恒放行；7 个内置岗位
+ * toolAllows 均 `vteam_tool_schema: allow`），但此前**没有任何提示词提到它** ⇒ agent
+ * 只能靠「最小调用 + 校验报错」反推参数（记忆 `me_0000000231`）。
+ *
+ * 选点理由：本段是**每次 dispatch 必注入**的唯一常驻位（`buildSystemInstructions`
+ * 唯一调用点在 worker-dispatcher.ts:2995），且 `suppressMemory` 分支（计划员岗位）走
+ * 的就是本段 ⇒ 7 个岗位无一遗漏。工具自身描述不是有效载体——`tool_schema` 的描述虽
+ * 已写明「调用前先用它确认必填字段与合法取值」，但 agent 未必会去翻 tools/list；
+ * 提示词点名才是「知道它存在」的手段。本段既有断言全是哨兵式 `toContain`/
+ * `not.toContain`（无一整串相等）⇒ 新增一行不撞逐字节基线。
+ */
 const GLOBAL_BASE_LINES = [
   '你是 AI 协作平台的 Agent，请遵守以下平台协议：',
   '【群聊通知】私聊默认不公开，需公开结论/进展时调用 vteam MCP 的 vteam_group_post 发布。',
@@ -481,6 +495,7 @@ const GLOBAL_BASE_LINES = [
   '【@ 定向机制｜回执】vteam_notify_agent 新增 type 与 stage 参数（默认 type=answer、stage=process）：' +
     'answer+process=常规进度汇报，不唤醒主Agent；answer+end=本次派发完工，清除回执，主Agent在所有派发均完工时一次性唤醒；' +
     'question/help=需主Agent立即介入，中断唤醒，不计为完工。进度汇报不再按条唤醒，完工必须传 stage=end。',
+  '【工具自省】不确定 vteam MCP 工具的参数（必填/枚举/状态机）时，先调 vteam MCP 的 vteam_tool_schema 工具查 schema（省略 name 则列出全部工具），不要靠报错回显反推。',
 ];
 
 export const GLOBAL_SYSTEM_INSTRUCTIONS = [

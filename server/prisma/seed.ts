@@ -2823,7 +2823,7 @@ version: 0.1.0
     `  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m: ModelSeedRow) => m.modelID).join('、')}）`,
   );
   console.log(
-    `  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）`,
+    `  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为项目经理）`,
   );
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);

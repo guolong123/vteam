@@ -94,3 +94,98 @@
 - 证据：`.omo/evidence/batch-<id>-<topic>.txt`。
 - 每批一个 PR，标题 `fix(<scope>): <主题>`，正文按仓库惯例（现象 / 根因 / 修法 / 验证 / 已知残留）。
 - **不得**引入权限收窄：每批 PR 自查 `git diff` 中不含 `capabilities` 置 false / `bashEffect` 变更 / `permission.*` 收紧。
+
+---
+
+# 执行结果（2026-10-22 追记；上文批次定义为历史记录，**不重写**）
+
+> 本节按仓库惯例**追加**记录实际落地情况。已合并的批次定义与硬约束原文保留在上文，不回改。
+
+## 1 · 已合并批次
+
+| 批次 | PR | 落地内容（一句话） |
+|---|---|---|
+| **A** 派发通道 | #59 | `notify_agent` 返回值新增 `claimed` / `sessionStatus`（区分「已投递」与「已开工」），并补 `supersede` 一等更正语义与 `no-active-task` 时自动改走 taskId 通道（`channelSwitched='task'`）。 |
+| **C** 纪律落点 | #60 | PM「只协调不执行」四条纪律写进岗位权威源 `agent_roles.role_prompt` + 平台级【职责边界】`scopeSummary`，含**存量回填迁移**（seed 是 `update:{}`，不改迁移则存量部署不生效）。 |
+| **A4** 回执销账 + 催办分级 | #61 | 回执账本补「减法」：引用原派发 `messageId` 即销账（`settled_reason='quoted'`）、`question/help` 被应答后结账、催办文案分「未开工 / 已交付未销账 / 回执未送达」三档。 |
+| **D** 零收窄安全修 | #62 | 中性化路径**保留**上次受管块而非删除（不再退回引擎默认 ⇒ 权限不放大）；能力点目录收敛为单一来源 + 往返断言闸门，新增能力点必须同 PR 全表回填。 |
+| **E** 协调度指标 | #63 | 新增只读端点 `GET /api/v1/teams/:teamId/coordination-metrics`（PM 产出物数 / PM 消息占比 / 派发 vs 亲做 / 群聊私聊双报率）。 |
+| **D2**（新增批次，见下） | #64 | 陈旧 worker 仍点名岗位 agent —— 岗位权限集不再被绕过。 |
+| **F** 仓库卫生 | #58 | `.omo/evidence/**/*.json` 进 `.gitignore`（保留 3 个冻结基线入库），跑测试不再弄脏工作区。 |
+
+## 2 · 批次 B 结论：**基本已过时，取消**
+
+原批次 B 的三项在开工前就已被上游覆盖：
+
+- **B-1（409 带合法迁移表）——已存在**。409 状态机错误体**早已**带 `allowedActions` / `allowedTo`
+  （`server/src/platform-mcp/platform-mcp.controller.ts:534-570` 的 `detailsSuffix()`，
+  `TRANSITION_TABLES` + `legalActionsFor`），随 **PR #55** 在本计划启动**之前**落地 ⇒ 无需再做。
+- **B-2（工具描述补齐 `force` / `forceReason` / `type` / `stage` / `kind`）——已由批次 A 补掉**；
+  其中 `type` / `stage` / `kind` 的枚举全集自 PR #55 起就由 schema **派生**进描述首行
+  （`describeToolEnums()` ⇒ 描述与 schema 同源、不会漂移），本就足够详尽。
+- **B-3（指向既有自省通道）——唯一真实残留**，已于 2026-10-22 落地（见 §5）。
+
+## 3 · 新增批次 D2（不在原计划内）
+
+**为什么需要它**：批次 D 只修了**配置侧**（worker 注入的 opencode 配置不再被清空）；但**派发侧**
+仍会丢掉 agent 名字 ⇒ 落到**引擎默认 agent** ⇒ 岗位权限集被绕过（D 想保的「不收窄也不放大」
+在派发这一环上根本没生效）。
+
+**改了什么**（PR #64）：server → worker → opencode 全链路补齐「本次派发用哪个岗位 agent」的
+显式传递（`worker-protocol.ts` / `workers.service.ts` / `worker-dispatcher.ts` /
+`worker/src/index.ts` / `worker/src/resources/injector.ts`），陈旧 worker 也按登记的
+agent 名点名 ⇒ 岗位权限集在陈旧 worker 上同样生效（新增回归用例锁死）。
+
+## 4 · e2e 脚本与当前状态
+
+`scripts/e2e-pm-coordination.sh`（**7 段**：A 迁移生效 / B 派发返回值 / C 引用即销账 /
+D 催办分级 / E 纪律落库 / F 权限未被收窄 / G 协调度指标），对着本地 compose 栈
+（MySQL8 + server + web + worker）跑**真实迁移 + 真实 MCP 端点 + 真实 worker**。
+
+当前状态（证据：`.omo/evidence/pm-coordination/e2e.txt`）：
+
+- **A PASS** —— 两份手写迁移在真实库生效（`message_receipts.settled_reason` 列 + PM 纪律正文 + 边界段）。
+- **B PASS** —— `notify_agent` 经真实 MCP 端点返回 `claimed` / `sessionStatus` / `triggered`。
+- **C PASS** —— 群帖精确引用派发 `messageId` ⇒ 回执行翻成 `status=acked` / `settled_reason=quoted`。
+- **D FAIL（测试设计问题，非产品缺陷）** —— 线上成员**答得太快** ⇒ 回执在超时前就合法结账
+  （`status=acked settled_reason=answered`）⇒ 催办**本就不该发生** ⇒ 自然观测不到分级文案。
+  ⇒ D 段需要「让目标不回复」的隔离夹具（或把 `receiptTimeoutMin` 调到分钟级以上）才能真正验。
+- **E / F / G 未跑** —— 脚本的「summary guard」要求 A..G 全 PASS 才算通过，D 失败即中止。
+
+## 5 · B-3 的载体选择（2026-10-22 实测）
+
+**先量爆炸半径再动手**（结论：**加一行到全局提示词，炸 0 条断言**）：
+
+- 全局提示词（`GLOBAL_BASE_LINES`）的既有断言**全是哨兵式** `toContain` / `not.toContain`，
+  **无一条整串相等**：`worker-dispatcher.spec.ts` 里 **43** 条 `expect()` 直接引用
+  `GLOBAL_SYSTEM_INSTRUCTIONS`，全文件 **116** 条 `not.toContain(...)` 字面量，
+  与新增行**无一条相交**（0 命中）。
+- 实测：加一行后跑 server **全量** 196 suites / 4622 tests ⇒ **全绿，与改前逐条一致**。
+- 顺带澄清两处**误传**：`worker-dispatcher.spec.ts` 的「7 内置出厂 correction → boundary 与
+  变更前冻结基线逐字节一致」、`worker-dispatcher.snapshot.spec.ts`、
+  `.omo/evidence/vteam-role-behavior-abstraction/before-boundary.json` —— 这三处冻结的是
+  **【职责边界】/ correction 正文**与**分派快照**，**都不含全局提示词** ⇒ 不构成全局提示词的闸门。
+- **载体选择**：落在 `GLOBAL_BASE_LINES` 末行（新增【工具自省】一行），而不是
+  「扩 `vteam_tool_schema` 工具自身描述」—— 后者的描述**本来就已经**写着
+  「调用前先用它确认必填字段与合法取值」，缺的从来不是描述而是**「这个工具存在」的提示**；
+  工具描述只有 agent 去翻 `tools/list` 才看得到，提示词点名才是有效手段。
+- 落点唯一性：`buildSystemInstructions` 的**唯一**调用点在 `worker-dispatcher.ts:2995`
+  ⇒ 每次 dispatch 必注入；`suppressMemory` 分支（计划员岗位）走的正是 `GLOBAL_BASE_LINES`
+  ⇒ 7 个岗位无一遗漏（`vteam_tool_schema` 在 7 个岗位的 toolAllows 里均为 `allow`，
+  且属 `PLATFORM_MCP_READONLY_TOOLS` ⇒ 能力门恒放行）。
+
+## 6 · 待办发现（Open findings）
+
+- **P0（并行修中）**：`submit_artifact` **不传 `meta`** 给 `artifactsService.append`
+  ⇒ `authorAgentId` **恒为 NULL** ⇒ 批次 E 的头号指标 `pm_artifact_count` 是一台
+  **假阴性机器**（PM 真交了产出物也数不出来）。修好 `meta` 之前，该指标**不可用于验收**。
+- **已知不计划修**（记录在案，避免反复讨论）：
+  - 会话 `failed` ≠ 已停止：并行会话下 `failed` 不代表目标真的停了，要正确表达需要
+    `run_id` 归属 + claim/stop 语义（新一轮工作，非本计划范围）。
+  - 唤醒预算 ≈ 5 次/任务：受 `MAX_SILENT_WAKE_ATTEMPTS` 一类上限约束，本轮不动。
+  - 只读凭据上**静默伪成功**（命令其实没跑但报成功）：已知缺陷，需单独一轮修。
+  - librarian **没有 `chat.notify`**：补它等于**收窄/改写**其他岗位的授权面，
+    与本轮「不做任何权限收窄」的硬约束冲突 ⇒ **阻塞，不在本轮做**。
+  - 指标窗口缺 `(channel_id, created_at)` 索引：只影响查询性能，不影响正确性；
+    补索引属 migration，另案。
+
