@@ -34,49 +34,17 @@ RUN npm config set registry https://registry.npmmirror.com
 #   --build-arg OPENCODE_CLI_SPEC=@opencode/cli@2.0.32
 # 构建日志会打印实际装到的版本（下方 echo），便于事后追溯"这个镜像用的是哪版"。
 ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32
+# **必须钉版本**：`agent-browser` / `bun` 若不带版本，上游每次发版都会让这一层及**其后所有层**
+# 失效（v1.1.1→v1.2.0 实测：基础镜像 tag 浮动 + 未钉版本 ⇒ 6 个构建 job 的缓存命中数为 0，
+# 镜像层全变 ⇒ 集群每次发布都要整包重拉）。`agent-browser` 的版本同时决定它下载的
+# Chrome for Testing 版本（`agent-browser install` 无版本参数）⇒ 钉住它，Chrome 层才稳定。
+ARG AGENT_BROWSER_SPEC=agent-browser@0.27.0
+ARG BUN_SPEC=bun@1.4.3
 # bun：omo 官方安装器（bunx oh-my-openagent install）的运行依赖，仅构建期需要。
-RUN npm i -g "${OPENCODE_CLI_SPEC}" agent-browser bun && \
+RUN npm i -g "${OPENCODE_CLI_SPEC}" "${AGENT_BROWSER_SPEC}" "${BUN_SPEC}" && \
     echo "opencode CLI installed: $(opencode --version)" && \
+    echo "agent-browser installed: $(agent-browser --version)" && \
     echo "bun installed: $(bun --version)"
-# oh-my-openagent（OmO）：官方 opencode 编排插件，11 个 agent + 生命周期 hook + 内置 MCP。
-# 用**官方安装器**装（README 明确要求走 install，会做订阅检测/模型映射/配置迁移）：
-#   非交互参数：--no-tui --skip-auth（容器内无浏览器/无 OAuth）
-#   所有 provider 显式 no —— 模型此时不由安装器决定，改由 vteam 的 omo 配置页统一指定
-#   （默认全部指向 opencode 免费模型，见 worker 侧 writeOmoConfig）。
-# 安装器把插件注册进 $HOME/.config/opencode/opencode.json；真正的 opencode 运行时
-# 工作目录是 /data/vteam-worker，其 opencode.json 由 worker 注入器维护（含本插件条目）。
-ARG OMO_INSTALL_SPEC=oh-my-openagent@latest
-# 交叉构建兜底：amd64 在 arm64 宿主经 qemu 模拟时 Bun 会 abort（qemu 已知限制），
-# 此时直接落盘与安装器等价的插件注册（opencode.json/tui.json 内容一致，运行期由
-# opencode 自行从 npm 解析该插件，与架构无关）。
-RUN set -e; \
-    if bunx "${OMO_INSTALL_SPEC}" install --no-tui --platform=opencode --skip-auth \
-         --claude=no --openai=no --gemini=no --copilot=no --opencode-zen=no \
-         --zai-coding-plan=no --opencode-go=no --kimi-for-coding=no \
-         --bailian-coding-plan=no --minimax-cn-coding-plan=no --minimax-coding-plan=no \
-         --vercel-ai-gateway=no > /tmp/omo-install.log 2>&1; then \
-      echo "omo installed via bunx installer"; tail -20 /tmp/omo-install.log; \
-    else \
-      echo "bunx installer failed (emulated build?) -> writing plugin registration directly"; \
-      mkdir -p /root/.config/opencode; \
-      printf '{\n  "plugin": [\n    "%s"\n  ]\n}\n' "${OMO_INSTALL_SPEC}" \
-        | tee /root/.config/opencode/opencode.json > /root/.config/opencode/tui.json; \
-    fi; \
-    test -f /root/.config/opencode/opencode.json; \
-    echo "omo plugin registered:"; cat /root/.config/opencode/opencode.json; \
-    OMO_VER="$(npm view "${OMO_INSTALL_SPEC}" version 2>/dev/null || true)"; \
-    if [ -z "${OMO_VER}" ]; then OMO_VER="$(bunx "${OMO_INSTALL_SPEC}" --version 2>/dev/null | tail -1 || true)"; fi; \
-    [ -n "${OMO_VER}" ] || OMO_VER=unknown; \
-    # 能力标记：运行期据此判断"本镜像是否内置 OmO"，决定是否展示/允许开启开关。
-    # 写在镜像里（不是数据卷）——没有内置 OmO 的镜像就不会有这个文件。
-    # "v2" 字段 = 内置 OmO 是否具备 **v2 形态入口**（导出 {id, setup}）。
-    # 当前安装器装出的是 **v1 形态**（导出 {server}）⇒ v2 上不会运行 ⇒ 注入器据此
-    # **不注册** OmO 条目（注册了也只会静默失败：plugins 是合法键，不产生归一化诊断）。
-    # 只有换成 v2 形态入口的 OmO 后才可改成 true（改前先跑一遍 worker 契约测试）。
-    printf '{"bundled":true,"v2":false,"spec":"%s","version":"%s"}' "${OMO_INSTALL_SPEC}" "${OMO_VER}" \
-      > /opt/omo-bundled.json; \
-    echo "omo capability marker: $(cat /opt/omo-bundled.json)"
-
 # 系统依赖：git 工具链 + Agent 常用命令 + Chrome 运行库
 # 说明：git/openssh-client 为 git 工具链路保留；python3/pip3（Agent 跑脚本/数据分析）、
 # curl（HTTP 请求）、jq（JSON 处理）、bash（Agent 脚本常依赖 bash）、wget（下载）、
@@ -114,6 +82,50 @@ RUN set -e; \
 # 验证安装（doctor 会检查 Chrome/daemon/config，失败不阻断构建，仅告警）
 RUN agent-browser --version && agent-browser doctor --offline --quick || true; \
     if [ -x /usr/bin/chromium ]; then chromium --version || chromium-browser --version || true; fi
+
+# 顺序说明：**易变的小步骤放最后**。OMO 走 `@latest` 的历史版本会频繁发版，若排在上面
+# 的 apt / Chrome 大层之前，每次发版都会把 GB 级层一起作废 ⇒ 集群全量重拉。
+# oh-my-openagent（OmO）：官方 opencode 编排插件，11 个 agent + 生命周期 hook + 内置 MCP。
+# 用**官方安装器**装（README 明确要求走 install，会做订阅检测/模型映射/配置迁移）：
+#   非交互参数：--no-tui --skip-auth（容器内无浏览器/无 OAuth）
+#   所有 provider 显式 no —— 模型此时不由安装器决定，改由 vteam 的 omo 配置页统一指定
+#   （默认全部指向 opencode 免费模型，见 worker 侧 writeOmoConfig）。
+# 安装器把插件注册进 $HOME/.config/opencode/opencode.json；真正的 opencode 运行时
+# 工作目录是 /data/vteam-worker，其 opencode.json 由 worker 注入器维护（含本插件条目）。
+# **必须钉版本**（同上的理由）：OMO 发版频繁，`@latest` 会让**它之后的每一层**都失效；
+# 本块已挪到 apt/Chrome 之后，所以 OMO 升级只影响这一小层。
+# 升级 OMO 时改这一处（并跑一遍 worker 契约测试）。
+ARG OMO_INSTALL_SPEC=oh-my-openagent@5.1.43
+# 交叉构建兜底：amd64 在 arm64 宿主经 qemu 模拟时 Bun 会 abort（qemu 已知限制），
+# 此时直接落盘与安装器等价的插件注册（opencode.json/tui.json 内容一致，运行期由
+# opencode 自行从 npm 解析该插件，与架构无关）。
+RUN set -e; \
+    if bunx "${OMO_INSTALL_SPEC}" install --no-tui --platform=opencode --skip-auth \
+         --claude=no --openai=no --gemini=no --copilot=no --opencode-zen=no \
+         --zai-coding-plan=no --opencode-go=no --kimi-for-coding=no \
+         --bailian-coding-plan=no --minimax-cn-coding-plan=no --minimax-coding-plan=no \
+         --vercel-ai-gateway=no > /tmp/omo-install.log 2>&1; then \
+      echo "omo installed via bunx installer"; tail -20 /tmp/omo-install.log; \
+    else \
+      echo "bunx installer failed (emulated build?) -> writing plugin registration directly"; \
+      mkdir -p /root/.config/opencode; \
+      printf '{\n  "plugin": [\n    "%s"\n  ]\n}\n' "${OMO_INSTALL_SPEC}" \
+        | tee /root/.config/opencode/opencode.json > /root/.config/opencode/tui.json; \
+    fi; \
+    test -f /root/.config/opencode/opencode.json; \
+    echo "omo plugin registered:"; cat /root/.config/opencode/opencode.json; \
+    OMO_VER="$(npm view "${OMO_INSTALL_SPEC}" version 2>/dev/null || true)"; \
+    if [ -z "${OMO_VER}" ]; then OMO_VER="$(bunx "${OMO_INSTALL_SPEC}" --version 2>/dev/null | tail -1 || true)"; fi; \
+    [ -n "${OMO_VER}" ] || OMO_VER=unknown; \
+    # 能力标记：运行期据此判断"本镜像是否内置 OmO"，决定是否展示/允许开启开关。
+    # 写在镜像里（不是数据卷）——没有内置 OmO 的镜像就不会有这个文件。
+    # "v2" 字段 = 内置 OmO 是否具备 **v2 形态入口**（导出 {id, setup}）。
+    # 当前安装器装出的是 **v1 形态**（导出 {server}）⇒ v2 上不会运行 ⇒ 注入器据此
+    # **不注册** OmO 条目（注册了也只会静默失败：plugins 是合法键，不产生归一化诊断）。
+    # 只有换成 v2 形态入口的 OmO 后才可改成 true（改前先跑一遍 worker 契约测试）。
+    printf '{"bundled":true,"v2":false,"spec":"%s","version":"%s"}' "${OMO_INSTALL_SPEC}" "${OMO_VER}" \
+      > /opt/omo-bundled.json; \
+    echo "omo capability marker: $(cat /opt/omo-bundled.json)"
 
 # 运行时代码区（与持久化卷 /data/vteam-worker 分离，避免卷遮挡代码）
 WORKDIR /app
