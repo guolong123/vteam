@@ -34,6 +34,11 @@ permissions:
 
 env:
   IMAGE_NAMESPACE: guojongg
+# 基础镜像**按具体版本钉住**（不是 22-alpine / 22-bookworm-slim 这类浮动 tag）：
+# 浮动 tag 会在上游 rebuild 时换 digest（v1.1.1→v1.2.0 实测换了：
+#   3ed9844… → de170b3…），基础层一变，**下面所有层全部失效** ⇒ 6 个构建 job 缓存命中
+# 数为 0、镜像层全变 ⇒ 集群每次发布都要整包重拉（worker 镜像 GB 级）。
+# 升级 node 时改这里的两个版本号即可（同时改 worker/Dockerfile 的 ARG 默认值）。
 
 concurrency:
   group: release-images-${{ github.ref }}
@@ -83,7 +88,7 @@ jobs:
             runner: ubuntu-latest
             dockerfile: server/Dockerfile
             context: server
-            node_tag: 22-alpine
+            node_tag: 22.23.4-alpine
             free_disk: false
           - image: server
             arch: arm64
@@ -91,7 +96,7 @@ jobs:
             runner: ubuntu-24.04-arm
             dockerfile: server/Dockerfile
             context: server
-            node_tag: 22-alpine
+            node_tag: 22.23.4-alpine
             free_disk: false
           - image: web
             arch: amd64
@@ -99,7 +104,7 @@ jobs:
             runner: ubuntu-latest
             dockerfile: web/Dockerfile
             context: .
-            node_tag: 22-alpine
+            node_tag: 22.23.4-alpine
             free_disk: false
           - image: web
             arch: arm64
@@ -107,7 +112,7 @@ jobs:
             runner: ubuntu-24.04-arm
             dockerfile: web/Dockerfile
             context: .
-            node_tag: 22-alpine
+            node_tag: 22.23.4-alpine
             free_disk: false
           - image: worker
             arch: amd64
@@ -115,7 +120,7 @@ jobs:
             runner: ubuntu-latest
             dockerfile: worker/Dockerfile
             context: worker
-            node_tag: 22-bookworm-slim
+            node_tag: 22.23.4-bookworm-slim
             free_disk: true
           - image: worker
             arch: arm64
@@ -123,7 +128,7 @@ jobs:
             runner: ubuntu-24.04-arm
             dockerfile: worker/Dockerfile
             context: worker
-            node_tag: 22-bookworm-slim
+            node_tag: 22.23.4-bookworm-slim
             free_disk: true
     steps:
       - uses: actions/checkout@v7
