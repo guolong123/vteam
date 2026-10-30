@@ -179,6 +179,21 @@ function usageTokenCount(value: unknown): number {
  * → 六计数。worker 的 step-finish 用量是 best-effort 上报，缺字段/NaN/负数都出现过；
  * 逐字段 `Number.isFinite` 校验后归零，**脏数据归零不断链**——绝不让一行统计因某个
  * 字段缺失而整条写不进去。
+ *
+ * ## `totalTokens` 的兜底（token-usage-accuracy 修复）
+ *
+ * 上游**从不给 `total`**：v1 的 step-finish 与 v2 wire 的 `tokens` 都没有该字段
+ * （`worker/src/driver/v2-driver.ts` 明写「v2 无 total，不造数」），worker 侧也是
+ * 逐字段累加、不合成 total。所以 `bag.total` 恒缺 ⇒ 原实现把它落成 0 ⇒
+ * `model_usages.total_tokens` **全表为 0**（线上实测 125/125 行都是 0）。
+ *
+ * 后果是**下游全部读这一列**：`usage.service` 的 `_sum.totalTokens`、前端
+ * `TeamStatsTab` 的「Token 总数」卡与 Top 分布条、缓存命中率分母——全都把 0 当成
+ * 「没用量」显示。用户看到的「token 偏小 / 统计不全」有一半来自这里。
+ *
+ * 修复口径：**上游给了 total 就用它（尊重上游）**；没给则由五个分量求和兜底。
+ * 这样既有值的宿主行为不变，缺 total 的宿主自动得到正确总量，且与
+ * 「总量 = 五元组之和」这一唯一口径对齐（不存在两个来源打架）。
  */
 export function parseUsageTokens(raw: unknown): UsageTokenCounts {
   const bag = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<
@@ -188,13 +203,27 @@ export function parseUsageTokens(raw: unknown): UsageTokenCounts {
   const cache = (
     typeof bag.cache === 'object' && bag.cache !== null ? bag.cache : {}
   ) as Record<string, unknown>;
+  const inputTokens = usageTokenCount(bag.input);
+  const outputTokens = usageTokenCount(bag.output);
+  const reasoningTokens = usageTokenCount(bag.reasoning);
+  const cacheReadTokens = usageTokenCount(cache.read);
+  const cacheWriteTokens = usageTokenCount(cache.write);
+  const upstreamTotal = usageTokenCount(bag.total);
   return {
-    inputTokens: usageTokenCount(bag.input),
-    outputTokens: usageTokenCount(bag.output),
-    reasoningTokens: usageTokenCount(bag.reasoning),
-    cacheReadTokens: usageTokenCount(cache.read),
-    cacheWriteTokens: usageTokenCount(cache.write),
-    totalTokens: usageTokenCount(bag.total),
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    // 上游给（且非 0）→ 用上游；否则五元组求和（求和也全 0 ⇒ 0，语义仍是「无用量」）。
+    totalTokens:
+      upstreamTotal > 0
+        ? upstreamTotal
+        : inputTokens +
+          outputTokens +
+          reasoningTokens +
+          cacheReadTokens +
+          cacheWriteTokens,
   };
 }
 

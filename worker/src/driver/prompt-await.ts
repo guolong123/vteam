@@ -570,13 +570,111 @@ export function aggregateText(messages: DriverMessage[]): string {
   return texts.map((p) => p.text ?? '').join('');
 }
 
-/** 从已收集消息构建聚合结果（tokens/cost 取 step-finish part，model 取 finish 归属消息的 info）。 */
+/**
+ * 累加本轮**全部** `step-finish` part 的 token 用量与 cost（token-usage-accuracy 修复）。
+ *
+ * ## 为什么不能只用 `findFinish()` 那一个 part
+ *
+ * `findFinish()` 的职责是**完成判定**：它返回**第一个** `reason==='stop'` 的 step-finish，
+ * 那是「本轮在这一步收尾了」的证据。但**用量不是完成证据**——一轮 ReAct 循环可能是：
+ *
+ * ```text
+ * step1 (tool-calls)  input 9k  / cacheRead 60k   ← 调工具
+ * step2 (tool-calls)  input 12k / cacheRead 80k   ← 再调工具
+ * step3 (stop)        input 3k  / cacheRead 20k   ← 出正文，findFinish 返回的正是它
+ * ```
+ *
+ * 只取 step3 ⇒ 上报 3k/20k，而真实消耗是 24k/160k：**偏小约 85%**。
+ * 这正是线上「token 统计看起来偏小、统计不全」的根因：工具循环轮次越多，漏得越多——
+ * 用户看到的数字其实只是「最后一个 step 的用量」，不是「整轮用量」。
+ *
+ * ## 口径（必须与上游 ServeTokens 逐字段一致）
+ *
+ * - 逐字段相加：`input` / `output` / `reasoning` / `cache.read` / `cache.write`；
+ * - `total` **上游本来就不给**（v1 step-finish 与 v2 wire 均无 `total` 字段，
+ *   `v2-driver.ts` 注释已写明「不造数」）⇒ 本函数**也不造** `total`；
+ *   需要总量时由消费侧用五元组求和（server 侧 `worker-dispatcher` 已按此口径落库）。
+ * - 字段缺失（undefined）视为 0 参与相加，**但全轮都没有该字段时仍返回 undefined**——
+ *   保持「未知」与「0」的语义区分（与 cost 口径同源）。
+ * - `cost` 逐 part 相加；全轮都没有 cost ⇒ undefined（未知），**不返回 0**（免费）。
+ *
+ * ## 幂等前提
+ *
+ * `messages` 必须已是**本轮新增消息的合并结果**（`filterFresh` + `mergeMessages`）：
+ * 同一 assistant 消息按 `info.id` 只保留最新版本，故同一 step-finish 不会被重复累加。
+ */
+export function sumTokenUsage(messages: DriverMessage[]): {
+  tokens: DriverTokenUsage | undefined;
+  cost: number | undefined;
+} {
+  let input: number | undefined;
+  let output: number | undefined;
+  let reasoning: number | undefined;
+  let cacheRead: number | undefined;
+  let cacheWrite: number | undefined;
+  let cost: number | undefined;
+
+  const add = (prev: number | undefined, next: unknown): number | undefined => {
+    if (typeof next !== 'number' || !Number.isFinite(next)) {
+      return prev;
+    }
+    return (prev ?? 0) + next;
+  };
+
+  for (const m of messages) {
+    if (m.info?.role !== 'assistant') {
+      continue;
+    }
+    for (const p of m.parts ?? []) {
+      // ⚠️ 这里**不按 reason 过滤**：`tool-calls` 的 step 同样是真金白银的模型调用。
+      // 完成判定只要 stop，用量累加要「所有已发生的 step」——两者口径不同，不可复用同一筛选。
+      if (p.type !== 'step-finish') {
+        continue;
+      }
+      const t = p.tokens;
+      if (t) {
+        input = add(input, t.input);
+        output = add(output, t.output);
+        reasoning = add(reasoning, t.reasoning);
+        cacheRead = add(cacheRead, t.cache?.read);
+        cacheWrite = add(cacheWrite, t.cache?.write);
+      }
+      cost = add(cost, p.cost);
+    }
+  }
+
+  const hasToken = [input, output, reasoning, cacheRead, cacheWrite].some((v) => v !== undefined);
+  const tokens: DriverTokenUsage | undefined = hasToken
+    ? {
+        ...(input !== undefined ? { input } : {}),
+        ...(output !== undefined ? { output } : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
+        ...(cacheRead !== undefined || cacheWrite !== undefined
+          ? {
+              cache: {
+                ...(cacheRead !== undefined ? { read: cacheRead } : {}),
+                ...(cacheWrite !== undefined ? { write: cacheWrite } : {}),
+              },
+            }
+          : {}),
+      }
+    : undefined;
+
+  return { tokens, cost };
+}
+
+/**
+ * 从已收集消息构建聚合结果（tokens/cost 累加本轮**全部** step-finish，model 取 finish 归属消息的 info）。
+ */
 function buildResult(
   messages: DriverMessage[],
   terminalEvidence?: 'event' | 'polling',
 ): CompletionResult {
-  const finish = findFinish(messages);
+  // `findFinish` 在这里不再用于取用量（用量走下面的累加），保留只为让读者看清
+  // 「完成判定」与「用量聚合」是两件口径不同的事；model 归属仍需它。
   const model = findAssistantModel(messages);
+  // 用量取**全部** step-finish 的累加（不是 finish 那一个）——见 sumTokenUsage 的说明。
+  const usage = sumTokenUsage(messages);
   return {
     text: aggregateText(messages),
     // P1 补充修复：parts 与 text 一致只取 assistant 消息——user 消息的 parts
@@ -585,8 +683,8 @@ function buildResult(
     parts: messages
       .filter((m) => m.info?.role === 'assistant')
       .flatMap((m) => m.parts ?? []),
-    ...(finish?.tokens ? { tokens: finish.tokens } : {}),
-    ...(finish?.cost !== undefined ? { cost: finish.cost } : {}),
+    ...(usage.tokens ? { tokens: usage.tokens } : {}),
+    ...(usage.cost !== undefined ? { cost: usage.cost } : {}),
     ...(model ? { model } : {}),
     ...(terminalEvidence !== undefined ? { terminalEvidence } : {}),
   };

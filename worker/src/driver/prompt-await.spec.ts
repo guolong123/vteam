@@ -34,6 +34,7 @@ import {
   describeTimeoutReason,
   extractServeError,
   MessageDeltaTracker,
+  sumTokenUsage,
 } from './prompt-await';
 import type { EventSignal, RunOutcome } from './prompt-await';
 import { RunTerminalGate } from './v2-event-map';
@@ -136,6 +137,123 @@ describe('findFinish（完成判定铁律）', () => {
       ]),
     ];
     expect(findFinish(msgs)).toBeUndefined();
+  });
+});
+
+describe('sumTokenUsage（token 用量累加：一轮多 step 不丢）', () => {
+  /** 造一个带指定 reason/tokens/cost 的 step-finish part（id 可以区分多 step）。 */
+  function finishStep(
+    id: string,
+    reason: string,
+    tokens: { input?: number; output?: number; reasoning?: number; read?: number; write?: number },
+    cost?: number,
+  ): ServePart {
+    return {
+      id,
+      type: 'step-finish',
+      reason,
+      ...(cost !== undefined ? { cost } : {}),
+      tokens: {
+        ...(tokens.input !== undefined ? { input: tokens.input } : {}),
+        ...(tokens.output !== undefined ? { output: tokens.output } : {}),
+        ...(tokens.reasoning !== undefined ? { reasoning: tokens.reasoning } : {}),
+        ...(tokens.read !== undefined || tokens.write !== undefined
+          ? {
+              cache: {
+                ...(tokens.read !== undefined ? { read: tokens.read } : {}),
+                ...(tokens.write !== undefined ? { write: tokens.write } : {}),
+              },
+            }
+          : {}),
+      },
+    };
+  }
+
+  it('🔴 回归：一轮 2 个 tool-calls step + 1 个 stop step → 五个口径全部累加（不是只取最后一个）', () => {
+    // 线上缺陷形状：工具循环三次模型调用，findFinish 只会返回最后那个 stop step
+    const msgs = [
+      // step1 调工具
+      asstMsg('a1', [finishStep('p1', 'tool-calls', { input: 9000, read: 60000 }, 0.12)]),
+      // step2 再调工具
+      asstMsg('a2', [finishStep('p2', 'tool-calls', { input: 12000, read: 80000 }, 0.18)]),
+      // step3 出正文
+      asstMsg('a3', [textPart('done', 300), finishStep('p3', 'stop', { input: 3000, read: 20000, output: 500 }, 0.05)]),
+    ];
+    expect(findFinish(msgs)?.id).toBe('p3'); // 完成判定仍只看 stop（口径不变）
+    const usage = sumTokenUsage(msgs);
+    // 只取 p3 会得到 input=3000/read=20000/output=500 —— 这里必须是三轮之和
+    expect(usage.tokens).toEqual({
+      input: 24000,
+      output: 500,
+      cache: { read: 160000 },
+    });
+    expect(usage.cost).toBeCloseTo(0.35, 10);
+  });
+
+  it('输出/推理/缓存写逐字段累加', () => {
+    const msgs = [
+      asstMsg('a1', [finishStep('p1', 'tool-calls', { output: 20, reasoning: 400, write: 700 })]),
+      asstMsg('a2', [finishStep('p2', 'stop', { output: 30, reasoning: 600, write: 900 })]),
+    ];
+    const usage = sumTokenUsage(msgs);
+    expect(usage.tokens?.output).toBe(50);
+    expect(usage.tokens?.reasoning).toBe(1000);
+    expect(usage.tokens?.cache?.write).toBe(1600);
+  });
+
+  it('user 消息里的 step-finish 不计入（必须 assistant）', () => {
+    const usage = sumTokenUsage([userMsg([finishStep('p1', 'stop', { input: 111 })])]);
+    expect(usage.tokens).toBeUndefined();
+    expect(usage.cost).toBeUndefined();
+  });
+
+  it('非 step-finish part 的 tokens 不计入（只认 step-finish，避免重复计数）', () => {
+    const usage = sumTokenUsage([
+      asstMsg('a1', [
+        { id: 't1', type: 'text', text: 'x', tokens: { input: 999 } } as ServePart,
+        finishStep('p1', 'stop', { input: 5 }),
+      ]),
+    ]);
+    expect(usage.tokens?.input).toBe(5);
+  });
+
+  it('全轮都没 tokens → undefined（未知，不是 0）', () => {
+    const usage = sumTokenUsage([asstMsg('a1', [{ id: 'p1', type: 'step-finish', reason: 'stop' }])]);
+    expect(usage.tokens).toBeUndefined();
+  });
+
+  it('全轮都没 cost → undefined（未知 ≠ 免费 0）', () => {
+    const usage = sumTokenUsage([
+      asstMsg('a1', [{ id: 'p1', type: 'step-finish', reason: 'stop', tokens: { input: 10 } }]),
+    ]);
+    expect(usage.cost).toBeUndefined();
+  });
+
+  it('空消息 → 两个都是 undefined，不抛错', () => {
+    const usage = sumTokenUsage([]);
+    expect(usage.tokens).toBeUndefined();
+    expect(usage.cost).toBeUndefined();
+  });
+
+  it('只有部分字段出现时，只带出出现过的字段（不把 undefined 写成 0）', () => {
+    const usage = sumTokenUsage([
+      asstMsg('a1', [finishStep('p1', 'stop', { input: 7 })]),
+      asstMsg('a2', [finishStep('p2', 'tool-calls', { output: 3 })]),
+    ]);
+    expect(usage.tokens).toEqual({ input: 7, output: 3 });
+    expect(usage.tokens?.reasoning).toBeUndefined();
+    expect(usage.tokens?.cache).toBeUndefined();
+  });
+
+  it('非有限值（NaN/Infinity）被忽略，不污染累加结果', () => {
+    const usage = sumTokenUsage([
+      asstMsg('a1', [
+        { id: 'p1', type: 'step-finish', reason: 'stop', cost: Number.NaN, tokens: { input: 10 } },
+      ]),
+      asstMsg('a2', [{ id: 'p2', type: 'step-finish', reason: 'stop', cost: 0.2 }]),
+    ]);
+    expect(usage.tokens?.input).toBe(10);
+    expect(usage.cost).toBeCloseTo(0.2, 10);
   });
 });
 

@@ -5376,6 +5376,47 @@ describe('WorkerDispatcher', () => {
       });
     });
 
+    it('🔴 回归：上游缺 total（线上实况）→ totalTokens 由五元组求和兜底（不再全表为 0）', () => {
+      // 线上实测 125/125 行 total_tokens=0，而五个分量都非 0 —— 这正是「token 偏小」的一半根因。
+      expect(
+        parseUsageTokens({
+          input: 579,
+          output: 581,
+          cache: { read: 192058 },
+        }),
+      ).toEqual({
+        inputTokens: 579,
+        outputTokens: 581,
+        reasoningTokens: 0,
+        cacheReadTokens: 192058,
+        cacheWriteTokens: 0,
+        totalTokens: 579 + 581 + 192058,
+      });
+    });
+
+    it('上游给了非 0 total → 尊重上游，不覆盖为求和值', () => {
+      expect(
+        parseUsageTokens({ total: 10.9, input: 1, output: 2 }),
+      ).toEqual({
+        inputTokens: 1,
+        outputTokens: 2,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 10,
+      });
+    });
+
+    it('上游给了 total=0 但分量非 0（上游占位）→ 仍用求和，避免 0 掩盖真实用量', () => {
+      expect(parseUsageTokens({ total: 0, input: 7, output: 3 }).totalTokens).toBe(10);
+    });
+
+    it('分量全为脏值 → 求和兜底后仍是 0（「无用量」语义不被破坏）', () => {
+      expect(
+        parseUsageTokens({ input: Number.NaN, output: -1, cache: { read: 'x' } }).totalTokens,
+      ).toBe(0);
+    });
+
     it('parseUsageTokens：脏值逐字段归零（缺字段/NaN/±Infinity/负数/小数截断）', () => {
       expect(
         parseUsageTokens({
