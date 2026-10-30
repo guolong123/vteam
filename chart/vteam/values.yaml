@@ -21,7 +21,10 @@ image:
 replicaCount:
   server: 1
   web: 1
-  worker: 0
+  ## 常驻 1 副本（与 compose 五服务一致）：/models/integrations 的注册表取自在线
+  ## worker 的 GET /integrations，收缩到 0 会让 Provider 下拉直接降级为空
+  ## （外部旧版 worker 不支持该端点）。helm upgrade 会按此值收敛 StatefulSet。
+  worker: 1
 
 ## ---------------------------------------------------------------------------
 ## 敏感配置

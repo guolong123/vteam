@@ -1101,7 +1101,7 @@ export class ModelsService implements OnModuleInit {
    * - 取列表：在线 worker 逐个问 `workerClient.listIntegrations`（执行端点
    *   `GET /integrations`），首个非空即用；全空/全失败 → `degraded:true + items:[]`
    *   （列表类端点不阻断页面，对齐 listModels/listAgents 的降级口径）。
-   * - 状态合并：`inCatalog` = 目录有该 provider 的模型行（不限 enabled）；
+   * - 状态合并：`inCatalog` = 目录有该 provider 的 **enabled** 模型行（与 listProviders 的列表口径严格一致）。候选登记（enabled=false）的 provider 不算入目录——否则它既被新增下拉排除（前端按 `!inCatalog` 过滤）、又不出现在列表（listProviders 只取 enabled），两头都够不着；
    *   `credential` = 凭据库该 provider 记录（revokedAt 非空 = revoked）。
    * - 输出按 id 字典序升序（前端 dedupe 后直接渲染，顺序稳定）。
    */
@@ -1127,6 +1127,7 @@ export class ModelsService implements OnModuleInit {
     }
     const [catalogRows, credentialRows] = await Promise.all([
       this.prisma.model.findMany({
+        where: { enabled: true },
         select: { providerID: true },
         distinct: ['providerID'],
       }),

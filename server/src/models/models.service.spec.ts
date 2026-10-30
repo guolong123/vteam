@@ -466,6 +466,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         id: 'w_1',
         capabilities: { models: [] },
       });
+      // inCatalog 取目录「可见」行——与 listProviders 的 enabled 过滤同口径
+      expect(prisma.model.findMany).toHaveBeenCalledWith({
+        where: { enabled: true },
+        select: { providerID: true },
+        distinct: ['providerID'],
+      });
       expect(result.degraded).toBe(false);
       expect(result.items).toEqual([
         // 目录有行 → inCatalog；无凭据 → none
@@ -495,6 +501,35 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       ]);
       // 输出绝不携带明文 key/fingerprint
       expect(JSON.stringify(result)).not.toMatch(/sk-[A-Za-z0-9]/);
+    });
+
+    it('目录仅剩候选行（enabled 过滤后无行）→ inCatalog=false（否则既被下拉排除又不进列表）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: { models: [] } },
+      ]);
+      workerClient.listIntegrations.mockResolvedValue([
+        { id: '302ai', name: '302.AI', apiKey: true },
+      ]);
+      // enabled=true 过滤后为空：该 provider 只有 enabled=false 的候选登记行
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+
+      const result = await service.listOpencodeIntegrations();
+
+      expect(prisma.model.findMany).toHaveBeenCalledWith({
+        where: { enabled: true },
+        select: { providerID: true },
+        distinct: ['providerID'],
+      });
+      expect(result.items).toEqual([
+        {
+          id: '302ai',
+          name: '302.AI',
+          apiKey: true,
+          inCatalog: false,
+          credential: 'none',
+        },
+      ]);
     });
 
     it('首个在线 worker 返回空 → 继续问下一个（首个非空即用，不拿空列表当真值）', async () => {
