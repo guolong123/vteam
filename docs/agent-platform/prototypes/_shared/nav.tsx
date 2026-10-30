@@ -47,6 +47,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { key: "project", label: "项目", icon: "▤" },
   { key: "board", label: "任务看板", icon: "☰" },
+  { key: "stats", label: "统计看板", icon: "▦" },
   { key: "agents", label: "Agent 管理", icon: "◉" },
   { key: "workers", label: "Worker 节点", icon: "⚙" },
   { key: "skills", label: "技能与工具", icon: "◫" },

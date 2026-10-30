@@ -108,6 +108,7 @@ const KEY_TO_PATH: Record<string, string> = {
   "git-repos": "/git-repos",
   skills: "/skills",
   integrations: "/integrations",
+  stats: "/stats",
   system: "/system",
 };
 
@@ -149,6 +150,7 @@ const CMDK_NAV_PATH: Record<string, string> = {
   仓库管理: "/git-repos",
   技能与工具: "/skills",
   集成渠道: "/integrations",
+  统计看板: "/stats",
   系统管理: "/system",
 };
 
@@ -164,6 +166,9 @@ const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
   agents: (p) => hasPermission(p, "agents"),
   workers: (p) => hasPermission(p, "workers"),
   skills: (p) => hasPermission(p, "skills"),
+  // 统计看板 = 跨团队经营数据，仅平台管理员（与后端 AdminGuard 同一口径，
+  // 前端闸门只是提前收敛体验；真正的门在服务端 controller）。
+  stats: isPlatformAdmin,
   system: isPlatformAdmin,
 };
 
@@ -207,6 +212,7 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "git-repos": { title: "仓库管理", subtitle: "git 仓库凭证与 Agent 授权" },
   skills: { title: "技能与工具", subtitle: "管理技能库与工具注册" },
   integrations: { title: "集成渠道", subtitle: "外部渠道双向集成（企微智能机器人 + 通用 Webhook）" },
+  stats: { title: "统计看板", subtitle: "跨团队 · 日/周/月粒度 · 任务/产出物/Token/成本与效率质量" },
   system: { title: "系统管理", subtitle: "平台管理 · 用户账号 · 角色权限 · Agent 记忆" },
 };
 
@@ -215,6 +221,10 @@ function resolvePageTitle(pathname: string): { title: string; subtitle: string }
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "workers" && parts.length === 2) {
     return EXTRA_PAGE_TITLE["/workers/[id]"];
+  }
+  // /teams/:id/stats → 团队统计详情（与团队会话/看板同属团队上下文，但标题要独立）
+  if (parts[0] === "teams" && parts.length === 3 && parts[2] === "stats") {
+    return { title: "团队统计详情", subtitle: "单团队 · 周期/质量/成员产能" };
   }
   const exact = EXTRA_PAGE_TITLE[pathname];
   if (exact) return exact;

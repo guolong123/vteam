@@ -16,6 +16,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore, type User } from "@/lib/stores/authStore";
+import { resolveLandingPath } from "@/lib/landing";
 import { neutral, space, fontSize, fontFamily } from "@/src/theme/tokens";
 import {
   BrandPanel,
@@ -68,11 +69,11 @@ function LoginForm() {
   const [resetSubmitting, setResetSubmitting] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
 
-  // 已登录用户直接进入工作区
+  // 已登录用户直接进入工作区：按角色分流（管理员 → 统计看板，成员 → 团队工作台）
   useEffect(() => {
-    const token = useAuthStore.getState().token;
+    const { token, user } = useAuthStore.getState();
     if (token) {
-      router.replace("/teams");
+      router.replace(resolveLandingPath(user));
     }
   }, [router]);
 
@@ -106,7 +107,8 @@ function LoginForm() {
       // 记住我：勾选 → localStorage 跨会话；未勾选 → sessionStorage 会话级
       useAuthStore.getState().setPersistMode(rememberMe);
       setAuth(res.accessToken, res.user);
-      router.push("/teams");
+      // 落地页按角色分流（管理员进统计看板、成员进团队工作台），规则单点在 lib/landing.ts
+      router.push(resolveLandingPath(res.user));
     } catch (err) {
       setError(isApiError(err) ? err.message : "登录失败，请稍后重试");
     } finally {
