@@ -46,6 +46,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       findMany: jest.Mock;
       update: jest.Mock;
     };
+    providerTombstone: {
+      findMany: jest.Mock;
+      upsert: jest.Mock;
+      deleteMany: jest.Mock;
+    };
     $transaction: jest.Mock;
   };
   let crypto: {
@@ -129,6 +134,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       worker: {
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
+      },
+      providerTombstone: {
+        findMany: jest.fn().mockResolvedValue([]),
+        upsert: jest.fn(),
+        deleteMany: jest.fn(),
       },
       $transaction: jest.fn(),
     };
@@ -263,6 +273,22 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
   });
 
   describe('listProviders（provider 聚合：模型数 + 凭据状态）', () => {
+    it('删除意图（tombstone）：tombstoned provider 被过滤——caps 并集不复活幽灵行', async () => {
+      prisma.model.groupBy.mockResolvedValue([]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.worker.findMany.mockResolvedValue([
+        { capabilities: { models: ['minimax-cn-coding-plan/MiniMax-M3'] } },
+      ]);
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.providerTombstone.findMany.mockResolvedValue([
+        { providerID: 'minimax-cn-coding-plan' },
+      ]);
+
+      const result = await service.listProviders();
+
+      expect(result.map((p) => p.providerID)).toEqual([]);
+    });
+
     it('models groupBy + ModelCredential 合并：modelCount/configured/fingerprint/revokedAt + 字典序', async () => {
       prisma.model.groupBy.mockResolvedValue([
         { providerID: 'zhipu', _count: { _all: 3 } },
@@ -618,6 +644,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           capabilities: undefined,
           enabled: true,
         },
+      });
+      // 显式重新添加（新建模型）→ 清除删除意图
+      expect(prisma.providerTombstone.deleteMany).toHaveBeenCalledWith({
+        where: { providerID: 'opencode-go' },
       });
       expect(result).toEqual(modelRowFull);
     });
@@ -1059,6 +1089,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.modelCredential.deleteMany).toHaveBeenCalledWith({
         where: { providerID: 'vllm' },
       });
+      // 删除意图落盘：外部 worker（keta）再上报该 provider，sync 也不会复活它
+      expect(prisma.providerTombstone.upsert).toHaveBeenCalledWith({
+        where: { providerID: 'vllm' },
+        create: { providerID: 'vllm' },
+        update: { deletedAt: expect.any(Date) },
+      });
       expect(workers.dispatchModelCredentials).toHaveBeenCalled();
       expect(result).toEqual({
         providerID: 'vllm',
@@ -1078,6 +1114,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(prisma.modelCredential.deleteMany).not.toHaveBeenCalled();
       expect(prisma.worker.update).not.toHaveBeenCalled();
+      expect(prisma.providerTombstone.upsert).not.toHaveBeenCalled();
     });
 
     it('幽灵 provider（无模型行+无凭据，但 worker caps 提及）→ 不 404，剥离 worker caps 删除成功 deletedModels:0', async () => {
@@ -1228,6 +1265,45 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
   });
 
   describe('syncFromWorkerCapabilities（worker 上报合并入库 + 同步清理）', () => {
+    it('删除意图（tombstone）：已删 provider 的快照上报被跳过（不建目录、不建 availability）', async () => {
+      prisma.providerTombstone.findMany.mockResolvedValue([
+        { providerID: 'minimax-cn-coding-plan' },
+      ]);
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockResolvedValue({
+        ...modelRowFull,
+        id: 'md_0000000001',
+        providerID: 'opencode',
+        modelID: 'big-pickle',
+      });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
+
+      const n = await service.syncFromWorkerCapabilities('w_0000000001', [
+        'minimax-cn-coding-plan/MiniMax-M3',
+        'opencode/big-pickle',
+      ]);
+
+      expect(n).toBe(1);
+      expect(prisma.model.findUnique).toHaveBeenCalledTimes(1);
+      expect(prisma.model.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            providerID_modelID: {
+              providerID: 'opencode',
+              modelID: 'big-pickle',
+            },
+          },
+        }),
+      );
+      expect(prisma.workerModelAvailability.upsert).toHaveBeenCalledTimes(1);
+      expect(prisma.model.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ providerID: 'opencode' }),
+        }),
+      );
+    });
+
     it('上报 models → 逐条拆解 upsert 目录 + upsert availability，返回合并条数', async () => {
       prisma.model.findUnique
         .mockResolvedValueOnce(null) // 'opencode-go/deepseek-v4-flash' 目录不存在 → 新建 md_0000000001
@@ -1536,6 +1612,56 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       });
     });
 
+    it('删除意图（tombstone）：已删 provider 的 live 上报被忽略——sync 不复活（删后刷新不再回来）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_0000000001', capabilities: { baseUrl: 'http://worker:4199' } },
+      ]);
+      workerClient.listModels.mockResolvedValue([
+        {
+          id: 'minimax-cn-coding-plan/MiniMax-M3',
+          name: 'MiniMax-M3',
+          providerID: 'minimax-cn-coding-plan',
+          modelID: 'MiniMax-M3',
+          status: 'active',
+        },
+        {
+          id: 'opencode/big-pickle',
+          name: 'big-pickle',
+          providerID: 'opencode',
+          modelID: 'big-pickle',
+          status: 'active',
+        },
+      ]);
+      prisma.providerTombstone.findMany.mockResolvedValue([
+        { providerID: 'minimax-cn-coding-plan' },
+      ]);
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockResolvedValue({
+        ...modelRowFull,
+        id: 'md_0000000001',
+        providerID: 'opencode',
+        modelID: 'big-pickle',
+      });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.findMany.mockResolvedValue([]);
+
+      const result = await service.syncLiveModels();
+
+      // live 只剩未删除 provider；minimax 上报被过滤（不 upsert、不进返回值）
+      expect(result).toEqual({
+        synced: 1,
+        disabled: 0,
+        liveModels: ['opencode/big-pickle'],
+      });
+      expect(prisma.model.create).toHaveBeenCalledTimes(1);
+      expect(prisma.model.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ providerID: 'opencode' }),
+        }),
+      );
+    });
+
     it('models-sync：无在线 worker → 空结果不剪枝（offline 不误删）', async () => {
       prisma.worker.findMany.mockResolvedValue([]);
 
@@ -1682,6 +1808,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         'md_0000000001',
         'sk-raw-token',
       );
+
+      // 显式重新添加（保存凭据）→ 清除删除意图，resync 才允许复活该 provider
+      expect(prisma.providerTombstone.deleteMany).toHaveBeenCalledWith({
+        where: { providerID: 'opencode-go' },
+      });
 
       expect(prisma.model.findUnique).toHaveBeenCalledWith({
         where: { id: 'md_0000000001' },

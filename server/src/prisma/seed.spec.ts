@@ -18,6 +18,9 @@ const mockPrisma = {
     upsert: jest.fn().mockResolvedValue({}),
   },
   workerModelAvailability: { deleteMany: jest.fn().mockResolvedValue({}) },
+  // Provider tombstone（删除不复活）：seed 在模型 upsert 前查删除意图。
+  // mock 缺少该 key 时 seed 首个模型 upsert 前即抛 TypeError。
+  providerTombstone: { findMany: jest.fn().mockResolvedValue([]) },
   tool: { upsert: jest.fn().mockResolvedValue({}) },
   mcpServer: { upsert: jest.fn().mockResolvedValue({}) },
   skill: { upsert: jest.fn().mockResolvedValue({}) },

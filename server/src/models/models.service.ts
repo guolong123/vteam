@@ -184,6 +184,8 @@ export class ModelsService implements OnModuleInit {
    * - modelCount 合并：目录 count + worker 上报该 provider 的模型数（worker-only provider 也能显示计数）；
    * - ModelCredential 全量按 providerID 建索引取凭据状态（表很小，二次查询内存合并）；
    * - configured = 存在且未 revoked；fingerprint 取库内已脱敏指纹（不回明文）；
+   * - tombstone：已显式删除的 provider 一律过滤（worker 重注册后 caps 并集可能
+   *   带回幽灵行）；
    * - 排序：providerID 字典序（简单稳定）。
    */
   async listProviders(): Promise<ProviderSummary[]> {
@@ -246,29 +248,35 @@ export class ModelsService implements OnModuleInit {
         });
       }
     }
+    const tombstoned = await this.deletedProviderSet();
     const providerIds = new Set<string>([
       ...groups.map((g) => g.providerID),
       ...workerCountByProvider.keys(),
     ]);
-    return [...providerIds]
-      .map((providerID) => {
-        const cred = credByProvider.get(providerID);
-        const configured = !!cred && cred.revokedAt === null;
-        const catalogCount =
-          groups.find((g) => g.providerID === providerID)?._count._all ?? 0;
-        const workerCount = workerCountByProvider.get(providerID) ?? 0;
-        const meta = metaByProvider.get(providerID);
-        return {
-          providerID,
-          modelCount: Math.max(catalogCount, workerCount),
-          configured,
-          fingerprint: configured ? (cred?.fingerprint ?? null) : null,
-          revokedAt: cred?.revokedAt ?? null,
-          providerType: meta?.providerType ?? 'cloud',
-          baseUrl: meta?.baseUrl ?? null,
-        };
-      })
-      .sort((a, b) => a.providerID.localeCompare(b.providerID));
+    return (
+      [...providerIds]
+        // 删除意图过滤：tombstoned provider 不出现在列表——caps 并集是幽灵复活的
+        // 另一条路（目录行已物理删除，groups 不会再含，双保险走同一次过滤）。
+        .filter((providerID) => !tombstoned.has(providerID))
+        .map((providerID) => {
+          const cred = credByProvider.get(providerID);
+          const configured = !!cred && cred.revokedAt === null;
+          const catalogCount =
+            groups.find((g) => g.providerID === providerID)?._count._all ?? 0;
+          const workerCount = workerCountByProvider.get(providerID) ?? 0;
+          const meta = metaByProvider.get(providerID);
+          return {
+            providerID,
+            modelCount: Math.max(catalogCount, workerCount),
+            configured,
+            fingerprint: configured ? (cred?.fingerprint ?? null) : null,
+            revokedAt: cred?.revokedAt ?? null,
+            providerType: meta?.providerType ?? 'cloud',
+            baseUrl: meta?.baseUrl ?? null,
+          };
+        })
+        .sort((a, b) => a.providerID.localeCompare(b.providerID))
+    );
   }
 
   /**
@@ -297,6 +305,11 @@ export class ModelsService implements OnModuleInit {
         ...(providerType ? { providerType } : {}),
         ...(baseUrl ? { baseUrl } : {}),
       },
+    });
+    // 显式重新添加（新建模型）：清除删除意图，随后的 sync 才允许把该 provider
+    // 的 live 模型重新 upsert 进目录。
+    await this.prisma.providerTombstone.deleteMany({
+      where: { providerID: dto.providerID.trim() },
     });
     // C6：带 baseUrl 的新模型且该 provider 已有活跃凭据 → 下发全量配置
     // （models map 立即含新模型，worker 重启后生效）；尚无凭据时不下发
@@ -550,7 +563,10 @@ export class ModelsService implements OnModuleInit {
    *   最后删该 provider 的 ModelCredential（若存在）；ids 可能为空数组，
    *   deleteMany({ where: { modelId: { in: [] } } }) 幂等安全；
    * - 删除前只要任一模型行有 baseUrl → C6 门控下发（provider 配置段随之消失）；
-   *   幽灵行无 baseUrl 自然不触发。
+   *   幽灵行无 baseUrl 自然不触发；
+   * - 删除意图落盘 ProviderTombstone：外部 worker 自有环境持续上报同名 provider
+   *   时，sync/快照/listProviders 忽略其 live 上报——删除不再被复活；重新添加
+   *   （保存凭据、新建模型）清除 tombstone。
    */
   async removeProvider(providerID: string): Promise<{
     providerID: string;
@@ -583,11 +599,21 @@ export class ModelsService implements OnModuleInit {
     ]);
     const deletedCredential =
       ((result[2] as { count?: number } | undefined)?.count ?? 0) > 0;
+    // 删除意图落盘（tombstone）：vteam 删得掉库行，删不掉外部 worker 自有
+    // opencode 环境里的同名 provider（keta 节点持续上报 minimax-cn-coding-plan
+    // 的模型 → 下一次 sync 就把行复活）。sync / worker 快照上报 / listProviders
+    // 据此忽略其 live 上报，直到显式重新添加（保存凭据、新建模型）清除。
+    await this.prisma.providerTombstone.upsert({
+      where: { providerID },
+      create: { providerID },
+      update: { deletedAt: new Date() },
+    });
     // Provider 删除后：剥离全部 worker capabilities.models 中该 provider 的
     // 陈旧上报（`providerID/...`），否则 listProviders 的目录 UNION worker 上报
     // 会把已删 provider 复活（models 行已空，但在线 worker 快照仍含该前缀）。
     // 仅触碰被删 providerID；其他 provider 上报原样保留（D5 非删除语义不动）。
-    // worker 重启重注册后若再次上报该 provider，行会自然重现（符合预期）。
+    // worker 重启重注册后再上报该 provider 也不会复活：tombstone 在外层把
+    // caps 并集/live 集一并过滤（见 listProviders / syncLiveModels），直至重新添加。
     await this.stripProviderFromWorkerCapabilities(providerID);
     // C6：删除带 baseUrl 的 provider → 门控下发（worker 侧 opencode.json 收敛）
     if (hadBaseUrl) {
@@ -621,6 +647,19 @@ export class ModelsService implements OnModuleInit {
       }
     }
     return false;
+  }
+
+  /**
+   * 已显式删除的 provider 集合（tombstone，见 schema ProviderTombstone）。
+   * 外部 worker（keta 等）自有 opencode 环境会持续上报同名 provider 的模型——
+   * 不加此关卡时，DELETE 后下一次 sync 的 live 并集就把行重新 upsert 回来
+   * （线上实测「点删除后刷新又回来了」）。表极小，全量入内存。
+   */
+  private async deletedProviderSet(): Promise<Set<string>> {
+    const rows = (await this.prisma.providerTombstone.findMany({
+      select: { providerID: true },
+    })) as { providerID: string }[];
+    return new Set(rows.map((r) => r.providerID));
   }
 
   private async stripProviderFromWorkerCapabilities(
@@ -673,11 +712,16 @@ export class ModelsService implements OnModuleInit {
     }
     let merged = 0;
     const catalogIds: string[] = [];
+    const tombstoned = await this.deletedProviderSet();
     for (const raw of modelIds) {
       if (!raw || typeof raw !== 'string') {
         continue;
       }
       const { providerID, modelID } = this.splitModelId(raw);
+      if (tombstoned.has(providerID)) {
+        // 删除意图：已删 provider 的快照上报不入目录、不建 availability。
+        continue;
+      }
       const catalogId = await this.upsertCatalogModel(providerID, modelID);
       catalogIds.push(catalogId);
       await this.prisma.workerModelAvailability.upsert({
@@ -819,7 +863,13 @@ export class ModelsService implements OnModuleInit {
         }
       }
     }
-    const liveModels = [...liveSet];
+    // 删除意图过滤：tombstoned provider 的 live 上报不参与 upsert/孤儿判定——
+    // 外部 worker 自有环境（keta 等）持续上报同名 provider 时，删除不再被
+    // 下一次 sync 复活（「点删除后刷新又回来了」根因）。
+    const tombstoned = await this.deletedProviderSet();
+    const liveModels = [...liveSet].filter(
+      (raw) => !tombstoned.has(this.splitModelId(raw).providerID),
+    );
     if (liveModels.length === 0) {
       return { synced: 0, disabled: 0, liveModels: [] };
     }
@@ -1296,6 +1346,10 @@ export class ModelsService implements OnModuleInit {
             },
           });
         }
+        // 显式重新添加（保存凭据）：清除删除意图，resync 才允许复活该 provider。
+        await this.prisma.providerTombstone.deleteMany({
+          where: { providerID },
+        });
         await this.dispatchCredentialState(targetWorkerIds);
         await this.enableProviderModelsAfterCredential(
           providerID,
@@ -1336,6 +1390,8 @@ export class ModelsService implements OnModuleInit {
       });
       this.logger.log(`模型凭据录入：${ctxLabel} fingerprint=${fingerprint}`);
     }
+    // 显式重新添加（保存凭据）：清除删除意图，resync 才允许复活该 provider。
+    await this.prisma.providerTombstone.deleteMany({ where: { providerID } });
     await this.dispatchCredentialState(targetWorkerIds);
     await this.enableProviderModelsAfterCredential(providerID, targetWorkerIds);
     await this.resyncAfterCredentialChange();

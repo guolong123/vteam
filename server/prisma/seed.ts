@@ -1415,7 +1415,17 @@ async function main() {
   }
 
   const modelRows = buildModelSeedRows();
+  // 显式删除的 provider 不因 seed 复活（tombstone 同步进 seed：否则删除过的
+  // provider 在下一次部署时被 upsert 的 create 分支带回来）。
+  const tombstoned = new Set(
+    (
+      await prisma.providerTombstone.findMany({ select: { providerID: true } })
+    ).map((t) => t.providerID),
+  );
   for (const row of modelRows) {
+    if (tombstoned.has(row.providerID)) {
+      continue;
+    }
     await prisma.model.upsert({
       where: {
         providerID_modelID: {
