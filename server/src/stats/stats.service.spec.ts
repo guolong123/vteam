@@ -194,7 +194,13 @@ describe('StatsService', () => {
     it('成本全窗已知（ratio=0）→ 每单位成本正常返回', async () => {
       prisma.$queryRawUnsafe.mockResolvedValue([
         dayRow({ day: '2026-10-29', costSum: 1, costKnown: 1 }),
-        dayRow({ day: '2026-10-30', costSum: 1, costKnown: 1, tasksCompleted: 2, artifacts: 4 }),
+        dayRow({
+          day: '2026-10-30',
+          costSum: 1,
+          costKnown: 1,
+          tasksCompleted: 2,
+          artifacts: 4,
+        }),
       ]);
       const result = await service.overview({ days: 2, granularity: 'day' });
       expect(result.totals.costUnknownRatio).toBe(0);
