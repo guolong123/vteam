@@ -176,6 +176,23 @@ export async function startFakeDriverServer(
       });
       return;
     }
+    if (method === 'GET' && path === '/api/integration') {
+      // 集成注册表（可配置 provider 全集）：含**没有模型行**的内置集成——
+      // 驱动必须归一成 `{id,name,apiKey,envNames?}` 且**丢掉 id 为空的脏项**。
+      sendJson(res, 200, {
+        data: [
+          {
+            id: 'opencode-go',
+            name: 'OpenCode Go',
+            methods: [{ type: 'key' }, { type: 'env', names: ['OPENCODE_API_KEY'] }],
+            connections: [],
+          },
+          { id: 'env-only', name: 'Env Only', methods: [{ type: 'env', names: ['ENV_ONLY_TOKEN'] }] },
+          { id: '', name: 'broken-no-id', methods: [{ type: 'key' }] },
+        ],
+      });
+      return;
+    }
     if (method === 'GET' && path === '/') {
       sendJson(res, 200, { ok: true });
       return;
@@ -329,6 +346,24 @@ export function describeOpencodeDriverConformance(
         expect(typeof model.providerID).toBe('string');
         expect(typeof model.modelID).toBe('string');
       }
+    });
+
+    it('listIntegrations 归一集成注册表：非空 id/name、apiKey 布尔、丢脏项、无 secret', async () => {
+      const items = await driver.listIntegrations();
+      expect(Array.isArray(items)).toBe(true);
+      expect(items.length).toBeGreaterThan(0);
+      // id 为空的脏项被丢弃
+      expect(items.some((item) => item.id === '')).toBe(false);
+      for (const item of items) {
+        expect(typeof item.id).toBe('string');
+        expect(item.id.length).toBeGreaterThan(0);
+        expect(typeof item.name).toBe('string');
+        expect(typeof item.apiKey).toBe('boolean');
+        expect(Array.isArray(item.envNames ?? [])).toBe(true);
+      }
+      // 「怎么配」的声明可以有，**已配的值绝不出现**（输出里没有任何 key 形态的串）
+      expect(JSON.stringify(items)).not.toMatch(/sk-[A-Za-z0-9]/);
+      expect(JSON.stringify(items)).toContain('opencode-go');
     });
 
     it('listAgents 返回数组', async () => {

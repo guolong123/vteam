@@ -34,6 +34,7 @@ function stubDriver(): OpenCodeDriver {
     listAgents: jest.fn().mockResolvedValue([]),
     listTodos: jest.fn().mockResolvedValue([]),
     listModels: jest.fn().mockResolvedValue([]),
+    listIntegrations: jest.fn().mockResolvedValue([]),
     isHealthy: jest.fn().mockResolvedValue(true),
   };
 }

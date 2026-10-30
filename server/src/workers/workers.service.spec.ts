@@ -373,8 +373,7 @@ describe('WorkersService', () => {
       await service.register('secret-token', dto);
 
       expect(prisma.modelCredential.findMany).toHaveBeenCalledWith({
-        where: { revokedAt: null },
-        select: { providerID: true, credentialRef: true },
+        select: { providerID: true, credentialRef: true, revokedAt: true },
       });
       expect(credentialCrypto.decrypt).toHaveBeenCalledWith('iv:tag:data1');
       expect(credentialCrypto.decrypt).toHaveBeenCalledWith('iv:tag:data2');
@@ -424,6 +423,64 @@ describe('WorkersService', () => {
           },
         },
       ]);
+    });
+
+    it('v2：回放携带 revokedProviderIDs（worker 重启期间发生的吊销补删 credential store）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        {
+          providerID: 'opencode-go',
+          credentialRef: 'iv:tag:data1',
+          revokedAt: new Date('2026-10-24T12:00:00Z'),
+        },
+        {
+          providerID: 'qwenlocal',
+          credentialRef: 'iv:tag:data2',
+          revokedAt: null,
+        },
+      ]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        {
+          type: 'model-credentials',
+          resourceVersion: 'model-credentials',
+          payload: {
+            providerKeys: [{ providerID: 'qwenlocal', key: 'sk-raw-token' }],
+            providerConfigs: {},
+            revokedProviderIDs: ['opencode-go'],
+          },
+        },
+      ]);
+    });
+
+    it('v2：全部行均已吊销 → 仍下发（providerKeys 为空 + revokedProviderIDs，worker 据此清 store）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        {
+          providerID: 'opencode-go',
+          credentialRef: 'iv:tag:data1',
+          revokedAt: new Date('2026-10-24T12:00:00Z'),
+        },
+      ]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        {
+          type: 'model-credentials',
+          resourceVersion: 'model-credentials',
+          payload: {
+            providerKeys: [],
+            providerConfigs: {},
+            revokedProviderIDs: ['opencode-go'],
+          },
+        },
+      ]);
+      expect(credentialCrypto.decrypt).not.toHaveBeenCalled();
     });
 
     it('C6：getLocalProviderConfigs 抛错 → 回放降级为仅凭据（不触碰配置），不阻断注册', async () => {
@@ -822,8 +879,7 @@ describe('WorkersService', () => {
       const result = await service.heartbeat('w_0000000001', dto);
 
       expect(prisma.modelCredential.findMany).toHaveBeenCalledWith({
-        where: { revokedAt: null },
-        select: { providerID: true, credentialRef: true },
+        select: { providerID: true, credentialRef: true, revokedAt: true },
       });
       // 回放命令经本次心跳响应携带（取出即清空，一次有效）
       expect(result.commands).toEqual([

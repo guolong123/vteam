@@ -52,6 +52,7 @@
 import {
   DriverAgentInfo,
   DriverContent,
+  DriverIntegrationInfo,
   DriverMessage,
   DriverMessageQuery,
   DriverModelInfo,
@@ -159,6 +160,15 @@ interface V2Model {
   name?: string;
   status?: string;
   enabled?: boolean;
+}
+
+/** v2 wire：集成注册表项（`GET /api/integration` 的 data 项）。 */
+interface V2Integration {
+  id?: string;
+  name?: string;
+  /** 配置方式：`{type:"key"}`（直接填 apikey）/ `{type:"env", names:[...]}`（读环境变量） */
+  methods?: Array<{ type?: string; names?: string[] }>;
+  connections?: unknown[];
 }
 
 /** v2 wire：表单（v2 的「问题」通道；对应 vteam 的 question 语义域）。 */
@@ -1043,6 +1053,42 @@ export class V2Driver implements OpenCodeDriver {
           status: model.status ?? 'active',
         };
       });
+  }
+
+  /**
+   * GET /api/integration：opencode 集成注册表（**可配置 provider 全集**，实测 239 项）。
+   *
+   * 与 `/api/provider`（只含已注册/已配置的 provider）互补：`opencode-go` 这类**没有
+   * 模型行**的内置集成只在这里可见——页面据此展示「可配 apikey 的 provider」并落凭据。
+   * `methods` 只描述怎么配（key/env），**不携带任何已配的值**，输出自然无 secret。
+   */
+  async listIntegrations(): Promise<DriverIntegrationInfo[]> {
+    const path = '/api/integration';
+    const res = await this.request(path);
+    const payload = await this.readJson<{ data?: unknown }>(res, path);
+    const items = unwrapV2List<V2Integration>(payload);
+    const integrations: DriverIntegrationInfo[] = [];
+    for (const item of items) {
+      const id = item.id?.trim();
+      if (!id) continue;
+      const envNames: string[] = [];
+      let apiKey = false;
+      for (const method of item.methods ?? []) {
+        if (method?.type === 'key') apiKey = true;
+        if (method?.type === 'env') {
+          for (const name of method.names ?? []) {
+            if (name && !envNames.includes(name)) envNames.push(name);
+          }
+        }
+      }
+      integrations.push({
+        id,
+        name: item.name?.trim() || id,
+        apiKey,
+        ...(envNames.length > 0 ? { envNames } : {}),
+      });
+    }
+    return integrations;
   }
 
   /**

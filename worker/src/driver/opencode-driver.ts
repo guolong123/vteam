@@ -72,6 +72,25 @@ export interface DriverModelInfo {
 }
 
 /**
+ * 集成注册表项（serve `GET /api/integration` 的归一化结果）。
+ *
+ * 与 `GET /api/provider`（**只含已注册/已配置** provider）不同，这里给出的是
+ * 「可配置全集」：像 `opencode-go` 这类**没有模型行的内置集成**只有在此处可被发现，
+ * 管理页据此展示 + 落 apikey。**绝不携带任何 secret**（`methods` 只描述怎么配，
+ * 不含已配的值）。
+ */
+export interface DriverIntegrationInfo {
+  /** 集成 id（= providerID，如 `opencode-go`） */
+  id: string;
+  /** 展示名（如 `OpenCode Go`）；缺失回退为 id */
+  name: string;
+  /** 支持直接填 apikey（`methods` 含 `{type:"key"}`） */
+  apiKey: boolean;
+  /** 该集成识别的环境变量名（`methods` 含 `{type:"env"}` 时的 names；仅作提示展示） */
+  envNames?: string[];
+}
+
+/**
  * agent 目录项（vteam 的「角色 agent」视角）。
  *
  * mode：primary=可作为会话主 agent；subagent=仅由主 agent 派生；all=两者皆可。
@@ -435,6 +454,9 @@ export interface OpenCodeDriver {
 
   /** 列出可用模型目录。 */
   listModels(): Promise<DriverModelInfo[]>;
+
+  /** 列出被驱动端的集成注册表（可配置 provider 全集；失败**抛错**，由上层降级）。 */
+  listIntegrations(): Promise<DriverIntegrationInfo[]>;
 
   /** 健康检查（在线 = true；**不抛异常**，网络错/非 2xx 一律 false）。 */
   isHealthy(): Promise<boolean>;

@@ -1087,6 +1087,8 @@ describe('handleModelCredentialsCommand（加凭据走**热重载**，不重启 
       }),
       onInjectedPaths: jest.fn(),
       onProviderConfigChanged: jest.fn(),
+      /** v2 credential store 同步（integration 维度）；与文件注入解耦、失败不阻断。 */
+      syncIntegrationCredentials: jest.fn(),
       log: jest.fn(),
       warn: jest.fn(),
     };
@@ -1125,6 +1127,61 @@ describe('handleModelCredentialsCommand（加凭据走**热重载**，不重启 
     deps.injectCredentials.mockRejectedValue(new Error('写盘失败'));
     await handleModelCredentialsCommand(COMMAND, null, null, deps);
     expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('注入失败'));
+  });
+
+  it('注入完成后**总是**调 credential store 同步（providerKeys/providerConfigs/revokedProviderIDs 全透传）', async () => {
+    const deps = makeDeps();
+    deps.syncIntegrationCredentials.mockResolvedValue({
+      changed: true,
+      missing: [],
+      failures: [],
+    });
+
+    await handleModelCredentialsCommand(
+      {
+        type: 'model-credentials',
+        resourceVersion: 'rv-9',
+        payload: {
+          providerKeys: [{ providerID: 'opencode-go', key: 'k1' }],
+          providerConfigs: { p1: { baseUrl: 'http://127.0.0.1:11434/v1', models: ['m1'] } },
+          revokedProviderIDs: ['old-provider'],
+        },
+      } as WorkerCommand,
+      null,
+      null,
+      deps,
+    );
+
+    expect(deps.syncIntegrationCredentials).toHaveBeenCalledTimes(1);
+    expect(deps.syncIntegrationCredentials).toHaveBeenCalledWith({
+      providerKeys: [{ providerID: 'opencode-go', key: 'k1' }],
+      providerConfigs: { p1: { baseUrl: 'http://127.0.0.1:11434/v1', models: ['m1'] } },
+      revokedProviderIDs: ['old-provider'],
+    });
+    // 两条路径互不影响：文件注入照常执行（本例 auth.json 也会被注入）
+    expect(deps.injectCredentials).toHaveBeenCalledTimes(1);
+  });
+
+  it('credential store 同步抛错 → warn 吞掉（文件注入已完成，worker 不下线）', async () => {
+    const deps = makeDeps();
+    deps.syncIntegrationCredentials.mockRejectedValue(new Error('serve 端点未就绪'));
+
+    await handleModelCredentialsCommand(COMMAND, null, null, deps);
+
+    expect(deps.injectCredentials).toHaveBeenCalledTimes(1);
+    expect(deps.warn).toHaveBeenCalledWith(
+      expect.stringContaining('credential store 同步失败'),
+    );
+    expect(deps.warn).not.toHaveBeenCalledWith(expect.stringContaining('注入失败'));
+  });
+
+  it('注入抛错时 store 同步仍执行（两面各自自愈，互不短路）', async () => {
+    const deps = makeDeps();
+    deps.injectCredentials.mockRejectedValue(new Error('写盘失败'));
+
+    await handleModelCredentialsCommand(COMMAND, null, null, deps);
+
+    expect(deps.syncIntegrationCredentials).toHaveBeenCalledTimes(1);
   });
 });
 

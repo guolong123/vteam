@@ -59,6 +59,22 @@ export class ModelsController {
   }
 
   /**
+   * opencode 集成注册表 = **可配置 provider 全集**（成员只读）。
+   * GET /api/v1/models/integrations → 200 {degraded, items:[{id,name,apiKey,inCatalog,credential}]}
+   *   数据源 = worker 执行端点 `GET /integrations` → 被驱动端集成注册表（实测 239 项）；
+   *   没有模型行的内置集成（opencode-go 等）只有这里能被发现（管理页「找不到 provider」的根因）；
+   *   无在线 worker / 取列表失败 → degraded:true + items:[]（列表类端点不阻断页面）；
+   *   静态段 integrations 声明在 :id 之前（NestJS 按声明顺序匹配）。
+   */
+  @Get('integrations')
+  @ApiOperation({
+    summary: 'opencode 可配置 provider 全集（集成注册表，成员只读）',
+  })
+  listIntegrations() {
+    return this.modelsService.listOpencodeIntegrations();
+  }
+
+  /**
    * 按 provider 吊销凭据（软撤销，AdminGuard）。
    * DELETE /api/v1/models/providers/:providerID/credentials → 200 + 脱敏视图
    *   凭据不存在 → 404 MODEL_CREDENTIAL_NOT_FOUND；
@@ -72,6 +88,34 @@ export class ModelsController {
   })
   revokeCredentialByProvider(@Param('providerID') providerID: string) {
     return this.modelsService.revokeCredentialByProvider(providerID);
+  }
+
+  /**
+   * 按 provider 保存凭据（**注册表级** provider 的唯一入口，AdminGuard）。
+   * POST /api/v1/models/providers/:providerID/credentials {token, providerID?, targetWorkerIds?}
+   *   → 201 + 脱敏视图
+   *   不依赖模型行存在——`opencode-go` 这类没有模型行的内置集成也能配 apikey
+   *   （落库 → worker 凭据同步写入被驱动端 → 前端延迟 POST /models/sync 带出模型行）；
+   *   provider 三查皆无（无模型行 ∧ 无既有凭据 ∧ 不在集成注册表）→ 404 PROVIDER_NOT_FOUND；
+   *   body.providerID 与路径不一致 → 400 MODEL_PROVIDER_MISMATCH；
+   *   非 local/custom 且 token 空 → 400 MODEL_TOKEN_REQUIRED。
+   *   静态段 providers 声明在 :id 之前（对齐 @Get('providers') 顺序）。
+   */
+  @Post('providers/:providerID/credentials')
+  @UseGuards(AdminGuard)
+  @ApiOperation({
+    summary: '按 provider 保存凭据（不依赖模型 id，AdminGuard）',
+  })
+  setCredentialByProvider(
+    @Param('providerID') providerID: string,
+    @Body() dto: SetModelCredentialDto,
+  ) {
+    return this.modelsService.setCredentialByProvider(
+      providerID,
+      dto.token,
+      dto.providerID,
+      dto.targetWorkerIds,
+    );
   }
 
   /**

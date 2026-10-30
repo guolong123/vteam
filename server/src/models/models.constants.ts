@@ -6,6 +6,8 @@
  * - providerID+modelID 撞 @@unique（POST/PATCH 目录冲突）→ 409 MODEL_EXISTS
  * - 目标凭据不存在（DELETE 吊销但未配置）→ 404 MODEL_CREDENTIAL_NOT_FOUND
  * - body.providerID 与 model.providerID 不一致（POST 校验一致策略）→ 400 MODEL_PROVIDER_MISMATCH
+ * - provider 保存凭据时三查皆无（无模型行 ∧ 无既有凭据 ∧ 不在 opencode 集成注册表）
+ *   → 404 PROVIDER_NOT_FOUND（防把任意字符串存成 provider 凭据）
  */
 export const MODEL_ERRORS = {
   MODEL_NOT_FOUND: 'MODEL_NOT_FOUND',
@@ -14,6 +16,7 @@ export const MODEL_ERRORS = {
   MODEL_PROVIDER_MISMATCH: 'MODEL_PROVIDER_MISMATCH',
   MODEL_BASEURL_CONFLICT: 'MODEL_BASEURL_CONFLICT',
   MODEL_BASEURL_REQUIRED: 'MODEL_BASEURL_REQUIRED',
+  PROVIDER_NOT_FOUND: 'PROVIDER_NOT_FOUND',
 } as const;
 
 export const MODEL_PROVIDER_TYPES = ['cloud', 'local', 'custom'] as const;

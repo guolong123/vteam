@@ -16,6 +16,8 @@ import type {
   SessionPromptRequestPayload,
   SessionPromptResponsePayload,
   WorkerDeliveryMode,
+  WorkerIntegrationInfo,
+  WorkerIntegrationsResponsePayload,
   WorkerModelsResponsePayload,
 } from './worker-session-protocol';
 
@@ -792,6 +794,73 @@ export class WorkerClient {
           `（${reason}），降级 capabilities 声明`,
       );
       return this.modelsFromCapabilities(worker);
+    }
+  }
+
+  /**
+   * GET /integrations：opencode **集成注册表 = 可配置 provider 全集**（实测 239 项）。
+   *
+   * 与 `listModels` 的分工（「管理页找不到 provider」的根因就在这）：
+   * - `listModels` 只报**目录里已有模型行**的 provider——`opencode-go` 这类内置集成
+   *   没有模型行 ⇒ 永远查不到，也就没法配 apikey；
+   * - 本端点从被驱动端的集成注册表取**全部可配置 provider**（worker 归一成
+   *   vteam 自有形状 `WorkerIntegrationInfo`，**不含任何 secret**，决策 D3）。
+   *
+   * 降级策略**对齐 listAgents**：列表类端点失败不阻断页面——网络错/worker 离线/旧版无
+   * 该端点/空结果一律返回 `[]`，由调用方以 `degraded` 标记提示前端。故本方法不抛
+   * WorkerUnavailableException。
+   */
+  async listIntegrations(
+    worker: WorkerEndpointRef,
+  ): Promise<WorkerIntegrationInfo[]> {
+    try {
+      const res = await this.requestExec(worker, '/integrations', {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body =
+        (await res.json()) as Partial<WorkerIntegrationsResponsePayload>;
+      const integrations = Array.isArray(body.integrations)
+        ? body.integrations
+        : [];
+      if (integrations.length === 0) {
+        throw new Error('empty integration data');
+      }
+      // 归一条目：丢掉 id 为空/纯空白的脏项；`name` 去空白、缺省回退 id；
+      // `apiKey` 布尔化；`envNames` 空数组不落键。输出只含声明字段，**无 secret**。
+      return integrations
+        .filter(
+          (item) =>
+            Boolean(item) &&
+            typeof item.id === 'string' &&
+            item.id.trim().length > 0,
+        )
+        .map((item) => ({
+          id: item.id.trim(),
+          name:
+            typeof item.name === 'string' && item.name.trim().length > 0
+              ? item.name.trim()
+              : item.id.trim(),
+          apiKey: Boolean(item.apiKey),
+          ...(Array.isArray(item.envNames) && item.envNames.length > 0
+            ? { envNames: item.envNames }
+            : {}),
+        }));
+    } catch (err) {
+      // 可观测性：同 listModels 区分「不可达/失败」与「可达但空列表」，但语义统一为
+      // 空列表（调用方以 items=[] 判 degraded，不关心具体原因）。
+      const baseUrl = this.resolveExecBaseUrl(worker);
+      const reason = this.describeError(err);
+      const unreachable = reason !== 'empty integration data';
+      this.logger.warn(
+        `listIntegrations: worker ${worker.id}（${baseUrl}）` +
+          `${unreachable ? '不可达/请求失败' : '可达但返回空集成列表'}` +
+          `（${reason}），降级空列表`,
+      );
+      return [];
     }
   }
 

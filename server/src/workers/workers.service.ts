@@ -172,6 +172,14 @@ export interface ModelCredentialsPayload {
    * （旧 server 向后兼容）；{} = 清空全部 provider 配置。
    */
   providerConfigs?: Record<string, ModelProviderConfigEntry>;
+  /**
+   * v2：**已吊销**凭据的 providerID 全量清单（integration 维度的删除信号）。
+   * worker 据此删除 serve credential store（`DELETE /api/credential/:id`）里对应的行
+   * ——否则 vteam 侧删了 key、serve 还拿旧 key 继续跑。
+   * undefined = 旧 worker（忽略）；[] = 明确没有吊销项。配置段 provider 的吊销
+   * 仍走 opencode.json（worker 侧过滤掉这些 id）。
+   */
+  revokedProviderIDs?: string[];
 }
 
 /**
@@ -693,6 +701,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * - 空 → 全量：broadcastCommand 原样广播（不改 broadcastCommand 签名，空=全量无需过滤）。
    * - providerConfigs（C6）：opencode.json provider 段全量状态，随 payload 透传
    *   （undefined = 不触碰配置，向后兼容）。
+   * - revokedProviderIDs（v2）：已吊销凭据的 providerID 全量清单，随 payload 透传
+   *   （空数组 = 明确无吊销；worker 据此删除 serve credential store 对应行）。
    * 返回下发目标 worker 数（定向=targetWorkerIds.length，全量=在线 worker 数）。
    * token 只经下行命令明文传输（心跳取出即清空），不落本服务日志。
    */
@@ -700,6 +710,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     providerKeys: ModelCredentialEntry[],
     targetWorkerIds?: string[],
     providerConfigs?: Record<string, ModelProviderConfigEntry>,
+    revokedProviderIDs?: string[],
   ): Promise<number> {
     const command: WorkerCommand = {
       type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
@@ -707,6 +718,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       payload: {
         providerKeys,
         ...(providerConfigs !== undefined ? { providerConfigs } : {}),
+        ...(revokedProviderIDs !== undefined ? { revokedProviderIDs } : {}),
         ...(targetWorkerIds && targetWorkerIds.length > 0
           ? { targetWorkerIds }
           : {}),
@@ -732,10 +744,15 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    */
   private async replayModelCredentials(workerId: string): Promise<void> {
     try {
-      const active = await this.prisma.modelCredential.findMany({
-        where: { revokedAt: null },
-        select: { providerID: true, credentialRef: true },
+      // 一次查全量行：未吊销 → providerKeys；已吊销 → revokedProviderIDs
+      // （worker 重启期间发生的吊销也要在回放时补删 serve credential store 对应行）。
+      const rows = await this.prisma.modelCredential.findMany({
+        select: { providerID: true, credentialRef: true, revokedAt: true },
       });
+      const active = rows.filter((row) => !row.revokedAt);
+      const revokedProviderIDs = rows
+        .filter((row) => !!row.revokedAt)
+        .map((row) => row.providerID);
       let providerConfigs: Record<string, ModelProviderConfigEntry> | undefined;
       try {
         providerConfigs = await this.modelsService.getLocalProviderConfigs();
@@ -746,6 +763,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       }
       if (
         active.length === 0 &&
+        revokedProviderIDs.length === 0 &&
         (providerConfigs === undefined ||
           Object.keys(providerConfigs).length === 0)
       ) {
@@ -761,10 +779,11 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         payload: {
           providerKeys,
           ...(providerConfigs !== undefined ? { providerConfigs } : {}),
+          ...(revokedProviderIDs.length > 0 ? { revokedProviderIDs } : {}),
         },
       });
       this.logger.log(
-        `模型凭据回放：worker=${workerId} providerKeys=${providerKeys.map((k) => k.providerID).join(', ')} providerConfigs=[${providerConfigs ? Object.keys(providerConfigs).join(', ') : '(不触碰)'}]`,
+        `模型凭据回放：worker=${workerId} providerKeys=${providerKeys.map((k) => k.providerID).join(', ')} providerConfigs=[${providerConfigs ? Object.keys(providerConfigs).join(', ') : '(不触碰)'}] revoked=[${revokedProviderIDs.join(', ') || '无'}]`,
       );
     } catch (err) {
       this.logger.warn(

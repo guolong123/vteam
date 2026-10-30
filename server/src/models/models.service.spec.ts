@@ -54,7 +54,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     fingerprint: jest.Mock;
   };
   let workers: { dispatchModelCredentials: jest.Mock };
-  let workerClient: { listModels: jest.Mock };
+  let workerClient: { listModels: jest.Mock; listIntegrations: jest.Mock };
 
   const modelRow = {
     id: 'md_0000000001',
@@ -144,6 +144,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     // （WorkerClient.listModels → worker `GET /models`）。
     workerClient = {
       listModels: jest.fn().mockResolvedValue([]),
+      // 注册表（GET /integrations）默认空：无在线 worker 场景走 degraded，
+      // 需要注册表的用例各自 mockResolvedValue 覆盖。
+      listIntegrations: jest.fn().mockResolvedValue([]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -433,6 +436,122 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
   });
 
+  describe('listOpencodeIntegrations（GET /integrations：注册表 = 可配置 provider 全集）', () => {
+    it('在线 worker 注册表非空 → 条目按 id 升序 + inCatalog/credential 状态合并（无 secret）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: { models: [] } },
+      ]);
+      workerClient.listIntegrations.mockResolvedValue([
+        { id: 'opencode-go', name: 'OpenCode Go', apiKey: true },
+        { id: '302ai', name: '302.AI', apiKey: true },
+        { id: 'abacus', name: 'Abacus', apiKey: false },
+      ]);
+      prisma.model.findMany.mockResolvedValue([{ providerID: '302ai' }]);
+      prisma.modelCredential.findMany.mockResolvedValue([
+        {
+          providerID: 'opencode-go',
+          revokedAt: new Date('2026-08-01T00:00:00Z'),
+        },
+        { providerID: 'abacus', revokedAt: null },
+      ]);
+
+      const result = await service.listOpencodeIntegrations();
+
+      // 只问在线 worker 的执行端点（select id/capabilities 形态对齐 syncLiveModels）
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: { status: { not: 'offline' } },
+        select: { id: true, capabilities: true },
+      });
+      expect(workerClient.listIntegrations).toHaveBeenCalledWith({
+        id: 'w_1',
+        capabilities: { models: [] },
+      });
+      expect(result.degraded).toBe(false);
+      expect(result.items).toEqual([
+        // 目录有行 → inCatalog；无凭据 → none
+        {
+          id: '302ai',
+          name: '302.AI',
+          apiKey: true,
+          inCatalog: true,
+          credential: 'none',
+        },
+        // 无模型行的注册表 provider（opencode-go 同类）+ 凭据未吊销 → configured
+        {
+          id: 'abacus',
+          name: 'Abacus',
+          apiKey: false,
+          inCatalog: false,
+          credential: 'configured',
+        },
+        // 已吊销凭据 → revoked
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          apiKey: true,
+          inCatalog: false,
+          credential: 'revoked',
+        },
+      ]);
+      // 输出绝不携带明文 key/fingerprint
+      expect(JSON.stringify(result)).not.toMatch(/sk-[A-Za-z0-9]/);
+    });
+
+    it('首个在线 worker 返回空 → 继续问下一个（首个非空即用，不拿空列表当真值）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: null },
+        { id: 'w_2', capabilities: null },
+      ]);
+      workerClient.listIntegrations
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 'x', name: 'X', apiKey: true }]);
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+
+      const result = await service.listOpencodeIntegrations();
+
+      expect(workerClient.listIntegrations).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({
+        degraded: false,
+        items: [
+          {
+            id: 'x',
+            name: 'X',
+            apiKey: true,
+            inCatalog: false,
+            credential: 'none',
+          },
+        ],
+      });
+    });
+
+    it('无在线 worker → degraded:true + items:[]（列表端点不阻断页面）', async () => {
+      prisma.worker.findMany.mockResolvedValue([]);
+
+      const result = await service.listOpencodeIntegrations();
+
+      expect(result).toEqual({ degraded: true, items: [] });
+      expect(workerClient.listIntegrations).not.toHaveBeenCalled();
+      expect(prisma.model.findMany).not.toHaveBeenCalled();
+    });
+
+    it('在线 worker 全部返回空 → degraded:true（可达但空 ≠ 注册表真为空，不静默当全集）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: null },
+      ]);
+      workerClient.listIntegrations.mockResolvedValue([]);
+      const warnSpy = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation(() => {});
+
+      const result = await service.listOpencodeIntegrations();
+
+      expect(result).toEqual({ degraded: true, items: [] });
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
   describe('create（创建目录条目）', () => {
     const createDto = {
       providerID: 'opencode-go',
@@ -595,6 +714,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         {
           vllm: { baseUrl: 'http://new:8000/v1', models: { 'qwen3-27b': {} } },
         },
+        [], // 无吊销行 → 空清单（明确"本次没有吊销"）
       );
       expect(result).toMatchObject({
         providerID: 'vllm',
@@ -1651,6 +1771,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
         undefined,
         {},
+        [],
       );
     });
 
@@ -1675,6 +1796,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
         ['w_0000000001'],
         {},
+        [],
       );
     });
 
@@ -1708,6 +1830,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
             models: { 'deepseek-v4-flash': {} },
           },
         },
+        [],
       );
     });
 
@@ -1801,6 +1924,44 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       await service.revokeCredentialByProvider('opencode-go');
 
       expect(syncSpy).toHaveBeenCalledTimes(1);
+      syncSpy.mockRestore();
+    });
+
+    it('v2：吊销后全量下发携带 revokedProviderIDs（worker 据此删 serve credential store 行）', async () => {
+      const now = new Date('2026-10-24T12:00:00Z');
+      prisma.modelCredential.findUnique.mockResolvedValue(credentialRow);
+      prisma.modelCredential.update.mockResolvedValue({
+        ...credentialRow,
+        revokedAt: now,
+      });
+      // 全量状态：opencode-go 已吊销、qwenlocal 仍有效（吊销与未吊销同批下发）
+      prisma.modelCredential.findMany.mockResolvedValue([
+        {
+          providerID: 'opencode-go',
+          credentialRef: 'iv:tag:revoked',
+          revokedAt: now,
+        },
+        {
+          providerID: 'qwenlocal',
+          credentialRef: 'iv:tag:active',
+          revokedAt: null,
+        },
+      ]);
+      crypto.decrypt.mockReturnValue('sk-raw-token');
+      const syncSpy = jest
+        .spyOn(service, 'syncLiveModels')
+        .mockResolvedValue({ synced: 0, disabled: 0, liveModels: [] });
+
+      await service.revokeCredentialByProvider('opencode-go');
+
+      expect(workers.dispatchModelCredentials).toHaveBeenCalledTimes(1);
+      const call = (workers.dispatchModelCredentials as jest.Mock).mock
+        .calls[0];
+      // 未吊销的仍在 providerKeys 里（全量状态），已吊销的进 revokedProviderIDs
+      expect(call[0]).toEqual([
+        { providerID: 'qwenlocal', key: 'sk-raw-token' },
+      ]);
+      expect(call[3]).toEqual(['opencode-go']);
       syncSpy.mockRestore();
     });
   });
@@ -2116,6 +2277,163 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.model.findUnique).not.toHaveBeenCalled();
       expect(result).toMatchObject({ configured: false });
       expect(prisma.modelCredential.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('setCredentialByProvider（POST 按 provider 保存凭据：注册表级 provider 入口）', () => {
+    it('纯注册表 provider（无模型行）→ 注册表放行 + 按 providerID 落库（model 粒度会 404 的场景）', async () => {
+      // providerIsKnown：目录 take:1 → 空；既有凭据 → null；注册表 → 有此集成
+      prisma.model.findMany.mockImplementation(
+        (args?: { take?: number; select?: Record<string, boolean> }) => {
+          if (args?.select?.id) return [];
+          if (args?.select?.providerType) return [{ providerType: 'cloud' }];
+          return []; // 注册表状态合并（distinct providerID）
+        },
+      );
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: null },
+      ]);
+      workerClient.listIntegrations.mockResolvedValue([
+        { id: 'opencode-go', name: 'OpenCode Go', apiKey: true },
+      ]);
+      prisma.modelCredential.create.mockResolvedValue(credentialRow);
+
+      const result = await service.setCredentialByProvider(
+        'opencode-go',
+        'sk-raw-token',
+      );
+
+      // 走了注册表（三查第三关），且只按 providerID upsert（不依赖 model 行）
+      expect(workerClient.listIntegrations).toHaveBeenCalled();
+      expect(crypto.encrypt).toHaveBeenCalledWith('sk-raw-token');
+      expect(prisma.modelCredential.create).toHaveBeenCalledWith({
+        data: {
+          id: 'mc_0000000001',
+          providerID: 'opencode-go',
+          credentialRef: 'iv:tag:data',
+          fingerprint: 'sk-a****89xz',
+        },
+      });
+      expect(result).toEqual({
+        id: 'mc_0000000001',
+        providerID: 'opencode-go',
+        configured: true,
+        fingerprint: 'sk-a****89xz',
+        revokedAt: null,
+        createdAt: credentialRow.createdAt,
+      });
+      // 下发链路同 model 粒度（共享 saveCredentialForProvider）
+      expect(workers.dispatchModelCredentials).toHaveBeenCalled();
+    });
+
+    it('body.providerID 与路径不一致 → 400 MODEL_PROVIDER_MISMATCH（未查未写）', async () => {
+      await expect(
+        service.setCredentialByProvider('opencode-go', 'sk-x', 'opencode'),
+      ).rejects.toMatchObject({
+        response: { code: MODEL_ERRORS.MODEL_PROVIDER_MISMATCH },
+      });
+      expect(prisma.model.findMany).not.toHaveBeenCalled();
+      expect(crypto.encrypt).not.toHaveBeenCalled();
+      expect(prisma.modelCredential.create).not.toHaveBeenCalled();
+    });
+
+    it('三查皆无（无模型行 ∧ 无既有凭据 ∧ 不在注册表）→ 404 PROVIDER_NOT_FOUND', async () => {
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: null },
+      ]);
+      workerClient.listIntegrations.mockResolvedValue([
+        { id: 'other', name: 'Other', apiKey: true },
+      ]);
+
+      await expect(
+        service.setCredentialByProvider('ghost-provider', 'sk-x'),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.setCredentialByProvider('ghost-provider', 'sk-x'),
+      ).rejects.toMatchObject({
+        response: { code: MODEL_ERRORS.PROVIDER_NOT_FOUND },
+      });
+      expect(crypto.encrypt).not.toHaveBeenCalled();
+      expect(prisma.modelCredential.create).not.toHaveBeenCalled();
+    });
+
+    it('注册表取不到（degraded）→ 放行保存（注册表是发现清单不是权限源）', async () => {
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.worker.findMany.mockResolvedValue([]); // 无在线 worker → degraded
+      prisma.modelCredential.create.mockResolvedValue(credentialRow);
+
+      const result = await service.setCredentialByProvider(
+        'opencode-go',
+        'sk-raw-token',
+      );
+
+      expect(workerClient.listIntegrations).not.toHaveBeenCalled();
+      expect(prisma.modelCredential.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ providerID: 'opencode-go' }),
+        }),
+      );
+      expect(result).toMatchObject({ configured: true });
+    });
+
+    it('目录已有该 provider 模型行 → 不碰注册表直接保存（与 model 粒度同路径）', async () => {
+      prisma.model.findMany.mockImplementation(
+        (args?: { take?: number; select?: Record<string, boolean> }) => {
+          if (args?.select?.id) return [{ id: 'md_0000000001' }];
+          if (args?.select?.providerType) return [{ providerType: 'cloud' }];
+          return [];
+        },
+      );
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.create.mockResolvedValue(credentialRow);
+
+      await service.setCredentialByProvider('opencode-go', 'sk-raw-token');
+
+      expect(workerClient.listIntegrations).not.toHaveBeenCalled();
+      expect(prisma.modelCredential.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ providerID: 'opencode-go' }),
+        }),
+      );
+    });
+
+    it('注册表 provider（无目录行 → providerType=cloud）空 token → 400 MODEL_TOKEN_REQUIRED', async () => {
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.modelCredential.findUnique.mockResolvedValue(credentialRow); // 既有凭据 → 存在性放行
+
+      await expect(
+        service.setCredentialByProvider('opencode-go', '   '),
+      ).rejects.toMatchObject({ response: { code: 'MODEL_TOKEN_REQUIRED' } });
+      expect(prisma.modelCredential.update).not.toHaveBeenCalled();
+      expect(prisma.modelCredential.create).not.toHaveBeenCalled();
+    });
+
+    it('目录 providerType=local + 空 token → local-noop 已配置（与 model 粒度共享核心）', async () => {
+      prisma.model.findMany.mockImplementation(
+        (args?: { take?: number; select?: Record<string, boolean> }) => {
+          if (args?.select?.id) return [{ id: 'md_0000000009' }];
+          if (args?.select?.providerType) return [{ providerType: 'local' }];
+          return [];
+        },
+      );
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.create.mockResolvedValue(credentialRow);
+
+      const result = await service.setCredentialByProvider('vllm', '');
+
+      expect(crypto.encrypt).toHaveBeenCalledWith('local-noop');
+      expect(prisma.modelCredential.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ providerID: 'vllm' }),
+        }),
+      );
+      expect(result).toMatchObject({ configured: true });
     });
   });
 });

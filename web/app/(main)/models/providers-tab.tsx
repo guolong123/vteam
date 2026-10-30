@@ -9,8 +9,16 @@
  * - Provider 列表：行 = providerID + 模型数（modelCount）+ 凭据状态徽章
  *   （provider-credential-status：已配置=绿 / 未配置=灰 / 已撤销=琥珀）+ fingerprint
  *   （已配置时显示，脱敏）。
- * - 配置按钮（provider-configure-button，admin 专属）→ 配置弹窗：provider 预填 +
- *   key 输入（password）+ 同步到节点（worker 多选，未选=全部 worker）+ 保存。
+ * - 配置按钮（provider-configure-button，admin 专属）→ 配置弹窗：provider 下拉可切换
+ *   （provider-modal-provider，选中值随 data-provider 回显）+ key 输入（password）+
+ *   同步到节点（worker 多选，未选=全部 worker）+ 保存（按选中 provider 落凭据）。
+ * - opencode 集成 provider（GET /models/integrations，契约冻结见下方类型注释）：这些
+ *   provider 没有模型行、/models/providers 查不到 → 与目录行合并去重后一并列出：
+ *   来源徽章「opencode 集成」+ 模型数列「未入目录」+ 凭据态按 credential 三态映射；
+ *   操作列仅「配置/更新凭据」（无模型行可编辑/删除）；顶部搜索框按 id/名称过滤，
+ *   头部计数按合并口径；degraded/请求失败给不打扰提示。保存分流：纯集成项走
+ *   POST /models/providers/:providerID/credentials，成功后延迟 ~3s best-effort
+ *   POST /models/sync（等凭据在 serve 侧生效后把该 provider 的模型拉进目录）。
  * - 保存 → POST /models/:id/credentials {token, targetWorkerIds?}（用该 provider 下
  *   任一模型 id；targetWorkerIds 非空 → 定向 enqueueCommand，空 → 全量广播，C5）→
  *   成功后列表刷新 + 徽章变「已配置」。
@@ -33,6 +41,13 @@
  *   POST /models/:id/credentials {token, targetWorkerIds?} 保存凭据并下发（C5）。
  *   输入的 Provider ID 命中已有 Provider 时预填其 type/baseUrl，保存语义变为
  *   「为其新增模型」（providerID+modelID 撞唯一 → 409 由后端报错）。
+ *   顶部 Provider 下拉（provider-add-provider-select）另支持「远端选择」：默认
+ *   「自定义 Provider」（__custom__）= 上述手填表单一字不差；选中 opencode 注册表项
+ *   （model-integrations 中 credential='none' 且未入目录、支持 apikey）即收起手填表单
+ *   （ID/类型/Base URL/模型 ID/名称/workers 全隐），只留 下拉 + API Key →
+ *   POST /models/providers/:providerID/credentials {token}（provider 级落凭据 + C5 下发，
+ *   不建目录模型行；纯集成成功后延迟 sync 与既有远端保存路径一致）；选项 >30 时出
+ *   过滤框（provider-add-provider-filter，空 key 不可提交）。
  * - 模型能力配置（provider-model-edit-button「配置」，admin 专属，展开 provider 后
  *   模型行尾）→ 能力弹窗（provider-model-capabilities-modal）：编辑 per-model 能力声明
  *   （limit.context/limit.output + reasoning/toolCall/temperature/attachment + 输入/输出
@@ -112,6 +127,93 @@ type CredentialStatus = keyof typeof credentialTheme;
 function toStatus(p: ProviderSummary): CredentialStatus {
   if (p.configured) return "configured";
   return p.revokedAt ? "revoked" : "missing";
+}
+
+/* ------------------------------ opencode 内置集成 provider（GET /models/integrations） ------------------------------
+ * 背景：opencode 内置可配置的集成 provider（opencode-go / openai / 302ai…，serve 侧注册表 200+ 个）
+ * 没有模型行 → GET /models/providers 里查不到 → 用户「找不到 provider，没法配 key」。
+ * 契约（冻结，字段由 serve 侧提供，勿自行猜）：
+ *   GET /models/integrations → { degraded, items[] }；degraded=true（worker 离线/旧版无该端点）时 items=[]。
+ */
+
+/** 集成注册表条目（items 已按 id 升序）。 */
+interface IntegrationProviderItem {
+  /** providerID（如 "opencode-go"） */
+  id: string;
+  /** 展示名（如 "OpenCode Go"） */
+  name: string;
+  /** 该集成支持直接填 apikey（注册表里有极少数不支持） */
+  apiKey: boolean;
+  /** 目录里已有该 provider 的模型行（= 已出现在 GET /models/providers） */
+  inCatalog: boolean;
+  credential: "configured" | "revoked" | "none";
+}
+
+/** GET /models/integrations 响应。 */
+interface IntegrationsResponse {
+  degraded: boolean;
+  items: IntegrationProviderItem[];
+}
+
+/** 列表统一行：目录聚合行 ∪ opencode 集成行（合并去重后的展示/搜索/下拉同源口径）。 */
+interface ProviderRow {
+  providerID: string;
+  /** catalog=目录聚合（有模型行）；integration=opencode 集成（未入目录） */
+  source: "catalog" | "integration";
+  /** 集成展示名（目录行为 null）；搜索框按 id/名称双匹配 */
+  name: string | null;
+  providerType: string | null;
+  baseUrl: string | null;
+  /** null = 未入目录（集成项无模型行，列表显示「未入目录」） */
+  modelCount: number | null;
+  status: CredentialStatus;
+  /** 已脱敏指纹（集成行无 fingerprint 接口 → 恒 null，列显示 —） */
+  fingerprint: string | null;
+}
+
+/** 集成 credential 三态 → 页面内徽章三态（configured/revoked/none → configured/revoked/missing）。 */
+function integrationStatus(c: IntegrationProviderItem["credential"]): CredentialStatus {
+  if (c === "configured") return "configured";
+  return c === "revoked" ? "revoked" : "missing";
+}
+
+/**
+ * 目录聚合 ∪ opencode 集成 合并去重：目录行在前，未入目录且已填写（credential ≠ 'none'）
+ * 的集成行按 id 追加在其后。未填写的注册表项不上列表——它们改由「新增 Provider」弹窗
+ * 「选择 + API Key」入列（见 addRemoteOptions），列表只留 configured/revoked 徽章行。
+ */
+function mergeProviderRows(
+  providers: ProviderSummary[],
+  items: IntegrationProviderItem[]
+): ProviderRow[] {
+  const rows: ProviderRow[] = providers.map((p) => ({
+    providerID: p.providerID,
+    source: "catalog",
+    name: null,
+    providerType: p.providerType ?? null,
+    baseUrl: p.baseUrl ?? null,
+    modelCount: p.modelCount,
+    status: toStatus(p),
+    fingerprint: p.fingerprint,
+  }));
+  const seen = new Set(rows.map((r) => r.providerID));
+  for (const it of items) {
+    /* inCatalog=true 跳过（原目录行已有）；credential='none' 跳过（未填写，不上列表）；
+     * seen 再兜一层去重防两接口口径偶发不一致时双行 */
+    if (it.inCatalog || it.credential === "none" || seen.has(it.id)) continue;
+    seen.add(it.id);
+    rows.push({
+      providerID: it.id,
+      source: "integration",
+      name: it.name || null,
+      providerType: null,
+      baseUrl: null,
+      modelCount: null,
+      status: integrationStatus(it.credential),
+      fingerprint: null,
+    });
+  }
+  return rows;
 }
 
 /* ------------------------------ 子组件 ------------------------------ */
@@ -384,15 +486,34 @@ function ProviderModels({
 
 /* ================================ 配置凭据弹窗（admin 专属） ================================ */
 
+/** 弹窗内 Provider 下拉的选项（父组件传合并后的列表行；展示字段可选） */
+export interface ConfigureProviderOption {
+  providerID: string;
+  providerType?: string | null;
+  baseUrl?: string | null;
+  modelCount?: number;
+  configured?: boolean;
+  /** integration = opencode 集成（未入目录；保存走 POST /models/providers/:id/credentials） */
+  source?: "catalog" | "integration";
+  /** 集成展示名（过滤输入框按 id/name 双匹配） */
+  name?: string | null;
+}
+
 interface ConfigureModalProps {
   open: boolean;
   provider: string;
   providerType?: string | null;
+  /** 可切换的 Provider 列表（缺省/为空 → 仅当前 provider 一项） */
+  providerOptions?: ConfigureProviderOption[];
   submitting: boolean;
   error: string | null;
   workers: ApiWorker[];
   onClose: () => void;
-  onSubmit: (payload: { token: string; targetWorkerIds?: string[] }) => void;
+  onSubmit: (payload: {
+    providerID: string;
+    token: string;
+    targetWorkerIds?: string[];
+  }) => void;
 }
 
 /** 凭据配置弹窗（本 Tab 内复用）。 */
@@ -400,6 +521,7 @@ export function ConfigureModal({
   open,
   provider,
   providerType,
+  providerOptions,
   submitting,
   error,
   workers,
@@ -408,7 +530,10 @@ export function ConfigureModal({
 }: ConfigureModalProps) {
   const [token, setToken] = useState("");
   const [targetWorkers, setTargetWorkers] = useState<Set<string>>(new Set());
-  const isLocal = providerType === 'local' || providerType === 'custom';
+  /* 弹窗内当前选中的 providerID（下拉可切换；提交 / placeholder / isLocal 均以其为准） */
+  const [selectedProviderId, setSelectedProviderId] = useState(provider);
+  /* 下拉关键字过滤（选项 >30 时才渲染输入框；240+ 集成项时避免大海捞针） */
+  const [optionFilter, setOptionFilter] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -419,13 +544,15 @@ export function ConfigureModal({
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
-  /* 打开弹窗时清空上次输入 */
+  /* 打开弹窗时清空上次输入；open 或 provider prop 变化时选中项重置为该 prop */
   useEffect(() => {
     if (open) {
       setToken("");
       setTargetWorkers(new Set());
+      setOptionFilter("");
     }
-  }, [open]);
+    setSelectedProviderId(provider);
+  }, [open, provider]);
 
   if (!open) return null;
 
@@ -441,6 +568,52 @@ export function ConfigureModal({
 
     fontFamily: fontFamily.body,
   };
+
+  /* 可切换的 Provider 列表：providerOptions 按 providerID 排序；
+   * 缺省/为空回退为仅当前 provider 一项；当前 provider 不在列表时补入
+   * （否则 <select> 的 value 无匹配 option 会渲染为空并提交空 providerID）。 */
+  const providerChoices: ConfigureProviderOption[] = (() => {
+    const base: ConfigureProviderOption[] =
+      providerOptions && providerOptions.length > 0
+        ? providerOptions
+        : [{ providerID: provider, providerType }];
+    const withCurrent =
+      !provider || base.some((o) => o.providerID === provider)
+        ? base
+        : [...base, { providerID: provider, providerType }];
+    return [...withCurrent].sort((a, b) => a.providerID.localeCompare(b.providerID));
+  })();
+
+  /* isLocal 按「当前选中」provider 的 providerType 计算；查不到时回退原 providerType prop */
+  const selectedType = providerChoices.find(
+    (o) => o.providerID === selectedProviderId
+  )?.providerType;
+  const effectiveProviderType = selectedType ?? providerType;
+  const isLocal = effectiveProviderType === "local" || effectiveProviderType === "custom";
+
+  /* 下拉关键字过滤：选项 >30 才启用输入框；按 id / 集成展示名双匹配。
+   * 当前选中项即便被过滤掉也强制保留（否则 select 的 value 无匹配 option → 渲染空、丢失选中）。 */
+  const showOptionFilter = providerChoices.length > 30;
+  const filterKw = optionFilter.trim().toLowerCase();
+  const optionMatches = (o: ConfigureProviderOption) =>
+    filterKw === "" ||
+    o.providerID.toLowerCase().includes(filterKw) ||
+    (!!o.name && o.name.toLowerCase().includes(filterKw));
+  const optionMatchesCount = providerChoices.filter(optionMatches).length;
+  const visibleChoices =
+    filterKw === ""
+      ? providerChoices
+      : providerChoices.filter(
+          (o) => optionMatches(o) || o.providerID === selectedProviderId
+        );
+  const filterNoMatch = filterKw !== "" && optionMatchesCount === 0;
+  /** 下拉选项文案：目录行带类型，opencode 集成行带来源标识 */
+  const optionLabel = (o: ConfigureProviderOption) =>
+    o.source === "integration"
+      ? `${o.providerID}（opencode 集成）`
+      : o.providerType
+        ? `${o.providerID}（${o.providerType}）`
+        : o.providerID;
 
   const toggleWorker = (id: string) => {
     setTargetWorkers((prev) => {
@@ -504,7 +677,7 @@ export function ConfigureModal({
               配置 Provider 凭据
             </div>
             <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
-              token 经 AES-256-GCM 加密落库，保存后下发到目标节点（C4/C5）
+              token 经 AES-256-GCM 加密落库，保存后下发到目标节点（C4/C5）· 可切换 Provider
             </div>
           </div>
           <button
@@ -532,40 +705,90 @@ export function ConfigureModal({
           </button>
         </div>
 
-        {/* Provider（预填该行，只读展示） */}
+        {/* Provider（原生 select：弹窗内可切换目标 Provider；testid/data-provider 供 e2e） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
             Provider
           </span>
-          <div
-            data-testid="provider-modal-provider"
-            data-provider={provider}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space.sm,
-              padding: `${space.md}px ${space.lg}px`,
-              borderRadius: radius.md,
-              backgroundColor: neutral[50],
-              border: `1px solid ${neutral[200]}`,
-              fontSize: fontSize.md,
-              fontWeight: 600,
-              color: neutral[800],
-              fontFamily: fontFamily.mono,
-            }}
-          >
+          {/* 关键字过滤（仅选项 >30 时出现；按 id / 集成展示名过滤，选中项始终保留） */}
+          {showOptionFilter && (
+            <input
+              data-testid="provider-modal-provider-filter"
+              autoComplete="off"
+              name="provider-filter"
+              value={optionFilter}
+              onChange={(e) => setOptionFilter(e.target.value)}
+              placeholder="搜索 Provider…（ID 或名称）"
+              disabled={submitting}
+              style={{
+                ...inputBase,
+                fontSize: fontSize.sm,
+                padding: `${space.sm + 1}px ${space.md}px`,
+              }}
+            />
+          )}
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <span
               aria-hidden
               style={{
+                position: "absolute",
+                left: space.lg,
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
                 backgroundColor: activeBlue,
-                flexShrink: 0,
+                pointerEvents: "none",
               }}
             />
-            {provider}
+            <select
+              data-testid="provider-modal-provider"
+              data-provider={selectedProviderId}
+              value={selectedProviderId}
+              onChange={(e) => setSelectedProviderId(e.target.value)}
+              disabled={submitting}
+              style={{
+                ...inputBase,
+                appearance: "none",
+                WebkitAppearance: "none",
+                paddingLeft: space.lg + 8 + space.sm,
+                paddingRight: space.xl,
+                cursor: "pointer",
+                fontWeight: 600,
+                fontFamily: fontFamily.mono,
+              }}
+            >
+              {visibleChoices.map((o) => (
+                <option key={o.providerID} value={o.providerID}>
+                  {optionLabel(o)}
+                </option>
+              ))}
+            </select>
+            <span
+              aria-hidden
+              style={{
+                position: "absolute",
+                right: space.lg,
+                fontSize: fontSize.xs,
+                color: neutral[400],
+                pointerEvents: "none",
+              }}
+            >
+              ▼
+            </span>
           </div>
+          {providerChoices.length > 1 && (
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              可切换 Provider（{providerChoices.length} 个可选），保存时按所选 provider 落凭据
+            </span>
+          )}
+          {showOptionFilter && filterNoMatch && (
+            <span
+              data-testid="provider-modal-provider-filter-empty"
+              style={{ fontSize: fontSize.xs, color: "#D97706" }}
+            >
+              无匹配的 Provider（保留当前选中：{selectedProviderId}）
+            </span>
+          )}
         </div>
 
         {/* API key 输入（password；本地 provider 无鉴权可留空） */}
@@ -578,8 +801,8 @@ export function ConfigureModal({
             type={isLocal ? "text" : "password"}
             placeholder={
               isLocal
-                ? `本地 provider（${provider}）无需密钥，可留空`
-                : `输入 ${provider} 的 API token`
+                ? `本地 provider（${selectedProviderId}）无需密钥，可留空`
+                : `输入 ${selectedProviderId} 的 API token`
             }
             value={token}
             onChange={(e) => setToken(e.target.value)}
@@ -589,7 +812,7 @@ export function ConfigureModal({
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
             {isLocal
               ? "本地模型无鉴权，留空保存即完成配置（worker 侧自动补占位 key）"
-              : "按 provider 粒度保存，agent 选择该 provider 下模型时自动生效"}
+              : `按 provider 粒度保存（当前：${selectedProviderId}），agent 选择该 provider 下模型时自动生效`}
           </span>
         </div>
 
@@ -727,6 +950,7 @@ export function ConfigureModal({
             disabled={submitting || (!isLocal && !token.trim())}
             onClick={() =>
               onSubmit({
+                providerID: selectedProviderId,
                 token: token.trim(),
                 targetWorkerIds: targetWorkers.size > 0 ? Array.from(targetWorkers) : undefined,
               })
@@ -781,9 +1005,16 @@ interface AddProviderModalProps {
   workers: ApiWorker[];
   /** 现有 Provider 聚合（providerID 命中时预填 type/baseUrl + 提示） */
   existing: ProviderSummary[];
+  /** 远端可选项：GET /models/integrations 里 credential='none' 且未入目录、支持 apikey 的注册表 provider */
+  remoteOptions: Array<{ providerID: string; name: string | null }>;
   onClose: () => void;
   onSubmit: (payload: AddProviderPayload) => void;
+  /** 远端 provider 保存：POST /models/providers/:providerID/credentials {token}（不建目录模型行） */
+  onSubmitRemote: (payload: { providerID: string; token: string }) => void;
 }
+
+/** 新增弹窗下拉「自定义 Provider」的值（= 现有手填表单，也是默认选中项） */
+const CUSTOM_PROVIDER_VALUE = "__custom__";
 
 /** providerID slug（对齐后端 CreateModelDto MODEL_SLUG_PATTERN：小写字母/数字开头 + 小写/数字/连字符/下划线/点） */
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_.]*$/;
@@ -804,8 +1035,10 @@ export function AddProviderModal({
   error,
   workers,
   existing,
+  remoteOptions,
   onClose,
   onSubmit,
+  onSubmitRemote,
 }: AddProviderModalProps) {
   const [providerID, setProviderID] = useState("");
   const [providerType, setProviderType] = useState("cloud");
@@ -814,10 +1047,14 @@ export function AddProviderModal({
   const [name, setName] = useState("");
   const [token, setToken] = useState("");
   const [targetWorkers, setTargetWorkers] = useState<Set<string>>(new Set());
+  /* 下拉选中的 provider：默认「自定义 Provider」（= 现有手填表单，行为一字不差） */
+  const [selectedProvider, setSelectedProvider] = useState(CUSTOM_PROVIDER_VALUE);
+  /* 下拉关键字过滤（选项 >30 才渲染输入框，复用 ConfigureModal 同一套模式） */
+  const [optionFilter, setOptionFilter] = useState("");
 
   const isLocal = providerType === "local" || providerType === "custom";
 
-  /* 打开弹窗时清空上次输入（对齐 ConfigureModal） */
+  /* 打开弹窗时清空上次输入（对齐 ConfigureModal）；选中项与过滤词一并复位 */
   useEffect(() => {
     if (open) {
       setProviderID("");
@@ -827,6 +1064,8 @@ export function AddProviderModal({
       setName("");
       setToken("");
       setTargetWorkers(new Set());
+      setSelectedProvider(CUSTOM_PROVIDER_VALUE);
+      setOptionFilter("");
     }
   }, [open]);
 
@@ -909,7 +1148,43 @@ export function AddProviderModal({
     : trimmedUrl.length === 0 ||
       (trimmedUrl.length <= 512 && BASE_URL_PATTERN.test(trimmedUrl));
   const keyValid = isLocal || token.trim().length > 0;
-  const canSave = idValid && modelValid && urlValid && keyValid;
+
+  /* ---------------- 远端 provider 模式（下拉选注册表项，「选择 + API Key」） ---------------- */
+  const isRemote = selectedProvider !== CUSTOM_PROVIDER_VALUE;
+  /* 远端项的 key 恒按「密码 + 必填」处理——与表单里遗留的 providerType 无关
+   * （注册表 provider 无目录行 → 后端 resolveProviderType 恒为 cloud，空 key 400） */
+  const keyPlain = isLocal && !isRemote;
+  /* 下拉选项：默认「自定义 Provider」在前（默认选中，= 现有手填表单），远端注册表项在后
+   *（后端 items 已按 id 字典序升序） */
+  const providerChoices = [
+    { value: CUSTOM_PROVIDER_VALUE, label: "自定义 Provider" },
+    ...remoteOptions.map((o) => ({
+      value: o.providerID,
+      label: `${o.providerID}（${o.name ? `${o.name} · ` : ""}opencode 集成）`,
+    })),
+  ];
+  /* 选项 >30 才出过滤输入框（远端注册表 200+ 项时避免大海捞针）；按 id / 名称匹配
+   *（名称已拼进 label），当前选中项即便被过滤掉也强制保留 */
+  const showOptionFilter = providerChoices.length > 30;
+  const filterKw = optionFilter.trim().toLowerCase();
+  const choiceMatches = (c: { value: string; label: string }) =>
+    filterKw === "" ||
+    c.value.toLowerCase().includes(filterKw) ||
+    c.label.toLowerCase().includes(filterKw);
+  const matchCount = providerChoices.filter(choiceMatches).length;
+  const visibleChoices =
+    filterKw === ""
+      ? providerChoices
+      : providerChoices.filter(
+          (c) => choiceMatches(c) || c.value === selectedProvider
+        );
+  const filterNoMatch = filterKw !== "" && matchCount === 0;
+
+  /* 远端：只校验非空 key（前置拦截后端 400 MODEL_TOKEN_REQUIRED）；
+   * 自定义：现有表单校验一字不差 */
+  const canSave = isRemote
+    ? token.trim().length > 0
+    : idValid && modelValid && urlValid && keyValid;
 
   return (
     <div
@@ -961,7 +1236,9 @@ export function AddProviderModal({
               新增 Provider
             </div>
             <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
-              创建锚点模型行使 Provider 入列，再保存凭据下发到节点（C4/C5）
+              {isRemote
+                ? "远端 provider（opencode 集成）：选择 + API Key 直接落凭据，不建目录模型行"
+                : "创建锚点模型行使 Provider 入列，再保存凭据下发到节点（C4/C5）"}
             </div>
           </div>
           <button
@@ -989,6 +1266,54 @@ export function AddProviderModal({
           </button>
         </div>
 
+        {/* Provider 下拉：默认「自定义 Provider」（= 现有手填表单）；远端注册表项走「选择 + API Key」 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <span style={labelStyle}>Provider</span>
+          {showOptionFilter && (
+            <input
+              data-testid="provider-add-provider-filter"
+              autoComplete="off"
+              value={optionFilter}
+              onChange={(e) => setOptionFilter(e.target.value)}
+              disabled={submitting}
+              placeholder="过滤 Provider（按 id / 名称）"
+              style={{ ...inputBase, padding: `${space.sm}px ${space.md}px` }}
+            />
+          )}
+          <select
+            data-testid="provider-add-provider-select"
+            data-provider={selectedProvider}
+            value={selectedProvider}
+            onChange={(e) => setSelectedProvider(e.target.value)}
+            disabled={submitting}
+            style={{ ...inputBase, fontFamily: fontFamily.mono }}
+          >
+            {visibleChoices.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          {showOptionFilter && filterNoMatch && (
+            <span
+              data-testid="provider-add-provider-filter-empty"
+              style={{ ...hintStyle, color: "#D97706" }}
+            >
+              无匹配项（当前选中项保留可见）
+            </span>
+          )}
+          {isRemote ? (
+            <span data-testid="provider-add-remote-hint" style={hintStyle}>
+              远端 provider：选择 + API Key 即可，保存后直接落凭据并下发节点
+            </span>
+          ) : (
+            <span style={hintStyle}>默认「自定义 Provider」= 手填下方表单</span>
+          )}
+        </div>
+
+        {/* 以下表单区仅「自定义 Provider」模式可见；远端模式收起，只留 下拉 + API Key */}
+        {!isRemote && (
+          <>
         {/* Provider ID */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={labelStyle}>
@@ -1115,35 +1440,41 @@ export function AddProviderModal({
             style={inputBase}
           />
         </div>
+          </>
+        )}
 
-        {/* API Key（cloud 必填；local/custom 可空=占位 key） */}
+        {/* API Key（远端/cloud 必填；local/custom 可空=占位 key） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={labelStyle}>
-            API Key {!isLocal && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}
+            API Key {!keyPlain && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}
           </span>
           <input
             data-testid="provider-add-key-input"
             autoComplete="new-password"
             name="provider-api-token"
-            type={isLocal ? "text" : "password"}
+            type={keyPlain ? "text" : "password"}
             value={token}
             onChange={(e) => setToken(e.target.value)}
             disabled={submitting}
             placeholder={
-              isLocal
-                ? `本地 provider 无需密钥，可留空`
-                : `输入 ${trimmedProvider || "provider"} 的 API token`
+              isRemote
+                ? `输入 ${selectedProvider} 的 API token`
+                : keyPlain
+                  ? `本地 provider 无需密钥，可留空`
+                  : `输入 ${trimmedProvider || "provider"} 的 API token`
             }
             style={inputBase}
           />
           <span style={hintStyle}>
-            {isLocal
+            {keyPlain
               ? "本地模型无鉴权，留空保存即完成配置（worker 侧自动补占位 key）"
               : "token 经 AES-256-GCM 加密落库，按 provider 粒度保存"}
           </span>
         </div>
 
-        {/* 同步到节点（worker 多选，未选=全部 worker） */}
+        {/* 同步到节点（worker 多选，未选=全部 worker；远端模式收起——凭据按 provider 落库后由 serve 侧下发） */}
+        {!isRemote && (
+          <>
         <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
           <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
             <span style={labelStyle}>同步到节点</span>
@@ -1231,6 +1562,8 @@ export function AddProviderModal({
             </span>
           </div>
         </div>
+          </>
+        )}
 
         {error && (
           <div
@@ -1275,16 +1608,21 @@ export function AddProviderModal({
             data-testid="provider-add-modal-save"
             disabled={submitting || !canSave}
             onClick={() =>
-              onSubmit({
-                providerID: trimmedProvider,
-                providerType,
-                baseUrl: trimmedUrl,
-                modelID: trimmedModel,
-                name: name.trim(),
-                token: token.trim(),
-                targetWorkerIds:
-                  targetWorkers.size > 0 ? Array.from(targetWorkers) : undefined,
-              })
+              isRemote
+                ? onSubmitRemote({
+                    providerID: selectedProvider,
+                    token: token.trim(),
+                  })
+                : onSubmit({
+                    providerID: trimmedProvider,
+                    providerType,
+                    baseUrl: trimmedUrl,
+                    modelID: trimmedModel,
+                    name: name.trim(),
+                    token: token.trim(),
+                    targetWorkerIds:
+                      targetWorkers.size > 0 ? Array.from(targetWorkers) : undefined,
+                  })
             }
             style={{
               padding: `${space.sm + 2}px ${space.lg}px`,
@@ -2505,9 +2843,39 @@ export default function ProvidersTab() {
     enabled: !!user,
   });
   const providers = useMemo(() => providersQuery.data ?? [], [providersQuery.data]);
+
+  /* opencode 内置集成 provider：GET /models/integrations（契约冻结，见文件头类型注释）——
+   * 这些集成没有模型行、/models/providers 里查不到，故与目录行合并去重后一并列出：
+   * 已填写（credential ≠ 'none'）的上列表（徽章行），未填写的转由「新增 Provider」弹窗
+   * 下拉「选择 + API Key」承接（addRemoteOptions）。
+   * degraded=true（worker 离线/旧版无该端点）→ items=[]，页面给一行不打扰的小提示。 */
+  const integrationsQuery = useQuery({
+    queryKey: ["model-integrations"],
+    queryFn: () => api.get<IntegrationsResponse>("/models/integrations"),
+    enabled: !!user,
+  });
+  const integrationItems = useMemo(
+    () => integrationsQuery.data?.items ?? [],
+    [integrationsQuery.data]
+  );
+  /* 端点 degraded 或整体请求失败（旧后端未部署）都视为「集成列表不可用」 */
+  const integrationsUnavailable =
+    (integrationsQuery.data?.degraded ?? false) || integrationsQuery.isError;
+
+  /* 合并口径（列表 / 头部计数 / 搜索 / 弹窗下拉同源）：目录行在前，集成行追加 */
+  const allProviders = useMemo(
+    () => mergeProviderRows(providers, integrationItems),
+    [providers, integrationItems]
+  );
   const kw = keyword.trim().toLowerCase();
   const filteredProviders =
-    kw === "" ? providers : providers.filter((p) => p.providerID.toLowerCase().includes(kw));
+    kw === ""
+      ? allProviders
+      : allProviders.filter(
+          (p) =>
+            p.providerID.toLowerCase().includes(kw) ||
+            (p.name ?? "").toLowerCase().includes(kw)
+        );
 
   /* worker 池：GET /workers（同步目标多选数据源） */
   const workersQuery = useQuery({
@@ -2530,10 +2898,64 @@ export default function ProvidersTab() {
     return first.id;
   };
 
-  const configuredCount = providers.filter((p) => toStatus(p) === "configured").length;
+  /* 已配置计数按合并口径（目录行 + 已填写集成行），与头部「N 个 Provider」分母一致 */
+  const configuredCount = allProviders.filter((p) => p.status === "configured").length;
 
-  /* 保存凭据：POST /models/:id/credentials（保底解析该 provider 模型 id）
-   * 指定 worker → 定向 enqueueCommand；未选 → 全量 broadcastCommand（C5） */
+  /* 「新增 Provider」弹窗的远端可选项（= 下拉里除「自定义 Provider」外的选项）：
+   * 注册表中未填写（credential='none'）、未入目录（已入目录者列表行自带「配置」入口，
+   * 不在新增里重复）、且支持 apikey（apiKey=false 的集成不接受 key，如 OAuth 类）。
+   * 口径与下拉、头部「opencode 待配置 N」严格一致。 */
+  const addRemoteOptions = useMemo(
+    () =>
+      integrationItems
+        .filter((i) => i.credential === "none" && !i.inCatalog && i.apiKey)
+        .map((i) => ({ providerID: i.id, name: i.name || null })),
+    [integrationItems]
+  );
+  /* 头部「opencode 未填写 N」：注册表 credential='none' 全集（含已入目录者——它们也缺
+   * 凭据，只是改走列表行「配置」入口），口径即未填写总数 */
+  const opencodeUnfilledCount = useMemo(
+    () => integrationItems.filter((i) => i.credential === "none").length,
+    [integrationItems]
+  );
+
+  /* 目标是否「纯集成」（不在目录，无模型行）——决定保存走哪个端点 */
+  const isIntegrationOnly = useCallback(
+    (providerID: string) =>
+      allProviders.some((r) => r.providerID === providerID && r.source === "integration") ||
+      integrationItems.some((i) => i.id === providerID && !i.inCatalog),
+    [allProviders, integrationItems]
+  );
+
+  /* 凭据保存成功的统一收尾（Configure 弹窗 / 新增弹窗·远端模式共用）：立即失效
+   * providers/credentials/integrations；纯集成 provider 再延迟 ~3s best-effort
+   * POST /models/sync——等 serve 侧凭据经 worker 凭据同步生效后把该 provider 的
+   * live 模型带进目录，随后失效 models/…。回调内不 setState，组件卸载后执行安全。 */
+  const finalizeCredentialSave = (providerID: string) => {
+    queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+    queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
+    queryClient.invalidateQueries({ queryKey: ["model-integrations"] });
+    if (!isIntegrationOnly(providerID)) return;
+    /* best-effort：同步失败静默忽略（用户仍可点头部「↻ 同步」） */
+    setTimeout(() => {
+      api
+        .post<{ synced: number; disabled: number; liveModels: string[] }>("/models/sync", {})
+        .then(() => {
+          queryClient.invalidateQueries({ queryKey: ["models"] });
+          queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+          queryClient.invalidateQueries({ queryKey: ["model-integrations"] });
+        })
+        .catch(() => {
+          /* 集成 provider 尚未被 worker 上报时同步可能报错——忽略 */
+        });
+    }, 3000);
+  };
+
+  /* 保存凭据（分流）：
+   * - 目录内 provider → 既有 POST /models/:id/credentials（resolveModelId 保底取模型 id，C4/C5）
+   * - 纯 opencode 集成（未入目录）→ POST /models/providers/:providerID/credentials
+   *   （AdminGuard，body 同形；404 PROVIDER_NOT_FOUND / 400 MODEL_TOKEN_REQUIRED 由后端报错回显）
+   * 成功后收尾见 finalizeCredentialSave（延迟 ~3s best-effort POST /models/sync）。 */
   const saveCredentialMutation = useMutation({
     mutationFn: ({
       providerID,
@@ -2543,13 +2965,17 @@ export default function ProvidersTab() {
       providerID: string;
       token: string;
       targetWorkerIds?: string[];
-    }) =>
-      resolveModelId(providerID).then((modelId) =>
-        api.post<CredentialView>(`/models/${modelId}/credentials`, {
-          token,
-          ...(targetWorkerIds && targetWorkerIds.length > 0 ? { targetWorkerIds } : {}),
-        })
-      ),
+    }) => {
+      const body = {
+        token,
+        ...(targetWorkerIds && targetWorkerIds.length > 0 ? { targetWorkerIds } : {}),
+      };
+      return isIntegrationOnly(providerID)
+        ? api.post<CredentialView>(`/models/providers/${providerID}/credentials`, body)
+        : resolveModelId(providerID).then((modelId) =>
+            api.post<CredentialView>(`/models/${modelId}/credentials`, body)
+          );
+    },
     onError: (err) => {
       console.error("[providers-tab] save credential failed:", err);
       setConfigureError(
@@ -2560,12 +2986,40 @@ export default function ProvidersTab() {
             : "保存失败，请稍后重试"
       );
     },
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       setConfigureOpen(false);
       setConfigureError(null);
-      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
-      /* 凭据态缓存一并失效 */
-      queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
+      finalizeCredentialSave(vars.providerID);
+    },
+  });
+
+  /* 新增弹窗·远端模式保存：POST /models/providers/:providerID/credentials {token}
+   *（复用上面同一分流——该 provider 恰已有目录行时回落 model 粒度端点），不建目录模型行；
+   * 成功 → 关新增弹窗 + 刷新列表 +（纯集成）延迟 sync，与 Configure 弹窗远端路径一致；
+   * 空 key 由弹窗 canSave 前置拦截，后端 400 MODEL_TOKEN_REQUIRED 错误回显到同一错误位。 */
+  const addRemoteCredentialMutation = useMutation({
+    mutationFn: ({ providerID, token }: { providerID: string; token: string }) => {
+      const body = { token };
+      return isIntegrationOnly(providerID)
+        ? api.post<CredentialView>(`/models/providers/${providerID}/credentials`, body)
+        : resolveModelId(providerID).then((modelId) =>
+            api.post<CredentialView>(`/models/${modelId}/credentials`, body)
+          );
+    },
+    onError: (err) => {
+      console.error("[providers-tab] add remote credential failed:", err);
+      setAddError(
+        isApiError(err)
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "保存失败，请稍后重试"
+      );
+    },
+    onSuccess: (_res, vars) => {
+      setAddOpen(false);
+      setAddError(null);
+      finalizeCredentialSave(vars.providerID);
     },
   });
 
@@ -2648,9 +3102,10 @@ export default function ProvidersTab() {
     },
   });
 
+  /* 弹窗预填行查合并口径（集成行也从这里找，否则 setConfigureOpen(集成id) 打不开弹窗） */
   const configuringProviderRow = useMemo(
-    () => providers.find((p) => p.providerID === configureOpen),
-    [providers, configureOpen]
+    () => allProviders.find((r) => r.providerID === configureOpen),
+    [allProviders, configureOpen]
   );
   const configuringProvider = configuringProviderRow?.providerID;
   const configuringProviderType = configuringProviderRow?.providerType ?? null;
@@ -2795,7 +3250,8 @@ export default function ProvidersTab() {
                 fontFamily: fontFamily.mono,
               }}
             >
-              {providers.length} 个 Provider · 已配置 {configuredCount}
+              {allProviders.length} 个 Provider · 已配置 {configuredCount} · opencode 未填写{" "}
+              {opencodeUnfilledCount}
             </span>
             <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>
               凭证管理 · 按 Provider 粒度配置，支持同步到节点（worker）
@@ -2860,6 +3316,23 @@ export default function ProvidersTab() {
               }}
             >
               {syncHint}
+            </div>
+          )}
+
+          {/* 集成列表不可用（degraded / 端点请求失败）：不打扰的小提示，不阻塞目录行 */}
+          {integrationsUnavailable && (
+            <div
+              data-testid="provider-integrations-hint"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: space.xs,
+                fontSize: fontSize.xs,
+                color: neutral[400],
+              }}
+            >
+              <span aria-hidden>◔</span>
+              opencode 集成列表不可用（节点离线或服务端未支持）——当前仅显示目录内 Provider
             </div>
           )}
 
@@ -3004,7 +3477,7 @@ export default function ProvidersTab() {
                   name="provider-search"
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
-                  placeholder="搜索 Provider ID…"
+                  placeholder="搜索 Provider ID / 名称…"
                   style={{
                     flex: 1,
                     border: "none",
@@ -3024,7 +3497,7 @@ export default function ProvidersTab() {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {filteredProviders.length} / {providers.length}
+                    {filteredProviders.length} / {allProviders.length}
                   </span>
                 )}
               </div>
@@ -3052,14 +3525,17 @@ export default function ProvidersTab() {
 
               {/* Provider 行（Level 1）+ 模型下钻面板（Level 2，行内展开） */}
               {filteredProviders.map((p) => {
-                const status = toStatus(p);
+                const status = p.status;
                 const fingerprint = p.fingerprint;
-                const isOpen = !!expanded[p.providerID];
+                /* 集成行未入目录：无模型可下钻 → 不渲染 expand toggle / 下钻面板 */
+                const isIntegration = p.source === "integration";
+                const isOpen = !isIntegration && !!expanded[p.providerID];
                 return (
                   <div key={p.providerID}>
                   <div
                     data-testid="provider-item"
                     data-provider={p.providerID}
+                    data-source={p.source}
                     data-credential={status}
                     data-expanded={isOpen ? "true" : "false"}
                     className="pv-provider-row"
@@ -3076,7 +3552,11 @@ export default function ProvidersTab() {
                       ...baseFont,
                     }}
                   >
-                    {/* 展开 toggle（行内 expand/collapse，对齐 agents 页分组模式） */}
+                    {/* 展开 toggle（行内 expand/collapse，对齐 agents 页分组模式）；
+                        集成行无模型行 → 占位保持列对齐，不出下钻 */}
+                    {isIntegration ? (
+                      <span aria-hidden style={{ width: 22, height: 22, flexShrink: 0 }} />
+                    ) : (
                     <button
                       type="button"
                       data-testid="provider-expand-toggle"
@@ -3104,10 +3584,12 @@ export default function ProvidersTab() {
                     >
                       <span aria-hidden>{isOpen ? "▾" : "▸"}</span>
                     </button>
-                    {/* provider 列 */}
+                    )}
+                    {/* provider 列（集成行附来源徽章；name 走 title 提示） */}
                     <span
                       data-testid="provider-id"
                       data-provider={p.providerID}
+                      title={p.name ?? undefined}
                       style={{
                         width: 220,
                         flexShrink: 0,
@@ -3134,12 +3616,32 @@ export default function ProvidersTab() {
                         }}
                       />
                       {p.providerID}
+                      {isIntegration && (
+                        <span
+                          data-testid="provider-source-badge"
+                          style={{
+                            flexShrink: 0,
+                            padding: "0 7px",
+                            borderRadius: radius.pill,
+                            backgroundColor: "rgba(13,148,136,0.10)",
+                            border: "1px solid rgba(13,148,136,0.22)",
+                            color: activeBlue,
+                            fontSize: fontSize.xs,
+                            fontWeight: 500,
+                            lineHeight: "16px",
+                            whiteSpace: "nowrap",
+                            fontFamily: fontFamily.body,
+                          }}
+                        >
+                          opencode 集成
+                        </span>
+                      )}
                     </span>
 
-                    {/* 模型数 */}
+                    {/* 模型数（集成行未入目录 → 「未入目录」，不出数字） */}
                     <span
                       data-testid="provider-model-count"
-                      data-count={p.modelCount}
+                      data-count={p.modelCount ?? undefined}
                       style={{
                         width: 100,
                         flexShrink: 0,
@@ -3150,10 +3652,20 @@ export default function ProvidersTab() {
                         color: neutral[700],
                       }}
                     >
-                      <span style={{ fontWeight: 600, fontFamily: fontFamily.mono }}>
-                        {p.modelCount}
-                      </span>
-                      <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>模型</span>
+                      {p.modelCount === null ? (
+                        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                          未入目录
+                        </span>
+                      ) : (
+                        <>
+                          <span style={{ fontWeight: 600, fontFamily: fontFamily.mono }}>
+                            {p.modelCount}
+                          </span>
+                          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                            模型
+                          </span>
+                        </>
+                      )}
                     </span>
 
                     {/* 凭据状态徽章 */}
@@ -3180,7 +3692,8 @@ export default function ProvidersTab() {
                       {status === "configured" ? (fingerprint ?? "—") : "—"}
                     </span>
 
-                    {/* 操作：编辑配置 / 配置凭据 / 删除凭据 / 删除 Provider（admin 专属；成员只读无操作） */}
+                    {/* 操作：编辑配置 / 配置凭据 / 删除凭据 / 删除 Provider（admin 专属；成员只读无操作）
+                        集成行只放「配置/更新凭据」——无模型行可编辑/删除，凭据走 provider 粒度端点 */}
                     <div
                       style={{
                         width: 320,
@@ -3190,7 +3703,15 @@ export default function ProvidersTab() {
                         gap: space.sm,
                       }}
                     >
-                      {isAdmin && (
+                      {isAdmin &&
+                        (isIntegration ? (
+                          <ActionButton
+                            testid="provider-configure-button"
+                            label={status === "configured" ? "更新凭据" : "配置"}
+                            primary
+                            onClick={() => setConfigureOpen(p.providerID)}
+                          />
+                        ) : (
                         <>
                           <ActionButton
                             testid="provider-edit-button"
@@ -3227,7 +3748,7 @@ export default function ProvidersTab() {
                             disabled={deleteProviderMutation.isPending}
                           />
                         </>
-                      )}
+                        ))}
                     </div>
                   </div>
                     {/* Level 2：该 Provider 下的模型（展开时懒加载 GET /models?providerID） */}
@@ -3290,7 +3811,7 @@ export default function ProvidersTab() {
               })}
 
               {/* 空结果：无 Provider / 搜索无匹配 */}
-              {providers.length === 0 && (
+              {allProviders.length === 0 && (
                 <div
                   data-testid="providers-empty"
                   style={{
@@ -3305,7 +3826,7 @@ export default function ProvidersTab() {
                       : "暂无 Provider（worker 上报 capabilities.models 后将自动出现）"}
                 </div>
               )}
-              {providers.length > 0 && filteredProviders.length === 0 && (
+              {allProviders.length > 0 && filteredProviders.length === 0 && (
                 <div
                   data-testid="providers-empty-search"
                   style={{
@@ -3339,11 +3860,17 @@ export default function ProvidersTab() {
         </div>
       </main>
 
-      {/* 配置凭据弹窗（admin 专属，provider 预填） */}
+      {/* 配置凭据弹窗（admin 专属，provider 预填，弹窗内可下拉切换） */}
       <ConfigureModal
         open={configuringProvider !== undefined}
         provider={configuringProvider ?? ""}
         providerType={configuringProviderType}
+        providerOptions={allProviders.map((r) => ({
+          providerID: r.providerID,
+          providerType: r.providerType,
+          source: r.source,
+          name: r.name,
+        }))}
         submitting={saveCredentialMutation.isPending}
         error={configureError}
         workers={workers}
@@ -3353,22 +3880,29 @@ export default function ProvidersTab() {
         }}
         onSubmit={(payload) =>
           configuringProvider &&
-          saveCredentialMutation.mutate({ providerID: configuringProvider, ...payload })
+          saveCredentialMutation.mutate({
+            providerID: payload.providerID ?? configuringProvider,
+            token: payload.token,
+            targetWorkerIds: payload.targetWorkerIds,
+          })
         }
       />
 
-      {/* 新增 Provider 弹窗（admin 专属：锚点模型行 + 凭据两步保存） */}
+      {/* 新增 Provider 弹窗（admin 专属：默认「自定义」= 锚点模型行 + 凭据两步保存；
+          选远端注册表 provider 时收起表单，只留 下拉 + API Key → provider 级凭据） */}
       <AddProviderModal
         open={addOpen}
-        submitting={addProviderMutation.isPending}
+        submitting={addProviderMutation.isPending || addRemoteCredentialMutation.isPending}
         error={addError}
         workers={workers}
         existing={providers}
+        remoteOptions={addRemoteOptions}
         onClose={() => {
           setAddOpen(false);
           setAddError(null);
         }}
         onSubmit={(payload) => addProviderMutation.mutate(payload)}
+        onSubmitRemote={(payload) => addRemoteCredentialMutation.mutate(payload)}
       />
 
       {/* 编辑 Provider 配置弹窗（admin 专属：类型 / Base URL 全模型行生效） */}

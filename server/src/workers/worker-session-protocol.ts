@@ -55,6 +55,35 @@ export interface WorkerModelsResponsePayload {
 }
 
 /**
+ * 集成注册表项（`GET /integrations` 的返回项）。
+ *
+ * ⚠️ 同 `WorkerModelInfo` 的 D3 口径：不透传被驱动端的 `methods`/`connections` 包装；
+ * 输出**不含任何已配的 secret**（`apiKey`/`envNames` 只是「怎么配」的声明）。
+ */
+export interface WorkerIntegrationInfo {
+  /** 集成 id（= providerID，如 `opencode-go`）。 */
+  id: string;
+  /** 展示名（如 `OpenCode Go`）。 */
+  name: string;
+  /** 是否支持直接填 apikey（`methods` 含 `{type:"key"}`）。 */
+  apiKey: boolean;
+  /** 该集成识别的环境变量名（仅作提示展示；缺失省略）。 */
+  envNames?: string[];
+}
+
+/**
+ * GET /integrations 响应体（集成注册表信封：单键 `integrations`）。
+ *
+ * 这是「可配置 provider 全集」——没有模型行的内置集成（`opencode-go` 等）
+ * 只能从这里被发现；`GET /models/providers` 查不到它们。
+ * worker 侧同形状副本见 `worker/src/protocol/worker-protocol.ts`。
+ */
+export interface WorkerIntegrationsResponsePayload {
+  /** 集成注册表（vteam 口径的条目数组）。 */
+  integrations: WorkerIntegrationInfo[];
+}
+
+/**
  * 投递策略（vteam 侧语义）。
  *
  * - `steer`：插队（打断当前轮，按新指令重跑）；

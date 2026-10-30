@@ -89,6 +89,7 @@ import {
   writeAuthJson,
   writeOpencodeConfig,
 } from './credentials/model-credential-injector';
+import { syncIntegrationCredentials } from './credentials/integration-credential-sync';
 
 /** 无注入时的空报告（buildCapabilities/buildRegisterOptions 默认值；main() 总会传入真实报告）。 */
 const EMPTY_INJECT_REPORT: InjectReport = {
@@ -612,6 +613,21 @@ export interface ModelCredentialsCommandDeps {
   onInjectedPaths: (authJsonPath: string, configPath: string) => void;
   /** provider 配置段实际变更（下次**真重启**后的 reRegister 需全量重探）。 */
   onProviderConfigChanged: () => void;
+  /**
+   * v2「integration 维度」凭据同步：把**不在配置段里**的凭据（`opencode-go` 这类
+   * 无 baseUrl 的内置 integration provider）写进 serve 的 credential store，并把
+   * 已吊销的 provider 对应行删掉。
+   *
+   * ⚠️ 与文件注入**正交且必须在文件未变化时也跑**：auth.json 在 v2 上是 no-op，
+   * 只靠"文件变了才动作"会漏掉「store 里压根没有这条凭据」的自愈
+   * （这正是"改了 opencode-go 密钥没同步给 opencode 实例"的根因）。
+   * 失败由实现方 warn，不阻断文件注入。
+   */
+  syncIntegrationCredentials?: (request: {
+    providerKeys: ModelCredentialEntry[];
+    providerConfigs?: Record<string, ModelProviderConfigEntry>;
+    revokedProviderIDs?: string[];
+  }) => Promise<{ changed: boolean; missing: string[]; failures: string[] }>;
   log: (message: string) => void;
   warn: (message: string) => void;
 }
@@ -647,6 +663,21 @@ export async function handleModelCredentialsCommand(
     }
   } catch (err) {
     deps.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
+  }
+  // v2 凭据双写的另一半（integration 维度）：即使上面两份文件**都没变**也要跑——
+  // store 缺行/吊销残留的自愈就靠它；失败只 warn，不阻断文件注入。
+  if (deps.syncIntegrationCredentials) {
+    try {
+      await deps.syncIntegrationCredentials({
+        providerKeys: payload.providerKeys,
+        providerConfigs: payload.providerConfigs,
+        revokedProviderIDs: payload.revokedProviderIDs,
+      });
+    } catch (err) {
+      deps.warn(
+        `[worker] model-credentials：credential store 同步失败（文件注入不受影响）: ${(err as Error).message}`,
+      );
+    }
   }
 }
 
@@ -1531,6 +1562,16 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
             onProviderConfigChanged: () => {
               configChangedSinceRegister = true;
             },
+            // v2 凭据双写的另一半：**integration 维度**（无 baseUrl 的内置 provider
+            // 如 opencode-go 进不了 opencode.json 配置段 ⇒ key 只能落 serve 的
+            // credential store；auth.json 在 v2 上是 no-op）。端点每次现读（重启可能
+            // 换端口），密码取 serve 的实际配置（effectiveServerPassword）。
+            syncIntegrationCredentials: (request) =>
+              syncIntegrationCredentials(request, {
+                endpoint: serveEndpoint(),
+                log: (message) => console.log(message),
+                warn: (message) => console.warn(message),
+              }),
             log: (message) => console.log(message),
             warn: (message) => console.warn(message),
           },

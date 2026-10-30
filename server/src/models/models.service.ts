@@ -23,6 +23,7 @@ import {
   ModelCapabilities,
   ModelModality,
   ModelProviderConfigEntry,
+  ModelProviderType,
   ProviderModelEntry,
 } from './models.constants';
 import { CreateModelDto } from './dto/create-model.dto';
@@ -63,6 +64,33 @@ export interface ProviderSummary {
   revokedAt: Date | null;
   providerType?: string | null;
   baseUrl?: string | null;
+}
+
+/**
+ * opencode 集成注册表条目（`GET /models/integrations` 的输出项）。
+ *
+ * 数据源 = worker 执行端点 `GET /integrations` → 被驱动端集成注册表（实测 239 项，
+ * 即「**可配置 provider 全集**」）。`opencode-go` 这类没有模型行的内置集成只有这里
+ * 能被发现（`GET /models/providers` 聚合的是 models 表 + worker 上报的模型 ⇒ 查不到）。
+ * `inCatalog`/`credential` 是 vteam 侧状态合并；**绝不携带 token/fingerprint 明文**。
+ */
+export interface OpencodeIntegrationItem {
+  /** 集成 id（= providerID，如 `opencode-go`）。 */
+  id: string;
+  /** 展示名（如 `OpenCode Go`）。 */
+  name: string;
+  /** 该集成是否支持直接填 apikey（注册表 methods 含 key）。 */
+  apiKey: boolean;
+  /** vteam 模型目录是否已有该 provider 的模型行（false = 纯注册表 provider）。 */
+  inCatalog: boolean;
+  /** 凭据状态：已配置 / 已吊销 / 未配置。 */
+  credential: 'configured' | 'revoked' | 'none';
+}
+
+/** `GET /models/integrations` 响应：`degraded=true` 时注册表取不到，`items` 恒为空。 */
+export interface OpencodeIntegrationsResult {
+  degraded: boolean;
+  items: OpencodeIntegrationItem[];
 }
 
 /**
@@ -1052,38 +1080,216 @@ export class ModelsService implements OnModuleInit {
         });
       }
     }
+    const providerType = await this.resolveProviderType(modelProviderID);
+    return this.saveCredentialForProvider(
+      modelProviderID,
+      token,
+      providerType,
+      targetWorkerIds,
+      `model=${modelId} provider=${modelProviderID}`,
+    );
+  }
+
+  /**
+   * GET /models/integrations：opencode **集成注册表 = 可配置 provider 全集** +
+   * vteam 状态合并（Provider 管理页「可配 provider」的第二数据源）。
+   *
+   * 为什么必须有它（用户反馈的根因）：`GET /models/providers` 聚合的是 models 表 +
+   * worker 上报的模型 ⇒ **没有模型行的内置集成（`opencode-go` 等）永远不出现**，
+   * 管理页就配不了它们的 apikey。本端点改从被驱动端的集成注册表取全集（实测 239 项）。
+   *
+   * - 取列表：在线 worker 逐个问 `workerClient.listIntegrations`（执行端点
+   *   `GET /integrations`），首个非空即用；全空/全失败 → `degraded:true + items:[]`
+   *   （列表类端点不阻断页面，对齐 listModels/listAgents 的降级口径）。
+   * - 状态合并：`inCatalog` = 目录有该 provider 的模型行（不限 enabled）；
+   *   `credential` = 凭据库该 provider 记录（revokedAt 非空 = revoked）。
+   * - 输出按 id 字典序升序（前端 dedupe 后直接渲染，顺序稳定）。
+   */
+  async listOpencodeIntegrations(): Promise<OpencodeIntegrationsResult> {
+    const onlineWorkers = await this.prisma.worker.findMany({
+      where: { status: { not: WORKER_STATUS.OFFLINE } },
+      select: { id: true, capabilities: true },
+    });
+    let raw: { id: string; name: string; apiKey: boolean }[] = [];
+    for (const w of onlineWorkers) {
+      raw = await this.workerClient.listIntegrations(
+        w as unknown as { id: string; capabilities: unknown },
+      );
+      if (raw.length > 0) {
+        break;
+      }
+    }
+    if (raw.length === 0) {
+      this.logger.warn(
+        `集成注册表取列表失败或为空（在线 worker=${onlineWorkers.length}），degraded 返回空 items`,
+      );
+      return { degraded: true, items: [] };
+    }
+    const [catalogRows, credentialRows] = await Promise.all([
+      this.prisma.model.findMany({
+        select: { providerID: true },
+        distinct: ['providerID'],
+      }),
+      this.prisma.modelCredential.findMany({
+        select: { providerID: true, revokedAt: true },
+      }),
+    ]);
+    const catalogProviders = new Set(catalogRows.map((r) => r.providerID));
+    const credByProvider = new Map(
+      credentialRows.map((r) => [r.providerID, r.revokedAt]),
+    );
+    const items: OpencodeIntegrationItem[] = raw.map((item) => {
+      const revokedAt = credByProvider.get(item.id) ?? null;
+      return {
+        id: item.id,
+        name: item.name,
+        apiKey: Boolean(item.apiKey),
+        inCatalog: catalogProviders.has(item.id),
+        credential: credByProvider.has(item.id)
+          ? revokedAt
+            ? 'revoked'
+            : 'configured'
+          : 'none',
+      };
+    });
+    items.sort((a, b) => a.id.localeCompare(b.id));
+    return { degraded: false, items };
+  }
+
+  /**
+   * POST /models/providers/:providerID/credentials：按 provider 保存凭据
+   * （**注册表级** provider 的唯一入口，与吊销侧 `revokeCredentialByProvider` 对称）。
+   *
+   * 为什么必须有它：model 粒度的 `setCredential` 要求 model 行存在，而 `opencode-go`
+   * 这类内置集成**没有模型行** ⇒ 永远配不上 apikey（管理页「找不到 provider」）。
+   * 这里只按 `ModelCredential.providerID` 唯一键落库：
+   * - 存在性三查：目录有该 provider 模型行 ∪ 已有该 provider 凭据 ∪ 在 opencode
+   *   集成注册表里；注册表本身取不到（degraded）→ **放行**——注册表是发现清单不是
+   *   权限源，宁可存下也别把管理员挡在外面（存错的 provider 无模型行，不会误配到会话）；
+   *   三查皆无 → 404 PROVIDER_NOT_FOUND。
+   * - `body.providerID`（可选）与路径不一致 → 400 MODEL_PROVIDER_MISMATCH。
+   * - 落库后的加密/下发/可见性回补/重收敛与 model 粒度**完全同路径**（共用
+   *   `saveCredentialForProvider`）；worker 侧凭据同步（integration-credential-sync）
+   *   会把它写进被驱动端凭据库，随后 `POST /models/sync` 把该 provider 的 live
+   *   模型带进目录（前端延迟触发）。
+   */
+  async setCredentialByProvider(
+    providerID: string,
+    token?: string,
+    providerIDFromBody?: string,
+    targetWorkerIds?: string[],
+  ): Promise<ModelCredentialView> {
+    const pid = providerID.trim();
+    if (pid.length === 0) {
+      throw new NotFoundException({
+        code: MODEL_ERRORS.PROVIDER_NOT_FOUND,
+        message: 'providerID 必填',
+      });
+    }
+    if (
+      providerIDFromBody &&
+      providerIDFromBody.trim().length > 0 &&
+      providerIDFromBody.trim() !== pid
+    ) {
+      throw new BadRequestException({
+        code: MODEL_ERRORS.MODEL_PROVIDER_MISMATCH,
+        message: `body.providerID=${providerIDFromBody} 与路径 providerID=${pid} 不一致（凭据按 provider 粒度存储）`,
+      });
+    }
+    if (!(await this.providerIsKnown(pid))) {
+      this.logger.warn(
+        `provider 凭据保存被拒：${pid} 既无模型行、也无既有凭据、更不在 opencode 集成注册表`,
+      );
+      throw new NotFoundException({
+        code: MODEL_ERRORS.PROVIDER_NOT_FOUND,
+        message: `provider ${pid} 不存在（不在模型目录，也不是 opencode 可配置集成）`,
+      });
+    }
+    const providerType = await this.resolveProviderType(pid);
+    return this.saveCredentialForProvider(
+      pid,
+      token,
+      providerType,
+      targetWorkerIds,
+      `provider=${pid}`,
+    );
+  }
+
+  /** provider 可配性：目录有行 ∪ 已有凭据 ∪ 注册表有此集成（注册表 degraded → 放行）。 */
+  private async providerIsKnown(providerID: string): Promise<boolean> {
+    const catalogRows = (await this.prisma.model.findMany({
+      where: { providerID },
+      select: { id: true },
+      take: 1,
+    } as never)) as unknown[] | undefined;
+    if (Array.isArray(catalogRows) && catalogRows.length > 0) {
+      return true;
+    }
+    const existing = await this.prisma.modelCredential.findUnique({
+      where: { providerID },
+    });
+    if (existing) {
+      return true;
+    }
+    const registry = await this.listOpencodeIntegrations();
+    if (registry.degraded) {
+      return true;
+    }
+    return registry.items.some((item) => item.id === providerID);
+  }
+
+  /** provider 的 providerType（目录首行为准；无模型行 → 'cloud'，即注册表级 provider 缺省）。 */
+  private async resolveProviderType(
+    providerID: string,
+  ): Promise<ModelProviderType> {
     const modelRows = (await this.prisma.model.findMany({
-      where: { providerID: modelProviderID },
+      where: { providerID },
       select: { providerType: true },
       take: 1,
     } as never)) as unknown[] | undefined;
-    const providerType =
-      ((modelRows ?? [])[0] as { providerType?: string } | undefined)
-        ?.providerType ?? 'cloud';
+    return (((modelRows ?? [])[0] as { providerType?: string } | undefined)
+      ?.providerType ?? 'cloud') as ModelProviderType;
+  }
+
+  /**
+   * 凭据保存核心（model 粒度与 provider 粒度**共用**）：加密 → 按 providerID upsert
+   * （同 provider 重复 POST 覆盖更新，幂等）→ C5/C6 全量下发 → 可见性回补 → 重收敛。
+   * - `ctxLabel` 只进日志：model 粒度 `model=x provider=y`，provider 粒度 `provider=y`。
+   * - `providerType` 决定空 token 语义：local/custom = 本地无鉴权允许空（local-noop
+   *   占位仍落库，凭据状态为「已配置」）；其余 → 400 MODEL_TOKEN_REQUIRED。
+   * - 返回脱敏视图（无明文 token）。
+   */
+  private async saveCredentialForProvider(
+    providerID: string,
+    token: string | undefined,
+    providerType: string,
+    targetWorkerIds: string[] | undefined,
+    ctxLabel: string,
+  ): Promise<ModelCredentialView> {
     const isLocal = providerType === 'local' || providerType === 'custom';
     const trimmedToken = token?.trim() ?? '';
     if (!trimmedToken) {
       if (isLocal) {
         this.logger.log(
-          `模型凭据本地无鉴权（空 token 视为已配置）：model=${modelId} provider=${modelProviderID} providerType=${providerType}`,
+          `模型凭据本地无鉴权（空 token 视为已配置）：${ctxLabel} providerType=${providerType}`,
         );
         const placeholder = 'local-noop';
         const credentialRef = this.crypto.encrypt(placeholder);
         const fingerprint = this.crypto.fingerprint(placeholder);
         const existingLocal = await this.prisma.modelCredential.findUnique({
-          where: { providerID: modelProviderID },
+          where: { providerID },
         });
         let row: ModelCredential;
         if (existingLocal) {
           row = await this.prisma.modelCredential.update({
-            where: { providerID: modelProviderID },
+            where: { providerID },
             data: { credentialRef, fingerprint, revokedAt: null },
           });
         } else {
           row = await this.prisma.modelCredential.create({
             data: {
               id: await this.idGen.nextId(MODEL_CREDENTIAL_ID_PREFIX),
-              providerID: modelProviderID,
+              providerID,
               credentialRef,
               fingerprint,
             },
@@ -1091,7 +1297,7 @@ export class ModelsService implements OnModuleInit {
         }
         await this.dispatchCredentialState(targetWorkerIds);
         await this.enableProviderModelsAfterCredential(
-          modelProviderID,
+          providerID,
           targetWorkerIds,
         );
         await this.resyncAfterCredentialChange();
@@ -1106,36 +1312,31 @@ export class ModelsService implements OnModuleInit {
     const fingerprint = this.crypto.fingerprint(trimmedToken);
 
     const existing = await this.prisma.modelCredential.findUnique({
-      where: { providerID: modelProviderID },
+      where: { providerID },
     });
 
     let row: ModelCredential;
     if (existing) {
       row = await this.prisma.modelCredential.update({
-        where: { providerID: modelProviderID },
+        where: { providerID },
         data: { credentialRef, fingerprint, revokedAt: null },
       });
       this.logger.log(
-        `模型凭据覆盖更新：model=${modelId} provider=${modelProviderID} fingerprint=${fingerprint}`,
+        `模型凭据覆盖更新：${ctxLabel} fingerprint=${fingerprint}`,
       );
     } else {
       row = await this.prisma.modelCredential.create({
         data: {
           id: await this.idGen.nextId(MODEL_CREDENTIAL_ID_PREFIX),
-          providerID: modelProviderID,
+          providerID,
           credentialRef,
           fingerprint,
         },
       });
-      this.logger.log(
-        `模型凭据录入：model=${modelId} provider=${modelProviderID} fingerprint=${fingerprint}`,
-      );
+      this.logger.log(`模型凭据录入：${ctxLabel} fingerprint=${fingerprint}`);
     }
     await this.dispatchCredentialState(targetWorkerIds);
-    await this.enableProviderModelsAfterCredential(
-      modelProviderID,
-      targetWorkerIds,
-    );
+    await this.enableProviderModelsAfterCredential(providerID, targetWorkerIds);
     await this.resyncAfterCredentialChange();
     return this.toView(row);
   }
@@ -1285,10 +1486,16 @@ export class ModelsService implements OnModuleInit {
     targetWorkerIds?: string[],
   ): Promise<void> {
     try {
-      const active = await this.prisma.modelCredential.findMany({
-        where: { revokedAt: null },
-        select: { providerID: true, credentialRef: true },
+      // 一次查全量行（未吊销 + 已吊销）：未吊销 → providerKeys（全量状态）；
+      // 已吊销 → revokedProviderIDs（v2：worker 据此删 serve credential store 对应行，
+      // 否则 vteam 侧删了 key、serve 还拿旧 key 继续跑）。
+      const rows = await this.prisma.modelCredential.findMany({
+        select: { providerID: true, credentialRef: true, revokedAt: true },
       });
+      const active = rows.filter((row) => !row.revokedAt);
+      const revokedProviderIDs = rows
+        .filter((row) => !!row.revokedAt)
+        .map((row) => row.providerID);
       const providerKeys = active.map((row) => ({
         providerID: row.providerID,
         key: this.crypto.decrypt(row.credentialRef),
@@ -1305,6 +1512,7 @@ export class ModelsService implements OnModuleInit {
         providerKeys,
         targetWorkerIds,
         providerConfigs,
+        revokedProviderIDs,
       );
     } catch (err) {
       this.logger.warn(

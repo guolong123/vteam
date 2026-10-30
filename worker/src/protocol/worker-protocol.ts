@@ -330,6 +330,15 @@ export interface ModelCredentialsPayload {
    * {} = 清空全部 provider 配置（所有 baseUrl provider 已移除）。
    */
   providerConfigs?: Record<string, ModelProviderConfigEntry>;
+  /**
+   * v2：**已吊销**凭据的 providerID 全量清单（integration 维度的删除信号）。
+   * worker 据此删除 serve credential store 里对应的行——否则 vteam 侧删了 key、
+   * serve 还拿旧 key 继续跑（吊销不同步 = 凭据泄漏面）。
+   * undefined = 旧 server（无吊销同步语义，忽略）；[] = 明确没有吊销项。
+   * 配置段 provider 的吊销仍走 opencode.json（buildProviderSection 摘掉 settings.apiKey），
+   * worker 侧会把它们从本清单里过滤掉。
+   */
+  revokedProviderIDs?: string[];
 }
 
 /**
@@ -649,6 +658,36 @@ export interface WorkerModelInfo {
 export interface WorkerModelsResponsePayload {
   /** 模型目录（vteam 口径的条目数组）。 */
   models: WorkerModelInfo[];
+}
+
+/**
+ * 集成注册表项（vteam 口径；`GET /integrations` 的返回项）。
+ *
+ * ⚠️ 同 `WorkerModelInfo` 的 D3 口径：只留页面/控制面用得到的字段，**不透传被驱动端的
+ * `methods`/`connections` 包装**；输出**不含任何已配的 secret**（`apiKey`/`envNames` 是
+ * 「怎么配」的声明，不是「配了什么」的值）。
+ */
+export interface WorkerIntegrationInfo {
+  /** 集成 id（= providerID，如 `opencode-go`）。 */
+  id: string;
+  /** 展示名（如 `OpenCode Go`）。 */
+  name: string;
+  /** 是否支持直接填 apikey（`methods` 含 `{type:"key"}`）。 */
+  apiKey: boolean;
+  /** 该集成识别的环境变量名（仅作提示展示；缺失省略）。 */
+  envNames?: string[];
+}
+
+/**
+ * GET /integrations 响应体（集成注册表**信封**：单键 `integrations`）。
+ *
+ * 这是「可配置 provider 全集」——像 `opencode-go` 这类没有模型行的内置集成
+ * 只能从这里被发现（`GET /models/providers` 查不到它们）。
+ * server 侧同形状副本见 `server/src/workers/worker-session-protocol.ts`。
+ */
+export interface WorkerIntegrationsResponsePayload {
+  /** 集成注册表（vteam 口径的条目数组；id 升序由 server 侧排，此处不排序）。 */
+  integrations: WorkerIntegrationInfo[];
 }
 
 /** 模型引用（vteam 口径：`providerID/modelID`）。 */

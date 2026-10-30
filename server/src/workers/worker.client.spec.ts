@@ -932,6 +932,107 @@ describe('WorkerClient', () => {
     });
   });
 
+  describe('listIntegrations（GET /integrations：opencode 集成注册表走 worker 执行端点）', () => {
+    it('GET /integrations 200 → 映射 {id,name,apiKey,envNames?}（注册表 = 可配置 provider 全集）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            integrations: [
+              {
+                id: 'opencode-go',
+                name: 'OpenCode Go',
+                apiKey: true,
+                envNames: ['OPENCODE_API_KEY'],
+              },
+              { id: '302ai', name: '302.AI', apiKey: true },
+            ],
+          }),
+        }),
+      );
+
+      await expect(client.listIntegrations(worker)).resolves.toEqual([
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          apiKey: true,
+          envNames: ['OPENCODE_API_KEY'],
+        },
+        { id: '302ai', name: '302.AI', apiKey: true },
+      ]);
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`http://localhost:${DEFAULT_EXEC_PORT}/integrations`);
+      expect(init.method).toBe('GET');
+      expect(new Headers(init.headers).get('X-Worker-Token')).toBe(
+        'dev-worker-token',
+      );
+    });
+
+    it('响应信封只有 integrations 一个键（拼错的键不被读取 → 降级 []）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            // 反向：worker 若回 {integration:[...]}（拼写漂移），控制面读不到 ⇒ 降级
+            integration: [{ id: 'opencode-go' }],
+          }),
+        }),
+      );
+
+      await expect(client.listIntegrations(worker)).resolves.toEqual([]);
+    });
+
+    it('归一：纯空白 id 丢弃、去空白；缺 name 回退 id；apiKey 布尔化；空 envNames 不落键（无 secret）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            integrations: [
+              { id: '  ', name: 'Blank ID' },
+              { id: 'env-only', apiKey: false, envNames: [] },
+              {
+                id: ' opencode-go ',
+                name: ' OpenCode Go ',
+                apiKey: 1,
+                envNames: ['OPENCODE_API_KEY'],
+              },
+              { name: 'No ID' },
+            ],
+          }),
+        }),
+      );
+
+      const items = await client.listIntegrations(worker);
+
+      expect(items).toEqual([
+        { id: 'env-only', name: 'env-only', apiKey: false },
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          apiKey: true,
+          envNames: ['OPENCODE_API_KEY'],
+        },
+      ]);
+      // 输出只含声明字段：不得出现任何明文 key（apiKey 是「可配」声明，envNames 是变量名）
+      expect(JSON.stringify(items)).not.toMatch(/sk-[A-Za-z0-9]/);
+    });
+
+    it('worker 端点 500 → 降级返回 []（列表端点不抛错，调用方以 degraded 提示）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: false, status: 500 }));
+
+      await expect(client.listIntegrations(worker)).resolves.toEqual([]);
+    });
+
+    it('网络错误（ECONNREFUSED）→ 降级返回 []', async () => {
+      const client = makeClient();
+      mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
+
+      await expect(client.listIntegrations(worker)).resolves.toEqual([]);
+    });
+  });
+
   describe('listAgents（GET /agents：opencode 原生 agent 清单）', () => {
     it('200 → 透传 agents 数组（含 native/hidden/mode 实测字段）', async () => {
       const client = makeClient();

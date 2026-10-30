@@ -16,7 +16,9 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     update: jest.Mock;
     remove: jest.Mock;
     listProviders: jest.Mock;
+    listOpencodeIntegrations: jest.Mock;
     setCredential: jest.Mock;
+    setCredentialByProvider: jest.Mock;
     getCredential: jest.Mock;
     revokeCredential: jest.Mock;
     revokeCredentialByProvider: jest.Mock;
@@ -50,7 +52,9 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
       update: jest.fn(),
       remove: jest.fn(),
       listProviders: jest.fn(),
+      listOpencodeIntegrations: jest.fn(),
       setCredential: jest.fn(),
+      setCredentialByProvider: jest.fn(),
       getCredential: jest.fn(),
       revokeCredential: jest.fn(),
       revokeCredentialByProvider: jest.fn(),
@@ -132,6 +136,58 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     expect(providersIdx).toBeGreaterThan(-1);
     expect(idIdx).toBeGreaterThan(-1);
     expect(providersIdx).toBeLessThan(idIdx);
+  });
+
+  it('GET /models/integrations 转发 listOpencodeIntegrations（注册表 = 可配置 provider 全集）', async () => {
+    service.listOpencodeIntegrations.mockResolvedValue({
+      degraded: false,
+      items: [
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          apiKey: true,
+          inCatalog: false,
+          credential: 'none',
+        },
+      ],
+    });
+
+    const result = await controller.listIntegrations();
+
+    expect(service.listOpencodeIntegrations).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      degraded: false,
+      items: [
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          apiKey: true,
+          inCatalog: false,
+          credential: 'none',
+        },
+      ],
+    });
+    // 注册表条目**不含任何 secret**（apiKey 是「可配」声明，不是值）
+    expect(JSON.stringify(result)).not.toMatch(/sk-[A-Za-z0-9]/);
+  });
+
+  it('路由顺序：integrations 静态段在 :id 参数段之前声明（避免被 :id 吞路由）', () => {
+    const pathOf = (method: string) =>
+      Reflect.getMetadata(
+        PATH_METADATA,
+        ModelsController.prototype[method],
+      ) as string;
+    const methods = Object.getOwnPropertyNames(
+      ModelsController.prototype,
+    ).filter((k) => k !== 'constructor');
+
+    const integrationsIdx = methods.findIndex(
+      (m) => pathOf(m) === 'integrations',
+    );
+    const idIdx = methods.findIndex((m) => pathOf(m) === ':id');
+    expect(integrationsIdx).toBeGreaterThan(-1);
+    expect(idIdx).toBeGreaterThan(-1);
+    expect(integrationsIdx).toBeLessThan(idIdx);
   });
 
   it('POST /models 转发 create（DTO 透传）', async () => {
@@ -273,6 +329,62 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
       providerID: 'opencode-go',
       revokedAt: expect.any(Date),
     });
+  });
+
+  it('POST /models/providers/:providerID/credentials 转发 setCredentialByProvider（注册表级 provider 入口）', async () => {
+    const dto: SetModelCredentialDto = {
+      token: 'sk-raw-token',
+      targetWorkerIds: ['w_0000000001'],
+    };
+    service.setCredentialByProvider.mockResolvedValue(view);
+
+    const result = await controller.setCredentialByProvider('opencode-go', dto);
+
+    // 参数顺序 = (路径 providerID, token, body.providerID?, targetWorkerIds?)
+    expect(service.setCredentialByProvider).toHaveBeenCalledWith(
+      'opencode-go',
+      'sk-raw-token',
+      undefined,
+      ['w_0000000001'],
+    );
+    expect(result).toMatchObject({ providerID: 'opencode-go' });
+  });
+
+  it('body.providerID 存在时透传服务层（与路径不一致 → 服务层 400 MODEL_PROVIDER_MISMATCH）', async () => {
+    const dto: SetModelCredentialDto = {
+      token: 'sk-raw-token',
+      providerID: 'opencode-go',
+    };
+    service.setCredentialByProvider.mockResolvedValue(view);
+
+    await controller.setCredentialByProvider('opencode-go', dto);
+
+    expect(service.setCredentialByProvider).toHaveBeenCalledWith(
+      'opencode-go',
+      'sk-raw-token',
+      'opencode-go',
+      undefined,
+    );
+  });
+
+  it('路由顺序：POST providers/:providerID/credentials 静态段在 :id 之前声明', () => {
+    const pathOf = (method: string) =>
+      Reflect.getMetadata(
+        PATH_METADATA,
+        ModelsController.prototype[method],
+      ) as string;
+    const methodNames = Object.getOwnPropertyNames(
+      ModelsController.prototype,
+    ).filter((k) => k !== 'constructor');
+
+    const postProviderCredIdx = methodNames.indexOf('setCredentialByProvider');
+    expect(pathOf('setCredentialByProvider')).toBe(
+      'providers/:providerID/credentials',
+    );
+    const idIdx = methodNames.findIndex((m) => pathOf(m) === ':id');
+    expect(postProviderCredIdx).toBeGreaterThan(-1);
+    expect(idIdx).toBeGreaterThan(-1);
+    expect(postProviderCredIdx).toBeLessThan(idIdx);
   });
 
   it('路由顺序：@Delete providers 静态段在 :id 参数段之前声明（不吞 providers/:providerID/credentials）', () => {

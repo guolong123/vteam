@@ -30,6 +30,8 @@ import {
   WorkerModelInfo,
   WorkerModelRef,
   WorkerModelsResponsePayload,
+  WorkerIntegrationInfo,
+  WorkerIntegrationsResponsePayload,
   WorkerDeliveryMode,
   SessionMessage,
 } from './worker-protocol';
@@ -250,6 +252,33 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {  it('Register
       { providerID: 'opencode-go', key: 'sk-a' },
     ]);
     expect(modelPayload?.targetWorkerIds).toBeUndefined();
+  });
+
+  it('v2：model-credentials 的 revokedProviderIDs round-trip（吊销清单全量语义 + 缺省兼容旧 server）', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
+      resourceVersion: 'model-credentials',
+      payload: {
+        providerKeys: [{ providerID: 'qwenlocal', key: 'local-noop' }],
+        revokedProviderIDs: ['opencode-go', 'keta-qwen'],
+      },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+    const payload = parsed.payload as ModelCredentialsPayload | undefined;
+
+    expect(payload?.providerKeys).toEqual([{ providerID: 'qwenlocal', key: 'local-noop' }]);
+    expect(payload?.revokedProviderIDs).toEqual(['opencode-go', 'keta-qwen']);
+
+    // 旧 server 负载不带该字段 → 缺省 undefined（worker 侧跳过吊销删除，不报错）
+    const legacy = JSON.parse(
+      JSON.stringify({
+        type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
+        resourceVersion: 'model-credentials',
+        payload: { providerKeys: [{ providerID: 'opencode-go', key: 'sk-a' }] },
+      }),
+    ) as WorkerCommand;
+    expect((legacy.payload as ModelCredentialsPayload | undefined)?.revokedProviderIDs).toBeUndefined();
   });
 
   it('C8：model-credentials 的 providerConfigs 带 per-model 能力 → round-trip 字段完整（camelCase 内部形状）', () => {
@@ -591,6 +620,30 @@ describe('T10 会话/模型端点契约（worker 侧；server 侧副本见 T18�
     expect('location' in parsed[0]).toBe(false);
     expect('data' in parsed[0]).toBe(false);
   });
+
+  it('GET /integrations：集成注册表条目 round-trip，且**不是**被驱动端的 methods/connections 包装', () => {
+    const integrations: WorkerIntegrationInfo[] = [
+      {
+        id: 'opencode-go',
+        name: 'OpenCode Go',
+        apiKey: true,
+        envNames: ['OPENCODE_API_KEY'],
+      },
+      { id: 'env-only', name: 'Env Only', apiKey: false },
+    ];
+
+    const parsed = JSON.parse(JSON.stringify(integrations)) as WorkerIntegrationInfo[];
+
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].id).toBe('opencode-go');
+    expect(parsed[0].apiKey).toBe(true);
+    expect(parsed[0].envNames).toEqual(['OPENCODE_API_KEY']);
+    expect(parsed[1].envNames).toBeUndefined();
+    // 归一输出里没有被驱动端的包装键，更没有 secret 值
+    expect('methods' in parsed[0]).toBe(false);
+    expect('connections' in parsed[0]).toBe(false);
+    expect(JSON.stringify(parsed)).not.toMatch(/sk-[A-Za-z0-9]/);
+  });
 });
 
 /* ============================================================================
@@ -623,6 +676,8 @@ const PROTOCOL_SHAPE_NAMES = [
   'WorkerModelRef',
   'WorkerModelInfo',
   'WorkerModelsResponsePayload',
+  'WorkerIntegrationInfo',
+  'WorkerIntegrationsResponsePayload',
   'CreateSessionRequestPayload',
   'CreateSessionResponsePayload',
   'SessionPromptRequestPayload',
@@ -715,6 +770,11 @@ const PROTOCOL_MANIFEST = {
     optional: ['status'],
   },
   WorkerModelsResponsePayload: { required: ['models'], optional: [] },
+  WorkerIntegrationInfo: {
+    required: ['id', 'name', 'apiKey'],
+    optional: ['envNames'],
+  },
+  WorkerIntegrationsResponsePayload: { required: ['integrations'], optional: [] },
   CreateSessionRequestPayload: { required: [], optional: ['model'] },
   CreateSessionResponsePayload: { required: ['sessionId'], optional: [] },
   SessionPromptRequestPayload: {
@@ -837,6 +897,26 @@ type _M10 = Expect<
     }
   >
 >;
+type _M11 = Expect<
+  SameKeys<
+    WorkerIntegrationInfo,
+    {
+      id: string;
+      name: string;
+      apiKey: boolean;
+      envNames?: string[];
+    }
+  >
+>;
+type _M12 = Expect<
+  SameKeys<
+    WorkerIntegrationsResponsePayload,
+    {
+      integrations: WorkerIntegrationInfo[];
+    }
+  >
+>;
+type _O7 = Expect<[OptionalKeys<WorkerIntegrationInfo>] extends ['envNames'] ? true : false>;
 /* 编译期：可选键集必须与 manifest 一致（`model?` 变成必填 = 契约漂移）。 */
 type _O1 = Expect<
   [OptionalKeys<CreateSessionRequestPayload>] extends ['model'] ? true : false
@@ -928,6 +1008,7 @@ describe('T21 双端契约一致性（worker 侧副本 ↔ server 侧副本）',
       getMessages: jest.Mock;
       abort: jest.Mock;
       listModels: jest.Mock;
+      listIntegrations: jest.Mock;
     } {
       const createSession = jest.fn().mockResolvedValue('ses_t21');
       const sendMessage = jest
@@ -936,6 +1017,7 @@ describe('T21 双端契约一致性（worker 侧副本 ↔ server 侧副本）',
       const getMessages = jest.fn().mockResolvedValue([]);
       const abort = jest.fn().mockResolvedValue({ interrupted: true });
       const listModels = jest.fn().mockResolvedValue([]);
+      const listIntegrations = jest.fn().mockResolvedValue([]);
       const driver = {
         baseUrl: 'http://127.0.0.1:4199',
         authPassword: '',
@@ -944,8 +1026,17 @@ describe('T21 双端契约一致性（worker 侧副本 ↔ server 侧副本）',
         getMessages,
         abort,
         listModels,
+        listIntegrations,
       } as unknown as OpenCodeDriver;
-      return { driver, createSession, sendMessage, getMessages, abort, listModels };
+      return {
+        driver,
+        createSession,
+        sendMessage,
+        getMessages,
+        abort,
+        listModels,
+        listIntegrations,
+      };
     }
 
     /** 起一个真实的 ExecServer（port 0 = 随机）。 */
@@ -1157,6 +1248,25 @@ describe('T21 双端契约一致性（worker 侧副本 ↔ server 侧副本）',
         expect(res.status).toBe(200);
         expect(Object.keys(res.body)).toEqual(['models']);
         expect(res.body.models).toEqual(models);
+      } finally {
+        await stop();
+      }
+    });
+
+    it('GET /integrations：响应信封只有 integrations 一个键（读键 = server 的 WorkerIntegrationsResponsePayload）', async () => {
+      const { driver, listIntegrations } = mockDriver();
+      const integrations = [
+        { id: 'opencode-go', name: 'OpenCode Go', apiKey: true, envNames: ['OPENCODE_API_KEY'] },
+        { id: 'env-only', name: 'Env Only', apiKey: false },
+      ];
+      listIntegrations.mockResolvedValue(integrations);
+      const { port, stop } = await startExec(driver);
+      try {
+        const res = await request(port, 'GET', '/integrations');
+        expect(res.status).toBe(200);
+        expect(Object.keys(res.body)).toEqual(['integrations']);
+        expect(res.body.integrations).toEqual(integrations);
+        expect(listIntegrations).toHaveBeenCalledTimes(1);
       } finally {
         await stop();
       }

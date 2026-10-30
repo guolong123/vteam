@@ -101,6 +101,7 @@ import type {
   SessionMessagesResponsePayload,
   SessionPromptRequestPayload,
   SessionPromptResponsePayload,
+  WorkerIntegrationInfo,
   WorkerModelInfo,
   WorkerModelRef,
 } from '../protocol/worker-protocol';
@@ -830,6 +831,10 @@ export class ExecServer {
     }
     if (url.pathname === '/models') {
       await this.handleModelsList(req, res);
+      return;
+    }
+    if (url.pathname === '/integrations') {
+      await this.handleIntegrationsList(req, res);
       return;
     }
     if (url.pathname.startsWith('/config/')) {
@@ -1941,6 +1946,38 @@ export class ExecServer {
       this.logger.info(`[exec] models list -> ${models.length} 个`);
     } catch (err) {
       this.sendDriverError(res, err, 'models list');
+    }
+  }
+
+  /**
+   * GET /integrations——opencode 集成注册表（**可配置 provider 全集**，实测 239 项）。
+   *
+   * 为什么单独开这个端点：`GET /models` 只报**已在跑的模型**（目录里有的 provider），
+   * 而 `opencode-go` 这类内置集成没有模型行 ⇒ 控制面此前无从得知「还有哪些 provider
+   * 可以配 apikey」（管理页显示不全的根因）。本端点从被驱动端的集成注册表取全集，
+   * 归一成 vteam 自有形状（D3：不透传 `methods`/`connections` 包装，**无 secret**）。
+   * - 鉴权：X-Worker-Token（与 /models 同规格）。
+   * - 失败语义：驱动层出错 → `sendDriverError` 回非 2xx，由控制面降级为
+   *   `items=[] + degraded`（列表类端点不阻断页面，同 `listModels` 的调用方约定）。
+   */
+  private async handleIntegrationsList(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: `仅支持 GET，收到 ${req.method}` });
+      return;
+    }
+    if (!this.checkWorkerToken(req, res, 'integrations list')) {
+      return;
+    }
+    try {
+      const integrations: WorkerIntegrationInfo[] =
+        await this.driver.listIntegrations();
+      sendJson(res, 200, { integrations });
+      this.logger.info(`[exec] integrations list -> ${integrations.length} 个`);
+    } catch (err) {
+      this.sendDriverError(res, err, 'integrations list');
     }
   }
 

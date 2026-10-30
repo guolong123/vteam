@@ -4,7 +4,12 @@
  * 事实依据：
  * - .omo/evidence/prototype-audit.md（Phase 0 审计，17 页全量清单）
  * - web/app/ 迁移实现（grep data-testid 实测，T4/T5 补充：skills 实际 25、
- *   tool-register 56 + register-feedback；各页新增 loading/error/retry 等反馈 testid）
+ *   tool-register 56 + register-feedback；各页新增 loading/error/retry 等反馈 testid；
+ *   providers 页并入 opencode 集成行补充 4 个：provider-source-badge /
+ *   provider-integrations-hint / provider-modal-provider-filter(-empty)；
+ *   新增弹窗「远端 provider 下拉（选择 + API Key）」再补 4 个：
+ *   provider-add-provider-select / provider-add-provider-filter(-empty) /
+ *   provider-add-remote-hint）
  * - 导航变体三页（nav-cmdk/nav-hybrid/nav-rail）无独立路由——AppShell 融合导航
  *   （NavTopBar + NavDock + CmdKPanel，nav-hybrid 心智终态）统一承载，对应 testid
  *   在 app-shell/nav-top-bar/nav-dock/cmdk-panel 组件中。
@@ -486,6 +491,7 @@ export const PAGES: PageTestidRef[] = [
       "provider-list",
       "provider-item",
       "provider-id",
+      "provider-source-badge",
       "provider-model-count",
       "provider-credential-status",
       "provider-fingerprint",
@@ -523,6 +529,9 @@ export const PAGES: PageTestidRef[] = [
       "provider-delete-provider-confirm-mask",
       "provider-config-modal",
       "provider-modal-provider",
+      /* 下拉关键字过滤输入框与其空结果提示（选项 >30 才渲染，如 240+ 集成项） */
+      "provider-modal-provider-filter",
+      "provider-modal-provider-filter-empty",
       "provider-modal-key-input",
       "provider-modal-select-all",
       "provider-modal-workers",
@@ -536,7 +545,14 @@ export const PAGES: PageTestidRef[] = [
       "provider-edit-modal-save",
       "provider-edit-modal-cancel",
       "provider-edit-modal-error",
+      /* 新增 Provider 弹窗·远端 provider 下拉（选择 + API Key 模式） */
+      "provider-add-provider-select",
+      "provider-add-provider-filter",
+      "provider-add-provider-filter-empty",
+      "provider-add-remote-hint",
       "provider-hint",
+      /* opencode 集成列表不可用（degraded/端点失败）行尾小字提示 */
+      "provider-integrations-hint",
       "providers-loading",
       "providers-error",
       "providers-retry",

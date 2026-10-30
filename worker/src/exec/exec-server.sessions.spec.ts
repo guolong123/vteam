@@ -34,12 +34,14 @@ function mockDriver(): {
   getMessages: jest.Mock;
   abort: jest.Mock;
   listModels: jest.Mock;
+  listIntegrations: jest.Mock;
 } {
   const createSession = jest.fn().mockResolvedValue('ses_new');
   const sendMessage = jest.fn().mockResolvedValue({ messageId: 'inbox_1' });
   const getMessages = jest.fn().mockResolvedValue([]);
   const abort = jest.fn().mockResolvedValue(undefined);
   const listModels = jest.fn().mockResolvedValue([]);
+  const listIntegrations = jest.fn().mockResolvedValue([]);
   const driver = {
     baseUrl: 'http://127.0.0.1:4199',
     authPassword: '',
@@ -48,8 +50,17 @@ function mockDriver(): {
     getMessages,
     abort,
     listModels,
+    listIntegrations,
   } as unknown as OpenCodeDriver;
-  return { driver, createSession, sendMessage, getMessages, abort, listModels };
+  return {
+    driver,
+    createSession,
+    sendMessage,
+    getMessages,
+    abort,
+    listModels,
+    listIntegrations,
+  };
 }
 
 /** 事件 sender（不发网络请求）。 */
@@ -557,6 +568,70 @@ describe('T10 会话/模型端点（决策 D3：控制面不再直连 opencode�
         const wrong = await request(port, 'GET', '/models', { token: 'nope' });
         expect(wrong.status).toBe(401);
         expect(listModels).not.toHaveBeenCalled();
+      } finally {
+        await stop();
+      }
+    });
+  });
+
+  describe('GET /integrations（opencode 集成注册表 = 可配置 provider 全集）', () => {
+    it('200 {integrations:[…]}：归一条目透传，不透传被驱动端包装', async () => {
+      const { driver, listIntegrations } = mockDriver();
+      listIntegrations.mockResolvedValue([
+        { id: 'opencode-go', name: 'OpenCode Go', apiKey: true, envNames: ['OPENCODE_API_KEY'] },
+        { id: 'env-only', name: 'Env Only', apiKey: false },
+      ]);
+      const { port, stop } = await startExec(driver);
+      try {
+        const res = await request(port, 'GET', '/integrations', { token: WORKER_TOKEN });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+          integrations: [
+            { id: 'opencode-go', name: 'OpenCode Go', apiKey: true, envNames: ['OPENCODE_API_KEY'] },
+            { id: 'env-only', name: 'Env Only', apiKey: false },
+          ],
+        });
+        // 上游包装不许漏出去（v2 是 {location,data} / {methods,connections}）
+        expect(res.body.location).toBeUndefined();
+        expect(res.body.data).toBeUndefined();
+        expect(listIntegrations).toHaveBeenCalledTimes(1);
+      } finally {
+        await stop();
+      }
+    });
+
+    it('缺 / 错 X-Worker-Token → 401（且驱动不被调用）', async () => {
+      const { driver, listIntegrations } = mockDriver();
+      const { port, stop } = await startExec(driver);
+      try {
+        const missing = await request(port, 'GET', '/integrations');
+        expect(missing.status).toBe(401);
+        const wrong = await request(port, 'GET', '/integrations', { token: 'nope' });
+        expect(wrong.status).toBe(401);
+        expect(listIntegrations).not.toHaveBeenCalled();
+      } finally {
+        await stop();
+      }
+    });
+
+    it('非 GET → 405', async () => {
+      const { driver } = mockDriver();
+      const { port, stop } = await startExec(driver);
+      try {
+        const res = await request(port, 'POST', '/integrations', { token: WORKER_TOKEN });
+        expect(res.status).toBe(405);
+      } finally {
+        await stop();
+      }
+    });
+
+    it('驱动抛错 → 非 2xx（控制面据此降级 items=[] + degraded）', async () => {
+      const { driver, listIntegrations } = mockDriver();
+      listIntegrations.mockRejectedValue(new DriverRequestError('serve 未就绪', 503));
+      const { port, stop } = await startExec(driver);
+      try {
+        const res = await request(port, 'GET', '/integrations', { token: WORKER_TOKEN });
+        expect(res.status).not.toBe(200);
       } finally {
         await stop();
       }
