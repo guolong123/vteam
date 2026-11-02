@@ -212,6 +212,31 @@ export class ChatController {
   }
 
   /**
+   * 中止频道中正在运行的 agent 回合（P5 用户主动停止）。
+   *
+   * POST /api/v1/channels/:id/abort → 200 + { aborted, sessions }
+   *
+   * 与"重置会话"（reset-session）的区别：本端点**只停当前这一轮**，
+   * 会话与历史保留，下一条消息继续同一会话（对齐 GUI 停止按钮语义）。
+   * 幂等：无运行中会话时返回 { aborted: false }（用户可连点）。
+   */
+  @Post('channels/:id/abort')
+  @HttpCode(200)
+  @UseGuards(PermissionGuard)
+  @RequirePermission('chats.create')
+  @ApiOperation({ summary: '中止频道中正在运行的 agent 回合（只停本轮，不丢会话）' })
+  abortChannel(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: { teamMemberId?: string; agentId?: string },
+  ) {
+    return this.chatService.abortRunningSession(id, user.id, {
+      ...(dto?.teamMemberId === undefined ? {} : { teamMemberId: dto.teamMemberId }),
+      ...(dto?.agentId === undefined ? {} : { agentId: dto.agentId }),
+    });
+  }
+
+  /**
    * 创建 private 私聊频道（FR-14，与群聊共用该 Agent 会话）。
    * POST /api/v1/dm-channels → 201 + 频道对象（重复创建幂等返回已有）
    */

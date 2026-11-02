@@ -1057,6 +1057,25 @@ export default function TeamSessionPage() {
   });
 
   /* ---------- 提问回复 ---------- */
+  /**
+   * P5：停止当前运行的 agent 回合（对齐 GUI 停止按钮语义）。
+   *
+   * 与"重置会话"的区别：只停本轮，会话与历史保留（下一条继续同一会话）。
+   * 端点幂等（无运行中会话返回 aborted:false），故连点安全。
+   */
+  const abortMutation = useMutation({
+    mutationFn: async (target?: { teamMemberId?: string; agentId?: string }) => {
+      // 用外层已解析好的 visibleChannelId（群聊=团队频道，私聊=该成员频道），
+      // 避免在 mutation 内遮蔽同名变量（会触发 TDZ 自引用）。
+      const targetChannel = visibleChannelId;
+      if (!targetChannel) throw new Error("当前没有可停止的会话");
+      return api.post(`/channels/${targetChannel}/abort`, target ?? {});
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["channels"] });
+    },
+  });
+
   const questionReplyMutation = useMutation({
     mutationFn: (input: { questionId: string; payload: QuestionModalSubmitPayload }) =>
       api.post(`/questions/${input.questionId}/reply`, input.payload),
@@ -1721,7 +1740,32 @@ export default function TeamSessionPage() {
                 <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachment={attachment} initials={initials} status={msg.status} />,
               );
             })}
-            {loadingLabel && <LoadingIndicator label={loadingLabel} />}
+            {loadingLabel && (
+              <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+                <LoadingIndicator label={loadingLabel} />
+                {/* P5：用户主动停止本轮（不是重置会话） */}
+                <button
+                  type="button"
+                  data-testid="session-abort"
+                  aria-label="停止当前回合"
+                  disabled={abortMutation.isPending}
+                  onClick={() => abortMutation.mutate(undefined)}
+                  style={{
+                    padding: `${space.xs}px ${space.md}px`,
+                    borderRadius: radius.pill,
+                    border: "1px solid rgba(220,38,38,0.35)",
+                    backgroundColor: "rgba(220,38,38,0.06)",
+                    color: "#DC2626",
+                    fontSize: fontSize.sm,
+                    cursor: abortMutation.isPending ? "default" : "pointer",
+                    opacity: abortMutation.isPending ? 0.6 : 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {abortMutation.isPending ? "停止中…" : "停止"}
+                </button>
+              </div>
+            )}
             {errorLabel && <MsgError kind={errorLabel.kind} detail={errorLabel.detail} time={formatTime(new Date().toISOString())} />}
             {/* B12：瞬态 session 状态行复用 LoadingIndicator 的容器（testid=session-status，指示点 testid=session-status-dots）；仍在 messages.map 之外追加，不进消息数组。 */}
             {sessionLabel && <LoadingIndicator label={sessionLabel} testid="session-status" dotsTestId="session-status-dots" />}

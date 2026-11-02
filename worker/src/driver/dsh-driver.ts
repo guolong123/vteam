@@ -176,6 +176,24 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   private readonly pendingQuestions = new Map<string, PendingQuestion>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
 
+  /**
+   * `session/steer` 可用性缓存（P5）：undefined = 未探测，true/false = 已确定。
+   * 见 pickPromptMethod（避免每轮多一次试探往返）。
+   */
+  private steerSupported: boolean | undefined;
+
+  /** 模型路由切换互斥标记（切换 = 关运行时，避免并发切换把运行时关两次）。 */
+  private switching = false;
+
+  /**
+   * 会话别名：上层持有的旧 id → 实际在用的 DSH 会话 id。
+   *
+   * 为什么需要：DSH 会话可能因 write handle 锁冲突而不可 resume（实测重启运行时后），
+   * 此时驱动新建会话 id 继续，但 exec-server 仍以旧 id 调用（getMessages/abort 等）。
+   * 别名表把旧 id 的调用解析到新 id，避免上层"会话失效"误判 + 重建循环。
+   */
+  private readonly sessionAliases = new Map<string, string>();
+
   /** 等待某会话 idle 的 resolver（settle 时触发）。 */
   private readonly idleWaiters = new Map<string, Array<() => void>>();
   /** 等待某会话 turn/end 的 resolver。 */
@@ -225,13 +243,91 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     const seed = `${Date.now()}-${Math.random()}`;
     const sessionId = `dsh-${createHash('sha256').update(seed).digest('hex').slice(0, 24)}`;
     this.sessions.set(sessionId, this.newMirror(sessionId));
+
+    // P5：UI 配置的模型**必须生效**（用户要求"界面配置的内容能下发到 worker"）。
+    //
+    // DSH 的 provider/model 在 initialize 握手时固定（协议无 per-session 选择）。
+    // 故策略：目标模型与当前路由不一致 ⇒ **重启运行时**并用新路由握手。
+    // 代价：重启约 1s（P0 实测 initialize 952ms），且需等当前无在途回合；
+    // 收益：Agent/成员页配的模型立刻生效，与 opencode 模式行为对齐。
+    //
+    // ⚠️ 已有会话在重启后会按需 `session/resume` 恢复（历史在 DSH 侧持久化，
+    // 不回放事件），故重启不会丢对话。
     if (model != null) {
-      this.logger.warn(
-        `[dsh-driver] createSession 传入模型 ${model.providerID}/${model.modelID}：` +
-          'DSH 的模型路由在 initialize 时固定，本会话将使用运行时既定路由（换模型需重启运行时）',
-      );
+      const target = `${model.providerID}/${model.modelID}`;
+      const current =
+        `${this.options.provider ?? ''}/${this.options.model ?? ''}`;
+      if (target !== current) {
+        await this.switchRoute(model.providerID, model.modelID);
+      }
     }
     return sessionId;
+  }
+
+  /**
+   * 切换模型路由（重启运行时并以新路由握手）。
+   *
+   * 为什么必须重启：DSH 的 `initialize` 携带 provider/model 且服务端会校验该路由
+   * （P0 实测 `no adapter registered for provider "..."` 即此校验），协议里**没有**
+   * per-session 或 per-prompt 的模型选择方法。所以"换模型"在 DSH 上等价于"换运行时"。
+   *
+   * 幂等：目标与当前一致时直接返回。
+   */
+  private async switchRoute(providerID: string, modelID: string): Promise<void> {
+    if (this.switching === true) return;
+    this.switching = true;
+    try {
+      this.logger.info(
+        `[dsh-driver] 模型路由切换：${this.options.provider}/${this.options.model} → ${providerID}/${modelID}（重启运行时）`,
+      );
+      // ① 先停掉所有活跃回合并等它们收口：DSH 的会话有 **write handle 独占锁**
+      //    （实测并发写会报 `session "..." is already owned by an active write handle`）。
+      //    直接 close 运行时会让锁悬着 → 新运行时 resume 会撞锁。
+      for (const sessionId of [...this.sessions.keys()]) {
+        try {
+          await this.client.request('session/cancel', { sessionId }, 10_000);
+        } catch {
+          // 会话不存在/无在途回合 → 正常
+        }
+      }
+      // 给引擎一点时间释放 write handle（cancel 是异步收口）
+      await new Promise((r) => setTimeout(r, 500));
+      // ② 记录新路由（后续 ensureStarted 用它握手）
+      this.options.provider = providerID;
+      this.options.model = modelID;
+      // ③ 关掉旧运行时（close 会重置于 initialized）
+      await this.client.close();
+      // ④ 清空会话镜像但**保留会话 id**（历史在 DSH 侧持久化，resume 可恢复）
+      for (const mirror of this.sessions.values()) {
+        mirror.messages = [];
+        mirror.assistantByMessage.clear();
+        mirror.toolParts.clear();
+        mirror.pendingTurn = undefined;
+        // system 已注入过（历史里在）→ 不重复
+        mirror.systemSent = true;
+      }
+    } finally {
+      this.switching = false;
+    }
+  }
+
+
+  /**
+   * 该会话在**本运行时内**是否已活跃（决定能否用 steer 而非 prompt）。
+   *
+   * 判据（任一为真即可）：
+   * - 有未定稿的 pendingTurn（本轮已在跑）；
+   * - mirror 里已有消息（本轮之前跑过）；
+   * - `session/prompt` 至少成功过一次（mirror.live 标记）。
+   *
+   * 为什么不用"会话在 DSH 侧是否存在"：那需要一次额外探测（session/resume 有副作用），
+   * 而首轮本来就该走 prompt（它会自动建会话）。
+   */
+  private sessionIsLive(sessionID: string): boolean {
+    const resolved = this.sessionAliases.get(sessionID) ?? sessionID;
+    const mirror = this.sessions.get(resolved);
+    if (mirror === undefined) return false;
+    return mirror.messages.length > 0 || mirror.pendingTurn !== undefined;
   }
 
   /**
@@ -268,8 +364,17 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     mirror.lastOutcome = undefined;
     const waitTurnEnd = this.waitForTurnEnd(sessionID);
 
-    // steer：优先 vendored 方法（P5），不存在则回退 queue（不阻断）
-    const method = input.delivery === 'steer' ? await this.pickPromptMethod(true) : 'session/prompt';
+    // steer：优先 vendored 方法（P5），不存在则回退 queue（不阻断）。
+    //
+    // ⚠️ **首轮必须走 session/prompt**：DSH 的 `session/prompt` 对未知 sessionId 会
+    // **自动创建会话**，而 vendored 的 `session/steer` 要求会话已存在（否则
+    // `session not found`）。故仅在「会话已在本运行时内活跃」时才用 steer
+    // （= pendingTurn 存在 或 本轮之前已收到过事件）。
+    const canSteer = this.sessionIsLive(sessionID);
+    const method =
+      input.delivery === 'steer' && canSteer
+        ? await this.pickPromptMethod(true)
+        : 'session/prompt';
     const promptParams = { sessionId: sessionID, contentBlocks: withSystem };
     let receipt: { messageId?: unknown } | undefined;
     try {
@@ -285,13 +390,34 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       // resume 后继续同一轮即可（历史也随之恢复）。
       if (!/already exists/i.test(message)) throw err;
       this.logger.warn(
-        `[dsh-driver] 会话 ${sessionID} 已存在于 DSH 侧 → resume 后继续本轮（不判失败）`,
+        `[dsh-driver] 会话 ${sessionID} 已存在于 DSH 侧 → 尝试 resume 后继续本轮`,
       );
-      await this.client.request('session/resume', { sessionId: sessionID }, 60_000);
-      this.ensureMirror(sessionID).systemSent = true;
-      receipt = (await this.client.request(method, promptParams)) as
-        | { messageId?: unknown }
-        | undefined;
+      // resume 可能失败：会话被**旧的 write handle 占用**（重启运行时后锁可能悬着，
+      // 实测报 `is already owned by an active write handle`）。
+      // 这种情况不能死循环重试：改为**新建会话 id**（放弃旧会话的 DSH 侧上下文），
+      // 保证本轮能跑通。代价：该会话的 DSH 历史不再续接（vteam 侧历史仍在）。
+      try {
+        await this.client.request('session/resume', { sessionId: sessionID }, 60_000);
+        this.ensureMirror(sessionID).systemSent = true;
+        receipt = (await this.client.request(method, promptParams)) as
+          | { messageId?: unknown }
+          | undefined;
+      } catch (resumeErr) {
+        const resumeMessage = (resumeErr as Error).message;
+        this.logger.warn(
+          `[dsh-driver] resume 失败（${resumeMessage}）→ 放弃旧会话上下文，用新会话继续本轮`,
+        );
+        // 用带时间戳的新 id（旧 id 在 DSH 侧被锁，无法复用）
+        const freshId = `${sessionID}-r${Date.now().toString(36)}`;
+        this.sessions.delete(sessionID);
+        this.ensureMirror(freshId);
+        receipt = (await this.client.request(method, {
+          sessionId: freshId,
+          contentBlocks: withSystem,
+        })) as { messageId?: unknown } | undefined;
+        // 把旧 id 的后续映射到新 id（上层仍用旧 id 收事件 → 由 sessionIdOf 兜底）
+        this.sessionAliases.set(sessionID, freshId);
+      }
     }
 
     const messageId =
@@ -309,7 +435,9 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    * `session/resume` 恢复（但 resume **不回放事件**，故历史仍可能为空——P1 遗留）。
    */
   async getMessages(sessionID: string, _options?: DriverMessageQuery): Promise<DriverMessage[]> {
-    let mirror = this.sessions.get(sessionID);
+    // 别名解析：旧 id 可能已被新 id 取代（见 sessionAliases）
+    const resolved = this.sessionAliases.get(sessionID) ?? sessionID;
+    let mirror = this.sessions.get(resolved);
     if (mirror === undefined) {
       // ⚠️ 镜像缺失**不等于**会话失效（实测踩到的坑）：
       // DSH 的会话是**持久化**的（`$DSH_HOME/sessions/...`），worker 重启只会丢掉本进程的
@@ -454,11 +582,12 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    * 不可行，故记警告并**不抛错**（避免上层因中止失败而卡住整个任务）。
    */
   async abort(sessionID: string): Promise<void> {
-    if (!this.sessions.has(sessionID)) return;
+    const resolved = this.sessionAliases.get(sessionID) ?? sessionID;
+    if (!this.sessions.has(resolved)) return;
     try {
       await this.client.request(
         'session/cancel',
-        { sessionId: sessionID },
+        { sessionId: resolved },
         Math.min(this.options.requestTimeoutMs ?? 120_000, 30_000),
       );
     } catch (err) {
@@ -952,17 +1081,40 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     return blocks;
   }
 
-  /** 选择下发方法：steer 优先 vendored `session/steer`，不存在则回退 prompt。 */
+  /**
+   * 选择下发方法：steer 优先 vendored `session/steer`。
+   *
+   * **探测结果缓存**（P5）：早期实现每轮都发一次 `{probe:true}` 试探请求
+   * （不存在会抛 unknown method），那会给每轮 steer 加一次往返。
+   * 现在首次探测一次并缓存，vendored 未安装时永久回退（不再每轮试探）。
+   */
   private async pickPromptMethod(wantSteer: boolean): Promise<string> {
     if (!wantSteer) return 'session/prompt';
+    if (this.steerSupported === false) return 'session/prompt';
+    if (this.steerSupported === true) return 'session/steer';
     try {
-      // 试探：不存在会抛 unknown method（无副作用）
-      await this.client.request('session/steer', { probe: true }, 5_000);
+      // 探测：vendored 版本会走到「session not found」（说明**方法存在**），
+      // 未 vendor 则抛 unknown method。用不存在的 id 探测 = 无副作用。
+      await this.client.request('session/steer', { sessionId: '__probe__', contentBlocks: [] }, 5_000);
+      this.steerSupported = true;
+      this.logger.info('[dsh-driver] session/steer 可用（vendored SDK server）');
       return 'session/steer';
-    } catch {
-      this.logger.warn(
-        '[dsh-driver] session/steer 不可用（vendored 插件未安装？）→ 按 queue 语义回退 session/prompt',
-      );
+    } catch (err) {
+      const message = (err as Error).message;
+      // 三种结果必须区分（否则会把「方法存在但没会话」误判成「未 vendor」）：
+      // ① unknown method → vendored 未安装（预期内降级，缓存 false）
+      // ② session not found → **方法存在**（探测用假 id 的正常响应，缓存 true）
+      // ③ 其它（运行时未启动等）→ 本次降级但**不缓存**（下次重试）
+      if (/unknown DeepSeek Harness SDK runtime method|unknown.*session\/steer/i.test(message)) {
+        this.steerSupported = false;
+        this.logger.warn('[dsh-driver] session/steer 不可用（vendored SDK server 未安装）→ 回退 session/prompt');
+      } else if (/session not found/i.test(message)) {
+        this.steerSupported = true;
+        this.logger.info('[dsh-driver] session/steer 可用（探测用假 id 得到 session not found）');
+        return 'session/steer';
+      } else {
+        this.logger.warn(`[dsh-driver] session/steer 探测异常（本次回退，不缓存结论）：${message}`);
+      }
       return 'session/prompt';
     }
   }

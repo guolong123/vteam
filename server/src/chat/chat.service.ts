@@ -680,6 +680,73 @@ export class ChatService {
    * 其它实例分派的回复无法进内存映射，DB 推导无跨实例一致性问题且零状态管理。
    * 404 MESSAGE_NOT_FOUND（消息不存在或非本频道）；400 MESSAGE_NOT_USER（非用户消息）。
    */
+  /**
+   * 中止频道中**正在运行**的 agent 回合（P5 用户主动停止）。
+   *
+   * 语义（对齐 GUI 停止按钮 / DSH 的 session/cancel）：
+   * - 只中止当前这一轮，**不丢弃会话**（下一条消息可以继续同一会话）；
+   * - worker 侧 `POST /sessions/:id/abort` → 驱动 `abort()` → DSH `session/cancel`
+   *   → `agent.cancel({kind:'user'},{keepInbox:true})`（部分输出保留、排队消息不丢）；
+   * - 幂等：没有运行中的会话时返回 `{aborted:false}` 而不是报错（用户可能连点）。
+   *
+   * ⚠️ 为什么不中止 runScope 之外的会话：一个频道可能绑定多个成员实例（群聊），
+   * 本端点按 `teamMemberId`/`agentId` 维度**只停目标成员**；缺省则停该频道下
+   * 所有 running 会话（群聊「全员停止」语义）。
+   */
+  async abortRunningSession(
+    channelId: string,
+    userId: string,
+    target?: { teamMemberId?: string; agentId?: string },
+  ): Promise<{ aborted: boolean; sessions: string[] }> {
+    const { channel } = await this.resolveChannelAccess(channelId, userId);
+
+    const where: {
+      channelId: string;
+      status: string;
+      teamMemberId?: string;
+      agentId?: string;
+    } = { channelId: channel.id, status: 'running' };
+    if (target?.teamMemberId !== undefined && target.teamMemberId !== '') {
+      where.teamMemberId = target.teamMemberId;
+    }
+    if (target?.agentId !== undefined && target.agentId !== '') {
+      where.agentId = target.agentId;
+    }
+
+    const running = await this.prisma.session.findMany({
+      where,
+      select: { id: true, workerId: true, instanceRef: true },
+    });
+    if (running.length === 0) {
+      return { aborted: false, sessions: [] };
+    }
+
+    const stopped: string[] = [];
+    for (const row of running) {
+      if (row.workerId === null || row.instanceRef === null) continue;
+      const worker = await this.prisma.worker.findUnique({
+        where: { id: row.workerId },
+        select: { id: true, capabilities: true },
+      });
+      if (worker === null) continue;
+      try {
+        await this.workerClient.abort(
+          { id: worker.id, capabilities: worker.capabilities as Record<string, unknown> },
+          row.instanceRef,
+        );
+        stopped.push(row.id);
+      } catch (err) {
+        // 中止失败不改变"用户已点击停止"的事实：记日志并继续（会话随后由
+        // 空闲判死/会话重建路径收口），**不**把错误抛给前端（否则用户看到报错但
+        // 实际可能已停）。
+        this.logger.warn(
+          `[chat] abort 会话 ${row.id}（worker=${worker.id}）失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return { aborted: stopped.length > 0, sessions: stopped };
+  }
+
   async getTriggerResults(
     channelId: string,
     userId: string,

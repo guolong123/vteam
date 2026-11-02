@@ -41,6 +41,12 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 
+# ── P5 vendor：给 SDK server 补 session/cancel + session/steer ────────────
+# 已发布的 SDK server 只有 7 个方法，缺 cancel/steer（P0 实测）。
+# 本步骤在**构建期**注入两个 case（幂等；锚点漂移会构建失败而不是运行期静默丢功能）。
+COPY scripts/vendor-sdk-server.mjs /app/scripts/vendor-sdk-server.mjs
+RUN node /app/scripts/vendor-sdk-server.mjs && echo "SDK server vendored (cancel + steer)"
+
 # dsh 运行时 home（隔离；每个 worker 一个）
 ENV DSH_HOME_DIR=/data/dsh-home
 # 引擎选择（compose 可覆盖）
