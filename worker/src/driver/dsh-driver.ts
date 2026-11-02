@@ -93,6 +93,18 @@ export interface DshDriverOptions extends DshRpcClientOptions {
 /** 会话镜像（DSH 无累积消息 API，驱动自建）。 */
 interface SessionMirror {
   sessionId: string;
+  /**
+   * 系统提示词是否已在本会话发送过（**只发一次**）。
+   *
+   * 为什么必须只在首次发送：DSH 会话是**持久化**的，多轮复用同一会话。若每轮都把整份
+   * system 前缀再拼进用户消息——① 对话框里每轮出现同一大段文本（用户可见噪音）；
+   * ② 每轮重复消耗 token（vteam 的 system 含完整岗位职责/协作协议，上千 token）；
+   * ③ 破坏 KV cache 前缀稳定性。
+   * system 在同一会话内稳定（角色不变），故首轮注入即可。
+   * 会话 resume 后 mirror 从空开始 → 会重发一次（可接受：resume 不回放事件，
+   * 且此时模型上下文里确实没有本轮 system）。
+   */
+  systemSent?: boolean;
   /** 已完成的 assistant 消息（按到达顺序）。 */
   messages: DriverMessage[];
   /** messageID → 该消息的 assistant 数据（供合成 step-finish）。 */
@@ -238,18 +250,19 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     const mirror = this.ensureMirror(sessionID);
 
     const blocks = this.buildContentBlocks(input);
-    const systemPrefix = typeof input.system === 'string' && input.system.trim() !== ''
-      ? `${input.system}\n\n`
-      : '';
-
-    // system 走前缀：拼进第一个 text block
-    const withSystem = systemPrefix === ''
-      ? blocks
-      : blocks.map((b, i) =>
+    // system 只在**本会话首次下发**时拼接（见 SessionMirror.systemSent 的说明）。
+    const shouldInjectSystem =
+      mirror.systemSent !== true &&
+      typeof input.system === 'string' &&
+      input.system.trim() !== '';
+    const withSystem = shouldInjectSystem
+      ? blocks.map((b, i) =>
           i === 0 && b.type === 'text'
-            ? { ...b, text: `${systemPrefix}${String(b.text ?? '')}` }
+            ? { ...b, text: `${String(input.system)}\n\n${String(b.text ?? '')}` }
             : b,
-        );
+        )
+      : blocks;
+    if (shouldInjectSystem) mirror.systemSent = true;
 
     // 清掉上一轮终态（本轮重新计）
     mirror.lastOutcome = undefined;
@@ -275,7 +288,7 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         `[dsh-driver] 会话 ${sessionID} 已存在于 DSH 侧 → resume 后继续本轮（不判失败）`,
       );
       await this.client.request('session/resume', { sessionId: sessionID }, 60_000);
-      this.ensureMirror(sessionID);
+      this.ensureMirror(sessionID).systemSent = true;
       receipt = (await this.client.request(method, promptParams)) as
         | { messageId?: unknown }
         | undefined;
@@ -308,6 +321,8 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       try {
         await this.client.request('session/resume', { sessionId: sessionID }, 30_000);
         mirror = this.ensureMirror(sessionID);
+        // resume 恢复了历史 ⇒ 历史首轮已含 system 前缀 ⇒ 后续不再重复拼接
+        mirror.systemSent = true;
         this.logger.info(`[dsh-driver] 会话已 resume 恢复（镜像为空，历史在 DSH 侧）：${sessionID}`);
       } catch (err) {
         const message = (err as Error).message;

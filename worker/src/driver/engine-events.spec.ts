@@ -157,7 +157,7 @@ describe('DshDriver 事件通道（扇出行为）', () => {
     expect(received).toHaveLength(1);
   });
 
-  it('未订阅时事件不影响镜像维护（两路独立）', () => {
+  it('未订阅时事件仍维护镜像（两路独立）：turn/end 后定稿为一条消息', () => {
     const driver = newDriver();
     const sessionId = 'dsh-test-7';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -167,9 +167,15 @@ describe('DshDriver 事件通道（扇出行为）', () => {
       type: 'assistant/message',
       data: { message: { id: 'm1', content: [{ type: 'text', text: 'hi' }] } },
     });
+    // 一 turn 未结束前只在待定区累积（一次 turn = 一条 vteam 消息）
+    expect(mirror.messages.length).toBe(0);
+    expect(mirror.pendingTurn).toBeDefined();
 
-    // 镜像照常更新（getMessages 的数据来源）
-    expect(mirror.messages.length).toBeGreaterThan(0);
+    feed(driver, { type: 'turn/end', data: { kind: 'completed' } });
+    // turn/end 定稿：一条消息，含 text + step-finish
+    expect(mirror.messages.length).toBe(1);
+    expect(mirror.messages[0].parts.some((p: { type: string }) => p.type === 'text')).toBe(true);
+    expect(mirror.messages[0].parts.some((p: { type: string }) => p.type === 'step-finish')).toBe(true);
   });
 
   it('订阅者抛错不冻结其它订阅者（一条失败不毒化整个流）', () => {
@@ -186,5 +192,66 @@ describe('DshDriver 事件通道（扇出行为）', () => {
 
     expect(() => feed(driver, { type: 'turn/end', data: { reason: { kind: 'completed' } } })).not.toThrow();
     expect(ok).toHaveLength(1);
+  });
+});
+
+describe('system 提示词只发一次（DSH 会话持久化，多轮复用）', () => {
+  /** 直接观察 sendMessage 构造的 contentBlocks（不启真实运行时）。 */
+  async function captureBlocks(driver: DshDriver, sessionId: string, system: string, text: string): Promise<string> {
+    // 桩掉 client.request，捕获 params
+    const captured: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).client.request = async (_m: string, params: any) => {
+      const block = params?.contentBlocks?.[0];
+      captured.push(String(block?.text ?? ''));
+      return { messageId: 'm1' };
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).ensureStarted = async () => {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).ensureMirror(sessionId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (driver as any).sendMessage(sessionId, {
+      parts: [{ type: 'text', text }],
+      system,
+    });
+    return captured[0] ?? '';
+  }
+
+  const silent = { info: () => {}, warn: () => {}, error: () => {} };
+
+  it('首轮带 system 前缀', async () => {
+    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
+    const first = await captureBlocks(driver, 'sys-1', '【岗位职责】你是项目经理', '你好');
+    expect(first).toContain('【岗位职责】你是项目经理');
+    expect(first).toContain('你好');
+  });
+
+  it('第二轮**不再**重复 system（避免每轮噪音与 token 浪费）', async () => {
+    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
+    const sys = '【岗位职责】你是项目经理';
+    const first = await captureBlocks(driver, 'sys-2', sys, '第一句');
+    expect(first).toContain(sys);
+    // 清掉 ensureStarted 缓存后再发第二轮（同会话）
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).ensureStarted = async () => {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const captured: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).client.request = async (_m: string, params: any) => {
+      captured.push(String(params?.contentBlocks?.[0]?.text ?? ''));
+      return { messageId: 'm2' };
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (driver as any).sendMessage('sys-2', { parts: [{ type: 'text', text: '第二句' }], system: sys });
+    const second = captured[0] ?? '';
+    expect(second).not.toContain('岗位职责');
+    expect(second).toContain('第二句');
+  });
+
+  it('system 为空时不影响正文', async () => {
+    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
+    const body = await captureBlocks(driver, 'sys-3', '', '只有正文');
+    expect(body).toBe('只有正文');
   });
 });
