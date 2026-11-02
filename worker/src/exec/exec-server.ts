@@ -35,6 +35,12 @@ import {
 } from '../driver/prompt-await';
 import { ServeEventStream } from '../driver/serve-event-stream';
 import {
+  hasEventChannel,
+  type EngineEvent,
+  type EngineEventSubscription,
+  type EngineStreamStatus,
+} from '../driver/engine-events';
+import {
   RunTerminalGate,
   V2RunEventScope,
   V2StreamAccumulator,
@@ -90,7 +96,7 @@ import {
   writeOmoAgents,
 } from '../resources/omo-config';
 import { UNKNOWN_MODEL_KEY, WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
-import type { UpstreamEventIdentity } from '../protocol/worker-protocol';
+import type { UpstreamEventIdentity, WorkerEventType } from '../protocol/worker-protocol';
 import type {
   CreateSessionRequestPayload,
   SecretCommandRequestPayload,
@@ -2629,6 +2635,11 @@ export class ExecServer {
     // 事件路可用性（T14 终态协调）：驱动有 baseUrl ⇒ 走 v2 事件总线（`/api/event`）。
     // T18：v1 驱动已删除 ⇒ 不再有「没有事件总线」的驱动实现；判据只剩「驱动是否已注入
     // baseUrl」（未注入 = serve 尚未就绪或注入的是无事件路的自定义实现）。
+    //
+    // P3：具备 `EngineEventChannel` 的驱动（dsh）**走引擎自己的事件订阅**——
+    // exec-server 不再知道"引擎怎么订阅"，只消费归一后的语义事件。
+    // 这是把 SSE 直连（下方约 300 行 v2 专有逻辑）收口到驱动接缝的落点。
+    const eventChannelAvailable = sseEnabled && hasEventChannel(this.driver);
     const eventPathAvailable = sseEnabled && Boolean(this.driver.baseUrl);
     // 流式内容累积器（把 v2 的增量事件累积成「当前全文」part）：断线重连时**必须清空**
     // ——v2 /api/event 是 volatile 实时总线（不重放历史帧），续用旧缓冲会拼出一段
@@ -2697,6 +2708,30 @@ export class ExecServer {
       });
       sseStream.start();
     }
+
+    // P3：引擎自带事件通道（dsh）——与上面的 SSE 路**互斥**：具备该能力的驱动
+    // 自己负责订阅与归一，exec-server 只消费语义事件。
+    // 为什么互斥：dsh 的"事件流"是进程内 stdio（无 HTTP 端点），v2 的 SSE 拼接对它无效；
+    // 而 v2 的 SSE 三件套（volatile 重连/accumulator 分帧/move 归属）是 v2 专有语义，
+    // 搬进通用层只会把两者都做拧。收口点是"驱动吐出 vteam 语义"，不是"统一订阅方式"。
+    let engineEvents: EngineEventSubscription | null = null;
+    if (eventChannelAvailable) {
+      engineEvents = this.driver.subscribeEvents(
+        sessionID,
+        (event: EngineEvent) => {
+          this.handleEngineEvent(event, sessionID, ctx, gate, enqueueParts, detector, runScope);
+        },
+        (status: EngineStreamStatus) => {
+          if (status.state === 'closed') {
+            this.logger.warn(
+              `[engine-events] 引擎事件流断开（${status.reason ?? '未知原因'}）：` +
+                '轮询兜底路继续跑，状态以消息快照为准',
+            );
+          }
+        },
+      );
+    }
+
     try {
       const result = await sendAndAwait(
         this.driver,
@@ -2760,7 +2795,86 @@ export class ExecServer {
       // **失败路径也必须关流**：否则 SSE 客户端会对着已死/已弃用的 serve 无限退避重连
       // （挂住定时器 = 挂住进程）。
       sseStream?.close();
+      engineEvents?.close();
       accumulator.clear();
+    }
+  }
+
+  /**
+   * 消费引擎语义事件（P3，dsh 事件通道的**唯一**接入点）。
+   *
+   * 与 `handleV2Event` 的关系：两者都是"引擎事件 → vteam 上送"，但前者消费**归一后的语义**
+   * （`EngineEvent`：parts/terminal/trigger/notice），后者消费 v2 原始帧。
+   * 这样新增引擎时只需实现 `EngineEventChannel`，exec-server 一行不改。
+   *
+   * 三条对齐既有 v2 路径的语义（不可省，否则会出现"有的引擎完成收口、有的不"）：
+   * 1. **终态交给 `RunTerminalGate`**，不直接发送——与轮询路合流，避免双发完成事件；
+   * 2. **delta 走 `enqueueParts`**（单调准入 + 串行链），保证与轮询快照不互相覆盖；
+   * 3. **trigger 只触发拉取**（`detector.detect`），内容由检测器带自己的身份上送。
+   */
+  private handleEngineEvent(
+    event: EngineEvent,
+    sessionID: string,
+    ctx: Record<string, string | undefined>,
+    gate: RunTerminalGate,
+    enqueueParts: (parts: DriverContent[], upstream?: UpstreamEventIdentity) => void,
+    detector: PendingQuestionDetector,
+    runScope: V2RunEventScope,
+  ): void {
+    // 本轮归属：DSH 无 v2 的 move/建会话基础设施执行概念，故简化为"始终允许终态"；
+    // 保留 runScope 形参是为了 P3 后统一到 v2 路径时无需改调用点。
+    void runScope;
+
+    // DSH 的事件身份：epoch 前缀 + seq 合成稳定 eventId，供 server 跨 worker 重启去重。
+    // `seq` 只在 durable 事件上存在（即 terminal/assistant 消息），无 seq 时不给身份
+    // （轮询快照本就不带身份，server 按指纹去重）。
+    let identity: UpstreamEventIdentity | undefined;
+    if (event.identity?.eventId !== undefined) {
+      identity = {
+        eventId: event.identity.eventId,
+        ...(event.identity.seq === undefined ? {} : { seq: event.identity.seq }),
+        aggregateId: sessionID,
+      };
+    } else if (event.identity?.seq !== undefined) {
+      identity = {
+        eventId: `dsh-${sessionID}-${event.identity.seq}`,
+        seq: event.identity.seq,
+        aggregateId: sessionID,
+      };
+    }
+
+    switch (event.kind) {
+      case 'terminal': {
+        if (event.terminal === undefined) return;
+        gate.noteEvent(
+          {
+            verdict: event.terminal,
+            ...(event.error === undefined ? {} : { error: event.error }),
+          },
+          identity,
+        );
+        return;
+      }
+      case 'parts': {
+        const parts = event.parts ?? [];
+        if (parts.length === 0) return;
+        enqueueParts(parts, identity);
+        return;
+      }
+      case 'trigger': {
+        void detector.detect(ctx, sessionID);
+        return;
+      }
+      case 'notice': {
+        if (event.noticeType === undefined || event.noticePayload === undefined) return;
+        // noticeType 由引擎实现按 vteam 协议枚举填写（WorkerEventType）。
+        void this.sender.send(event.noticeType as WorkerEventType, {
+          ...ctx,
+          ...event.noticePayload,
+          ...(identity === undefined ? {} : { upstream: identity }),
+        });
+        return;
+      }
     }
   }
 

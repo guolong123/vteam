@@ -63,6 +63,14 @@ import {
   type DshSessionEvent,
   type DshTurnOutcome,
 } from './dsh-event-map';
+import {
+  toTerminalVerdict,
+  type EngineEvent,
+  type EngineEventHandler,
+  type EngineEventSubscription,
+  type EngineEventChannel,
+  type EngineStreamStatus,
+} from './engine-events';
 import { DshRpcClient, type DshInitializeParams, type DshRpcClientOptions } from './dsh-rpc-client';
 
 /** DshDriver 构造参数。 */
@@ -121,7 +129,7 @@ interface PendingPermission extends DriverPermissionRequest {
  * `abort` 走 vendored `session/cancel`（不杀进程）；进程由上层（exec-server）在
  * worker 停机时 `close()`。
  */
-export class DshDriver implements OpenCodeDriver {
+export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   /** 被驱动端基址——DSH 走 stdio，**无 HTTP 基址**。保留字段以维持接口形状。 */
   baseUrl = '';
 
@@ -140,6 +148,14 @@ export class DshDriver implements OpenCodeDriver {
   private readonly idleWaiters = new Map<string, Array<() => void>>();
   /** 等待某会话 turn/end 的 resolver。 */
   private readonly turnEndWaiters = new Map<string, Array<() => void>>();
+  /**
+   * 事件通道订阅者（P3）：sessionId → 订阅者集合。
+   * DSH 的事件来自同一进程的单条 stdout 流，故这里做**扇出**（按 sessionId 过滤后分发）。
+   */
+  private readonly eventSubscribers = new Map<
+    string,
+    Array<{ onEvent: EngineEventHandler; onStatus?: (s: EngineStreamStatus) => void }>
+  >();
 
   constructor(options: DshDriverOptions = {}) {
     this.options = options;
@@ -427,6 +443,135 @@ export class DshDriver implements OpenCodeDriver {
     return this.client.isRunning;
   }
 
+  // ── EngineEventChannel 实现（P3）──────────────────────────────────────
+
+  /**
+   * 订阅某会话的引擎事件。
+   *
+   * DSH 的事件源自**同一条 stdout 流**（所有会话共享），故这里登记订阅者后由
+   * `consumeEvent` 扇出。这也是 dsh 与 opencode 的根本差异之一：
+   * opencode 的事件是 HTTP SSE（每会话可独立订阅），dsh 是进程内单流（按 sessionId 过滤）。
+   *
+   * @param sessionId - vteam 会话 id。
+   * @param onEvent - 语义事件回调。
+   * @param onStatus - 连接状态回调（dsh 的"连接"= 子进程存活，故只在退出时通知 closed）。
+   */
+  subscribeEvents(
+    sessionId: string,
+    onEvent: EngineEventHandler,
+    onStatus?: (status: EngineStreamStatus) => void,
+  ): EngineEventSubscription {
+    const list = this.eventSubscribers.get(sessionId) ?? [];
+    const entry = { onEvent, onStatus };
+    list.push(entry);
+    this.eventSubscribers.set(sessionId, list);
+
+    // dsh 无独立连接概念：子进程在跑就是 open（先报一次，让上层立刻标记"事件路可用"）
+    onStatus?.({ state: 'open' });
+
+    let closed = false;
+    return {
+      close: (): void => {
+        if (closed) return;
+        closed = true;
+        const current = this.eventSubscribers.get(sessionId);
+        if (current === undefined) return;
+        const index = current.indexOf(entry);
+        if (index >= 0) current.splice(index, 1);
+        if (current.length === 0) this.eventSubscribers.delete(sessionId);
+      },
+    };
+  }
+
+  /**
+   * 把一条 DSH 事件翻译成 vteam 语义并扇出（P3）。
+   *
+   * 翻译口径与 `consumeEvent` 的镜像维护**刻意分离**：
+   * - `consumeEvent` 维护 `getMessages()` 用的镜像（面向"轮询兜底路"）
+   * - 本函数维护"事件路上送"用的语义（面向 exec-server 的实时上送）
+   *
+   * 两者同源但用途不同，合并会让任一路的调整都牵动另一路（v2 实现踩过这个耦合）。
+   */
+  private fanoutEngineEvent(sessionId: string, event: DshSessionEvent): void {
+    const subscribers = this.eventSubscribers.get(sessionId);
+    if (subscribers === undefined || subscribers.length === 0) return;
+
+    const mapped = this.mapToEngineEvents(sessionId, event);
+    if (mapped.length === 0) return;
+    for (const subscriber of subscribers) {
+      for (const semantic of mapped) {
+        try {
+          subscriber.onEvent(semantic);
+        } catch (err) {
+          // 订阅者抛错不得中断引擎事件处理（否则一条失败会冻结整个会话的流）
+          this.logger.error(`[dsh-driver] 事件订阅者抛异常：${(err as Error).message}`);
+        }
+      }
+    }
+  }
+
+  /** DSH 事件 → 零到多条 vteam 语义事件。 */
+  private mapToEngineEvents(sessionId: string, event: DshSessionEvent): EngineEvent[] {
+    // 上游身份：DSH 的 durable 事件带 seq（P2 的镜像同源）
+    const identity = {
+      ...(typeof event.seq === 'number' ? { seq: event.seq } : {}),
+      durable: event.type !== 'assistant/attempt',
+    };
+
+    switch (event.type) {
+      case 'assistant/message': {
+        const assistant = readAssistantMessage(event.data);
+        if (assistant === null) return [];
+        // 内容增量：reasoning + text（committed 粒度，非 token 级——DSH 的既定行为）
+        const parts: DriverContent[] = [];
+        if (assistant.reasoning.length > 0) {
+          parts.push({
+            id: `${assistant.messageID}:reasoning`,
+            messageID: assistant.messageID,
+            type: 'reasoning',
+            text: assistant.reasoning,
+          });
+        }
+        if (assistant.text.length > 0) {
+          parts.push({
+            id: `${assistant.messageID}:text`,
+            messageID: assistant.messageID,
+            type: 'text',
+            text: assistant.text,
+          });
+        }
+        return parts.length === 0 ? [] : [{ kind: 'parts', parts, identity }];
+      }
+      case 'turn/end': {
+        const outcome = classifyTurnEnd(event.data as never);
+        const error = (event.data as Record<string, unknown> | undefined)?.error as
+          | Record<string, unknown>
+          | undefined;
+        const semantic: EngineEvent = {
+          kind: 'terminal',
+          terminal: toTerminalVerdict(outcome),
+          identity,
+        };
+        if (typeof error?.message === 'string') semantic.error = error.message;
+        return [semantic];
+      }
+      case 'tool/call': {
+        const tool = readToolCall(event.data, '');
+        if (tool === null) return [];
+        return [{ kind: 'parts', parts: [tool.part], identity }];
+      }
+      case 'tool/result': {
+        const result = readToolResult(event.data, '');
+        if (result === null) return [];
+        return [{ kind: 'parts', parts: [result.part], identity }];
+      }
+      default:
+        // 其它事件（permission/preset、sandbox/mode 等）不上送：
+        // 它们是引擎内部治理事件，vteam 前端无消费语义。
+        return [];
+    }
+  }
+
   /** 关闭运行时（worker 停机/引擎切换时由上层调用）。 */
   async close(): Promise<void> {
     await this.client.close();
@@ -435,6 +580,7 @@ export class DshDriver implements OpenCodeDriver {
     this.pendingPermissions.clear();
     this.idleWaiters.clear();
     this.turnEndWaiters.clear();
+    this.eventSubscribers.clear();
   }
 
   // ── 内部：启动与事件消费 ──────────────────────────────────────────────
@@ -458,6 +604,8 @@ export class DshDriver implements OpenCodeDriver {
   private consumeEvent(event: DshSessionEvent): void {
     const sessionId = this.sessionIdOf(event);
     if (sessionId === '') return;
+    // P3：先扇出给事件通道订阅者（exec-server 通过它上送 delta / 收口终态）
+    this.fanoutEngineEvent(sessionId, event);
     const mirror = this.ensureMirror(sessionId);
 
     switch (event.type) {
