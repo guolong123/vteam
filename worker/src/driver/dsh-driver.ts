@@ -49,6 +49,7 @@ import {
   type DriverPromptResult,
   type DriverQuestionRequest,
   type DriverTodo,
+  type DriverTokenUsage,
   type Logger,
   type OpenCodeDriver,
 } from './opencode-driver';
@@ -102,6 +103,25 @@ interface SessionMirror {
   lastOutcome?: DshTurnOutcome;
   /** 本会话最近一条 assistant message id（turn/end 到达时用它合成 step-finish）。 */
   lastMessageID?: string;
+  /**
+   * 当前进行中 turn 的聚合消息（**一次 turn = 一条 vteam 消息**）。
+   *
+   * 为什么需要聚合：DSH 的一轮任务会产出**多个** assistant/message（每个 step 一条，
+   * 实测一轮 5 条不同 messageID）。若逐条塞进 mirror，exec-server 会把整轮内容
+   * 归并到**同一条** vteam 消息里（控制面按"一次执行 = 一条 agent 消息"聚合），
+   * 结果是多轮内容挤在一条消息、part 顺序混乱、前端渲染成一大坨碎块。
+   * 正确做法：turn 内累积 parts，turn/end 时一次性定稿成一条消息。
+   */
+  pendingTurn?: {
+    /** 聚合后的 part 列表（按到达顺序）。 */
+    parts: DriverContent[];
+    /** 本轮最后一条 assistant 消息 id（step-finish 的 id 前缀）。 */
+    lastMessageID?: string;
+    /** 本轮 usage（取最后一个非空值；DSH 的 usage 是逐 step 的）。 */
+    usage?: DriverTokenUsage;
+    providerID?: string;
+    modelID?: string;
+  };
 }
 
 /** 待答复的提问（服务端 RPC 推送后登记）。 */
@@ -653,23 +673,50 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         if (assistant === null) return;
         mirror.assistantByMessage.set(assistant.messageID, assistant);
         mirror.lastMessageID = assistant.messageID;
-        // 消息入镜（终态未知时先不合成 step-finish）
-        mirror.messages.push(toDriverMessage(assistant, undefined));
+        // 聚合到本轮（**不**立即入镜：一次 turn = 一条 vteam 消息，turn/end 时定稿）
+        const turn = (mirror.pendingTurn ??= { parts: [] });
+        turn.lastMessageID = assistant.messageID;
+        if (assistant.usage !== undefined) turn.usage = assistant.usage;
+        if (assistant.providerID !== undefined) turn.providerID = assistant.providerID;
+        if (assistant.modelID !== undefined) turn.modelID = assistant.modelID;
+        if (assistant.reasoning.length > 0) {
+          turn.parts.push({
+            id: `${assistant.messageID}:reasoning`,
+            messageID: assistant.messageID,
+            type: 'reasoning',
+            text: assistant.reasoning,
+          });
+        }
+        if (assistant.text.length > 0) {
+          turn.parts.push({
+            id: `${assistant.messageID}:text`,
+            messageID: assistant.messageID,
+            type: 'text',
+            text: assistant.text,
+          });
+        }
         return;
       }
       case 'turn/end': {
         const outcome = classifyTurnEnd(event.data as never);
         mirror.lastOutcome = outcome;
-        // 用最近的 assistant 消息合成 step-finish（控制面靠它判完成 + 落库用量）
-        const messageID = mirror.lastMessageID;
-        if (messageID !== undefined) {
-          const assistant = mirror.assistantByMessage.get(messageID);
-          const finish = synthesizeStepFinish(messageID, outcome, assistant?.usage);
-          // 找到对应消息并追加（避免重复：同 id 的已有 step-finish 不重复加）
-          const target = mirror.messages.find((m) => m.info.id === messageID);
-          if (target !== undefined && !target.parts.some((p) => p.type === 'step-finish')) {
-            target.parts.push(finish);
-          }
+        // 本轮定稿：聚合 parts + 合成 step-finish → **一条** vteam 消息入镜
+        const turn = mirror.pendingTurn;
+        if (turn !== undefined && turn.parts.length > 0) {
+          const messageID = turn.lastMessageID ?? mirror.lastMessageID ?? `turn-${Date.now()}`;
+          turn.parts.push(synthesizeStepFinish(messageID, outcome, turn.usage));
+          const info: DriverMessageInfo = {
+            id: messageID,
+            role: 'assistant',
+            time: { completed: Date.now() },
+          };
+          if (turn.providerID !== undefined) info.providerID = turn.providerID;
+          if (turn.modelID !== undefined) info.modelID = turn.modelID;
+          mirror.messages.push({ info, parts: turn.parts });
+        }
+        mirror.pendingTurn = undefined;
+        if (turn !== undefined && turn.lastMessageID !== undefined) {
+          mirror.lastMessageID = turn.lastMessageID;
         }
         if (outcome === 'error') {
           const data = event.data as Record<string, unknown> | undefined;
