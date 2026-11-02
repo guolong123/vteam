@@ -195,63 +195,60 @@ describe('DshDriver 事件通道（扇出行为）', () => {
   });
 });
 
-describe('system 提示词只发一次（DSH 会话持久化，多轮复用）', () => {
-  /** 直接观察 sendMessage 构造的 contentBlocks（不启真实运行时）。 */
-  async function captureBlocks(driver: DshDriver, sessionId: string, system: string, text: string): Promise<string> {
-    // 桩掉 client.request，捕获 params
-    const captured: string[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (driver as any).client.request = async (_m: string, params: any) => {
-      const block = params?.contentBlocks?.[0];
-      captured.push(String(block?.text ?? ''));
-      return { messageId: 'm1' };
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (driver as any).ensureStarted = async () => {};
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (driver as any).ensureMirror(sessionId);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (driver as any).sendMessage(sessionId, {
-      parts: [{ type: 'text', text }],
-      system,
-    });
-    return captured[0] ?? '';
-  }
-
+describe('系统提示词走 persona 通道（不拼进用户消息）', () => {
+  /**
+   * 设计变更（P5 修正）：早期把 system 拼成用户消息前缀，导致对话记录被污染、
+   * 每轮重复消耗 token、破坏 KV cache 前缀稳定。
+   * 正确机制：DSH 的 `dsh-system-prompt.personaPrefix`（patch + spawn env）。
+   * 故 contentBlocks **必须保持纯净**（只含真正的用户内容）。
+   */
   const silent = { info: () => {}, warn: () => {}, error: () => {} };
 
-  it('首轮带 system 前缀', async () => {
-    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
-    const first = await captureBlocks(driver, 'sys-1', '【岗位职责】你是项目经理', '你好');
-    expect(first).toContain('【岗位职责】你是项目经理');
-    expect(first).toContain('你好');
-  });
-
-  it('第二轮**不再**重复 system（避免每轮噪音与 token 浪费）', async () => {
-    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
-    const sys = '【岗位职责】你是项目经理';
-    const first = await captureBlocks(driver, 'sys-2', sys, '第一句');
-    expect(first).toContain(sys);
-    // 清掉 ensureStarted 缓存后再发第二轮（同会话）
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (driver as any).ensureStarted = async () => {};
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function captureBlocks(
+    driver: DshDriver,
+    sessionId: string,
+    system: string,
+    text: string,
+  ): Promise<{ blocks: string; personaEnv: string }> {
     const captured: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (driver as any).client.request = async (_m: string, params: any) => {
       captured.push(String(params?.contentBlocks?.[0]?.text ?? ''));
-      return { messageId: 'm2' };
+      return { messageId: 'm1' };
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (driver as any).sendMessage('sys-2', { parts: [{ type: 'text', text: '第二句' }], system: sys });
-    const second = captured[0] ?? '';
-    expect(second).not.toContain('岗位职责');
-    expect(second).toContain('第二句');
+    (driver as any).ensureStarted = async () => {};
+    // switchPersona 会走 client.close/request，这里桩掉以观察 env 变化
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).client.close = async () => {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).ensureMirror(sessionId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (driver as any).sendMessage(sessionId, { parts: [{ type: 'text', text }], system });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { blocks: captured[0] ?? '', personaEnv: ((driver as any).options.env ?? {}).DSH_SYSTEM_PROMPT ?? '' };
+  }
+
+  it('contentBlocks 保持纯净（system 不进用户消息）', async () => {
+    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
+    // 预置 persona（避免首轮触发 switchPersona 重启流程干扰捕获）
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).options.env = { DSH_SYSTEM_PROMPT: '【岗位职责】你是项目经理' };
+    const { blocks } = await captureBlocks(driver, 'p-1', '【岗位职责】你是项目经理', '你好');
+    expect(blocks).toBe('你好');
+    expect(blocks).not.toContain('岗位职责');
   });
 
-  it('system 为空时不影响正文', async () => {
+  it('system 进入 persona env（DSH 正规通道）', async () => {
     const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
-    const body = await captureBlocks(driver, 'sys-3', '', '只有正文');
-    expect(body).toBe('只有正文');
+    const { personaEnv } = await captureBlocks(driver, 'p-2', '【岗位职责】你是项目经理', '你好');
+    expect(personaEnv).toBe('【岗位职责】你是项目经理');
+  });
+
+  it('system 为空时不设置 persona env', async () => {
+    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
+    const { blocks, personaEnv } = await captureBlocks(driver, 'p-3', '', '只有正文');
+    expect(blocks).toBe('只有正文');
+    expect(personaEnv).toBe('');
   });
 });

@@ -89,8 +89,32 @@ export interface DshPatchInput {
   defaultModel?: { provider: string; model: string };
   /** 权限模式（`DSH_PERMISSION_MODE` 的等价 patch 形态；可选）。 */
   permissionMode?: string;
-  /** agent 角色策略（提示词前缀注入不计入 patch——DSH 无 per-session system API）。 */
-  agentPolicies?: Array<{ name: string; system: string }>;
+  /**
+   * **系统提示词**（`system-prompt` 条目的 `personaPrefix`）。
+   *
+   * ⚠️ 修正此前的错误结论：DSH 的 system prompt **完全可以配置**，机制有两个：
+   * 1. `dsh-system-prompt` 的 config（`personaPrefix` / `personaSuffix` /
+   *    `includeHarnessIdentity` / `includeRuntimeContext` / `toolOrder`）；
+   * 2. `dsh-persona` 在 preset 内为**单个 agent** shadow 全局 persona
+   *    （`dsh-persona` 的 `prefix` / `suffix` / `complete`）。
+   *
+   * 它们在 patch 层都是**平铺修改已有条目**（`- id: system-prompt`），不是 `insert:`。
+   * 源码依据：`packages/core/system-prompt/src/index.ts:437-446`（Config schema）；
+   * `packages/bundle/sdk-minimal/cordis.patch.yml:113-118` 的现成范例
+   * （`personaPrefix: !!js process.env.DSH_SYSTEM_PROMPT ?? '...'`）。
+   *
+   * 实测：`--dump-config` 已确认平铺 patch 能改到 `personaPrefix`。
+   */
+  persona?: {
+    /** 主提示词（渲染为 `deployment:persona-prefix` section，order 0）。 */
+    prefix: string;
+    /** 收尾提示词（order 10200，可选）。 */
+    suffix?: string;
+    /** 是否保留 DSH 固定开场白（`You are an AI agent powered by DeepSeek Harness.`）。 */
+    includeHarnessIdentity?: boolean;
+    /** 是否启用动态运行时上下文（cwd/时间等）。 */
+    includeRuntimeContext?: boolean;
+  };
 }
 
 /**
@@ -135,7 +159,24 @@ export function buildDshPatch(input: DshPatchInput): string {
     }
   }
 
-  // ② 默认模型：修改已有 agent-default-model 条目
+  // ② 系统提示词：**平铺修改** system-prompt 条目（不是 insert，它在 base 里已存在）
+  // 这是 vteam 角色人设（岗位职责/协作协议）进模型 system 段的**唯一正规通道**——
+  // 比"拼进用户消息前缀"更正确：不占用户消息、不进对话记录、KV cache 前缀稳定。
+  if (input.persona !== undefined) {
+    lines.push('', '- id: system-prompt', '  config:');
+    lines.push(`    personaPrefix: !!js ${yamlEnvExpression('DSH_SYSTEM_PROMPT', input.persona.prefix)}`);
+    if (input.persona.suffix !== undefined) {
+      lines.push(`    personaSuffix: !!js ${yamlEnvExpression('DSH_SYSTEM_PROMPT_SUFFIX', input.persona.suffix)}`);
+    }
+    if (input.persona.includeHarnessIdentity !== undefined) {
+      lines.push(`    includeHarnessIdentity: ${input.persona.includeHarnessIdentity ? 'true' : 'false'}`);
+    }
+    if (input.persona.includeRuntimeContext !== undefined) {
+      lines.push(`    includeRuntimeContext: ${input.persona.includeRuntimeContext ? 'true' : 'false'}`);
+    }
+  }
+
+  // ③ 默认模型：修改已有 agent-default-model 条目
   if (input.defaultModel !== undefined) {
     lines.push(
       '',
@@ -183,6 +224,25 @@ export function buildDshPatch(input: DshPatchInput): string {
 
   lines.push('');
   return lines.join('\n');
+}
+
+/**
+ * 生成 `!!js` 环境变量表达式（提示词从 **env** 读取，不写进 patch 文件）。
+ *
+ * 为什么不直接写进 patch：vteam 的系统提示词含完整岗位职责/协作协议（数千字），
+ * 写进 patch 会导致：
+ * - patch 文件巨大且每次注入都要重写（IO 开销）；
+ * - 提示词内容留在磁盘（patch 落在 workDir，可能被读取）。
+ * 用 env 注入（对齐 `sdk-minimal` 的 `DSH_SYSTEM_PROMPT` 惯例）既短又安全，
+ * 且驱动可以在 spawn 时按会话切换人设。
+ *
+ * @param envName 环境变量名
+ * @param fallback 缺省值（env 未设时用）
+ */
+export function yamlEnvExpression(envName: string, fallback: string): string {
+  // !!js 表达式里用单引号字面量；fallback 里的单引号需转义（YAML 层由 quote 处理）
+  const escaped = fallback.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `process.env.${envName} ?? '${escaped}'`;
 }
 
 /** YAML 标量转义（单引号包裹，内部单引号双写——YAML PLAIN/single-quote 标准做法）。 */

@@ -70,6 +70,13 @@ export interface WorkerConfig {
   dshSessionHeader?: string;
   /** dsh：上述请求头的值（缺省用 workerId，保证同一 worker 稳定）。 */
   dshSessionHeaderValue?: string;
+  /**
+   * dsh：系统提示词（env `DSH_SYSTEM_PROMPT`）。
+   *
+   * 写入 patch 的 `system-prompt.personaPrefix`（DSH 正规通道，走模型 system 段），
+   * 不再拼进用户消息。缺省为空 = 用 DSH 自己的身份开场白。
+   */
+  dshSystemPrompt?: string;
   /** 心跳间隔 ms；默认 10000（D1：10s 心跳，server 30s=3 周期判 offline） */
   heartbeatIntervalMs: number;
   /** 日志级别；默认 info */
@@ -400,6 +407,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     dshBaseUrl: (env.DSH_BASE_URL ?? '').trim() || undefined,
     dshSessionHeader: (env.DSH_SESSION_HEADER ?? '').trim() || undefined,
     dshSessionHeaderValue: (env.DSH_SESSION_HEADER_VALUE ?? '').trim() || undefined,
+    dshSystemPrompt: (env.DSH_SYSTEM_PROMPT ?? '') || undefined,
     heartbeatIntervalMs: parseNonNegativeInt('HEARTBEAT_INTERVAL_MS', env.HEARTBEAT_INTERVAL_MS, 10000),
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',

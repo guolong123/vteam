@@ -66,6 +66,15 @@ export interface DshInjectorOptions {
    * 注意：opencode 会话头的值会按会话变化 → 若网关强制唯一值，见 `providerHeadersFor`。
    */
   providerHeaders?: Record<string, Record<string, string>>;
+  /**
+   * 系统提示词（persona）。写入 patch 时用
+   * `!!js process.env.DSH_SYSTEM_PROMPT ?? '<fallback>'`，真值由驱动 spawn 时经 env 注入。
+   *
+   * 依据：DSH 的 `dsh-system-prompt` 支持 `personaPrefix`（Config schema 见
+   * packages/core/system-prompt/src/index.ts:437-446），且 `sdk-minimal` profile
+   * 已用 `DSH_SYSTEM_PROMPT` 环境变量做范例（cordis.patch.yml:113-118）。
+   */
+  persona?: { prefix: string; suffix?: string };
   logger?: { info(m: string): void; warn(m: string): void; error(m: string): void };
 }
 
@@ -102,7 +111,7 @@ export class DshResourceInjector implements ResourceInjector {
     const content = buildDshPatch({
       providers,
       mcpMounts,
-      ...(this.options.providerApi !== undefined ? {} : {}),
+      ...(this.options.persona === undefined ? {} : { persona: this.options.persona }),
     });
 
     await fs.promises.mkdir(path.dirname(patchPath), { recursive: true });
@@ -125,6 +134,23 @@ export class DshResourceInjector implements ResourceInjector {
     } catch (err) {
       this.logger.warn(`[engine/dsh] 清理 patch 失败：${(err as Error).message}`);
     }
+  }
+
+  /**
+   * 系统提示词对应的 **env 变量**（spawn 时注入；patch 只写变量名）。
+   *
+   * 为什么走 env 而非写进 patch：提示词数千字，写进 patch 会让文件巨大 + 内容落盘；
+   * env 注入对齐 `sdk-minimal` 的 `DSH_SYSTEM_PROMPT` 惯例，且支持按会话切换人设。
+   */
+  personaEnv(): Record<string, string> {
+    if (this.options.persona === undefined) return {};
+    const env: Record<string, string> = {
+      DSH_SYSTEM_PROMPT: this.options.persona.prefix,
+    };
+    if (this.options.persona.suffix !== undefined) {
+      env.DSH_SYSTEM_PROMPT_SUFFIX = this.options.persona.suffix;
+    }
+    return env;
   }
 
   /** 凭据 → provider 路由声明。 */

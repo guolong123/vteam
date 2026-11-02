@@ -163,6 +163,12 @@ export function createDshWorkerDriver(
       config.dshSessionHeader === undefined
         ? undefined
         : { [providerID]: { [config.dshSessionHeader]: config.dshSessionHeaderValue ?? config.workerId } },
+    // P5 修正：系统提示词走 **persona** 通道（patch 的 system-prompt 条目 + env 值），
+    // 不再拼进用户消息。依据：DSH 的 dsh-system-prompt 支持 personaPrefix
+    // （sdk-minimal 已用 DSH_SYSTEM_PROMPT 做过范例）。缺省 = 用 DSH 自己的开场白。
+    ...(config.dshSystemPrompt === undefined
+      ? {}
+      : { persona: { prefix: config.dshSystemPrompt } }),
     logger: {
       info: (m) => console.log(m),
       warn: (m) => console.warn(m),
@@ -211,7 +217,8 @@ export function createDshWorkerDriver(
     cwd: workDir,
     provider: providerID,
     model: modelID,
-    env: credentials.envVars,
+    // persona env 与凭据 env 合并（patch 只写变量名，真值从这里进子进程）
+    env: { ...credentials.envVars, ...injector.personaEnv() },
     // 会话级 expertise：DSH 的模型路由在 initialize 固定
     approvalRequests: true,
     userQuestions: true,

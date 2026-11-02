@@ -186,6 +186,15 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   private switching = false;
 
   /**
+   * 已**实际应用**的 persona（用于幂等判断，避免每轮都重启运行时）。
+   *
+   * 与 `options.env.DSH_SYSTEM_PROMPT` 的区别：后者是"期望值"（构造时可能已有初值），
+   * 本字段只在切换**成功**后更新。不区分这两者会导致：
+   * 有初值时第一轮误判"已切换"→ 跳过重启 → persona 实际没生效。
+   */
+  private appliedPersona: string | undefined;
+
+  /**
    * 会话别名：上层持有的旧 id → 实际在用的 DSH 会话 id。
    *
    * 为什么需要：DSH 会话可能因 write handle 锁冲突而不可 resume（实测重启运行时后），
@@ -346,19 +355,36 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     const mirror = this.ensureMirror(sessionID);
 
     const blocks = this.buildContentBlocks(input);
-    // system 只在**本会话首次下发**时拼接（见 SessionMirror.systemSent 的说明）。
-    const shouldInjectSystem =
-      mirror.systemSent !== true &&
-      typeof input.system === 'string' &&
-      input.system.trim() !== '';
-    const withSystem = shouldInjectSystem
-      ? blocks.map((b, i) =>
-          i === 0 && b.type === 'text'
-            ? { ...b, text: `${String(input.system)}\n\n${String(b.text ?? '')}` }
-            : b,
-        )
-      : blocks;
-    if (shouldInjectSystem) mirror.systemSent = true;
+
+    // **系统提示词走 persona 通道**（不是拼进用户消息）。
+    //
+    // 修正此前的错误做法：早期把 input.system 拼成用户消息前缀，导致
+    // ① 用户消息里出现整坨系统提示（对话记录被污染）、② 每轮重复消耗 token、
+    // ③ 破坏 KV cache 前缀稳定。
+    //
+    // 正确机制（源码核实）：DSH 的 `dsh-system-prompt` 支持 `personaPrefix`
+    // （`packages/core/system-prompt/src/index.ts:437-446` 的 Config schema），
+    // 值经 patch 的 `!!js process.env.DSH_SYSTEM_PROMPT` + spawn env 注入。
+    // `sdk-minimal` profile 已用同一惯例（cordis.patch.yml:113-118）。
+    //
+    // 故：把 input.system 交给 `switchPersona`（进程级，切换时重启运行时），
+    // **contentBlocks 保持纯净**（只有真正的用户内容）。
+    if (typeof input.system === 'string' && input.system.trim() !== '') {
+      try {
+        const changed = await this.switchPersona(input.system);
+        // ⚠️ switchPersona 会 close 运行时（env 是进程级）⇒ 必须**重新握手**，
+        // 否则紧接着的 session/prompt 会报"运行时未启动"（实测踩到）。
+        if (changed) await this.ensureStarted();
+      } catch (err) {
+        // persona 切换失败不阻断本轮：退回"不注入"（下轮再试），并明确告警
+        // （静默吞掉会让 agent 丢掉角色提示词而用户毫不知情）。
+        this.logger.warn(
+          `[dsh-driver] persona 切换失败（本轮不带系统提示词，下轮重试）：${(err as Error).message}`,
+        );
+      }
+    }
+    const withSystem = blocks;
+    mirror.systemSent = true;
 
     // 清掉上一轮终态（本轮重新计）
     mirror.lastOutcome = undefined;
@@ -805,6 +831,61 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   // ── 内部：启动与事件消费 ──────────────────────────────────────────────
 
   /** 懒启动运行时（首次使用时握手）。 */
+  /**
+   * 切换系统提示词（persona）。
+   *
+   * DSH 的 persona 是 **profile patch + spawn env** 两段式：patch 里写
+   * `!!js process.env.DSH_SYSTEM_PROMPT ?? '<fallback>'`，真值由 env 注入。
+   * ⇒ 换 persona 必须**重启运行时**（env 是进程级）。
+   *
+   * 与 `switchRoute`（换模型）共用同一套"先 cancel 释放锁 → close → 重开"的流程，
+   * 因为它们都是"重启以改变进程级配置"。
+   *
+   * 幂等：目标与当前一致时直接返回。
+   */
+  async switchPersona(prefix: string, suffix?: string): Promise<boolean> {
+    // 用**已应用**的 persona 判断（appliedPersona 在切换成功后才更新），
+    // 避免读 options.env 的初始值导致"每次都以为没切换过"（每次重启运行时）。
+    const current = this.appliedPersona ?? this.options.env?.DSH_SYSTEM_PROMPT ?? '';
+    if (current === prefix) {
+      return false;
+    }
+    if (this.switching) return false;
+    this.switching = true;
+    try {
+      this.logger.info(
+        `[dsh-driver] persona 切换（重启运行时）：${prefix.slice(0, 40)}…（长度 ${prefix.length}）`,
+      );
+      // 释放会话锁 + 关运行时（与 switchRoute 同一套）
+      for (const sessionId of [...this.sessions.keys()]) {
+        try {
+          await this.client.request('session/cancel', { sessionId }, 10_000);
+        } catch {
+          // 会话不存在/无在途回合 → 正常
+        }
+      }
+      await new Promise((r) => setTimeout(r, 300));
+      this.options.env = {
+        ...(this.options.env ?? {}),
+        DSH_SYSTEM_PROMPT: prefix,
+        ...(suffix === undefined ? {} : { DSH_SYSTEM_PROMPT_SUFFIX: suffix }),
+      };
+      this.appliedPersona = prefix;
+      await this.client.close();
+      // 清镜像（新 persona = 新上下文；systemSent 需重置以便重新注入）
+      for (const mirror of this.sessions.values()) {
+        mirror.messages = [];
+        mirror.assistantByMessage.clear();
+        mirror.toolParts.clear();
+        mirror.pendingTurn = undefined;
+        mirror.systemSent = false;
+      }
+      return true;
+    } finally {
+      this.switching = false;
+    }
+  }
+
   private async ensureStarted(): Promise<void> {
     if (this.client.isRunning) return;
     const params: DshInitializeParams = {
