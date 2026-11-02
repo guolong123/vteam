@@ -86,18 +86,26 @@ describe('createEngine（工厂校验）', () => {
 
   it('注入的工厂被调用并返回实现', () => {
     const factory: EngineFactory = (kind) => stub(kind);
-    const impl = createEngine('opencode', factory);
+    const impl = createEngine('opencode', {}, factory);
     expect(impl.kind).toBe('opencode');
   });
 
   it('工厂返回的 kind 与请求不一致 → 响亮失败（防配错引擎）', () => {
     const factory: EngineFactory = () => stub('dsh');
-    expect(() => createEngine('opencode', factory)).toThrow(/不一致/);
+    expect(() => createEngine('opencode', {}, factory)).toThrow(/不一致/);
   });
 
-  it('P1：未注入工厂时明确报错（dsh 实现在 P2/P4 登记）', () => {
-    expect(() => createEngine('opencode')).toThrow(/尚未登记引擎实现/);
-    expect(() => createEngine('dsh')).toThrow(/P2\/P4/);
+  it('P2：dsh 已登记真实实现（不再报"未登记"）', () => {
+    const impl = createEngine('dsh');
+    expect(impl.kind).toBe('dsh');
+    expect(impl.runtime.kind).toBe('dsh');
+    expect(impl.injector.kind).toBe('dsh');
+    expect(impl.credentials.kind).toBe('dsh');
+    expect(impl.layout.plansDir).toContain('.vteam');
+  });
+
+  it('opencode 缺 serve 选项 → 明确报错（不构造半个引擎）', () => {
+    expect(() => createEngine('opencode')).toThrow(/缺少 serve 选项/);
   });
 });
 

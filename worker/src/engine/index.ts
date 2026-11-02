@@ -106,14 +106,16 @@ export type EngineFactory = (engine: WorkerEngineKind) => EngineImplementation;
 /**
  * 构造引擎实现（**唯一选择点**；新增引擎在此登记）。
  *
- * ⚠️ 本函数**延迟加载**实现模块：dsh 相关依赖（vendored 插件等）只在 dsh 模式下才碰，
- * opencode 模式的分发体积与加载路径保持原样。
+ * ⚠️ **延迟加载**：dsh 的实现模块（含 vendored 插件路径、DshDriver）只在 dsh 模式下 import，
+ * opencode 模式的加载路径与分发体积保持原样。
  *
  * @param engine - 引擎类型（来自 `resolveWorkerEngineFromEnv` 等）。
- * @param factory - 实现工厂（缺省按引擎类型分发到真实实现；测试传桩）。
+ * @param options - 各引擎的构造参数（由调用方按引擎类型准备；缺省用各自默认值）。
+ * @param factory - 实现工厂（**测试注入桩用**；生产不传）。
  */
 export function createEngine(
   engine: WorkerEngineKind,
+  options: EngineConstructOptions = {},
   factory?: EngineFactory,
 ): EngineImplementation {
   if (factory !== undefined) {
@@ -125,8 +127,77 @@ export function createEngine(
     }
     return impl;
   }
-  throw new Error(
-    `[engine] 尚未登记引擎实现：${engine}（P1 只落地 opencode 适配与选择决策；` +
-      `dsh 实现在 P2/P4 接入后登记到本函数）`,
-  );
+  switch (engine) {
+    case 'opencode':
+      return createOpencodeEngine(options);
+    case 'dsh':
+      return createDshEngine(options);
+  }
+}
+
+/** 引擎构造参数（按引擎类型取用；未用到的字段被忽略）。 */
+export interface EngineConstructOptions {
+  /** opencode：serve 选项 + 可选的注入/凭据配置。 */
+  opencode?: {
+    serve: import('../runtime/opencode-server').OpencodeServerOptions;
+    reloader?: import('../reload/config-reloader').ConfigReloaderOptions;
+    mcpProbe?: import('../mcp-status/mcp-status-probe').McpStatusProbeOptions;
+  };
+  /** dsh：驱动/运行时选项。 */
+  dsh?: import('./dsh/runtime').DshRuntimeOptions;
+  /** 工作目录（布局与注入根；缺省 process.cwd()）。 */
+  workDir?: string;
+}
+
+/** opencode 实现装配（延迟 import 避免 dsh 模式加载 opencode 依赖）。 */
+function createOpencodeEngine(options: EngineConstructOptions): EngineImplementation {
+  const serveOptions = options.opencode?.serve;
+  if (serveOptions === undefined) {
+    throw new Error('[engine] opencode 引擎缺少 serve 选项（opencode.serve 必填）');
+  }
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { OpencodeRuntime } = require('./opencode/runtime') as typeof import('./opencode/runtime');
+  const { OpencodeResourceInjector, OpencodeCredentialApplier } =
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('./opencode/resources') as typeof import('./opencode/resources');
+  const { createWorkspaceLayout } =
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('./workspace-layout') as typeof import('./workspace-layout');
+
+  const workDir = options.workDir ?? process.cwd();
+  return {
+    kind: 'opencode',
+    runtime: new OpencodeRuntime({
+      serve: serveOptions,
+      ...(options.opencode?.reloader === undefined ? {} : { reloader: options.opencode.reloader }),
+      ...(options.opencode?.mcpProbe === undefined ? {} : { mcpProbe: options.opencode.mcpProbe }),
+    }),
+    injector: new OpencodeResourceInjector({
+      serverUrl: '',
+      workerToken: '',
+      workerId: '',
+      workDir,
+    }),
+    credentials: new OpencodeCredentialApplier(),
+    layout: createWorkspaceLayout(workDir),
+  };
+}
+
+/** dsh 实现装配。 */
+function createDshEngine(options: EngineConstructOptions): EngineImplementation {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { DshRuntime, DshResourceInjector, DshCredentialApplier } =
+    require('./dsh/runtime') as typeof import('./dsh/runtime');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createWorkspaceLayout } =
+    require('./workspace-layout') as typeof import('./workspace-layout');
+
+  const workDir = options.workDir ?? process.cwd();
+  return {
+    kind: 'dsh',
+    runtime: new DshRuntime(options.dsh ?? {}),
+    injector: new DshResourceInjector(),
+    credentials: new DshCredentialApplier(),
+    layout: createWorkspaceLayout(workDir),
+  };
 }
