@@ -190,12 +190,24 @@ export function createDshWorkerDriver(
     workDir,
   );
 
-  // ② 构造驱动（凭据 env 合并进子进程环境）
+  // ② **清理陈旧会话锁**（关键：否则 worker 重启后 resume 必然失败）
+  //
+  // DSH 用 `<sessionDir>/session.lock` 做 write handle 独占。worker 被重启/重建时，
+  // 前一个 dsh 运行时进程已死，但锁文件留在卷上 → 新运行时 resume 旧会话会报
+  // `session "..." is already owned by an active write handle`（实测反复踩到）。
+  // 清理是**安全**的：worker 重启 = 前一运行时必然已终止，锁必然是陈旧的。
+  const dshHomeDir = config.dshHome ?? path.join(workDir, '.dsh-home');
+  const clearedLocks = clearStaleDshSessionLocks(dshHomeDir);
+  if (clearedLocks > 0) {
+    console.log(`[worker/dsh] 已清理 ${clearedLocks} 个陈旧会话锁（worker 重启 = 前一运行时已终止）`);
+  }
+
+  // ③ 构造驱动（凭据 env 合并进子进程环境）
   const driver = new DshDriver({
     dshBin: config.dshBin,
     profile: 'sdk',
     patches: [patchPath],
-    dshHome: config.dshHome ?? path.join(workDir, '.dsh-home'),
+    dshHome: dshHomeDir,
     cwd: workDir,
     provider: providerID,
     model: modelID,
@@ -217,9 +229,53 @@ export function createDshWorkerDriver(
 
   console.log(
     `[worker/dsh] 驱动就绪：provider=${providerID} model=${modelID} ` +
-      `patch=${patchPath} dshHome=${config.dshHome ?? path.join(workDir, '.dsh-home')}`,
+      `patch=${patchPath} dshHome=${dshHomeDir}`,
   );
   return driver;
+}
+
+/**
+ * 清理 DSH 的**陈旧会话锁**（worker 启动时调用）。
+ *
+ * 背景：DSH 用 `<sessionDir>/session.lock` 做 write handle 独占。worker 重启/重建时
+ * 前一运行时已死，但锁文件留在持久化卷上 → 新运行时 resume 旧会话报
+ * `already owned by an active write handle`（实测反复踩到，表现为"会话无法续接"）。
+ *
+ * 为什么清理是安全的：调用点 = worker 进程启动早期，此时**本 worker 的 dsh 运行时
+ * 尚未 spawn**（驱动懒启动），且同卷不允许多 worker 共享（compose 一机一 worker）
+ * ⇒ 卷上所有 `session.lock` 必然是**已死进程**留下的。
+ *
+ * @returns 清理的锁数量。
+ */
+export function clearStaleDshSessionLocks(dshHomeDir: string): number {
+  const sessionsRoot = path.join(dshHomeDir, 'sessions');
+  if (!fs.existsSync(sessionsRoot)) return 0;
+  let cleared = 0;
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (entry.name === 'session.lock') {
+        try {
+          fs.unlinkSync(full);
+          cleared += 1;
+        } catch {
+          // 删不掉不阻断启动（运行时自己也会尝试接管）
+        }
+      }
+    }
+  };
+  walk(sessionsRoot);
+  return cleared;
 }
 
 /** 解析平台 MCP 地址（与既有 opencode 路径同口径：WORKER_MCP_URL 优先）。 */

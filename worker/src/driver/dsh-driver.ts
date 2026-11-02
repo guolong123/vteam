@@ -410,13 +410,29 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         // 用带时间戳的新 id（旧 id 在 DSH 侧被锁，无法复用）
         const freshId = `${sessionID}-r${Date.now().toString(36)}`;
         this.sessions.delete(sessionID);
-        this.ensureMirror(freshId);
+        const freshMirror = this.ensureMirror(freshId);
+        // 新会话 = 空上下文 ⇒ **必须重新注入 system**（旧 withSystem 的 systemSent
+        // 已置 true，但那属于旧会话；新会话若不带 system，agent 会失去全部角色/协作
+        // 提示词，表现为"能回复但完全不懂 vteam 规则"）。
+        freshMirror.systemSent = false;
+        const freshBlocks =
+          typeof input.system === 'string' && input.system.trim() !== ''
+            ? (this.buildContentBlocks(input) as Array<Record<string, unknown>>).map((b, i) =>
+                i === 0 && b.type === 'text'
+                  ? { ...b, text: `${String(input.system)}\n\n${String(b.text ?? '')}` }
+                  : b,
+              )
+            : this.buildContentBlocks(input);
+        freshMirror.systemSent = true;
         receipt = (await this.client.request(method, {
           sessionId: freshId,
-          contentBlocks: withSystem,
+          contentBlocks: freshBlocks,
         })) as { messageId?: unknown } | undefined;
-        // 把旧 id 的后续映射到新 id（上层仍用旧 id 收事件 → 由 sessionIdOf 兜底）
+        // 把旧 id 的后续映射到新 id（上层仍用旧 id 调用 getMessages/abort）
         this.sessionAliases.set(sessionID, freshId);
+        this.logger.info(
+          `[dsh-driver] 会话别名：${sessionID} → ${freshId}（旧会话锁冲突已绕开，system 已重注入）`,
+        );
       }
     }
 
