@@ -384,6 +384,9 @@ export function resolveVteamMcpTimeoutMs(
 }
 
 
+/** 技能落盘根（与引擎的发现路径一致；双写避免切引擎丢技能）。 */
+export const SKILL_ROOTS = ['.opencode/skills', '.dsh/skills'] as const;
+
 export class ResourceInjector {
   private readonly serverUrl: string;
   private readonly workerToken: string;
@@ -498,9 +501,15 @@ export class ResourceInjector {
   applySkills(skills: ResolvedSkill[]): string[] {
     const names: string[] = [];
     for (const skill of skills) {
-      const skillDir = path.join(this.workDir, '.opencode', 'skills', skill.name);
-      fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skill.content, 'utf8');
+      // 双写：opencode 读 `.opencode/skills`，DSH 读 `.dsh/skills`（实测发现路径，
+      // 见 `dsh-skill-filesystem` 的 ".agents/skills" / ".dsh/skills" / "skills"）。
+      // 为什么双写而不是按引擎分支：skills 是**引擎无关资产**（同一个 SKILL.md 格式
+      // 两引擎都认），双写成本极低（几 KB 文本），却避免"切引擎后技能全丢"。
+      for (const root of SKILL_ROOTS) {
+        const skillDir = path.join(this.workDir, root, skill.name);
+        fs.mkdirSync(skillDir, { recursive: true });
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skill.content, 'utf8');
+      }
       names.push(skill.name);
     }
     this.cleanupByManifest('skills', names);

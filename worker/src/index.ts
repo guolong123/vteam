@@ -1910,12 +1910,17 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // 独立模式（WORKER_STANDALONE=true）：跳过控制面资源注入（无 server 可达），
   // 本地工具注入（git/browser，上方已执行）与 omo 种子保留；随后跳过注册/心跳。
   void (async () => {
-    // P4：opencode 专有的资源注入（写 .opencode/skills、opencode.json、omo 种子等）
-    // 在 dsh 引擎下**必须跳过**——这些是 opencode 的目录约定，写进 dsh 的 workdir 只会
-    // 污染工作区（dsh 的注入由 createDshWorkerDriver 生成 cordis patch 承担）。
-    if (config.engine === 'dsh') {
-      console.log('[worker] dsh 引擎模式：跳过 opencode 专有资源注入（由 dsh patch 生成器承担）');
-    } else if (config.standalone) {
+    // P5 修正：dsh 引擎**也要**执行资源注入（此前整块跳过，导致 skills/技能完全不下发）。
+    //
+    // 判断依据（实测）：skills 是**引擎无关资产**——SKILL.md 格式两引擎都认，
+    // dsh 的发现路径是 `.dsh/skills`（`dsh-skill-filesystem` 实测字符串
+    // ".agents/skills" / ".dsh/skills" / "skills"）。injector 已改为**双写**
+    // （`.opencode/skills` + `.dsh/skills`），故两引擎共用同一条注入链路。
+    //
+    // 仍留给 opencode 的部分：openocde.json 的 mcp/agents 节、omo 种子——这些 dsh 不读，
+    // 但**写入无害**（只是多几个小文件）；换来的是"一份注入代码服务两引擎"，
+    // 避免像现在这样双路径维护（本次 skills 漏下发就是跳过注入导致的）。
+    if (config.standalone) {
       console.log('[worker] 独立模式（WORKER_STANDALONE）：跳过控制面资源注入/注册/心跳');
       // T18：注入被跳过 ⇒ `plugins` 段没人写 ⇒ v2 内置 `opencode.browser` 会静默遮蔽
       // 平台自己的 browser 工具 ⇒ 此处补写（详见 ensureStandaloneProjectConfig）。
@@ -1936,18 +1941,22 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // T9：首次注入清单作为注册时上报的真实 skills/tools
       lastInjectReport = report;
       console.log(
-        `[worker] 平台资源注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers`,
+        `[worker] 平台资源注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers` +
+          (config.engine === 'dsh' ? '（dsh：skills 双写 .dsh/skills）' : ''),
       );
       // omo 子代理模型种子：新数据卷无配置文件时写入内置默认（已有则跳过，用户页面/API 修改优先）
-      try {
-        const seeded = seedOmoAgentModels(config.workDir);
-        if (seeded) {
-          console.log(
-            `[worker] omo 模型种子已写入: ${Object.entries(seeded).map(([k, v]) => `${k}=${v}`).join(', ')}`,
-          );
+      // dsh 模式跳过：OmO 是 opencode 生态插件，dsh 不读该配置（写了只是垃圾文件）
+      if (config.engine !== 'dsh') {
+        try {
+          const seeded = seedOmoAgentModels(config.workDir);
+          if (seeded) {
+            console.log(
+              `[worker] omo 模型种子已写入: ${Object.entries(seeded).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+            );
+          }
+        } catch (err) {
+          console.warn(`[worker] omo 模型种子写入失败（不阻断启动）: ${(err as Error).message}`);
         }
-      } catch (err) {
-        console.warn(`[worker] omo 模型种子写入失败（不阻断启动）: ${(err as Error).message}`);
       }
     } catch (err) {
       console.warn(
