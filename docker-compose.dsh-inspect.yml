@@ -1,0 +1,62 @@
+# ============================================================
+# vteam DSH 引擎追加服务（**只加服务，不改主栈定义**）
+#
+# 主栈（server/web/db/init/worker）由 docker-compose.yml 定义，worker 的 dsh 配置
+# 由 docker-compose.dsh.yml 的 `worker` 段注入。本文件只补**观察类**服务。
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.dsh.yml -f docker-compose.dsh-inspect.yml up -d
+#
+# 本文件存在的理由：`dsh-inspect` 是**可选旁挂**，不该与 worker 定义纠缠
+# （早期把它们混在一个文件里，导致 worker 的 container_name/WORKER_ID 被覆盖，
+# 出现重复 worker 容器抢同一 volume）。
+# ============================================================
+
+services:
+  # ==========================================================================
+  # dsh-inspect：DSH 原生 Web UI 观察面板（**只读旁挂**，不参与 vteam 执行）
+  #
+  # 用途：对照 vteam 界面看 DSH 引擎侧的原始视角（会话、事件流、模型调用细节）。
+  #
+  # 关键设计：
+  #  - **共享 worker 的 DSH_HOME volume**（复用同一份会话数据；worker 仍在跑
+  #    `sdk` profile 的 stdio 运行时，本服务是另一个读同一 home 的 web profile 实例）
+  #  - 绑定**容器具体 IP**：DSH 拒绝 `0.0.0.0`（明确报错"绑定所有接口会把 RCE
+  #    暴露到网络"），故用 `$(hostname -i)` 取容器 IP
+  #  - `--trusted-host` 必须显式列出宿主机访问用的 authority，否则 /api 一律 403
+  #  - launch token **每次启动都变**，从容器日志取：
+  #      docker logs vteam-trial-dsh-inspect | grep token
+  # ==========================================================================
+  dsh-inspect:
+    image: vteam-worker:dsh
+    container_name: vteam-trial-dsh-inspect
+    restart: unless-stopped
+    volumes:
+      - dsh_home:/data/dsh-home
+      - vteam_worker_data:/data/vteam-worker
+    environment:
+      DSH_HOME: /data/dsh-home
+      # provider 凭据：与 worker 同源（web profile 也要它才能发起模型请求）
+      VTEAM_PROVIDER_OPENCODE_GO_KEY: ${DSH_API_KEY:-}
+    command:
+      - sh
+      - -c
+      - >-
+        dsh web --no-open --port 3080 --host $$(hostname -i)
+        --trusted-host 127.0.0.1
+        --trusted-host localhost
+        --trusted-host 127.0.0.1:13080
+        --trusted-host localhost:13080
+    ports:
+      - "13080:3080"
+    networks:
+      - vteam-net
+
+volumes:
+  dsh_home:
+  vteam_worker_data:
+
+networks:
+  vteam-net:
+    name: vteam_vteam-net
+    external: true
