@@ -148,7 +148,14 @@ export function createDshWorkerDriver(
   // ① 生成 patch（provider 路由 + 平台 MCP）
   const injector = new DshResourceInjector({
     platformMcpUrl: resolvePlatformMcpUrl(config),
-    platformMcpHeaders: { 'X-Worker-Token': config.workerToken },
+    // 平台 MCP 鉴权需要**两个**头（对齐 server 的 platform-mcp 守卫，见既有 injector.ts:1224-1227）：
+    // - X-Worker-Token：worker 身份令牌
+    // - x-worker-id：worker 全局 id（server 据此反查 Session；缺它 → 403
+    //   PLATFORM_MCP_MISSING_WORKER_ID，所有 vteam 工具调用失败）
+    platformMcpHeaders: {
+      'X-Worker-Token': config.workerToken,
+      'x-worker-id': config.workerId,
+    },
     providerBaseUrl: baseUrl === undefined ? undefined : { [providerID]: baseUrl },
     // 网关要求会话头时由部署配置显式声明（如 opencode-go 的 `x-opencode-session`）。
     // 值必须是**静态**字符串——网关若按会话区分，用固定部署标识即可（同一 worker 稳定）。
@@ -1151,7 +1158,12 @@ export async function buildCapabilities(
     engine,
     engineCapabilities: engineBits,
     port: port ?? undefined,
-    baseUrl: port !== null ? `${base}:${port}` : undefined,
+    // P6：baseUrl 是 server 推导 worker 执行端点主机的**唯一**来源
+    // （`resolveAdvertiseOrigin` 只取 origin 部分，再拼 execPort）。
+    // opencode 模式带 serve 端口（既有行为）；**dsh 模式没有 serve 端口**，
+    // 若不上报 baseUrl，server 会回退到 WORKER_BASE_URL 默认值（容器内不可达）
+    // ⇒ 派发必失败（fetch failed）。故 dsh 模式上报**不带端口**的公布基址。
+    baseUrl: engine === 'dsh' ? base : port !== null ? `${base}:${port}` : undefined,
     ...(models !== undefined ? { models } : {}),
     ...(execPort !== undefined ? { execPort } : {}),
     ...(executableModels !== undefined ? { executableModels } : {}),

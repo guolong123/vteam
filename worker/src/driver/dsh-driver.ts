@@ -237,10 +237,29 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
 
     // steer：优先 vendored 方法（P5），不存在则回退 queue（不阻断）
     const method = input.delivery === 'steer' ? await this.pickPromptMethod(true) : 'session/prompt';
-    const receipt = (await this.client.request(method, {
-      sessionId: sessionID,
-      contentBlocks: withSystem,
-    })) as { messageId?: unknown } | undefined;
+    const promptParams = { sessionId: sessionID, contentBlocks: withSystem };
+    let receipt: { messageId?: unknown } | undefined;
+    try {
+      receipt = (await this.client.request(method, promptParams)) as
+        | { messageId?: unknown }
+        | undefined;
+    } catch (err) {
+      const message = (err as Error).message;
+      // ⚠️ "already exists" 不是失败（实测踩到的坑）：
+      // DSH 会话持久化在 `$DSH_HOME/sessions/`。worker 重启后 createSession 会分配新 id，
+      // 但 exec-server 复用的是**旧** instanceRef ⇒ 对已存在的会话发 prompt 会报
+      // `session "<id>" already exists`。此时**不能**判失败——会话就在那儿，
+      // resume 后继续同一轮即可（历史也随之恢复）。
+      if (!/already exists/i.test(message)) throw err;
+      this.logger.warn(
+        `[dsh-driver] 会话 ${sessionID} 已存在于 DSH 侧 → resume 后继续本轮（不判失败）`,
+      );
+      await this.client.request('session/resume', { sessionId: sessionID }, 60_000);
+      this.ensureMirror(sessionID);
+      receipt = (await this.client.request(method, promptParams)) as
+        | { messageId?: unknown }
+        | undefined;
+    }
 
     const messageId =
       typeof receipt?.messageId === 'string' && receipt.messageId.length > 0
@@ -257,9 +276,29 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    * `session/resume` 恢复（但 resume **不回放事件**，故历史仍可能为空——P1 遗留）。
    */
   async getMessages(sessionID: string, _options?: DriverMessageQuery): Promise<DriverMessage[]> {
-    const mirror = this.sessions.get(sessionID);
+    let mirror = this.sessions.get(sessionID);
     if (mirror === undefined) {
-      throw new DriverRequestError(`[dsh-driver] 未知会话：${sessionID}`, 404);
+      // ⚠️ 镜像缺失**不等于**会话失效（实测踩到的坑）：
+      // DSH 的会话是**持久化**的（`$DSH_HOME/sessions/...`），worker 重启只会丢掉本进程的
+      // 事件镜像，会话本身仍在。若这里直接抛 404，exec-server 会判定"会话失效" →
+      // unbind + 重建 → 对**已存在**的 DSH 会话发 prompt → `session already exists` 死循环。
+      //
+      // 正确做法：先尝试 `session/resume` 恢复（DSH 支持持久化会话恢复，但不回放事件），
+      // 再返回空镜像（历史经 resume 进入后续模型请求，前端只能看到新消息——P1 遗留）。
+      try {
+        await this.client.request('session/resume', { sessionId: sessionID }, 30_000);
+        mirror = this.ensureMirror(sessionID);
+        this.logger.info(`[dsh-driver] 会话已 resume 恢复（镜像为空，历史在 DSH 侧）：${sessionID}`);
+      } catch (err) {
+        const message = (err as Error).message;
+        // resume 明确说"不存在"才算真失效（这时 404 触发重建才有意义）
+        if (/not found|no such|unknown session|missing/i.test(message)) {
+          throw new DriverRequestError(`[dsh-driver] 会话不存在：${sessionID}`, 404);
+        }
+        // 其它错误（已活跃/占用等）：按"会话存在"处理，返回空镜像（不误判失效）
+        this.logger.warn(`[dsh-driver] resume 未成功但会话可能仍存在（按存在处理）：${message}`);
+        mirror = this.ensureMirror(sessionID);
+      }
     }
     return [...mirror.messages];
   }
