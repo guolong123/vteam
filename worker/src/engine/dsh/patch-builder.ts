@@ -54,6 +54,13 @@ export interface DshProviderRoute {
     contextWindow?: number;
     maxTokens?: number;
   }>;
+  /**
+   * provider 级请求头（如 opencode-go 网关要求 `x-opencode-session`）。
+   *
+   * 依据：`dsh-llm-pi-ai` 的 `PiAiProviderProfile.headers`（config.d.ts:113-114）。
+   * ⚠️ 值是**静态字符串**（不能含密钥；header 里的凭据应走 env + 引擎自己的鉴权）。
+   */
+  headers?: Record<string, string>;
 }
 
 /** MCP 服务器声明（引擎无关 → patch 条目）。 */
@@ -108,6 +115,12 @@ export function buildDshPatch(input: DshPatchInput): string {
       lines.push(`        apiKeyEnv: ${quote(provider.apiKeyEnv)}`);
       lines.push(`        api: ${quote(provider.api)}`);
       lines.push(`        baseURL: ${quote(provider.baseURL)}`);
+      if (provider.headers !== undefined && Object.keys(provider.headers).length > 0) {
+        lines.push('        headers:');
+        for (const [key, value] of Object.entries(provider.headers)) {
+          lines.push(`          ${quoteKey(key)}: ${quote(value)}`);
+        }
+      }
       lines.push('        models:');
       for (const model of provider.models) {
         lines.push(`          - id: ${quote(model.id)}`);

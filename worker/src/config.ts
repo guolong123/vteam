@@ -63,6 +63,13 @@ export interface WorkerConfig {
   dshApiKey?: string;
   /** dsh：自定义端点（自建 OpenAI 兼容网关时必填）。 */
   dshBaseUrl?: string;
+  /**
+   * dsh：provider 请求头名（如 opencode-go 网关要求 `x-opencode-session`）。
+   * 缺省不注入任何头（直连标准 OpenAI 兼容端点）。
+   */
+  dshSessionHeader?: string;
+  /** dsh：上述请求头的值（缺省用 workerId，保证同一 worker 稳定）。 */
+  dshSessionHeaderValue?: string;
   /** 心跳间隔 ms；默认 10000（D1：10s 心跳，server 30s=3 周期判 offline） */
   heartbeatIntervalMs: number;
   /** 日志级别；默认 info */
@@ -391,6 +398,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     dshModel: (env.DSH_MODEL ?? '').trim() || undefined,
     dshApiKey: (env.DSH_API_KEY ?? '').trim() || undefined,
     dshBaseUrl: (env.DSH_BASE_URL ?? '').trim() || undefined,
+    dshSessionHeader: (env.DSH_SESSION_HEADER ?? '').trim() || undefined,
+    dshSessionHeaderValue: (env.DSH_SESSION_HEADER_VALUE ?? '').trim() || undefined,
     heartbeatIntervalMs: parseNonNegativeInt('HEARTBEAT_INTERVAL_MS', env.HEARTBEAT_INTERVAL_MS, 10000),
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',

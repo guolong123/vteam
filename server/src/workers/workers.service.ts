@@ -1161,12 +1161,15 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
           maxInstances: unknown;
           skills: unknown;
           tools: unknown;
+          engine: unknown;
+          engineCapabilities: unknown;
+          capModels: unknown;
         }>
       >(
         `SELECT t.id, t.name, t.opencodeVersion, t.\`load\`, t.status,
                 t.lastHeartbeatAt, t.registeredAt, t.defaultModelId,
                 t.codeVersion, t.updateState, t.rolledBack,
-                t.maxInstances, t.skills, t.tools
+                t.maxInstances, t.skills, t.tools, t.engine, t.engineCapabilities, t.capModels
            FROM (
              SELECT id, name, opencode_version AS opencodeVersion, \`load\`, status,
                     last_heartbeat_at AS lastHeartbeatAt, registered_at AS registeredAt,
@@ -1175,7 +1178,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
                     rolled_back AS rolledBack,
                     JSON_EXTRACT(capabilities, '$.maxInstances') AS maxInstances,
                     JSON_EXTRACT(capabilities, '$.skills') AS skills,
-                    JSON_EXTRACT(capabilities, '$.tools') AS tools
+                    JSON_EXTRACT(capabilities, '$.tools') AS tools,
+                    JSON_EXTRACT(capabilities, '$.engine') AS engine,
+                    JSON_EXTRACT(capabilities, '$.engineCapabilities') AS engineCapabilities,
+                    JSON_EXTRACT(capabilities, '$.models') AS capModels
                FROM workers
               ORDER BY id
               LIMIT 1000000
@@ -1193,6 +1199,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
             maxInstances: this.jsonScalarToNumber(row.maxInstances, 0),
             skills: this.jsonArrayToStrings(row.skills),
             tools: this.jsonArrayToStrings(row.tools),
+            // P6：引擎与能力位（前端/调度按此降级；缺省 = 旧 worker = opencode 全支持）
+            engine: this.jsonStringToEngine(row.engine),
+            engineCapabilities: this.jsonToObject(row.engineCapabilities) ?? undefined,
+            models: this.jsonArrayToStrings(row.capModels),
           },
         }),
       );
@@ -1251,6 +1261,16 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** JSON 数组列 → string[]：驱动可能回 string（未解析）或已解析数组，两种都归一化。 */
+  /** 引擎类型归一（NULL/非字符串/未知值 → undefined = 顶层按 opencode 处理）。 */
+  private jsonStringToEngine(value: unknown): 'opencode' | 'dsh' | undefined {
+    if (value === null || value === undefined) return undefined;
+    const raw = typeof value === 'string' ? value : String(value);
+    const cleaned = raw.replace(/^"|"$/g, '').trim();
+    if (cleaned === 'dsh') return 'dsh';
+    if (cleaned === 'opencode') return 'opencode';
+    return undefined;
+  }
+
   private jsonArrayToStrings(value: unknown): string[] {
     if (Array.isArray(value)) {
       return value.filter((v): v is string => typeof v === 'string');

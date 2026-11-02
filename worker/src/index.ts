@@ -150,6 +150,12 @@ export function createDshWorkerDriver(
     platformMcpUrl: resolvePlatformMcpUrl(config),
     platformMcpHeaders: { 'X-Worker-Token': config.workerToken },
     providerBaseUrl: baseUrl === undefined ? undefined : { [providerID]: baseUrl },
+    // 网关要求会话头时由部署配置显式声明（如 opencode-go 的 `x-opencode-session`）。
+    // 值必须是**静态**字符串——网关若按会话区分，用固定部署标识即可（同一 worker 稳定）。
+    providerHeaders:
+      config.dshSessionHeader === undefined
+        ? undefined
+        : { [providerID]: { [config.dshSessionHeader]: config.dshSessionHeaderValue ?? config.workerId } },
     logger: {
       info: (m) => console.log(m),
       warn: (m) => console.warn(m),
@@ -1613,7 +1619,11 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // F2 M4：load 上报真实活动会话数（instance-tracker 计数，
     // T10 会话执行接线后由驱动调用点 trackInstanceStart/End 驱动）
     const load: WorkerLoad = getLoad(config.workerMaxInstances);
-    const health: WorkerHealth = serveServer.isRunning ? 'ok' : 'degraded';
+    // P4：dsh 模式**没有 serve 进程** ⇒ 健康判据不能看 serveServer.isRunning
+    // （恒 false ⇒ worker 永远 degraded ⇒ server 不派单）。dsh 的健康 = 进程在跑
+    // （驱动按需 spawn 子进程；未 spawn 也算健康——懒启动是设计而非故障）。
+    const health: WorkerHealth =
+      config.engine === 'dsh' ? 'ok' : serveServer.isRunning ? 'ok' : 'degraded';
     try {
       // 回滚判定排在心跳之前：真触发回滚时，rolledback 状态要在**这一轮**就报上去，
       // server 的指令收敛（convergePendingUpdateCommand）才能及时清掉 pending。
@@ -1625,7 +1635,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         load,
         health,
         // T8c：MCP 状态快照（节流缓存，30s 内复用）
-        mcpStatus: await mcpStatusProbe.getStatus(),
+        // P4：dsh 模式**不探测**（无 serve 端点可查；能力位 mcpStatusProbe=false）
+        // 缺省不传 = server 按"未上报"处理，而不是报一个假的失败态。
+        ...(config.engine === 'dsh' ? {} : { mcpStatus: await mcpStatusProbe.getStatus() }),
         ...updaterReport(),
         // 同 register：上报进程启动时定格的版本，不现读磁盘文件。
         codeVersion: BOOT_CODE_VERSION,

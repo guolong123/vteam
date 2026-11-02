@@ -1,0 +1,52 @@
+# ============================================================
+# vteam worker（dsh 引擎版）——试用镜像
+#
+# 与 worker/Dockerfile 的差异：
+#   - 基础镜像 node:24（DSH 要求 node >= 24.9；原镜像 node:22 不满足）
+#   - 预装 `dsh` CLI（npm 公开发行包，锁版本）+ bubblewrap（linux 沙箱链）
+#   - 不装 opencode CLI（dsh 引擎不需要；减小体积与构建时间）
+#   - 不装 agent-browser / Chrome（试用期浏览器能力非必需）
+#
+# 用法（compose 覆盖 worker 服务）：
+#   WORKER_ENGINE=dsh
+#   DSH_API_KEY=...
+#   DSH_PROVIDER/DSH_MODEL/DSH_BASE_URL 按实际路由
+# ============================================================
+ARG NODE_IMAGE=docker.io/library/node:24-bookworm-slim
+
+# ---- 阶段 1：build（TS 编译）----
+FROM ${NODE_IMAGE} AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+# 与既有 worker 构建一致的国内源；失败时回退默认源（离线/受限网络）
+RUN npm config set registry https://registry.npmmirror.com && npm ci || npm ci
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+# ---- 阶段 2：runner ----
+FROM ${NODE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git openssh-client curl jq bash procps \
+      bubblewrap \
+    && rm -rf /var/lib/apt/lists/*
+
+# dsh CLI（锁版本；升级需同步跑 P7 的 conformance 断言）
+ARG DSH_SPEC=@deepseek-ai/dsh@0.2.2-alpha.2
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm i -g "${DSH_SPEC}" && echo "dsh installed: $(dsh --version)" && which dsh
+
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+
+# dsh 运行时 home（隔离；每个 worker 一个）
+ENV DSH_HOME_DIR=/data/dsh-home
+# 引擎选择（compose 可覆盖）
+ENV WORKER_ENGINE=dsh
+ENV WORK_DIR=/data/vteam-worker
+RUN mkdir -p /data/vteam-worker /data/dsh-home
+
+EXPOSE 4198
+CMD ["node", "dist/index.js"]

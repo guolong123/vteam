@@ -61,6 +61,11 @@ export interface DshInjectorOptions {
   providerApi?: Record<string, string>;
   /** provider 路由的 baseURL（缺省按凭据里的 baseUrl 或 providerID 猜）。 */
   providerBaseUrl?: Record<string, string>;
+  /**
+   * provider 路由的请求头（如 opencode-go 网关要求 `x-opencode-session`）。
+   * 注意：opencode 会话头的值会按会话变化 → 若网关强制唯一值，见 `providerHeadersFor`。
+   */
+  providerHeaders?: Record<string, Record<string, string>>;
   logger?: { info(m: string): void; warn(m: string): void; error(m: string): void };
 }
 
@@ -134,11 +139,13 @@ export class DshResourceInjector implements ResourceInjector {
       (cred.providerID.startsWith('deepseek')
         ? 'https://api.deepseek.com/v1'
         : `https://${cred.providerID}/v1`);
+    const headers = this.options.providerHeaders?.[cred.providerID];
     return {
       route: cred.providerID,
       apiKeyEnv: credentialEnvName(cred.providerID),
       api,
       baseURL,
+      ...(headers === undefined ? {} : { headers }),
       models: [
         {
           id: cred.modelID ?? 'deepseek-v4-flash',
