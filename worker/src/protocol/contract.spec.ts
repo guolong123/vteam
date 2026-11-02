@@ -775,7 +775,8 @@ const PROTOCOL_MANIFEST = {
     optional: ['envNames'],
   },
   WorkerIntegrationsResponsePayload: { required: ['integrations'], optional: [] },
-  CreateSessionRequestPayload: { required: [], optional: ['model'] },
+  // P6：`agent?` 增补（agent 身份 / dsh 侧 agent-preset）
+  CreateSessionRequestPayload: { required: [], optional: ['model', 'agent', 'system'] },
   CreateSessionResponsePayload: { required: ['sessionId'], optional: [] },
   SessionPromptRequestPayload: {
     required: ['prompt'],
@@ -805,6 +806,10 @@ type _M1 = Expect<
     CreateSessionRequestPayload,
     {
       model?: WorkerModelRef | null;
+      /** P6：agent 身份（vteam `vteam-<agentKey>`；dsh 侧映射为 agent-preset） */
+      agent?: string;
+      /** P6：完整角色提示词（建会话时注入；dsh 侧作为会话 preset 的 persona） */
+      system?: string;
     }
   >
 >;
@@ -917,9 +922,12 @@ type _M12 = Expect<
   >
 >;
 type _O7 = Expect<[OptionalKeys<WorkerIntegrationInfo>] extends ['envNames'] ? true : false>;
-/* 编译期：可选键集必须与 manifest 一致（`model?` 变成必填 = 契约漂移）。 */
+/* 编译期：可选键集必须与 manifest 一致（`model?` 变成必填 = 契约漂移）。
+ * P6 增补 `agent?`（agent 身份 / dsh 侧 agent-preset）。 */
 type _O1 = Expect<
-  [OptionalKeys<CreateSessionRequestPayload>] extends ['model'] ? true : false
+  [OptionalKeys<CreateSessionRequestPayload>] extends ['model' | 'agent' | 'system']
+    ? true
+    : false
 >;
 type _O2 = Expect<
   [OptionalKeys<SessionPromptRequestPayload>] extends [
@@ -1170,7 +1178,7 @@ describe('T21 双端契约一致性（worker 侧副本 ↔ server 侧副本）',
       }
     });
 
-    it('POST /sessions：请求体只认 model；响应只回 sessionId', async () => {
+    it('POST /sessions：请求体认 model + agent（P6）；响应只回 sessionId', async () => {
       const { driver, createSession } = mockDriver();
       const { port, stop } = await startExec(driver);
       try {
@@ -1179,10 +1187,13 @@ describe('T21 双端契约一致性（worker 侧副本 ↔ server 侧副本）',
         });
         expect(res.status).toBe(200);
         expect(Object.keys(res.body)).toEqual(['sessionId']);
-        expect(createSession).toHaveBeenCalledWith({
-          providerID: 'opencode',
-          modelID: 'gpt-5',
-        });
+        // P6：createSession 第二个参数是 agent preset（此处请求未带 agent → undefined）
+        // P6：第二/三参数 = agent preset 与 agent system（此处请求未带 → undefined）
+        expect(createSession).toHaveBeenCalledWith(
+          { providerID: 'opencode', modelID: 'gpt-5' },
+          undefined,
+          undefined,
+        );
       } finally {
         await stop();
       }

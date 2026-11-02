@@ -726,6 +726,25 @@ export type WorkerDeliveryMode = 'steer' | 'queue';
 export interface CreateSessionRequestPayload {
   /** 模型选择（可选；缺省用被驱动端默认模型）。 */
   model?: WorkerModelRef | null;
+  /**
+   * P6：agent 身份（vteam 的 `vteam-<agentKey>`；可选）。
+   *
+   * 语义 = "这个会话扮演哪个 Agent"。引擎侧映射：
+   * - opencode：忽略（角色由 system 提示词承载）
+   * - dsh：作为 agent-preset 绑定（多角色共享运行时、零重启切换人设）
+   */
+  agent?: string;
+  /**
+   * P6：完整角色提示词（server 的 buildSystemInstructions 输出；可选）。
+   *
+   * 引擎侧映射：
+   * - opencode：忽略（由既有 system handoff 通道承载）
+   * - dsh：作为该会话专属 preset 的 persona（**进模型 system 段**，不污染用户消息）
+   *
+   * 与 `SessionPromptRequestPayload.system` 的区别：本字段在**建会话时**生效
+   * （部分引擎要求身份绑定早于首个 turn）；prompt 的 system 是逐轮的。
+   */
+  system?: string;
 }
 
 /** POST /sessions 响应体（创建会话）。 */

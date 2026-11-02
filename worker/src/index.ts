@@ -182,6 +182,38 @@ export function createDshWorkerDriver(
   });
   void credentials.apply([{ providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) }]);
 
+  // P6：注入 **agent-preset roster**（多角色共享一个运行时）。
+  //
+  // 为什么用内置静态 roster 而不是拉 Agent API：`GET /agents` 需要用户 JWT，
+  // worker 只有 worker-token（无权限）。而 worker 其实**不需要** Agent 定义——
+  // server 派发时已通过 `payload.system` 下发完整角色提示词（buildSystemInstructions）。
+  // preset 的作用是**按角色隔离工具/技能上下文**，骨架用 vteam 的 7 个稳定出厂角色即可。
+  void (async () => {
+    try {
+      const { buildBuiltinRoster, renderPresetPatch } = await import('./engine/dsh/preset-builder');
+      const roster = buildBuiltinRoster();
+      injector.setPresetRosterPatch(renderPresetPatch(roster, roster[0]?.id ?? 'standard'));
+      await injector.apply(
+        {
+          workDir,
+          skills: [],
+          tools: [],
+          mcpServers: [],
+          agentPolicies: [],
+          modelCredentials: [
+            { providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) },
+          ],
+        },
+        workDir,
+      );
+      console.log(
+        `[worker/dsh] agent-preset roster 已注入：${roster.length} 个角色（${roster.map((r) => r.id).join(', ')}）`,
+      );
+    } catch (err) {
+      console.warn(`[worker/dsh] preset roster 注入失败（退回单 persona）：${(err as Error).message}`);
+    }
+  })();
+
   // patch 写盘（同步等待：握手前必须就位）
   const patchPath = path.join(workDir, '.vteam', 'dsh-profile.patch.yml');
   void injector.apply(
@@ -283,6 +315,72 @@ export function clearStaleDshSessionLocks(dshHomeDir: string): number {
   };
   walk(sessionsRoot);
   return cleared;
+}
+
+/**
+ * 从控制面拉取 vteam Agent 列表 → dsh preset 规格（P6）。
+ *
+ * 语义映射（见 engine/dsh/preset-builder.ts 的对照表）：
+ * - `agentKey` → preset id（稳定可读，跨环境一致）
+ * - `prompt` + `persona` → persona prefix（进模型 system 段）
+ * - `defaultModelId` / `skills` → 打包进 spec（preset 生成时按需使用）
+ *
+ * 鉴权与既有资源拉取一致：`X-Worker-Token` + `x-worker-id`。
+ * 失败返回空数组（调用方退回单 persona，不阻断启动）。
+ */
+export async function fetchVteamAgentSpecs(
+  config: WorkerConfig,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<import('./engine/dsh/preset-builder').VteamAgentSpec[]> {
+  const base = config.serverUrl.replace(/\/+$/, '');
+  if (base === '') return [];
+  const url = `${base}/api/v1/agents?pageSize=200`;
+  try {
+    const res = await fetchImpl(url, {
+      headers: {
+        'X-Worker-Token': config.workerToken,
+        'x-worker-id': config.workerId,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      console.warn(`[worker/dsh] GET /agents 失败 HTTP ${res.status}（退回单 persona）`);
+      return [];
+    }
+    const json = (await res.json()) as unknown;
+    // 兼容两种信封：裸数组 / { items }
+    const rows = Array.isArray(json)
+      ? json
+      : Array.isArray((json as { items?: unknown }).items)
+        ? (json as { items: unknown[] }).items
+        : [];
+    const specs: import('./engine/dsh/preset-builder').VteamAgentSpec[] = [];
+    for (const raw of rows) {
+      if (raw === null || typeof raw !== 'object') continue;
+      const row = raw as Record<string, unknown>;
+      const agentKey = typeof row.agentKey === 'string' ? row.agentKey.trim() : '';
+      const id = typeof row.id === 'string' ? row.id : '';
+      const prompt = typeof row.prompt === 'string' ? row.prompt : '';
+      // 只收模板/自定义 Agent（跳过无 key 或空提示词的行：preset 需要 identity）
+      if (agentKey === '' || id === '' || prompt.trim() === '') continue;
+      specs.push({
+        id,
+        agentKey,
+        name: typeof row.name === 'string' ? row.name : agentKey,
+        prompt,
+        ...(typeof row.persona === 'string' && row.persona !== ''
+          ? { persona: row.persona }
+          : {}),
+        ...(typeof row.defaultModelId === 'string' && row.defaultModelId !== ''
+          ? { defaultModelId: row.defaultModelId }
+          : {}),
+      });
+    }
+    return specs;
+  } catch (err) {
+    console.warn(`[worker/dsh] GET /agents 异常（退回单 persona）：${(err as Error).message}`);
+    return [];
+  }
 }
 
 /** 解析平台 MCP 地址（与既有 opencode 路径同口径：WORKER_MCP_URL 优先）。 */

@@ -2759,10 +2759,27 @@ export class WorkerDispatcher
       phase: 'thinking',
     });
 
-    // 5. 创建 opencode 会话（未创建/占位时）→ 第二次 bind 写入真实 instanceRef
+    // 5. 创建会话（未创建/占位时）→ 第二次 bind 写入真实 instanceRef
     if (!opencodeSessionId) {
       try {
-        const created = await this.workerClient.createSession(worker, model);
+        // P6：agentKey 供 preset 身份解析（提前单独查询：下方 agentIdentity 构建时
+        // 才查 agentRow，但 createSession 必须早于它）
+        const presetAgentKey = await this.prisma.agent
+          .findUnique({
+            where: { id: target.agentId },
+            select: { agentKey: true },
+          })
+          .then((row) => row?.agentKey ?? null)
+          .catch(() => null);
+        // P6：建会话时一并下发 **agent 身份**（= 该会话扮演哪个角色）。
+        // 为什么必须在这里：dsh 的 agent-preset 绑定要求首 turn 之前完成（之后锁定）；
+        // 角色提示词（system）在 execute 时才构建，故此处只传身份，
+        // 完整提示词由 worker 在首次 sendMessage 时经 persona 通道补上。
+        const created = await this.workerClient.createSession(
+          worker,
+          model,
+          this.resolveAgentPresetId(target.agentId, presetAgentKey),
+        );
         opencodeSessionId = created.sessionId;
         await this.sessionLifecycle.bindSessionToWorker(
           sessionId,
@@ -5548,6 +5565,28 @@ export class WorkerDispatcher
    * stop-first：空闲判死后 best-effort 中止 worker 侧 stuck 会话。
    * 失败只记 warn、永不抛错，调用方恢复链（失败标记/广播/自动拉起）照常继续。
    */
+  /**
+   * P6：把 vteam agent 身份解析成 **DSH preset id**。
+   *
+   * 规则（与 worker 侧 `VTEAM_BUILTIN_ROLES` 对齐）：
+   * - 内置角色：`vteam-<agentKey>`（如 `vteam-developer`）—— vteam 的 agentKey 就是
+   *   这个命名空间，与 preset roster 的 id 逐字一致；
+   * - 自定义/未知 Agent：退回 `vteam-product`（默认 preset，保证不因缺定义而失败）。
+   *
+   * @param agentId - vteam Agent id（诊断用）。
+   * @param agentKey - DB 的 agent_key 列（可能是 null）。
+   */
+  private resolveAgentPresetId(agentId: string, agentKey: string | null | undefined): string {
+    if (typeof agentKey === 'string' && agentKey.trim() !== '') {
+      const preset = agentKey.trim();
+      // 内置命名空间直接用；自定义 Agent 的名字也作为 preset id 传给 worker
+      // （worker 侧运行时注册会按需创建该 preset，见 vendored session/create）
+      return preset;
+    }
+    void agentId;
+    return 'vteam-product';
+  }
+
   private async abortStuckWorkerSession(
     workerRef: WorkerEndpointRef,
     instanceRef: string,

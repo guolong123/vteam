@@ -91,10 +91,33 @@ export class DshResourceInjector implements ResourceInjector {
   private readonly options: DshInjectorOptions;
   private readonly logger: NonNullable<DshInjectorOptions['logger']>;
 
+  /**
+   * 预设 roster 的 patch 文本（P6）。
+   *
+   * 由调用方生成（`renderPresetPatch(buildBuiltinRoster(), default)`），
+   * `apply()` 时追加到 patch 尾部。为什么用「预渲染文本」而不是结构体：
+   * roster 是**静态出厂角色**（7 个），渲染一次比每轮重新构造简单且稳定。
+   */
+  private presetRosterPatch: string | null = null;
+
+  /** 设置 preset roster patch（null = 不注入 roster，退回单 persona）。 */
+  setPresetRosterPatch(patch: string | null): void {
+    this.presetRosterPatch = patch;
+  }
+
   constructor(options: DshInjectorOptions = {}) {
     this.options = options;
     this.logger = options.logger ?? console;
   }
+
+  /**
+   * 写入串行化链（避免并发 apply 撞同一个 tmp 文件）。
+   *
+   * 实测：启动时"同步 apply（基本配置）"与"异步 apply（preset roster）"可能并发，
+   * 两者用同一个 `<patch>.tmp-<pid>` 名字 → 后者的 rename 找不到文件（ENOENT）。
+   * 故所有写操作排队。
+   */
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   /**
    * 应用注入快照 → 写 patch 文件。
@@ -104,15 +127,28 @@ export class DshResourceInjector implements ResourceInjector {
    * @returns patch 文件绝对路径（供驱动 spawn 时 --patch 引用）。
    */
   async apply(snapshot: EngineConfigSnapshot, workDir: string): Promise<string> {
+    // 串行化：把本次写入排到链尾（见 writeChain 说明）
+    const task = this.writeChain.then(() => this.applyNow(snapshot, workDir));
+    this.writeChain = task.catch(() => undefined);
+    return task;
+  }
+
+  /** 实际写入（由 apply 串行化调用）。 */
+  private async applyNow(snapshot: EngineConfigSnapshot, workDir: string): Promise<string> {
     const patchPath = path.join(workDir, '.vteam', DSH_PATCH_FILENAME);
     const providers = snapshot.modelCredentials.map((cred) => this.toProviderRoute(cred));
     const mcpMounts = this.buildMounts(snapshot);
 
-    const content = buildDshPatch({
+    let content = buildDshPatch({
       providers,
       mcpMounts,
       ...(this.options.persona === undefined ? {} : { persona: this.options.persona }),
     });
+
+    // P6：追加 agent-preset roster（多角色共享运行时的关键）
+    if (this.presetRosterPatch !== null) {
+      content += `\n${this.presetRosterPatch}`;
+    }
 
     await fs.promises.mkdir(path.dirname(patchPath), { recursive: true });
     // 原子写：先写临时文件再 rename（避免 dsh 读到半个文件导致启动失败）

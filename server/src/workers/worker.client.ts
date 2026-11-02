@@ -416,10 +416,18 @@ export class WorkerClient {
   async createSession(
     worker: WorkerEndpointRef,
     model?: { providerID: string; modelID: string } | null,
+    agentPreset?: string,
+    agentSystem?: string,
   ): Promise<{ sessionId: string }> {
-    const body: CreateSessionRequestPayload = model
-      ? { model: { ...model } }
-      : {};
+    // P6：建会话时一并下发 **agent 身份 + 角色提示词**。
+    // 为什么在建会话时下发（而不是后的 prompt）：dsh 的 agent-preset 绑定要求
+    // 会话**首个 turn 之前**完成（之后锁定）；且角色提示词进 preset 的 persona
+    // ⇒ 模型 system 段，不污染用户消息、不多角色共享运行时。
+    const body: CreateSessionRequestPayload = {
+      ...(model ? { model: { ...model } } : {}),
+      ...(agentPreset !== undefined && agentPreset !== '' ? { agent: agentPreset } : {}),
+      ...(agentSystem !== undefined && agentSystem !== '' ? { system: agentSystem } : {}),
+    };
     const res = await this.requestExec(worker, '/sessions', {
       method: 'POST',
       headers: {

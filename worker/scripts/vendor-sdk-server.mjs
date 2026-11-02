@@ -76,6 +76,62 @@ const CANCEL_CASE = `
  * UserMessage 需要 `{ id, content, source }`（与 DSH 内部 createUserMessage 同形）。
  * vteam 只传纯文本 → 组装为单个 text block。
  */
+/**
+ * `session/create`：**创建会话时绑定 agent preset**（P6）。
+ *
+ * 为什么需要这个扩展：DSH 的 preset 选择有严格时机——`agentPresets.select()`
+ * 要求会话**尚未开始首个 turn**（`agent-preset/locked`），而 SDK 协议本来没有
+ * per-session 创建方法（`session/prompt` 会隐式建会话，那时已经晚了）。
+ *
+ * 所以必须"先建会话 + 立刻选 preset"，两者在同一个 case 里完成：
+ * 1. 用 `getOrCreateSession` 建（或复用）会话
+ * 2. 若 registry 存在且该会话**还没跑过 turn**，调 `agentPresets.select(agent, presetId)`
+ * 3. registry 不存在（未配置 roster）时退化为警告（不阻断，保持向后兼容）
+ *
+ * 语义对齐 vteam：一个成员实例 = 一个 Agent = 一个 preset；
+ * 团队里 PM/开发/测试并发时各用自己的 preset，**共享同一个运行时进程**。
+ */
+const CREATE_CASE = `
+\t\t\tcase "session/create": {
+\t\t\t\tconst sid = params?.sessionId;
+\t\t\t\tif (typeof sid !== "string" || sid.length === 0) throw new TypeError("session/create requires a non-empty sessionId");
+\t\t\t\tconst rec = await this.getOrCreateSession(sid);
+\t\t\t\tconst preset = params?.agentPreset;
+\t\t\t\tconst presetPlugins = params?.agentPresetPlugins;
+\t\t\t\tif (typeof preset === "string" && preset.length > 0) {
+\t\t\t\t\tconst registry = this.ctx.get("agentPresets");
+\t\t\t\t\tif (registry === undefined) {
+\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: agentPreset=\${preset} 但未挂载 preset registry（profile 未配置 roster）→ 忽略\`);
+\t\t\t\t\t} else {
+\t\t\t\t\t\t// 运行时注册：若调用方带了 plugins，就用它注册/覆盖该 preset。
+\t\t\t\t\t\t// 这是 vteam 的**核心通道**——server 派发时下发的完整角色提示词
+\t\t\t\t\t\t// （buildSystemInstructions，数千字）在这里变成该会话专属的
+\t\t\t\t\t\t// preset persona prefix，且**不重启运行时**、**不污染用户消息**。
+\t\t\t\t\t\tif (Array.isArray(presetPlugins) && presetPlugins.length > 0) {
+\t\t\t\t\t\t\ttry {
+\t\t\t\t\t\t\t\tawait registry.register({
+\t\t\t\t\t\t\t\t\tid: preset,
+\t\t\t\t\t\t\t\t\tname: params?.agentPresetName ?? preset,
+\t\t\t\t\t\t\t\t\tplugins: presetPlugins,
+\t\t\t\t\t\t\t\t});
+\t\t\t\t\t\t\t} catch (err) {
+\t\t\t\t\t\t\t\t// 已存在（同 id 静态 roster）→ 忽略；其它错误告警
+\t\t\t\t\t\t\t\tif (!/Duplicate agent preset/i.test(err.message)) {
+\t\t\t\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: 运行时注册 preset \${preset} 失败：\${err.message}\`);
+\t\t\t\t\t\t\t\t}
+\t\t\t\t\t\t\t}
+\t\t\t\t\t\t}
+\t\t\t\t\t\t// select 要求首 turn 之前；已跑过 turn 会抛 agent-preset/locked
+\t\t\t\t\t\ttry {
+\t\t\t\t\t\t\tawait registry.select(rec.handle.agent, preset);
+\t\t\t\t\t\t} catch (err) {
+\t\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: preset \${preset} 选择失败（会话可能已开始）：\${err.message}\`);
+\t\t\t\t\t\t}
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t\treturn { sessionId: sid, agentPreset: typeof preset === "string" ? preset : null };
+\t\t\t}`;
+
 const STEER_CASE = `
 \t\t\tcase "session/steer": {
 \t\t\t\t// vteam P5 vendor：在途注入（下一 step 边界消费）。
@@ -113,8 +169,9 @@ function main() {
   // 幂等：已有两个 case → 跳过
   const hasCancel = source.includes('case "session/cancel"');
   const hasSteer = source.includes('case "session/steer"');
-  if (hasCancel && hasSteer) {
-    console.log('[vendor] 已打过补丁（session/cancel + session/steer 均存在），跳过');
+  const hasCreate = source.includes('case "session/create"');
+  if (hasCancel && hasSteer && hasCreate) {
+    console.log('[vendor] 已打过补丁（create/cancel/steer 均存在），跳过');
     return;
   }
 
@@ -138,14 +195,18 @@ function main() {
   }
 
   let patched = source;
-  // 两个 case 插在 shutdown 之前（cancel 在前，steer 在后）
+  // 三个 case 插在 shutdown 之前（create → cancel → steer）
   patched = patched.replace(
     ANCHOR,
-    `${CANCEL_CASE}\n${STEER_CASE}\n${ANCHOR}`,
+    `${CREATE_CASE}\n${CANCEL_CASE}\n${STEER_CASE}\n${ANCHOR}`,
   );
 
   // 结构断言：两处 case 必须都在，且 default 分支未被破坏
-  if (!patched.includes('case "session/cancel"') || !patched.includes('case "session/steer"')) {
+  if (
+    !patched.includes('case "session/create"') ||
+    !patched.includes('case "session/cancel"') ||
+    !patched.includes('case "session/steer"')
+  ) {
     throw new Error('[vendor] 注入后断言失败：case 未写入');
   }
   if (!patched.includes('default: throw new Error(')) {
@@ -154,6 +215,7 @@ function main() {
 
   writeFileSync(target, patched, 'utf8');
   console.log(`[vendor] 补丁完成：${target}`);
+  console.log('[vendor]   新增 session/create（建会话 + 绑定 agent preset）');
   console.log('[vendor]   新增 session/cancel（GUI 停止按钮语义，keepInbox=true）');
   console.log('[vendor]   新增 session/steer（在途注入，agent.steer）');
 }

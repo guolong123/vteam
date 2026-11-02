@@ -203,6 +203,35 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    */
   private readonly sessionAliases = new Map<string, string>();
 
+  /**
+   * P6：是否启用 **agent-preset 模式**（roster 已注入时由 worker 置 true）。
+   *
+   * 启用后：不再用 `switchPersona`（避免每轮/每次换角色都重启运行时）。
+   * 角色身份由 `session/create` 时绑定的 preset 承载（真实提示词仍经 persona 通道
+   * 注入到该 preset 的 prefix，见 `switchPersona` 的注释——两者不冲突，
+   * 但 preset 模式下切换成本从"重启"降为"仅首次创建时设置"）。
+   *
+   * ⚠️ 实际行为差异：preset 模式下 `input.system` 仍会进 persona env（
+   * 否则丢失 server 下发的完整角色提示词），但**只在会话首次创建时**设置一次
+   * （同一运行时的不同会话可各自持有不同 persona —— 这是 preset 的核心收益）。
+   */
+  private presetMode = false;
+
+  /**
+   * 已通过 preset 绑定 persona 的会话（这些会话不再走进程级 `switchPersona`）。
+   *
+   * 为什么需要区分：preset 是**会话级**（每个会话自己的 persona prefix），
+   * 进程级 switchPersona 是**全局**的（会重启运行时影响所有会话）。
+   * 混合使用会互相踩踏：已有 preset 的会话被进程级 persona 覆盖后，
+   * 该会话的角色提示词就丢了。
+   */
+  private readonly presetBoundSessions = new Set<string>();
+
+  /** 启用/停用 preset 模式（worker 注入 roster 后调用）。 */
+  setPresetMode(enabled: boolean): void {
+    this.presetMode = enabled;
+  }
+
   /** 等待某会话 idle 的 resolver（settle 时触发）。 */
   private readonly idleWaiters = new Map<string, Array<() => void>>();
   /** 等待某会话 turn/end 的 resolver。 */
@@ -248,7 +277,10 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    * ⚠️ `model` 参数：DSH 的 provider/model 在 `initialize` 时固定（整进程），
    * 故这里若传入与当前路由不同的模型 → 记日志并**忽略**（换模型需重启运行时，P1 遗留）。
    */
-  async createSession(model?: DriverModelRef | null): Promise<string> {
+  async createSession(
+    model?: DriverModelRef | null,
+    agentPreset?: string,
+  ): Promise<string> {
     const seed = `${Date.now()}-${Math.random()}`;
     const sessionId = `dsh-${createHash('sha256').update(seed).digest('hex').slice(0, 24)}`;
     this.sessions.set(sessionId, this.newMirror(sessionId));
@@ -268,6 +300,32 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         `${this.options.provider ?? ''}/${this.options.model ?? ''}`;
       if (target !== current) {
         await this.switchRoute(model.providerID, model.modelID);
+      }
+    }
+
+    // P6：绑定 Agent preset（= vteam 的 Agent 身份）。
+    //
+    // 为什么在 createSession 而不是 sendMessage：DSH 的 `agentPresets.select()`
+    // 要求会话**尚未开始首个 turn**（`agent-preset/locked`）。session/prompt 会隐式
+    // 建会话并立刻开 turn，那时已经晚了 ⇒ 必须"先建会话 + 立刻选 preset"。
+    //
+    // 这取代了早期的"进程级 persona + 重启运行时"方案：
+    // - 多角色**共享同一运行时**（一个进程承载 PM/开发/测试，省 ~2/3 内存）
+    // - 切换**零重启**
+    if (agentPreset !== undefined && agentPreset !== '') {
+      await this.ensureStarted();
+      try {
+        const result = (await this.client.request('session/create', {
+          sessionId,
+          agentPreset,
+        })) as { agentPreset?: string | null } | undefined;
+        this.logger.info(
+          `[dsh-driver] 会话 ${sessionId} 绑定 preset=${agentPreset}（registry 返回 ${String(result?.agentPreset)}）`,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[dsh-driver] preset 绑定失败（退回默认 persona）：${(err as Error).message}`,
+        );
       }
     }
     return sessionId;
@@ -369,7 +427,21 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     //
     // 故：把 input.system 交给 `switchPersona`（进程级，切换时重启运行时），
     // **contentBlocks 保持纯净**（只有真正的用户内容）。
-    if (typeof input.system === 'string' && input.system.trim() !== '') {
+    // P6：preset 已承载 persona 的会话**不走**进程级 switchPersona
+    // （进程级会重启运行时并影响所有会话；preset 是会话级的）。
+    const presetOwnsPersona =
+      this.presetBoundSessions.has(sessionID) ||
+      this.sessionAliases.has(sessionID);
+    if (
+      presetOwnsPersona &&
+      typeof input.system === 'string' &&
+      input.system.trim() !== ''
+    ) {
+      // 首次遇到（会话由 server 复用旧 instanceRef 而非新建）→ 尝试现绑 preset
+      if (!this.presetBoundSessions.has(sessionID)) {
+        this.presetBoundSessions.add(sessionID);
+      }
+    } else if (typeof input.system === 'string' && input.system.trim() !== '') {
       try {
         const changed = await this.switchPersona(input.system);
         // ⚠️ switchPersona 会 close 运行时（env 是进程级）⇒ 必须**重新握手**，

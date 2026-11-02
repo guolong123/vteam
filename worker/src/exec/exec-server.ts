@@ -1750,7 +1750,7 @@ export class ExecServer {
       return;
     }
     try {
-      const sessionId = await this.driver.createSession(model);
+      const sessionId = await this.driver.createSession(model, body.agent, body.system);
       this.rememberSession(sessionId);
       sendJson(res, 200, { sessionId });
       this.logger.info(`[exec] session create -> ${sessionId}`);
@@ -2275,7 +2275,14 @@ export class ExecServer {
         }
       }
       if (!opencodeSessionId) {
-        opencodeSessionId = await this.driver.createSession(payload.model);
+        // P6：把 vteam 的 agent 身份作为 **preset** 传入（多角色共享运行时）
+        // P6：把 agent 身份 + **完整角色提示词** 一起交给驱动 →
+        // 会作为该会话专属 preset 的 persona 注册（多角色共享运行时、零重启）
+        opencodeSessionId = await this.driver.createSession(
+          payload.model,
+          payload.agent,
+          payload.system,
+        );
         // metric：临时 anon 键迁移到真实 opencode 会话 id，保证 finally 能用同一键 end。
         trackInstanceRekey(sessionKey, opencodeSessionId);
         sessionKey = opencodeSessionId;
@@ -2333,7 +2340,14 @@ export class ExecServer {
           // 复用会话失效（serve 重启/容器重建后旧会话 404）→ 自动 createSession 新建
           // 会话并重试一次；新建也失败 → 外层 error 收敛。
           this.logger.warn(`[exec] 复用会话 ${opencodeSessionId} 会话不存在（HTTP 404），新建会话重试一次`);
-          opencodeSessionId = await this.driver.createSession(payload.model);
+          // P6：把 vteam 的 agent 身份作为 **preset** 传入（多角色共享运行时）
+        // P6：把 agent 身份 + **完整角色提示词** 一起交给驱动 →
+        // 会作为该会话专属 preset 的 persona 注册（多角色共享运行时、零重启）
+        opencodeSessionId = await this.driver.createSession(
+          payload.model,
+          payload.agent,
+          payload.system,
+        );
           // metric：旧键迁移到新建的真实 opencode 会话 id（仍保持 1 个去重活跃会话）。
           trackInstanceRekey(sessionKey, opencodeSessionId);
           sessionKey = opencodeSessionId;
