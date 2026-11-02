@@ -51,6 +51,18 @@ export interface WorkerConfig {
    * opencode（否则运维会以为切成功了、实际跑的还是老引擎）。
    */
   engine: WorkerEngineKind;
+  /** dsh：`dsh` 可执行文件路径（缺省 PATH 上的 `dsh`）。 */
+  dshBin?: string;
+  /** dsh：DSH home 目录（隔离；缺省 `<workDir>/.dsh-home`）。 */
+  dshHome?: string;
+  /** dsh：模型 provider 路由（缺省 `deepseek-official`）。 */
+  dshProvider?: string;
+  /** dsh：模型 id（缺省 `deepseek-v4-flash`）。 */
+  dshModel?: string;
+  /** dsh：模型 API key（env `DSH_API_KEY`；凭据走 spawn env，不落盘）。 */
+  dshApiKey?: string;
+  /** dsh：自定义端点（自建 OpenAI 兼容网关时必填）。 */
+  dshBaseUrl?: string;
   /** 心跳间隔 ms；默认 10000（D1：10s 心跳，server 30s=3 周期判 offline） */
   heartbeatIntervalMs: number;
   /** 日志级别；默认 info */
@@ -372,6 +384,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     // P1：引擎选择（env WORKER_ENGINE）。未知值在这里抛错 = 启动即失败，
     // 不静默回落 opencode（否则"切了引擎"在运维眼里是成功了、实际没变）。
     engine: resolveWorkerEngine(env.WORKER_ENGINE),
+    // P4：dsh 引擎配置（仅在 engine=dsh 时使用；opencode 模式下这些字段被忽略）
+    dshBin: (env.DSH_BIN ?? '').trim() || undefined,
+    dshHome: (env.DSH_HOME_DIR ?? '').trim() || undefined,
+    dshProvider: (env.DSH_PROVIDER ?? '').trim() || undefined,
+    dshModel: (env.DSH_MODEL ?? '').trim() || undefined,
+    dshApiKey: (env.DSH_API_KEY ?? '').trim() || undefined,
+    dshBaseUrl: (env.DSH_BASE_URL ?? '').trim() || undefined,
     heartbeatIntervalMs: parseNonNegativeInt('HEARTBEAT_INTERVAL_MS', env.HEARTBEAT_INTERVAL_MS, 10000),
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',

@@ -70,8 +70,25 @@ const UPDATE_REQUEST_STATUS = 'pending';
 const TOKEN_CHECK_TTL_MS = 30_000;
 
 /** 调度需求声明（T10 WorkerDispatcher 分派时传入）。 */
+
+/**
+ * 从 worker capabilities Json 读取引擎类型（P6）。
+ *
+ * 缺省 `opencode`：兼容全部存量 worker（它们的 capabilities 里没有 engine 键）。
+ */
+export function readWorkerEngine(capabilities: unknown): 'opencode' | 'dsh' {
+  if (capabilities === null || typeof capabilities !== 'object') return 'opencode';
+  const engine = (capabilities as { engine?: unknown }).engine;
+  return engine === 'dsh' ? 'dsh' : 'opencode';
+}
+
 export interface AssignmentRequirement {
-  /** 要求的 opencode 版本（精确匹配；省略则接受任意版本） */
+  /**
+   * P6：要求的执行引擎（省略 = `opencode`，保持既有行为）。
+   * 引擎不同时 worker 直接出候选（不同引擎不参与 opencode 版本比对）。
+   */
+  engine?: 'opencode' | 'dsh';
+  /** 要求的 opencode 版本（精确匹配；省略则接受任意版本；仅 engine=opencode 时生效） */
   opencodeVersion?: string;
   /** 需要的并发实例槽位（默认 1） */
   instances?: number;
@@ -1003,14 +1020,20 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       // 防御式双保险：DB where 已过滤 offline，此处再兜底（单测 mock 不执行 where）
       .filter((x) => x.worker.status !== WORKER_STATUS.OFFLINE)
       .filter((x) => x.capacity >= need)
-      .filter(
-        (x) =>
-          !req.opencodeVersion ||
-          // 两侧都归一后再比（双写自 worker 的 normalizeOpencodeVersion）：
-          // worker 上报 `2.0.28`，需求可能写成 `opencode v2.0.28`——精确串相等会
-          // 匹配不上 ⇒ worker 变不可调度 ⇒ **静默的总停摆**（什么都不派发、无报错）。
-          isSameOpencodeVersion(x.worker.opencodeVersion, req.opencodeVersion),
-      )
+      .filter((x) => {
+        // P6：引擎维度只在**需求显式指定**时生效（默认不指定 = 接受任意引擎，
+        // 与今日行为逐字节一致——分派侧当前只传 modelId/preferredWorkerId）。
+        const workerEngine = readWorkerEngine(x.worker.capabilities);
+        if (req.engine !== undefined && workerEngine !== req.engine) return false;
+        // dsh worker 不参与 opencode 版本比对：它的 opencodeVersion 是占位串
+        // （`dsh-<ver>`），拿去比必然不等 ⇒ dsh worker 永远不可调度（静默停摆）。
+        if (workerEngine !== 'opencode') return true;
+        if (!req.opencodeVersion) return true;
+        // 两侧都归一后再比（双写自 worker 的 normalizeOpencodeVersion）：
+        // worker 上报 `2.0.28`，需求可能写成 `opencode v2.0.28`——精确串相等会
+        // 匹配不上 ⇒ worker 变不可调度 ⇒ **静默的总停摆**（什么都不派发、无报错）。
+        return isSameOpencodeVersion(x.worker.opencodeVersion, req.opencodeVersion);
+      })
       .filter((x) => this.matchesModelRequirement(x.worker, req.modelId))
       .sort((a, b) => {
         const aOnline = a.worker.status === WORKER_STATUS.ONLINE ? 1 : 0;

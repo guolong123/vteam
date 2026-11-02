@@ -35,6 +35,22 @@ export interface WorkerCapabilities {
   skills: string[];
   tools: string[];
   /**
+   * P6：执行引擎类型（缺省 `opencode`，兼容旧 worker）。
+   * server 据此选引擎匹配的 worker，并跳过引擎不支持的端点。
+   */
+  engine?: 'opencode' | 'dsh';
+  /** P6：引擎能力位（缺省 = 全支持，兼容旧 worker）。 */
+  engineCapabilities?: {
+    perMessageModelSwitch?: boolean;
+    todos?: boolean;
+    externalAgents?: boolean;
+    integrations?: boolean;
+    omoConfig?: boolean;
+    planFiles?: boolean;
+    steer?: boolean;
+    mcpStatusProbe?: boolean;
+  };
+  /**
    * C2：serve 实际可用模型 id 列表（listModels 成功上报，id 格式 providerID/modelID；
    * listModels 失败降级缺省——server 侧 C3 据此合并入库，C7 调度按模型可用过滤）。
    */

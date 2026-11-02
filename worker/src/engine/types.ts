@@ -206,6 +206,8 @@ export interface EnginePermissionRule {
 export interface EngineModelCredential {
   /** providerID（vteam 口径）。 */
   providerID: string;
+  /** modelID（vteam 口径；引擎需要它来声明"这条凭据服务哪个模型"）。 */
+  modelID?: string;
   /** API key（明文只在内存与受限 env 中存在，绝不进日志）。 */
   apiKey: string;
   /** 自定义端点（可选；OpenAI 兼容网关需要）。 */
@@ -228,10 +230,12 @@ export interface ResourceInjector {
    * 铁律（既有实现已确立）：**注入失败时保留上次受管块**，避免"权限放大"
    * （拉取失败若清空配置，模型会回落到该引擎的默认全权限）。
    *
+   * @returns 产物路径（引擎需要在启动时引用它，如 dsh 的 `--patch <file>`；
+   *   opencode 无此概念时返回 undefined）。
    * @param snapshot - 引擎无关快照。
    * @param workDir - 注入根目录。
    */
-  apply(snapshot: EngineConfigSnapshot, workDir: string): Promise<void>;
+  apply(snapshot: EngineConfigSnapshot, workDir: string): Promise<string | void>;
 
   /** 清理受管块（worker 卸载/会话结束时；不删引擎自身配置）。 */
   cleanup(workDir: string): Promise<void>;

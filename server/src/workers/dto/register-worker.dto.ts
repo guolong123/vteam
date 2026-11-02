@@ -61,6 +61,33 @@ export class WorkerCapabilitiesDto {
   @Min(0)
   maxInstances: number;
 
+  @ApiPropertyOptional({
+    description:
+      'P6：执行引擎类型（`opencode` 缺省 / `dsh`）。控制面据此跳过引擎不支持的端点' +
+      '（todos/agents/integrations/omo-config/plan-files），而非用 if (engine) 散落分支。',
+    enum: ['opencode', 'dsh'],
+  })
+  @IsOptional()
+  @IsIn(['opencode', 'dsh'])
+  engine?: 'opencode' | 'dsh';
+
+  @ApiPropertyOptional({
+    description:
+      'P6：引擎能力位（缺省 = 全支持，兼容旧 worker）。server 按位降级，不再猜引擎行为。',
+  })
+  @IsOptional()
+  @IsObject()
+  engineCapabilities?: {
+    perMessageModelSwitch?: boolean;
+    todos?: boolean;
+    externalAgents?: boolean;
+    integrations?: boolean;
+    omoConfig?: boolean;
+    planFiles?: boolean;
+    steer?: boolean;
+    mcpStatusProbe?: boolean;
+  };
+
   @ApiProperty({ description: 'worker 启用的 skill 名列表', type: [String] })
   @IsArray()
   @IsString({ each: true })

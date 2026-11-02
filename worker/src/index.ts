@@ -28,6 +28,10 @@ import { createOpencodeDriver, resolveOpencodeDriverMode } from './driver';
 import { unwrapV2List } from './driver/v2-driver';
 import { SystemHandoffStore } from './driver/v2-system-handoff';
 import { DriverModelInfo } from './driver/opencode-driver';
+import type { OpenCodeDriver } from './driver/opencode-driver';
+import type { WorkerEngineKind } from './engine';
+import { DshDriver } from './driver/dsh-driver';
+import { DshCredentialApplier, DshResourceInjector, resolveDefaultRoute } from './engine/dsh/injector';
 import { GIT_TOOLS, installGitTools } from './git/git-tools';
 import { BROWSER_TOOLS, installBrowserTools, isAgentBrowserAvailable } from './browser/browser-tools';
 import {
@@ -107,6 +111,113 @@ const EMPTY_INJECT_REPORT: InjectReport = {
  * 分不清"平台本来就没有自定义工具"与"拉取炸了/注入被跳过"——这正是**静默失败**的典型形态。
  * 故本工厂是注入器的**唯一**构造入口。
  */
+/**
+ * 构造 dsh 引擎的 worker 驱动（P4）。
+ *
+ * 与 opencode 路径的关键差异：
+ * - **不需要 serve 子进程**：DshDriver 自己 spawn `dsh --profile sdk`；
+ * - **patch 由注入器生成**：provider 路由/平台 MCP 落在 `<workDir>/.vteam/dsh-profile.patch.yml`，
+ *   驱动 spawn 时 `--patch` 引用它；
+ * - **凭据走 env**（`VTEAM_PROVIDER_*_KEY`），不依赖宿主 `~/.dsh` 凭据库。
+ *
+ * ⚠️ patch 必须在驱动**首次握手前**就位（initialize 会按路由校验 provider）。
+ * 故本函数同步生成一次 patch（用 worker 配置里的静态信息），后续心跳/注入轮次再刷新。
+ *
+ * @param config - worker 配置（含 serverUrl/workDir 等）。
+ * @param systemHandoff - 系统提示词交接器（DSH 无 per-session system API →
+ *   由驱动把它拼成文本前缀，故此处仅透传工作目录）。
+ */
+export function createDshWorkerDriver(
+  config: WorkerConfig,
+  systemHandoff: SystemHandoffStore,
+): DshDriver {
+  // 引擎无关布局：vteam 自有资产固定 .vteam/
+  const workDir = config.workDir;
+  const providerID = config.dshProvider ?? 'deepseek-official';
+  const modelID = config.dshModel ?? 'deepseek-v4-flash';
+  const apiKey = config.dshApiKey ?? '';
+  const baseUrl = config.dshBaseUrl;
+
+  if (apiKey === '') {
+    console.warn(
+      '[worker/dsh] 未配置 DSH_API_KEY：dsh 子进程可能因缺少模型凭据而无法完成首轮。' +
+        '若使用自建网关请同时设置 DSH_BASE_URL / DSH_PROVIDER / DSH_MODEL。',
+    );
+  }
+
+  // ① 生成 patch（provider 路由 + 平台 MCP）
+  const injector = new DshResourceInjector({
+    platformMcpUrl: resolvePlatformMcpUrl(config),
+    platformMcpHeaders: { 'X-Worker-Token': config.workerToken },
+    providerBaseUrl: baseUrl === undefined ? undefined : { [providerID]: baseUrl },
+    logger: {
+      info: (m) => console.log(m),
+      warn: (m) => console.warn(m),
+      error: (m) => console.error(m),
+    },
+  });
+  const credentials = new DshCredentialApplier({
+    info: (m) => console.log(m),
+    warn: (m) => console.warn(m),
+    error: (m) => console.error(m),
+  });
+  void credentials.apply([{ providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) }]);
+
+  // patch 写盘（同步等待：握手前必须就位）
+  const patchPath = path.join(workDir, '.vteam', 'dsh-profile.patch.yml');
+  void injector.apply(
+    {
+      workDir,
+      skills: [],
+      tools: [],
+      mcpServers: [],
+      agentPolicies: [],
+      modelCredentials: [{ providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) }],
+    },
+    workDir,
+  );
+
+  // ② 构造驱动（凭据 env 合并进子进程环境）
+  const driver = new DshDriver({
+    dshBin: config.dshBin,
+    profile: 'sdk',
+    patches: [patchPath],
+    dshHome: config.dshHome ?? path.join(workDir, '.dsh-home'),
+    cwd: workDir,
+    provider: providerID,
+    model: modelID,
+    env: credentials.envVars,
+    // 会话级 expertise：DSH 的模型路由在 initialize 固定
+    approvalRequests: true,
+    userQuestions: true,
+    logger: {
+      info: (m) => console.log(m),
+      warn: (m) => console.warn(m),
+      error: (m) => console.error(m),
+    },
+  });
+
+  // ③ 系统提示词交接：DSH 无 per-session system 注入 API →
+  //    由驱动在 sendMessage 时把 system 拼成文本前缀（既有 v2 的 fallback 同语义）。
+  //    systemHandoff 在 dsh 路径下只提供"on-disk 交接"，驱动不消费（P4 简化）。
+  void systemHandoff;
+
+  console.log(
+    `[worker/dsh] 驱动就绪：provider=${providerID} model=${modelID} ` +
+      `patch=${patchPath} dshHome=${config.dshHome ?? path.join(workDir, '.dsh-home')}`,
+  );
+  return driver;
+}
+
+/** 解析平台 MCP 地址（与既有 opencode 路径同口径：WORKER_MCP_URL 优先）。 */
+function resolvePlatformMcpUrl(config: WorkerConfig): string | undefined {
+  const override = (process.env.WORKER_MCP_URL ?? '').trim();
+  if (override !== '') return override;
+  // 缺省按 server 基址推导（platform-mcp 挂载在 /api/v1/platform-mcp）
+  const base = config.serverUrl.replace(/\/+$/, '');
+  return base === '' ? undefined : `${base}/api/v1/platform-mcp`;
+}
+
 export function createResourceInjector(options: {
   serverUrl: string;
   workerToken: string;
@@ -998,14 +1109,41 @@ export async function buildCapabilities(
   execPort?: number,
   maxInstances = 5,
   executableModels?: string[],
+  engine: WorkerEngineKind = 'opencode',
 ): Promise<WorkerCapabilities> {
   const base = advertiseHost.replace(/\/+$/, '');
   const browserTools = isAgentBrowserAvailable() ? BROWSER_TOOLS.map((t) => t.name) : [];
   const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...browserTools, ...injected.tools])];
+  // P6：引擎与能力位上报（server 据此跳过引擎不支持的端点，而非猜引擎行为）。
+  const engineBits =
+    engine === 'dsh'
+      ? {
+          perMessageModelSwitch: false,
+          todos: false,
+          externalAgents: false,
+          integrations: false,
+          omoConfig: false,
+          planFiles: false,
+          steer: false,
+          mcpStatusProbe: false,
+        }
+      : {
+          perMessageModelSwitch: true,
+          todos: true,
+          externalAgents: true,
+          integrations: true,
+          omoConfig: true,
+          planFiles: true,
+          steer: true,
+          mcpStatusProbe: true,
+        };
+
   return {
     maxInstances,
     skills: injected.skills,
     tools,
+    engine,
+    engineCapabilities: engineBits,
     port: port ?? undefined,
     baseUrl: port !== null ? `${base}:${port}` : undefined,
     ...(models !== undefined ? { models } : {}),
@@ -1057,6 +1195,7 @@ export async function buildRegisterOptions(
     execPort,
     maxInstances ?? config.workerMaxInstances,
     executableModels,
+    config.engine,
   );
   return {
     serverUrl: config.serverUrl,
@@ -1173,17 +1312,23 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   const systemHandoff = new SystemHandoffStore(config.workDir, {
     logger: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
   });
-  const driver = createOpencodeDriver({
-    mode: driverMode,
-    // B1：口令取 serve 的**实际**鉴权口令（配置密码或 v2 自动生成的密码），且**每次请求
-    // 时现取**——v2 自动生成的密码要等 serve 起来、从 stdout 捕获后才知道；把它固化在
-    // 构造那一刻 = 无口令 ⇒ 驱动每个请求都 401，而 worker 仍注册成功、看起来健康。
-    // 绝不从环境变量另读一份（会与 serve 的真实鉴权漂移 ⇒ 全线 401）——与
-    // serveEndpoint() / mcpStatusProbe 同一套做法。
-    serverPassword: serveServer.effectiveServerPassword ?? undefined,
-    serverPasswordProvider: buildServePasswordProvider(serveServer),
-    systemHandoff,
-  });
+  // P4：按引擎类型构造驱动（`WORKER_ENGINE` 已在 loadConfig 阶段解析并校验）。
+  // 业务层（exec-server / prompt-await）只依赖 OpenCodeDriver 接缝 ⇒ 两引擎共用同一条
+  // 执行链路，除驱动实现外**零分支**（这正是 P1–P3 抽象的目的）。
+  const driver: OpenCodeDriver =
+    config.engine === 'dsh'
+      ? createDshWorkerDriver(config, systemHandoff)
+      : createOpencodeDriver({
+          mode: driverMode,
+          // B1：口令取 serve 的**实际**鉴权口令（配置密码或 v2 自动生成的密码），且**每次请求
+          // 时现取**——v2 自动生成的密码要等 serve 起来、从 stdout 捕获后才知道；把它固化在
+          // 构造那一刻 = 无口令 ⇒ 驱动每个请求都 401，而 worker 仍注册成功、看起来健康。
+          // 绝不从环境变量另读一份（会与 serve 的真实鉴权漂移 ⇒ 全线 401）——与
+          // serveEndpoint() / mcpStatusProbe 同一套做法。
+          serverPassword: serveServer.effectiveServerPassword ?? undefined,
+          serverPasswordProvider: buildServePasswordProvider(serveServer),
+          systemHandoff,
+        });
 
   // T4b：资源注入执行器——serve 启动前拉取控制面 skills/tools/mcp-servers 注入
   // <workDir>（.opencode/skills/ + .opencode/tools/ + opencode.json mcp 节），
@@ -1741,7 +1886,12 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // 独立模式（WORKER_STANDALONE=true）：跳过控制面资源注入（无 server 可达），
   // 本地工具注入（git/browser，上方已执行）与 omo 种子保留；随后跳过注册/心跳。
   void (async () => {
-    if (config.standalone) {
+    // P4：opencode 专有的资源注入（写 .opencode/skills、opencode.json、omo 种子等）
+    // 在 dsh 引擎下**必须跳过**——这些是 opencode 的目录约定，写进 dsh 的 workdir 只会
+    // 污染工作区（dsh 的注入由 createDshWorkerDriver 生成 cordis patch 承担）。
+    if (config.engine === 'dsh') {
+      console.log('[worker] dsh 引擎模式：跳过 opencode 专有资源注入（由 dsh patch 生成器承担）');
+    } else if (config.standalone) {
       console.log('[worker] 独立模式（WORKER_STANDALONE）：跳过控制面资源注入/注册/心跳');
       // T18：注入被跳过 ⇒ `plugins` 段没人写 ⇒ v2 内置 `opencode.browser` 会静默遮蔽
       // 平台自己的 browser 工具 ⇒ 此处补写（详见 ensureStandaloneProjectConfig）。
@@ -1783,12 +1933,19 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     }
 
     try {
-      const baseUrl = await serveServer.start();
-      // T4：serve 就绪后注入实际 baseUrl（随机端口场景，driver 后续请求才有目标地址）
-      driver.baseUrl = baseUrl;
-      // 新起的 serve 还没加载插件 ⇒ 就绪标记作废（驱动会等插件加载，或退回文本前缀）
-      systemHandoff.invalidateReady();
-      console.log(`[worker] opencode serve 就绪: ${baseUrl} (pid=${serveServer.pid})`);
+      // P4：引擎差异的**唯一**启动分支。
+      // - opencode：起 serve 子进程，把实际 baseUrl 注入驱动
+      // - dsh：无 serve（驱动自己 spawn `dsh --profile sdk`），故只做就绪日志
+      if (config.engine === 'dsh') {
+        console.log('[worker] dsh 引擎模式：无 serve 子进程，驱动按需 spawn dsh 运行时');
+      } else {
+        const baseUrl = await serveServer.start();
+        // T4：serve 就绪后注入实际 baseUrl（随机端口场景，driver 后续请求才有目标地址）
+        driver.baseUrl = baseUrl;
+        // 新起的 serve 还没加载插件 ⇒ 就绪标记作废（驱动会等插件加载，或退回文本前缀）
+        systemHandoff.invalidateReady();
+        console.log(`[worker] opencode serve 就绪: ${baseUrl} (pid=${serveServer.pid})`);
+      }
 
       // T10：执行端点启动（node:http POST /execute，固定端口）。失败仅记录日志并
       // 置 execPort=undefined（注册不带 execPort，server 不会连到不可用端点），
@@ -1833,7 +1990,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         void sendHeartbeatOnce();
       }, heartbeatIntervalMs);
     } catch (err) {
-      console.error(`[worker] opencode serve 启动失败: ${(err as Error).message}`);
+      console.error(
+        `[worker] ${config.engine} 引擎启动失败: ${(err as Error).message}`,
+      );
       process.exit(1);
     }
   })();
