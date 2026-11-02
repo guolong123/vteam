@@ -1,0 +1,8 @@
+- insert:
+    - id: mcp-vteam
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: vteam
+        transport: streamable-http
+        url: http://127.0.0.1:18900/mcp
+        failOnStartupError: true

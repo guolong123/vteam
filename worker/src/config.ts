@@ -10,6 +10,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import { resolveWorkerEngine, type WorkerEngineKind } from './engine';
+
 export interface WorkerConfig {
   /** 注册鉴权 token（对齐协议 X-Worker-Token header，D1）；必填 */
   workerToken: string;
@@ -41,6 +43,14 @@ export interface WorkerConfig {
    * 的开关 = 故障时按错方向排查。唯一有效回退是回滚镜像/代码到 v1.0.x（并回滚数据卷）。
    */
   opencodeV2Enabled: boolean;
+  /**
+   * 执行引擎类型（env `WORKER_ENGINE`，P1 / 计划 D1）：`opencode`（默认）| `dsh`。
+   *
+   * 语义：**只是后端运行时不同**——server 配置、web 界面、用户使用方式一律不变。
+   * 未知值在 `loadConfig` 阶段**响亮失败**（`resolveWorkerEngine` 抛错），不静默回落
+   * opencode（否则运维会以为切成功了、实际跑的还是老引擎）。
+   */
+  engine: WorkerEngineKind;
   /** 心跳间隔 ms；默认 10000（D1：10s 心跳，server 30s=3 周期判 offline） */
   heartbeatIntervalMs: number;
   /** 日志级别；默认 info */
@@ -359,6 +369,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       'OPENCODE_V2_ENABLED',
       env.OPENCODE_V2_ENABLED,
     ),
+    // P1：引擎选择（env WORKER_ENGINE）。未知值在这里抛错 = 启动即失败，
+    // 不静默回落 opencode（否则"切了引擎"在运维眼里是成功了、实际没变）。
+    engine: resolveWorkerEngine(env.WORKER_ENGINE),
     heartbeatIntervalMs: parseNonNegativeInt('HEARTBEAT_INTERVAL_MS', env.HEARTBEAT_INTERVAL_MS, 10000),
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',

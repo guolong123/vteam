@@ -1,0 +1,7 @@
+{
+  "name": "vteam-dsh-bundle",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

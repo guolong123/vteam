@@ -72,6 +72,7 @@ const CONFIG: WorkerConfig = {
   serverPassword: '',
   allowGeneratedPassword: false,
   opencodeV2Enabled: true,
+  engine: 'opencode',
   heartbeatIntervalMs: 10000,
   logLevel: 'info',
   workDir: '/tmp/w',
