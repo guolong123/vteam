@@ -404,8 +404,18 @@ export interface OpenCodeDriver {
   /** 被驱动端鉴权口令（空 = 不鉴权；订阅事件流时用）。 */
   readonly authPassword: string;
 
-  /** 创建会话，返回会话 id（非空字符串）。 */
-  createSession(model?: DriverModelRef | null): Promise<string>;
+  /**
+   * 创建会话，返回会话 id（非空字符串）。
+   *
+   * @param model - 模型选择（可选）。
+   * @param agentPreset - **agent 身份**（可选；引擎无关表述 = vteam 的角色标识）。
+   * @param agentSystem - **完整角色提示词**（可选；server 派发的 buildSystemInstructions）。
+   */
+  createSession(
+    model?: DriverModelRef | null,
+    agentPreset?: string,
+    agentSystem?: string,
+  ): Promise<string>;
 
   /** 下发提示（异步投递即可；失败抛 `DriverRequestError`）。 */
   sendMessage(sessionID: string, input: DriverPromptInput): Promise<DriverPromptResult>;
