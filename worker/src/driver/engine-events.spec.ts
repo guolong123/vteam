@@ -264,6 +264,41 @@ describe('DshDriver 事件通道（扇出行为）', () => {
     expect(mirror.messages[0].parts.some((p: { type: string }) => p.type === 'step-finish')).toBe(true);
   });
 
+  it('工具调用必须并进终态内容（否则刷新后工具卡消失）', () => {
+    const driver = newDriver();
+    const sessionId = 'dsh-test-tool';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mirror = (driver as any).ensureMirror(sessionId);
+
+    feed(driver, {
+      type: 'assistant/message',
+      data: { message: { id: 'm1', content: [{ type: 'text', text: '先看一下文件' }] } },
+    });
+    feed(driver, {
+      type: 'tool/call',
+      data: { turn: 1, step: 0, callId: 'call-1', name: 'read', arguments: '{"path":"a.ts"}' },
+    });
+    feed(driver, {
+      type: 'tool/result',
+      data: {
+        turn: 1,
+        step: 0,
+        message: { callId: 'call-1', content: [{ type: 'text', text: 'file body' }] },
+      },
+    });
+    feed(driver, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } });
+
+    expect(mirror.messages.length).toBe(1);
+    const parts = mirror.messages[0].parts as Array<{ type: string; tool?: string }>;
+    const toolParts = parts.filter((p) => p.type === 'tool');
+    expect(toolParts).toHaveLength(1);
+    expect(toolParts[0].tool).toBe('read');
+    expect(parts.findIndex((p) => p.type === 'text')).toBeLessThan(
+      parts.findIndex((p) => p.type === 'tool'),
+    );
+    expect(parts.some((p) => p.type === 'step-finish')).toBe(true);
+  });
+
   it('订阅者抛错不冻结其它订阅者（一条失败不毒化整个流）', () => {
     const driver = newDriver();
     const ok: EngineEvent[] = [];

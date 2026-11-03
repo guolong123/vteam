@@ -73,10 +73,51 @@ export function toolTitleOf(name: string): string {
   return name;
 }
 
-/** 单行摘要：取输入首行，超长截断（折叠态只有一行，不能撑开）。 */
+/** 摘要里优先取的字段（按"最能说明这条调用在干什么"排序）。 */
+const SUMMARY_KEYS = [
+  "command",
+  "cmd",
+  "file_path",
+  "filePath",
+  "path",
+  "pattern",
+  "query",
+  "url",
+  "description",
+] as const;
+
+/**
+ * 摘要提取：DSH 折叠行显示的是**这次调用在干什么**（命令原文/路径/查询词），
+ * 而不是 `{"command":"ls -la"}` 这样的裸 JSON。所以先尝试解析 JSON 取语义字段。
+ */
+function pickFromJson(raw: string): string | null {
+  const t = raw.trim();
+  if (!(t.startsWith("{") && t.endsWith("}")) && !(t.startsWith("[") && t.endsWith("]"))) return null;
+  try {
+    const parsed: unknown = JSON.parse(t);
+    if (parsed === null || typeof parsed !== "object") return null;
+    if (Array.isArray(parsed)) return null;
+    const obj = parsed as Record<string, unknown>;
+    for (const key of SUMMARY_KEYS) {
+      const v = obj[key];
+      if (typeof v === "string" && v.trim().length > 0) return v;
+      if (Array.isArray(v) && v.length > 0) return v.map(String).join(" ");
+    }
+    // 没命中语义字段：取第一个非空字符串值（比整段 JSON 可读）
+    for (const v of Object.values(obj)) {
+      if (typeof v === "string" && v.trim().length > 0) return v;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 单行摘要：优先语义字段，其次首行；超长截断（折叠态只有一行）。 */
 function summarize(input: string): string {
   if (input.trim().length === 0) return "";
-  const line = input.split("\n")[0] ?? "";
+  const picked = pickFromJson(input) ?? input.split("\n")[0] ?? "";
+  const line = picked.replace(/\s+/g, " ").trim();
   return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 

@@ -254,6 +254,34 @@ export function readToolResult(
 }
 
 /**
+ * 把 `tool/result` 的 part 合并到 `tool/call` 的 part 上。
+ *
+ * ⚠️ **不能整体替换 `state`**：`readToolResult` 只产出 `status/output/metadata/time`，
+ * 既没有 `tool` 名也没有 `input`。若直接用结果 part 覆盖调用 part（服务端
+ * `mergePartsById` 是 last-write-wins，驱动内也是整体赋值），工具调用就会
+ * **丢掉「工具名」和「入参」** —— 前端只看得见输出，看不到"执行了什么命令"。
+ *
+ * 故这里做浅合并：名字、入参等只在调用阶段存在的字段一律保留。
+ */
+export function mergeToolPart(
+  prev: DriverContent | undefined,
+  next: DriverContent,
+): DriverContent {
+  if (prev === undefined) return next;
+  const prevState = asRecord(prev.state as unknown) ?? {};
+  const nextState = asRecord(next.state as unknown) ?? {};
+  const prevTime = asRecord(prev.time as unknown) ?? {};
+  const nextTime = asRecord(next.time as unknown) ?? {};
+  return {
+    ...prev,
+    ...next,
+    tool: next.tool ?? prev.tool,
+    state: { ...prevState, ...nextState },
+    time: { ...prevTime, ...nextTime },
+  } as DriverContent;
+}
+
+/**
  * 合成 `step-finish` part（**本轮完成锚点**）。
  *
  * 为什么必须合成：DSH 没有 vteam 需要的 `step-finish` 概念，而控制面

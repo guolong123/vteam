@@ -55,6 +55,7 @@ import {
 } from './opencode-driver';
 import {
   classifyTurnEnd,
+  mergeToolPart,
   readAssistantMessage,
   readToolCall,
   readToolResult,
@@ -1079,7 +1080,10 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       case 'tool/result': {
         const result = readToolResult(event.data, '');
         if (result === null) return [];
-        return [{ kind: 'parts', parts: [result.part], identity }];
+        // 与调用阶段的 part 合并后再上送：结果 part 不含 tool 名与入参，
+        // 直接发会让服务端 last-write-wins 把它们冲掉（前端只剩输出）。
+        const prev = this.sessions.get(sessionId)?.toolParts.get(result.callId);
+        return [{ kind: 'parts', parts: [mergeToolPart(prev, result.part)], identity }];
       }
       default:
         // 其它事件（permission/preset、sandbox/mode 等）不上送：
@@ -1274,6 +1278,12 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         const toolPart = readToolCall(event.data, mirror.lastMessageID ?? '');
         if (toolPart === null) return;
         mirror.toolParts.set(toolPart.callId, toolPart.part);
+        // ⚠️ **必须同时并入本轮聚合**：终态消息的内容由 `pendingTurn.parts` 定稿，
+        // 只放进 toolParts 这张旁表的话，工具调用只存在于「流式增量」里 ——
+        // 流式时看得到、刷新/切 Tab 后（改读落库的终态内容）就消失了。
+        // 按到达顺序 push，保证与 assistant/message 的文本/思考保持时间线交错。
+        const turn = (mirror.pendingTurn ??= { parts: [] });
+        turn.parts.push(toolPart.part);
         return;
       }
       case 'tool/result': {
@@ -1281,12 +1291,20 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         if (result === null) return;
         const existing = mirror.toolParts.get(result.callId);
         if (existing !== undefined) {
-          // 合并：保留 tool 名，覆盖 state
-          existing.state = result.part.state;
-          existing.time = result.part.time;
-        } else {
-          mirror.toolParts.set(result.callId, result.part);
+          // **浅合并 state**，不能整体替换：结果 part 只有 status/output，
+          // 整体赋值会把调用阶段写进去的 input（工具入参）冲掉 ——
+          // 前端就只能看到输出、看不到"执行了什么命令"。
+          // existing 与 turn.parts 里是同一引用，原地改即可。
+          const merged = mergeToolPart(existing, result.part);
+          existing.state = merged.state;
+          existing.time = merged.time;
+          existing.tool = merged.tool;
+          return;
         }
+        // 没配对上 call 的孤立 result：同样并入终态，别把工具结果整个丢掉
+        mirror.toolParts.set(result.callId, result.part);
+        const orphanTurn = (mirror.pendingTurn ??= { parts: [] });
+        orphanTurn.parts.push(result.part);
         return;
       }
       case 'step/start': {
