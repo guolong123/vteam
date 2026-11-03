@@ -42,6 +42,7 @@ import { MsgError } from "./msg-error";
 import { MsgAborted } from "./msg-aborted";
 import { MsgUnknownPart } from "./msg-unknown-part";
 import { MsgLineBox } from "./msg-line-box";
+import { DshMessage } from "./dsh/dsh-message";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -84,7 +85,7 @@ export const TOOL_IO_MAX_CHARS = 2000;
  * 超长（>2000 字符）只保留前 TOOL_IO_MAX_CHARS 个字符——第 2001 字符起不进入 DOM，
  * 不追加省略号以保证「DOM ≤ 前 2000 字符」严格成立。
  */
-function formatToolIO(value: unknown): string {
+export function formatToolIO(value: unknown): string {
   if (value === undefined || value === null) {
     return "";
   }
@@ -108,7 +109,7 @@ function formatToolIO(value: unknown): string {
 }
 
 /** serve tool part 状态值（completed 等）→ MsgTool 四态（running/success/failed/awaiting-input）。 */
-function toToolStatus(value: unknown): "running" | "success" | "failed" {
+export function toToolStatus(value: unknown): "running" | "success" | "failed" {
   const s = typeof value === "string" ? value.toLowerCase() : "";
   if (s === "running" || s === "streaming" || s === "pending" || s === "queued") {
     return "running";
@@ -121,12 +122,12 @@ function toToolStatus(value: unknown): "running" | "success" | "failed" {
 }
 
 /** serve tool part 工具名（`<serverName>_<toolName>` 或裸名）是否敏感命令工具。 */
-function isSecretCommandPart(name: string): boolean {
+export function isSecretCommandPart(name: string): boolean {
   return name === "secret_command" || name.endsWith("_secret_command");
 }
 
 /** 工具 I/O 是否「零信息量」：空串，或字面空对象/空数组（`{}` / `[]`，含空白包裹形态）。 */
-function isEmptyToolIO(value: string): boolean {
+export function isEmptyToolIO(value: string): boolean {
   const t = value.trim();
   return t.length === 0 || t === "{}" || t === "[]";
 }
@@ -160,14 +161,41 @@ export interface MsgPartsProps {
   /**
    * 渲染变体：
    * - `"bubble"`（默认）= 既有群聊/回归路径：reasoning→MsgThinking、text→ChatBubble/流式块，字节不变；
-   * - `"line"` = 私聊路径：把去重后的 part **按原顺序**逐个渲染成单行盒
+   * - `"line"` = 旧私聊路径：把去重后的 part **按原顺序**逐个渲染成单行盒
    *   （reasoning→MsgLineBox tone=thinking、text→MsgLineBox tone=body、tool→MsgTool），
    *   streaming 与 sent 共用同一渲染，无 ChatBubble、无 msg-streaming、无「生成中」包裹层。
+   * - `"dsh"` = **新私聊路径**（对齐 DSH Web）：委托 `chat/dsh/DshMessage`，正文走
+   *   DSH 的 `MarkdownText`（真 Markdown + 代码块 + 流式增量解析），思考走折叠行、
+   *   工具走 DSH 折叠卡。`line` 保留不删（老 e2e 与历史回归仍引用）。
    */
-  variant?: "bubble" | "line";
+  variant?: "bubble" | "line" | "dsh";
 }
 
 export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
+  // DSH 变体整条委托：本组件不认识它，避免把两套 part 语义混在一处。
+  // 放在最前面（先于 aborted 判断）—— DshMessage 内部自己处理中断独占分支，
+  // 保证 dsh 路径只有一个渲染入口。
+  if (variant === "dsh") {
+    return (
+      <DshMessage
+        parts={parts}
+        bodyText={bodyText}
+        author={author}
+        role={role}
+        time={time}
+        streaming={streaming}
+        messageStatus={messageStatus}
+        secretAwaiting={secretAwaiting}
+        attachment={attachment}
+        isMentionMe={isMentionMe}
+        grouped={grouped}
+        initials={initials}
+        style={style}
+        className={className}
+      />
+    );
+  }
+
   const list = (parts ?? []) as PartShape[];
   /** 终态收敛：消息已 sent/failed 但 part 仍 pending/running → sent 收敛成功，failed 收敛失败 */
   const terminal = messageStatus === "sent" || messageStatus === "failed";
