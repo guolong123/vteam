@@ -240,6 +240,22 @@ export const PAGES: PageTestidRef[] = [
       "question-secret-cancel",
       "question-secret-submit",
       "msg-tool-awaiting",
+      // 私聊 DSH 变体（variant="dsh"，对齐 DSH Web 的渲染层）：
+      // dsh-message = 消息根；dsh-reasoning(-summary/-body) = 折叠思考行；
+      // dsh-tool(-summary/-status/-body/-input/-output) = 折叠工具卡；
+      // dsh-body / dsh-markdown = DSH MarkdownText 正文（含代码块 CodeCard_* 结构）。
+      "dsh-message",
+      "dsh-reasoning",
+      "dsh-reasoning-summary",
+      "dsh-reasoning-body",
+      "dsh-tool",
+      "dsh-tool-summary",
+      "dsh-tool-status",
+      "dsh-tool-body",
+      "dsh-tool-input",
+      "dsh-tool-output",
+      "dsh-body",
+      "dsh-markdown",
       "agent-worker-chip-<instanceId>",
       "agent-worker-running-<instanceId>",
       "agent-worker-option-<instanceId>-follow-team",

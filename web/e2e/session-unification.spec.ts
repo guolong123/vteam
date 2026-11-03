@@ -835,13 +835,14 @@ test.describe("B2 连续同发送者消息复用身份栏", () => {
     const first = nodes.nth(1);
     await expect(first.getByTestId("message-identity")).toHaveCount(1);
     await expect(first.getByTestId("agent-avatar")).toHaveCount(1);
-    // 私聊 agent 消息走 variant="line"：每个 part 一个单行盒，按原顺序 reasoning→tool→text
-    const firstBoxes = first.getByTestId("msg-line-box");
-    await expect(firstBoxes).toHaveCount(2);
-    await expect(firstBoxes.nth(0)).toHaveAttribute("data-tone", "thinking");
-    await expect(firstBoxes.nth(1)).toHaveAttribute("data-tone", "body");
-    await expect(first.getByTestId("msg-tool")).toHaveCount(1);
-    // line 模式不再出现 ChatBubble / 流式块 / 旧思考行
+    // 私聊 agent 消息走 variant="dsh"（对齐 DSH Web）：part 按原顺序渲染成时间线块
+    // reasoning→dsh-reasoning（折叠思考行）、tool→dsh-tool（折叠工具卡）、
+    // text→dsh-body（DSH 的 MarkdownText 正文）。三者各一个。
+    await expect(first.getByTestId("dsh-reasoning")).toHaveCount(1);
+    await expect(first.getByTestId("dsh-tool")).toHaveCount(1);
+    await expect(first.getByTestId("dsh-body")).toHaveCount(1);
+    // dsh 正文走 DSH 的 MarkdownText ⇒ 不再出现旧单行盒 / ChatBubble / 流式块 / 旧思考行
+    await expect(first.getByTestId("msg-line-box")).toHaveCount(0);
     await expect(first.getByTestId("chat-bubble")).toHaveCount(0);
     await expect(first.getByTestId("msg-thinking")).toHaveCount(0);
     await expect(first.getByTestId("msg-streaming")).toHaveCount(0);
@@ -850,11 +851,10 @@ test.describe("B2 连续同发送者消息复用身份栏", () => {
     // 分组态：共享身份栏与头像都被省略（= 上一条同发送者）
     await expect(second.getByTestId("message-identity")).toHaveCount(0);
     await expect(second.getByTestId("agent-avatar")).toHaveCount(0);
-    const secondBoxes = second.getByTestId("msg-line-box");
-    await expect(secondBoxes).toHaveCount(2);
-    await expect(secondBoxes.nth(0)).toHaveAttribute("data-tone", "thinking");
-    await expect(secondBoxes.nth(1)).toHaveAttribute("data-tone", "body");
-    await expect(second.getByTestId("msg-tool")).toHaveCount(1);
+    await expect(second.getByTestId("dsh-reasoning")).toHaveCount(1);
+    await expect(second.getByTestId("dsh-tool")).toHaveCount(1);
+    await expect(second.getByTestId("dsh-body")).toHaveCount(1);
+    await expect(second.getByTestId("msg-line-box")).toHaveCount(0);
     await expect(second.getByTestId("msg-streaming")).toHaveCount(0);
     await expect(second).toContainText("过程分组-02 分组复用身份");
     await page.screenshot({ path: path.join(B2_DIR, "task-5-grouping-parts.png") });
