@@ -701,17 +701,29 @@ export class ChatService {
   ): Promise<{ aborted: boolean; sessions: string[] }> {
     const { channel } = await this.resolveChannelAccess(channelId, userId);
 
+    // ⚠️ `Session` **没有 channelId 列**（schema.prisma:317-342）——
+    // 会话按 (teamId, teamMemberId) 归属团队/成员，频道只是入口。
+    // 私聊频道：取该频道对应的 teamMemberId；群聊频道：取整团队。
+    // 用 channelId 会触发 Prisma 校验错误 `Unknown argument channelId` ⇒ 500。
     const where: {
-      channelId: string;
       status: string;
+      teamId?: string;
       teamMemberId?: string;
       agentId?: string;
-    } = { channelId: channel.id, status: 'running' };
-    if (target?.teamMemberId !== undefined && target.teamMemberId !== '') {
-      where.teamMemberId = target.teamMemberId;
+    } = { status: 'running' };
+    if (channel.teamId) where.teamId = channel.teamId;
+    // 私聊：频道天然绑定一个成员；群聊：可由 target 指定
+    const scopedMemberId =
+      channel.teamMemberId ?? target?.teamMemberId ?? undefined;
+    if (scopedMemberId !== undefined && scopedMemberId !== '') {
+      where.teamMemberId = scopedMemberId;
     }
     if (target?.agentId !== undefined && target.agentId !== '') {
       where.agentId = target.agentId;
+    }
+    // 兜底：若两者都无（异常频道），按 agentId 收敛，避免全表扫描
+    if (where.teamId === undefined && where.teamMemberId === undefined && where.agentId === undefined) {
+      return { aborted: false, sessions: [] };
     }
 
     const running = await this.prisma.session.findMany({

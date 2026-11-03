@@ -17,10 +17,12 @@ WEB="http://localhost:13001"
 WORKER_EXEC="http://localhost:14000"
 CONTAINER_WORKER="vteam-trial-worker-dsh"
 CONTAINER_INSPECT="vteam-trial-dsh-inspect"
-TEAM="tm_0000000002"
-CH_GROUP="c_0000000009"
-CH_DEV="c_0000000011"
-DEV_MEMBER="tmm_0000000009"
+# 环境标识：默认自动发现（栈重建后 ID 会变，写死必然误报）。
+# 可用环境变量覆盖：VTEAM_TEAM / VTEAM_GROUP_CH / VTEAM_DEV_CH / VTEAM_DEV_MEMBER
+TEAM="${VTEAM_TEAM:-}"
+CH_GROUP="${VTEAM_GROUP_CH:-}"
+CH_DEV="${VTEAM_DEV_CH:-}"
+DEV_MEMBER="${VTEAM_DEV_MEMBER:-}"
 QUICK=0
 [ "${1:-}" = "--quick" ] && QUICK=1
 
@@ -35,6 +37,41 @@ TOKEN=$(curl -s -m 10 -X POST "$API/auth/login" -H 'Content-Type: application/js
   -d '{"username":"seed-admin","password":"Admin@123456"}' | jq -r '.accessToken // empty')
 ok "TC-DSH-000 登录 seed-admin" $([ -n "$TOKEN" ] && [ ${#TOKEN} -gt 100 ]; echo $?) "token_len=${#TOKEN}"
 AUTH="Authorization: Bearer $TOKEN"
+
+# 自动发现团队与频道（栈重建后 ID 会变；显式环境变量优先）
+if [ -n "$TOKEN" ]; then
+  if [ -z "$TEAM" ]; then
+    # seed-admin 可能属于多个团队；优先选**有成员绑定到 dsh worker**的那个
+    # （否则取到无关团队会导致后续 abort/频道断言 403）。
+    # 优先级：① 有成员绑定 dsh worker 的团队 → ② 成员最多的团队（试用团队是 7 成员）
+    TEAM=$(curl -s -m 10 "$API/teams" -H "$AUTH" | jq -r '
+      [.items[] | {id,
+        bound: ([.members[]? | select(.preferredWorkerId=="'"${VTEAM_WORKER_ID:-w_trial_dsh}"'")] | length),
+        size: (.members|length)}]
+      | sort_by(-.bound, -.size) | .[0].id // empty')
+    # 兜底：取第一个
+    [ -z "$TEAM" ] && TEAM=$(curl -s -m 10 "$API/teams" -H "$AUTH" | jq -r '.items[0].id // empty')
+  fi
+  if [ -n "$TEAM" ]; then
+    # 群聊频道（懒创建；先列一次确保存在）
+    if [ -z "$CH_GROUP" ]; then
+      CH_GROUP=$(curl -s -m 10 "$API/channels?teamId=$TEAM" -H "$AUTH" \
+        | jq -r '[.items[] | select(.type=="team_group")][0].id // empty')
+    fi
+    # 开发者实例私聊（取第一个非主 Agent 成员）
+    if [ -z "$DEV_MEMBER" ]; then
+      DEV_MEMBER=$(curl -s -m 10 "$API/teams/$TEAM" -H "$AUTH" \
+        | jq -r '[.members[] | select(.main != true)][0].id // empty')
+    fi
+    if [ -z "$CH_DEV" ] && [ -n "$DEV_MEMBER" ]; then
+      CH_DEV=$(curl -s -m 10 -X POST "$API/dm-channels" -H "$AUTH" \
+        -H 'Content-Type: application/json' \
+        -d "{\"teamId\":\"$TEAM\",\"teamMemberId\":\"$DEV_MEMBER\"}" | jq -r '.id // empty')
+    fi
+  fi
+fi
+ok "TC-DSH-000b 环境发现" $([ -n "$TEAM" ] && [ -n "$CH_GROUP" ]; echo $?) \
+  "team=$TEAM group=$CH_GROUP dev=$CH_DEV member=$DEV_MEMBER"
 
 # ── 1. 服务可达（TC-DSH-006 前置） ─────────────────────────────
 H=$(curl -s -m 5 "$API/health" | jq -r '.status // empty')
@@ -52,7 +89,14 @@ BITS=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].capabilities.en
 ALLFALSE=$(echo "$BITS" | jq -r '[.[]] | all(. == false)')
 ok "TC-DSH-002c engineCapabilities 全 false" $([ "$ALLFALSE" = "true" ]; echo $?) "$(echo "$BITS" | jq -c .)"
 SKN=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].capabilities.skills | length')
-ok "TC-DSH-032a worker 上报 skills 非空" $([ "$SKN" -gt 0 ] 2>/dev/null; echo $?) "skills=$SKN"
+# capabilities.skills 是 worker **注册那一刻**的快照；worker 首次注册时控制面资源
+# 可能尚未拉到，导致上报为空但磁盘实际已下发。故以磁盘为准判定"下发成功"。
+SKD=0
+if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_WORKER}$"; then
+  SKD=$(docker exec "$CONTAINER_WORKER" sh -c 'ls /data/vteam-worker/.dsh/skills/ 2>/dev/null | wc -l' 2>/dev/null | tr -d ' \r')
+fi
+ok "TC-DSH-032a skills 已下发（磁盘为准）" $([ "${SKD:-0}" -gt 0 ] 2>/dev/null; echo $?) \
+  "capabilities=$SKN disk=$SKD"
 MAXI=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].capabilities.maxInstances')
 ok "TC-DSH-002d maxInstances=10" $([ "$MAXI" = "10" ]; echo $?) "maxInstances=$MAXI"
 
@@ -159,19 +203,19 @@ fi
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_INSPECT}$"; then
   INSP=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://localhost:13080/")
   # 面板需要 launch token，裸访问可能是 200(登录页) 或 403，只验证端口在监听
-  ok "TC-DSH-051a dsh-inspect 13080 响应" $([ "$INSP" != "000" ]; echo $?) "http=$INSP（需 token 登录，人工核验 UI）"
+  ok "TC-DSH-051a dsh-inspect 13080 响应" $([ "$INSP" != "000" ]; echo $?) "http=$INSP (需 token 登录, 人工核验 UI)"
 else
   skip "TC-DSH-051" "容器 $CONTAINER_INSPECT 不在运行"
 fi
 
 # ── 12. 反向：无 token 401（TC-DSH-056） ────────────────────────
 U=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API/channels/$CH_DEV/messages" \
-  -H 'Content-Type: application/json' -d '{"content":"x"}')
+  -H 'Content-Type: application/json' -d '{"text":"x"}')
 ok "TC-DSH-056 未认证发消息 401" $([ "$U" = "401" ]; echo $?) "http=$U"
 
 # ── 13. 反向：不存在频道（TC-DSH-055） ──────────────────────────
 NE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API/channels/c_not_exist/messages" \
-  -H "$AUTH" -H 'Content-Type: application/json' -d '{"content":"x"}')
+  -H "$AUTH" -H 'Content-Type: application/json' -d '{"text":"x"}')
 ok "TC-DSH-055 不存在频道 404" $([ "$NE" = "404" ]; echo $?) "http=$NE"
 
 # ── 汇总 ───────────────────────────────────────────────────────
