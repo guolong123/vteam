@@ -227,6 +227,15 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    */
   private readonly presetBoundSessions = new Set<string>();
 
+  /**
+   * 流式累积文本（partId → 截至目前的完整文本）。
+   *
+   * DSH 的 `assistant/live-chunk` 是 token 级**增量**（text-delta 只带新增片段），
+   * 而 exec-server 的增量准入是**单调全文**语义（拒绝同 part.id 文本变短）。
+   * 故在此累积成全文再上送，复用既有准入逻辑（与 v2 SSE 口径一致）。
+   */
+  private readonly liveTexts = new Map<string, string>();
+
   /** createSession 时指定的 preset 身份（供 sendMessage 首次绑定时复用）。 */
   private readonly pendingPresetIds = new Map<string, string>();
 
@@ -468,15 +477,13 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     // 为什么在 sendMessage 兜底：server 侧的 `buildSystemInstructions` 在 execute 时
     // 才构建（createSession 更早），故 createSession 拿到的 agentSystem 可能是空的。
     // 本驱动实例 = 一个角色的运行时 ⇒ 首次拿到 system 时切换 persona 并重启，
-    // 之后同角色的所有会话复用（appliedPersona 幂等判断，不会重复重启）。
-    if (
-      typeof input.system === 'string' &&
-      input.system.trim() !== '' &&
-      this.appliedPersona !== input.system
-    ) {
-      await this.switchPersona(input.system);
-      await this.ensureStarted();
-    }
+    // **persona 在本驱动建会话时已确定，这里绝不再切换**。
+    //
+    // 实测踩坑：sendMessage 里 switchPersona → close+重启运行时 → exec-server
+    // 本轮开始前订阅的事件通道随即失效 ⇒ turn/end 收不到 ⇒ sendAndAwait 卡死
+    // ⇒ 消息永久 processing、会话永久 running（用户截图"永久工作中"的根因）。
+    // 且建会话 system（4534 字）与 execute system（5519 字）长度不同但语义完整，
+    // 按"内容不同就切"会每轮都重启。故取建会话那份，本轮不动。
     mirror.systemSent = true;
 
     // 清掉上一轮终态（本轮重新计）
@@ -861,6 +868,120 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     };
 
     switch (event.type) {
+      // ══ 流式 chunk（P7-b，vendored agent-loop hook）═══════════════════════
+      //
+      // vendored 的 `dsh-agent-loop` 在 `live.push(chunk)`（每个 token）处
+      // `session.append('assistant/stream-chunk', {turn, step, chunk})` ⇒
+      // SDK server 的 `session/event` 订阅立刻转发 ⇒ 客户端拿到 token 级增量。
+      //
+      // 为什么不在 SDK server 订阅 `agent/assistant-stream`：该事件绑定在 agent
+      // loopCtx 的 scope 上，server ctx 订阅零触发（实测）。
+      case 'assistant/stream-chunk': {
+        const data = event.data as
+          | { turn?: unknown; step?: unknown; chunk?: Record<string, unknown> }
+          | undefined;
+        const chunk = data?.chunk;
+        if (chunk === undefined) return [];
+        if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return [];
+        const index = typeof chunk.index === 'number' ? chunk.index : 0;
+        const text = typeof chunk.text === 'string' ? chunk.text : '';
+        if (text === '') return [];
+        const partId = `${String(data?.turn)}:${String(data?.step)}:${String(index)}`;
+        // 累积成全文快照（exec-server 的增量准入是单调全文语义）
+        const prev = this.liveTexts.get(partId) ?? '';
+        const accumulated = prev + text;
+        this.liveTexts.set(partId, accumulated);
+        return [
+          {
+            kind: 'parts',
+            parts: [
+              {
+                id: partId,
+                type: chunk.type === 'text-delta' ? 'text' : 'reasoning',
+                text: accumulated,
+              } as unknown as DriverContent,
+            ],
+          },
+        ];
+      }
+      // ══ 流式帧（P7，vendored 通道）══════════════════════════════════════
+      //
+      // vendored SDK server 订阅 DSH 内部的 `agent/assistant-stream`（token 级帧，
+      // 见 packages/core/agent-loop/src/agent.ts:487-496），并以
+      // `assistant/stream-frame` 经 session.event 实时通知。
+      // 注意：上游 SDK 协议**没有**这条通道（`assistant/live-chunk` 只存在于
+      // DSH Web GUI 客户端内部），故必须 vendor。
+      case 'assistant/stream-frame': {
+        const frame = (event.data as { frame?: Record<string, unknown> } | undefined)?.frame;
+        if (frame === undefined || frame.type !== 'chunk') return [];
+        const chunk = frame.chunk as Record<string, unknown> | undefined;
+        if (chunk === undefined) return [];
+        if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return [];
+        const index = typeof chunk.index === 'number' ? chunk.index : 0;
+        const text = typeof chunk.text === 'string' ? chunk.text : '';
+        if (text === '') return [];
+        const partId = `${String(frame.turn)}:${String(frame.step)}:${String(index)}`;
+        // 累积为全文快照（exec-server 的增量准入是"单调全文"语义，见 liveTexts 注释）
+        const prev = this.liveTexts.get(partId) ?? '';
+        const accumulated = prev + text;
+        this.liveTexts.set(partId, accumulated);
+        return [
+          {
+            kind: 'parts',
+            parts: [
+              {
+                id: partId,
+                type: chunk.type === 'text-delta' ? 'text' : 'reasoning',
+                text: accumulated,
+              } as unknown as DriverContent,
+            ],
+          },
+        ];
+      }
+      // ══ 流式增量（P7）══════════════════════════════════════════════════
+      //
+      // DSH 的 `assistant/live-chunk` 携带 token 级 `StreamChunk`
+      // （packages/llm/llm/src/types.ts:496）。此前 vteam 只消费整段
+      // `assistant/message` ⇒ **没有流式输出**（整块出现）。
+      //
+      // 映射 text-delta / reasoning-delta → `EngineEvent.parts`（exec-server 串行
+      // 上送 message.part.delta，前端 onMessagePartDelta 消费）。
+      // 聚合口径对齐 DSH 的 assistant.ts updateChunk（blocks[index] 累加）：
+      // 稳定 part id = `${turn}:${step}:${index}`。
+      case 'assistant/live-chunk': {
+        const data = event.data as
+          | { chunk?: Record<string, unknown>; turn?: unknown; step?: unknown }
+          | undefined;
+        const chunk = data?.chunk;
+        if (chunk === undefined) return [];
+        // 只处理文本类增量；tool-call/usage/finish 由 assistant/message 定稿统一处理
+        if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return [];
+        const index = typeof chunk.index === 'number' ? chunk.index : 0;
+        const text = typeof chunk.text === 'string' ? chunk.text : '';
+        if (text === '') return [];
+        const partId = `${String(data?.turn)}:${String(data?.step)}:${String(index)}`;
+        // **累积为全文快照**（不是纯增量）：exec-server 的 `tracker.admitSsePart`
+        // 是"单调准入"——同 part.id 拒绝文本变短。v2 的 SSE 发送的就是累积全文，
+        // 若这里发纯增量（长度始终很小），每次都会被判为"回退"而丢弃 ⇒ 前端无流式。
+        // 故在本驱动内维护累积文本，每次发出的是"到目前为止的完整文本"。
+        const key = partId;
+        const prev = this.liveTexts.get(key) ?? '';
+        const accumulated = prev + text;
+        this.liveTexts.set(key, accumulated);
+        return [
+          {
+            kind: 'parts',
+            parts: [
+              {
+                id: partId,
+                type: chunk.type === 'text-delta' ? 'text' : 'reasoning',
+                text: accumulated,
+              } as unknown as DriverContent,
+            ],
+          },
+        ];
+      }
+
       case 'assistant/message': {
         const assistant = readAssistantMessage(event.data);
         if (assistant === null) return [];
@@ -1209,8 +1330,15 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   private sessionIdOf(event: DshSessionEvent): string {
     const data = event.data as Record<string, unknown> | undefined;
     if (typeof data?.sessionId === 'string' && data.sessionId !== '') return data.sessionId;
-    // 事件层没有 sessionId 时，用"当前唯一活跃会话"兜底（单会话运行时的常态）
+    // 事件层没有 sessionId 时兜底（池代理下同一角色多会话共用本实例，不能用 size===1 判断）：
+    // ① 本驱动只有 1 个会话
     if (this.sessions.size === 1) return [...this.sessions.keys()][0] as string;
+    // ② 恰好一个会话有在途 turn（pendingTurn）—— 流式增量都归属它
+    const busy = [...this.sessions.entries()].filter(([, m]) => m.pendingTurn !== undefined);
+    if (busy.length === 1) return busy[0][0];
+    // ③ 恰好一个会话在等 turn 结束（流式期间的强信号）
+    const waiting = [...this.turnEndWaiters.entries()].filter(([, list]) => list.length > 0);
+    if (waiting.length === 1) return waiting[0][0];
     return '';
   }
 

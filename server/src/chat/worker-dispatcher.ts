@@ -2794,44 +2794,6 @@ export class WorkerDispatcher
       phase: 'thinking',
     });
 
-    // 5. 创建会话（未创建/占位时）→ 第二次 bind 写入真实 instanceRef
-    if (!opencodeSessionId) {
-      try {
-        // P6：agentKey 供 preset 身份解析（提前单独查询：下方 agentIdentity 构建时
-        // 才查 agentRow，但 createSession 必须早于它）
-        const presetAgentKey = await this.prisma.agent
-          .findUnique({
-            where: { id: target.agentId },
-            select: { agentKey: true },
-          })
-          .then((row) => row?.agentKey ?? null)
-          .catch(() => null);
-        // P6：建会话时一并下发 **agent 身份**（= 该会话扮演哪个角色）。
-        // 为什么必须在这里：dsh 的 agent-preset 绑定要求首 turn 之前完成（之后锁定）；
-        // 角色提示词（system）在 execute 时才构建，故此处只传身份，
-        // 完整提示词由 worker 在首次 sendMessage 时经 persona 通道补上。
-        const created = await this.workerClient.createSession(
-          worker,
-          model,
-          this.resolveAgentPresetId(target.agentId, presetAgentKey),
-        );
-        opencodeSessionId = created.sessionId;
-        await this.sessionLifecycle.bindSessionToWorker(
-          sessionId,
-          workerId,
-          opencodeSessionId,
-        );
-      } catch (err) {
-        void err; // 故意忽略：降级路径，错误原因不改变语义
-        await this.sessionLifecycle
-          .unbindSession(sessionId)
-          .catch((rbErr: unknown) =>
-            this.logger.error(`回滚绑定失败: ${this.describeError(rbErr)}`),
-          );
-        this.unregisterExecution(workerId, scope, teamMemberId);
-        throw err;
-      }
-    }
 
     // 6. 工作目录（任务隔离保留：taskContext.taskId → tasks/<taskId>；
     // 无任务 → teams/<teamId>）+ 身份/名册/主判定（task 查询全部跳过；空名册 = 空列表）
@@ -3021,6 +2983,50 @@ export class WorkerDispatcher
       // Todo 9：平台内部派发（记忆整理）→ 团队直聊时不注入【团队接待】人格段。
       internal: request.internal === true,
     };
+
+    // 5. 创建会话（未创建/占位时）→ 第二次 bind 写入真实 instanceRef
+    if (!opencodeSessionId) {
+      try {
+        // P6：agentKey 供 preset 身份解析（提前单独查询：下方 agentIdentity 构建时
+        // 才查 agentRow，但 createSession 必须早于它）
+        const presetAgentKey = await this.prisma.agent
+          .findUnique({
+            where: { id: target.agentId },
+            select: { agentKey: true },
+          })
+          .then((row) => row?.agentKey ?? null)
+          .catch(() => null);
+        // P6：建会话时一并下发 **agent 身份**（= 该会话扮演哪个角色）。
+        // 为什么必须在这里：dsh 的 agent-preset 绑定要求首 turn 之前完成（之后锁定）；
+        // 角色提示词（system）在 execute 时才构建，故此处只传身份，
+        // 完整提示词由 worker 在首次 sendMessage 时经 persona 通道补上。
+        // 建会话时**一并下发完整角色提示词**：dsh 的 persona 走进程 env，
+        // 必须在运行时启动前就位；否则执行中途切换 persona 会重启运行时
+        // ⇒ 事件订阅失效 ⇒ 终态丢失 ⇒ 消息永久 processing（实测踩到）。
+        // 能在此构建是因为已把 createSession 移到 agentIdentity/systemOpts 之后。
+        const created = await this.workerClient.createSession(
+          worker,
+          model,
+          this.resolveAgentPresetId(target.agentId, presetAgentKey),
+          buildSystemInstructions(agentIdentity, systemOpts),
+        );
+        opencodeSessionId = created.sessionId;
+        await this.sessionLifecycle.bindSessionToWorker(
+          sessionId,
+          workerId,
+          opencodeSessionId,
+        );
+      } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
+        await this.sessionLifecycle
+          .unbindSession(sessionId)
+          .catch((rbErr: unknown) =>
+            this.logger.error(`回滚绑定失败: ${this.describeError(rbErr)}`),
+          );
+        this.unregisterExecution(workerId, scope, teamMemberId);
+        throw err;
+      }
+    }
     if (taskIdForPrompt) {
       if (memoryIndex) {
         systemOpts.memoryIndex = memoryIndex;

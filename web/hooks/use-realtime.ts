@@ -417,7 +417,28 @@ function upsertMessage(queryClient: QueryClient, message: RealtimeChatMessage): 
     (old) => {
       if (!old) return old; // 无缓存：不创建，避免与页面首次 fetch 竞争
       const idx = old.items.findIndex((m) => m.id === message.id);
-      if (idx === -1) return { ...old, items: [...old.items, message] };
+      if (idx === -1) {
+        // **按 createdAt 有序插入**（不能简单 append）。
+        // 实测问题：用户发消息后 agent 回复到达时，若 append 到末尾，会出现
+        // 「agent 回复显示在用户消息之后」但**用户的下一条消息又插到它下面**，
+        // 表现为"我的消息在回复下面"、随后又变成"所有回复堆在下方"。
+        // 正确做法：以 createdAt 为序插入到第一个更大的消息之前
+        //（processing 行的后置由服务端排序负责，此处只保证时间序）。
+        const items = [...old.items];
+        const at = Date.parse(message.createdAt as string);
+        let i = items.length;
+        if (!Number.isNaN(at)) {
+          for (let k = 0; k < items.length; k += 1) {
+            const t = Date.parse(items[k].createdAt as string);
+            if (!Number.isNaN(t) && t > at) {
+              i = k;
+              break;
+            }
+          }
+        }
+        items.splice(i, 0, message);
+        return { ...old, items };
+      }
       if (old.items[idx].status !== "processing") return old; // 终态优先：补拉重放不覆盖
       // 流式单调守卫（defense-in-depth，后端已是权威）：processing 期间不让同一 part.id
       // 的 text/reasoning 文本变短——乱序/回退帧不得把已渲染的更长文本替换掉。

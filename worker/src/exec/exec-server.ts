@@ -3013,12 +3013,7 @@ export class ExecServer {
     parts: DriverContent[],
     upstream?: UpstreamEventIdentity,
   ): Promise<void> {
-    await this.sender.send(WORKER_EVENT_TYPES.MESSAGE_PART_DELTA, {
-      ...ctx,
-      parts,
-      status: 'streaming',
-      ...(upstream !== undefined ? { upstream } : {}),
-    });
+
   }
 }
 

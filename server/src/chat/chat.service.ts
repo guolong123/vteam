@@ -655,15 +655,16 @@ export class ChatService {
       (a, b) =>
         Date.parse(a.createdAt as string) - Date.parse(b.createdAt as string),
     );
-    // 稳定分区：processing 行（进行中的流式轮次）钉到末尾，其余行保持
-    // createdAt 升序不动；聚合行后置后前端轮询始终能看到最新流式块
-    const live = merged.filter(
-      (item) => item.status === MESSAGE_STATUS.processing,
-    );
-    const rest = merged.filter(
-      (item) => item.status !== MESSAGE_STATUS.processing,
-    );
-    return [...rest, ...live];
+    // **取消"processing 钉到末尾"**（实测是错的）：
+    //
+    // 原实现把进行中的流式聚合行一律后置，理由是"前端轮询要能看到最新流式块"。
+    // 但它与真实对话顺序冲突：用户在 agent 生成过程中又发了一条消息时，
+    // 会出现「用户的第 2 条消息排在进行中的回复**上方**」——随后回复完成、状态变化，
+    // 又变成「所有回复堆在下方、用户消息在上方」，正是用户截图里看到的现象。
+    //
+    // 正确做法：严格按 createdAt 升序（保持对话真实时间线）。前端已有
+    // loading/streaming 指示器标识"进行中"，不需要靠列表位置来强调。
+    return merged;
   }
 
   /** 错误信息归一（worker 拉取失败时用于日志）。 */

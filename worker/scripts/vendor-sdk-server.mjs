@@ -30,7 +30,7 @@
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /** 解析 SDK server 的 lib/index.js 路径。 */
 function resolveTargetPath(explicitDir) {
@@ -171,6 +171,29 @@ const ANCHOR = '\t\t\tcase "shutdown": return this.shutdown();';
  * 而 `CreateAgentOptions.meta.agentPreset`（packages/core/agent/src/index.ts:88）
  * 在**建会话时**就绑定 preset ⇒ 不会丢 model。
  */
+/**
+ * **流式转发补丁（P7）**：把 `agent/assistant-stream` 帧实时推给客户端。
+ *
+ * ## 为什么必须 vendor（上游没有这条通道）
+ *
+ * DSH 自身的 Web GUI 有逐字流式，但走的是**客户端内部机制**：
+ * `packages/api/session-controller/src/client/sessions/assistant-stream.ts` 把
+ * durable 的 `assistant/attempt`（含完整 `stream: StreamChunk[]`）在**客户端**展开
+ * 成 transient 的 `assistant/live-chunk`。
+ *
+ * 而 SDK 协议（`session.event`）只转发 **durable** 事件 ⇒ `assistant/attempt` 是
+ * attempt **结束后**才写入的一次性事件 ⇒ 客户端只能拿到整段，**没有逐字效果**。
+ *
+ * 但 DSH 内部**已经有实时帧机制**：
+ * `packages/core/agent-loop/src/agent.ts:487` 构造 `AssistantStreamAttempt` 时传了
+ * `(frame) => this.dispatch.emit('agent/assistant-stream', { frame })`，
+ * 每个 token 都会触发一次（`live.push(chunk)` @ line 496）。
+ *
+ * 故本补丁：在 server 上订阅 `agent/assistant-stream`，把 `frame` 经
+ * `session.event` 通知发给客户端（新增 `assistant/stream-frame` 事件类型）。
+ *
+ * 客户端（worker 驱动）据此累积文本 → 上送 `message.part.delta` ⇒ 前端逐字渲染。
+ */
 const CREATE_META_OLD = 'meta: { cwd: this.cwd },';
 const CREATE_META_NEW = 'meta: { cwd: this.cwd, ...(this.__vteamPreset ? { agentPreset: this.__vteamPreset } : {}) },';
 
@@ -213,6 +236,25 @@ function main() {
 
   let patched = source;
 
+  // ②' 流式帧转发：在 server 构造完成后订阅 agent/assistant-stream
+  // 锚点：`this.disposers.push(ctx.on('session/event'` 之前，插一段订阅
+  // 编译产物用**双引号**（源码是单引号，tsc 构建后转双引号）
+  const STREAM_ANCHOR = 'this.disposers.push(ctx.on("session/event"';
+  const STREAM_SUB = `this.disposers.push(ctx.on('agent/assistant-stream', ({ frame }) => {
+\t\t\t\tconsole.error("[vendor] stream-frame", frame.type, String(frame.attemptId));\n\t\t\t\tconst sessionId = frame.attemptId.split(':')[0];
+\t\t\t\tthis.transport.notify('session.event', {
+\t\t\t\t\tsessionId,
+\t\t\t\t\tevent: {
+\t\t\t\t\t\ttype: 'assistant/stream-frame',
+\t\t\t\t\t\t// 用高精度 seq 标记 transient（不参与 durable 顺序判定）
+\t\t\t\t\t\tseq: -1,
+\t\t\t\t\t\ttime: typeof frame.time === 'number' ? frame.time : Date.now(),
+\t\t\t\t\t\tdata: { frame },
+\t\t\t\t\t},
+\t\t\t\t});
+\t\t\t}), { global: true });
+\t\t\t`;
+
   // ① meta 补丁：建会话**直接带 preset**（避免 select() 的 recompose 丢 model）
   if (patched.includes(CREATE_META_OLD)) {
     patched = patched.replace(CREATE_META_OLD, CREATE_META_NEW);
@@ -223,7 +265,15 @@ function main() {
         `期望 ${JSON.stringify(CREATE_META_OLD)}`,
     );
   }
-  // 三个 case 插在 shutdown 之前（create → cancel → steer）
+  // ②' 流式帧转发（P7）：订阅 agent/assistant-stream → 经 session.event 实时通知客户端
+  if (patched.includes(STREAM_ANCHOR) && !patched.includes('assistant/stream-frame')) {
+    patched = patched.replace(STREAM_ANCHOR, `${STREAM_SUB}${STREAM_ANCHOR}`);
+    console.log('[vendor]   新增流式转发：agent/assistant-stream → session.event');
+  } else if (!patched.includes('assistant/stream-frame')) {
+    throw new Error('[vendor] 流式转发锚点未命中：session/event 订阅处结构可能变化');
+  }
+
+  // ③ 三个 case 插在 shutdown 之前（create → cancel → steer）
   patched = patched.replace(
     ANCHOR,
     `${CREATE_CASE}\n${CANCEL_CASE}\n${STEER_CASE}\n${ANCHOR}`,
@@ -242,6 +292,43 @@ function main() {
   }
 
   writeFileSync(target, patched, 'utf8');
+  // 4) agent-loop 流式 hook（P7-b）
+  // target = .../dsh/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-server/lib/index.js
+  // 4 层 dirname 到 @deepseek-ai 的父目录（dsh/node_modules）
+  const loopTarget = join(
+    dirname(dirname(dirname(dirname(target)))),
+    '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js',
+  );
+  if (!existsSync(loopTarget)) {
+    console.warn('[vendor]   warn: 未找到 dsh-agent-loop，跳过流式 hook');
+  } else {
+    const loopSource = readFileSync(loopTarget, 'utf8');
+    if (loopSource.includes('vteam stream chunk hook')) {
+      console.log('[vendor]   流式 hook 已存在，跳过');
+    } else {
+      const PUSH_OLD = '					live.push(chunk);';
+      if (!loopSource.includes(PUSH_OLD)) {
+        console.warn('[vendor]   warn: agent-loop live.push 锚点未命中');
+      } else {
+        const PUSH_NEW = [
+          PUSH_OLD,
+          '					// vteam stream chunk hook',
+          '					try {',
+          '						this.session.append("assistant/stream-chunk", { turn, step, chunk: JSON.parse(JSON.stringify(chunk)) }, { ignorable: true });',
+          '					} catch { /* best effort */ }',
+        ].join('\n');
+        const loopPatched = loopSource.replace(PUSH_OLD, PUSH_NEW);
+        if (loopPatched !== loopSource) {
+          writeFileSync(loopTarget + '.orig', loopSource);
+          writeFileSync(loopTarget, loopPatched);
+          console.log('[vendor]   新增流式 hook: agent-loop token -> session/event');
+        } else {
+          console.warn('[vendor]   warn: 流式 hook 注入无变化');
+        }
+      }
+    }
+  }
+
   console.log(`[vendor] 补丁完成：${target}`);
   console.log('[vendor]   新增 session/create（建会话 + 绑定 agent preset）');
   console.log('[vendor]   新增 session/cancel（GUI 停止按钮语义，keepInbox=true）');

@@ -71,6 +71,12 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
   /** 会话 → 角色（用于未绑定时的兜底与诊断）。 */
   private readonly sessionRoles = new Map<string, string>();
 
+  /** 挂起的事件订阅（sessionId → 落地后接上的回调）。 */
+  private readonly pendingSubscriptions = new Map<
+    string,
+    (driver: DshDriver, realId: string) => void
+  >();
+
   constructor(options: DshPoolDriverOptions = {}) {
     this.logger = options.logger ?? console;
     this.pool = new DshRolePool({ ...options, logger: this.logger });
@@ -96,6 +102,12 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
     const sessionId = await driver.createSession(model, agentPreset, agentSystem);
     this.sessionRoles.set(sessionId, role);
     this.pool.bindSession(sessionId, role);
+    // 触发挂起的事件订阅（把之前返回的句柄接到真实运行时）
+    const hook = this.pendingSubscriptions.get(sessionId);
+    if (hook !== undefined) {
+      this.pendingSubscriptions.delete(sessionId);
+      hook(driver, sessionId);
+    }
     this.logger.info(
       `[dsh-pool] 会话 ${sessionId} 归属角色 ${role}` +
         `（当前池内 ${this.pool.roleCount} 个角色运行时）`,
@@ -223,13 +235,33 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
     onStatus?: Parameters<DshDriver['subscribeEvents']>[2],
   ): ReturnType<DshDriver['subscribeEvents']> {
     const driver = this.pool.driverForSession(sessionId);
-    if (driver === undefined) {
-      this.logger.warn(
-        `[dsh-pool] 事件订阅时会话 ${sessionId} 尚未登记归属 → 空句柄（轮询兜底继续）`,
-      );
-      return { close: () => undefined };
+    if (driver !== undefined) {
+      return driver.subscribeEvents(sessionId, onEvent, onStatus);
     }
-    return driver.subscribeEvents(sessionId, onEvent, onStatus);
+    // **挂起订阅**（关键）：exec-server 在本轮开始前订阅，此时会话可能尚未建好。
+    // 若直接返回空句柄 ⇒ 流式增量 / turn/end 全部丢失 ⇒ 无流式 + 状态永久 processing
+    // （实测：日志 `stream-chunk 到达 ... 订阅者=0`）。
+    // 改为暂存回调，等 createSession 落地后立刻接到真实运行时上。
+    // **兜底直连**：会话无归属通常是 worker 重启后 server 复用旧 instanceRef。
+    // 此时若只挂起等 createSession，而 driverFor 走兜底建新运行时，挂起永不触发
+    // ⇒ 订阅者恒为 0 ⇒ 流式增量与 turn/end 全丢（实测）。
+    // 故：立即用兜底运行时（唯一角色或 __default__）订阅，不等待。
+    const roles = this.pool.listRoles();
+    const fallbackRole =
+      roles.length === 1 ? roles[0] : ('__default__' as const);
+    void this.pool.runtimeFor(fallbackRole, undefined).then((d) => {
+      try {
+        d.subscribeEvents(sessionId, onEvent, onStatus);
+        this.logger.info(
+          `[dsh-pool] 会话 ${sessionId} 无归属 → 事件订阅直连兜底角色 ${fallbackRole}`,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[dsh-pool] 兜底订阅失败 session=${sessionId}: ${(err as Error).message}`,
+        );
+      }
+    });
+    return { close: () => undefined };
   }
 
   /** 关闭全部角色运行时。 */
