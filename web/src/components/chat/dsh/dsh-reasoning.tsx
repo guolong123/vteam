@@ -88,7 +88,22 @@ export function DshReasoning({ text, running = false, labels }: DshReasoningProp
   if (text.trim().length === 0) return null;
 
   return (
-    <div data-testid="dsh-reasoning" data-state={running ? "running" : "done"}>
+    <div
+      data-testid="dsh-reasoning"
+      data-state={running ? "running" : "done"}
+      data-expanded={open ? "true" : undefined}
+      // ⚠️ 折叠态必须**自己钉死高度**：`DisclosureRow` 只保证 header 行 24px，
+      // 而思考摘要是一长段没有换行的文本 —— 不约束就会换行撑破行高、把相邻的
+      // 思考行挤在一起（实测现象）。DSH 的 ReasoningRow 用的是
+      // `.root:not([data-expanded]) { contain: size layout; height: 24px }`，
+      // 这里照抄该契约。
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        ...(open ? {} : { contain: "size layout", height: "calc(24px + var(--dsh-content-font-delta, 0px))" }),
+      }}
+    >
       <DisclosureRow
         icon={<IconThinkOutlineRegular size={14} />}
         title={REASONING_TITLE_ZH}
@@ -101,16 +116,48 @@ export function DshReasoning({ text, running = false, labels }: DshReasoningProp
         keepContentWhenOpen
         collapsedContent={
           summary.length > 0 ? (
-            <TextShimmer active={running}>
-              <span data-testid="dsh-reasoning-summary">{summary}</span>
-            </TextShimmer>
+            <>
+              {/* 标题与摘要之间的 2×2 圆点分隔（DSH `.separator` 同款） */}
+              <span
+                aria-hidden
+                style={{
+                  flex: "none",
+                  width: 2,
+                  height: 2,
+                  margin: "0 8px",
+                  borderRadius: 1,
+                  background: "var(--dsw-alias-label-caption)",
+                }}
+              />
+              {/* 摘要单行 + 省略号。流式中用 mask 做右侧淡出（DSH 同款），
+                  避免省略号在文字还在增长时频繁跳变。 */}
+              <span
+                data-testid="dsh-reasoning-summary"
+                data-streaming={running ? "true" : undefined}
+                style={{
+                  flex: "auto",
+                  minWidth: 0,
+                  fontSize: 13,
+                  lineHeight: "20px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: running ? "clip" : "ellipsis",
+                  display: "block",
+                  ...(running
+                    ? { maskImage: "linear-gradient(90deg, #000 calc(100% - 48px), transparent)" }
+                    : {}),
+                }}
+              >
+                <TextShimmer active={running}>{summary}</TextShimmer>
+              </span>
+            </>
           ) : undefined
         }
       >
         {open ? (
           <div
             data-testid="dsh-reasoning-body"
-            style={{ padding: "4px 0 8px 22px" }}
+            style={{ padding: "4px 0 4px 22px", minWidth: 0 }}
           >
             <DshMarkdown text={text} labels={labels} variant="compact" />
           </div>

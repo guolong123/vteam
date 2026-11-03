@@ -104,7 +104,20 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
   const expandable = input.length > 0 || output.length > 0;
 
   return (
-    <div data-testid="dsh-tool" data-status={status} data-tool={name}>
+    <div
+      data-testid="dsh-tool"
+      data-status={status}
+      data-tool={name}
+      data-expanded={open ? "true" : undefined}
+      // 与思考行同一契约：折叠态自己钉死 24px（DisclosureRow 只保证 header 行），
+      // 否则长摘要换行会把相邻工具卡挤在一起。
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        ...(open ? {} : { contain: "size layout", height: "calc(24px + var(--dsh-content-font-delta, 0px))" }),
+      }}
+    >
       <DisclosureRow
         icon={
           status === "running" ? (
@@ -128,7 +141,20 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
         collapsedContent={
           <>
             {summary.length > 0 ? (
-              <span data-testid="dsh-tool-summary"> · {summary}</span>
+              // 单行 + 省略号：工具输入可能很长，不截断就会换行撑破 24px 行高
+              <span
+                data-testid="dsh-tool-summary"
+                style={{
+                  flex: "auto",
+                  minWidth: 0,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  display: "block",
+                }}
+              >
+                {" "}· {summary}
+              </span>
             ) : null}
             {view.label.length > 0 ? (
               <span
@@ -137,6 +163,7 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
                 // 故 awaiting 时把 testid 让给它（其余状态用 dsh-tool-status）。
                 data-testid={status === "awaiting-input" ? "dsh-tool-awaiting" : "dsh-tool-status"}
                 data-status={status}
+                style={{ flex: "none", whiteSpace: "nowrap" }}
               >
                 {" "}· {view.label}
               </span>
