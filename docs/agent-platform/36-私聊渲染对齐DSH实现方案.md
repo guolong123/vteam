@@ -920,6 +920,34 @@ token 后，用 Playwright 打开「vteam开发团队 → 私聊: 开发者-1」
 > **既有 resume 兜底问题**（`dsh-driver` 的日志`resume 未成功但会话可能仍存在`后继续用旧会话），
 > 与本轮改动无关；重置会话后即恢复正常。
 
+### 12.2d e2e 回归（playwright，本地 next start + 全量 route-mock）
+
+`web/e2e/session-unification.spec.ts` 用 hermetic harness（全 `/api/v1/**` route-mock、
+SSE 直接 abort）跑，不依赖真实后端：
+
+| 轮次 | 结果 | 说明 |
+|---|---|---|
+| 首次（仅改了断言） | 7 失败 / 30 通过 | 暴露两个问题，见下 |
+| 补 hermeticity + 工具卡 await 契约后 | **2 失败 / 35 通过** | sensitive-command 4 条转绿、Todo14 1 条转绿 |
+
+修掉的两个问题：
+
+1. **`GET /tasks?teamId=` 未被 mock** —— `installHarness` 末尾的 `route.fallback()`
+   让它打到真实后端，把真实团队的任务/实例漏进 hermetic 测试（成员面板出现 7 个
+   真实成员、私聊 Tab 变成真实实例 id，`dm-tab-private-ta_1` 永远等不到）。
+   补 mock 后恢复。
+2. **dsh 变体丢了「等待填写」入口** —— 敏感命令工具靠 `msg-tool-awaiting` 标记
+   awaiting-input（用户唯一操作入口），dsh 工具卡没有等价标记，文案还写成了
+   「等待填写」而产品口径是「等待填写敏感信息」。补 `dsh-tool-awaiting` 并统一文案；
+   4 个 sensitive-command 用例的选择器改成契约并集（`msg-tool | dsh-tool`）。
+
+**剩余 2 条失败是 B5「禁止裸 id 兜底」的既有问题**：断言未映射 sender 应显示角色标签
+「开发者」，实际渲染出裸 id `a_ghost_ext`。归因证据：
+- B5 断言区间（spec 第 1330–1400 行）本次**一行未改**（`git diff 7b135cc` 的 hunk 只落在
+  356 / 859 / 875 / 1998+ 四处）；
+- 作者解析链路 `web/src/components/ui/`、`lib/display-author.ts`、
+  `lib/author-role-display.ts` vs 改动前提交 **`--stat` 为空**（零改动）。
+
 ### 12.3 已知剩余问题（**非本轮引入**，均已用「回滚改动后重跑」证实）
 
 | Suite | 剩余 | 根因 | 建议 |
@@ -933,7 +961,8 @@ token 后，用 Playwright 打开「vteam开发团队 → 私聊: 开发者-1」
 
 | 项 | 状态 |
 |---|---|
-| 端到端手测 | ✅ **DSH 引擎已跑通**（§12.2c，流式 + 无重复消息）；⬜ opencode 引擎待跑（需重建 opencode worker 镜像，改动同一出口，风险低） |
+| 端到端手测 | ✅ **DSH 引擎已跑通**（§12.2c，流式 + 无重复消息） |
+| opencode 引擎端到端 | ⚠️ **未跑通（环境问题，非代码问题）**：本地用源码起 opencode worker 注册成功、`opencode serve` 健康检查通过，但 `/api/model` 返回 503（该环境未给 opencode 引擎配 provider），控制面因此不带 models 注册、**不会向它调度**，实测发消息后没有任何 `[exec]` 下发日志。opencode 的 delta 路径本身由 `exec-server.spec.ts` 的 v2 用例覆盖且已转绿（见 §12.2 基线） |
 | 工具卡的 9 种专用视图（read/search/web/diff/terminal…） | ⬜ 当前是通用卡（等价 DSH `GenericToolCard` fallback）；需先拿到 vteam MCP 工具清单 |
 | 群聊页也切 DSH 风格 | ⬜ 未做（本方案默认只改私聊） |
 | 包体优化：shiki/katex 改动态 import | ⬜ 当前 `/teams/[id]/session` 272 kB，可接受；若要压，把 `MarkdownText` 与 `CodeBlock` 走 `next/dynamic` |
