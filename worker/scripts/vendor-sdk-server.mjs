@@ -95,41 +95,46 @@ const CREATE_CASE = `
 \t\t\tcase "session/create": {
 \t\t\t\tconst sid = params?.sessionId;
 \t\t\t\tif (typeof sid !== "string" || sid.length === 0) throw new TypeError("session/create requires a non-empty sessionId");
-\t\t\t\tconst rec = await this.getOrCreateSession(sid);
-\t\t\t\tconst preset = params?.agentPreset;
-\t\t\t\tconst presetPlugins = params?.agentPresetPlugins;
-\t\t\t\tif (typeof preset === "string" && preset.length > 0) {
+\t\t\t\tconst preset = typeof params?.agentPreset === "string" && params.agentPreset.length > 0 ? params.agentPreset : undefined;
+\t\t\t\tconst presetPlugins = Array.isArray(params?.agentPresetPlugins) ? params.agentPresetPlugins : undefined;
+\t\t\t\t// **建会话前**登记 preset：让 createSession 的 meta.agentPreset 生效，
+\t\t\t\t// 避免事后再 select() 的 recompose 丢掉 provider/model（实测踩坑）
+\t\t\t\tthis.__vteamPreset = preset;
+\t\t\t\tlet rec;
+\t\t\t\ttry {
+\t\t\t\t\trec = await this.getOrCreateSession(sid);
+\t\t\t\t} finally {
+\t\t\t\t\tthis.__vteamPreset = undefined;
+\t\t\t\t}
+\t\t\t\tif (preset !== undefined) {
 \t\t\t\t\tconst registry = this.ctx.get("agentPresets");
 \t\t\t\t\tif (registry === undefined) {
-\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: agentPreset=\${preset} 但未挂载 preset registry（profile 未配置 roster）→ 忽略\`);
+\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: agentPreset=\${preset} 但未挂载 preset registry → 忽略\`);
 \t\t\t\t\t} else {
-\t\t\t\t\t\t// 运行时注册：若调用方带了 plugins，就用它注册/覆盖该 preset。
-\t\t\t\t\t\t// 这是 vteam 的**核心通道**——server 派发时下发的完整角色提示词
-\t\t\t\t\t\t// （buildSystemInstructions，数千字）在这里变成该会话专属的
-\t\t\t\t\t\t// preset persona prefix，且**不重启运行时**、**不污染用户消息**。
-\t\t\t\t\t\tif (Array.isArray(presetPlugins) && presetPlugins.length > 0) {
+\t\t\t\t\t\tif (presetPlugins !== undefined && presetPlugins.length > 0) {
 \t\t\t\t\t\t\ttry {
-\t\t\t\t\t\t\t\tawait registry.register({
-\t\t\t\t\t\t\t\t\tid: preset,
-\t\t\t\t\t\t\t\t\tname: params?.agentPresetName ?? preset,
-\t\t\t\t\t\t\t\t\tplugins: presetPlugins,
-\t\t\t\t\t\t\t\t});
+\t\t\t\t\t\t\t\tawait registry.register({ id: preset, name: preset, plugins: presetPlugins });
 \t\t\t\t\t\t\t} catch (err) {
-\t\t\t\t\t\t\t\t// 已存在（同 id 静态 roster）→ 忽略；其它错误告警
 \t\t\t\t\t\t\t\tif (!/Duplicate agent preset/i.test(err.message)) {
 \t\t\t\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: 运行时注册 preset \${preset} 失败：\${err.message}\`);
 \t\t\t\t\t\t\t\t}
 \t\t\t\t\t\t\t}
 \t\t\t\t\t\t}
-\t\t\t\t\t\t// select 要求首 turn 之前；已跑过 turn 会抛 agent-preset/locked
-\t\t\t\t\t\ttry {
-\t\t\t\t\t\t\tawait registry.select(rec.handle.agent, preset);
-\t\t\t\t\t\t} catch (err) {
-\t\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: preset \${preset} 选择失败（会话可能已开始）：\${err.message}\`);
+\t\t\t\t\t\t// **不调用 select()**：meta.agentPreset 已在建会话时完成绑定。
+\t\t\t\t\t\t// 实测：对已绑定的会话再 select 会触发 recompose → **丢 provider/model**
+\t\t\t\t\t\t// （回落到 deepseek-official ⇒ no API key）。仅当会话是"已有会话被复用"
+\t\t\t\t\t\t// （meta 未生效）时才需要 select。用 registry 的已有记录判断。
+\t\t\t\t\t\tconst recorded = registry.presetForSession(rec.handle.agent.session);
+\t\t\t\t\t\tif (recorded === null || recorded === undefined) {
+\t\t\t\t\t\t\ttry {
+\t\t\t\t\t\t\t\tawait registry.select(rec.handle.agent, preset);
+\t\t\t\t\t\t\t} catch (err) {
+\t\t\t\t\t\t\t\tconsole.warn(\`[vendor] session/create: select \${preset} 失败：\${err.message}\`);
+\t\t\t\t\t\t\t}
 \t\t\t\t\t\t}
 \t\t\t\t\t}
 \t\t\t\t}
-\t\t\t\treturn { sessionId: sid, agentPreset: typeof preset === "string" ? preset : null };
+\t\t\t\treturn { sessionId: sid, agentPreset: preset ?? null };
 \t\t\t}`;
 
 const STEER_CASE = `
@@ -156,6 +161,18 @@ const STEER_CASE = `
 
 /** 锚点：switch 里 shutdown 那一行（保持其后的 default 分支不动）。 */
 const ANCHOR = '\t\t\tcase "shutdown": return this.shutdown();';
+
+/**
+ * `createSession` 的 meta 补丁：让建会话时**直接带上 preset**。
+ *
+ * 为什么必须这样（实测踩坑）：`agentPresets.select()` 是**事后 recompose**——
+ * 它把 agent 移到新 plugin scope，导致 `agentOptions` 的 provider/model 丢失，
+ * 回落到 DSH 内置默认 `deepseek-official` ⇒ `no API key for provider route`。
+ * 而 `CreateAgentOptions.meta.agentPreset`（packages/core/agent/src/index.ts:88）
+ * 在**建会话时**就绑定 preset ⇒ 不会丢 model。
+ */
+const CREATE_META_OLD = 'meta: { cwd: this.cwd },';
+const CREATE_META_NEW = 'meta: { cwd: this.cwd, ...(this.__vteamPreset ? { agentPreset: this.__vteamPreset } : {}) },';
 
 function main() {
   const explicitDir = process.argv[2];
@@ -195,6 +212,17 @@ function main() {
   }
 
   let patched = source;
+
+  // ① meta 补丁：建会话**直接带 preset**（避免 select() 的 recompose 丢 model）
+  if (patched.includes(CREATE_META_OLD)) {
+    patched = patched.replace(CREATE_META_OLD, CREATE_META_NEW);
+    console.log('[vendor]   meta 补丁：建会话支持 agentPreset');
+  } else {
+    throw new Error(
+      '[vendor] createSession 的 meta 锚点未命中（上游结构可能变化）：' +
+        `期望 ${JSON.stringify(CREATE_META_OLD)}`,
+    );
+  }
   // 三个 case 插在 shutdown 之前（create → cancel → steer）
   patched = patched.replace(
     ANCHOR,

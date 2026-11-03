@@ -230,6 +230,18 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   /** createSession 时指定的 preset 身份（供 sendMessage 首次绑定时复用）。 */
   private readonly pendingPresetIds = new Map<string, string>();
 
+  /**
+   * preset 注册/绑定的**串行队列**。
+   *
+   * 为什么必须串行（实测踩坑）：多个会话并发绑定 preset 时，每个绑定都会触发
+   * `agentPresets.select()` → `recompose()`（把 agent 挂到新的 plugin scope）。
+   * 并发 recompose 会互相踩踏共享的 host context 状态 ⇒ **provider/model 被
+   * 重置为内置默认 `deepseek-official`** ⇒ 报 no API key。
+   * 实测：并发 4 个角色时只有 1 个路由正确，其余 3 个全部丢失 model。
+   * 串行化后每个绑定独立完成，互不干扰。
+   */
+  private presetChain: Promise<unknown> = Promise.resolve();
+
   /** 启用/停用 preset 模式（worker 注入 roster 后调用）。 */
   setPresetMode(enabled: boolean): void {
     this.presetMode = enabled;
@@ -460,7 +472,7 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       const presetId =
         this.pendingPresetIds.get(sessionID) ??
         (typeof input.agent === 'string' && input.agent !== '' ? input.agent : `sess-${sessionID}`);
-      const plugins = [
+      const plugins: Array<Record<string, unknown>> = [
         {
           id: 'persona',
           name: '@deepseek-ai/dsh-persona',
@@ -469,13 +481,33 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
         { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
       ];
-      try {
-        const result = (await this.client.request('session/create', {
+      // ⚠️ **必须显式声明模型路由**（实测踩坑）：
+      // preset 会创建独立的 plugin 子树，其 `agent-default-model` 若缺席则回落到
+      // DSH 内置默认 `deepseek-official`（而 vteam 用的是 opencode-go 网关）
+      // ⇒ 报 `llm-deepseek: no API key for provider route "deepseek-official"`。
+      // 故把运行时 initialize 时确定的路由写进 preset。
+      if (this.options.provider !== undefined && this.options.model !== undefined) {
+        plugins.push({
+          id: 'agent-default-model',
+          name: '@deepseek-ai/dsh-agent-default-model',
+          config: {
+            provider: this.options.provider,
+            model: this.options.model,
+          },
+        });
+      }
+      // 串行化（见 presetChain 说明）：并发 recompose 会踩踏 model 路由
+      const task = this.presetChain.then(async () => {
+        return (await this.client.request('session/create', {
           sessionId: sessionID,
           agentPreset: presetId,
           agentPresetPlugins: plugins,
           agentPresetName: presetId,
         })) as { agentPreset?: string | null } | undefined;
+      });
+      this.presetChain = task.catch(() => undefined);
+      try {
+        const result = await task;
         this.presetBoundSessions.add(sessionID);
         this.logger.info(
           `[dsh-driver] 会话 ${sessionID} 已绑定 preset=${presetId}` +

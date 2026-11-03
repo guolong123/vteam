@@ -1647,7 +1647,16 @@ export class WorkerDispatcher
     { agents: Set<string>; at: number }
   >();
   /** 执行注册 TTL（ms）：worker 崩溃/回流丢失时防活跃记录泄漏，超时视为不活跃。 */
-  private readonly executionTtlMs = 30 * 60 * 1000;
+  /**
+   * 在飞登记的 TTL（**故障窗口上限**）。
+   *
+   * 原值 30 分钟过长：首字超时/终态事件丢失时，泄漏的登记会让该成员在 TTL 内
+   * 一直被判定"已有执行在飞" ⇒ 后续消息走 fire-and-forget 注入路 ⇒ 前端收不到回复
+   * （实测黑洞）。TTL 只影响"故障后多久自愈"，不影响正常运行（正常路径由
+   * task.completed / agent.status error 主动注销）。
+   * 5 分钟足以覆盖最长首字超时（默认 300s），又不会让故障窗口拖到半小时。
+   */
+  private readonly executionTtlMs = 5 * 60 * 1000;
   private executionKey(workerId: string, scope: string): string {
     return `${workerId}:${scope}`;
   }
@@ -2613,7 +2622,33 @@ export class WorkerDispatcher
     // 仅当在飞会话的实例引用缺失（异常态，无法定位注入目标）时兜底回退常规派发。
     const busyInFlight =
       this.isAgentExecuting(workerId, scope)?.has(teamMemberId) === true;
-    const injectFlight = busyInFlight && !!opencodeSessionId;
+    // B 层（y 补强）：在飞登记可能泄漏（首字超时后未被清理）。进入轻路径前
+    // **交叉校验会话真实状态**——只有 DB 里该会话仍 status='running' 才认为
+    // 确有执行在飞；否则清理泄漏登记并走常规执行（保证消息有事件与落库）。
+    //
+    // 为什么必须校验：inFlight 轻路径是 fire-and-forget（不上送事件、不写消息），
+    // 若误判则消息**静默消失**（实测：用户发消息永远无回复）。
+    let staleInFlight = false;
+    if (busyInFlight && opencodeSessionId) {
+      try {
+        const row = await this.prisma.session.findUnique({
+          where: { id: sessionId },
+          select: { status: true },
+        });
+        staleInFlight = row?.status !== 'running';
+      } catch {
+        // 查询失败按"有在飞"处理（保守：不改变既有时序）
+        staleInFlight = false;
+      }
+      if (staleInFlight) {
+        this.logger.warn(
+          `[dispatch-guard] 成员 ${teamMemberId} 的在飞登记已泄漏` +
+            `（会话 ${sessionId} 实际 status≠running）→ 清理登记并走常规执行`,
+        );
+        this.unregisterExecution(workerId, scope, teamMemberId);
+      }
+    }
+    const injectFlight = busyInFlight && !!opencodeSessionId && !staleInFlight;
     if (busyInFlight && !opencodeSessionId) {
       this.logger.warn(
         `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，但会话实例引用缺失，回退常规派发`,

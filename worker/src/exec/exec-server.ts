@@ -664,6 +664,19 @@ export class ExecServer {
    * 2×会话数的本地 HTTP 往返，无界会让一次配置变更越等越久。
    */
   private readonly knownSessions = new Set<string>();
+
+  /**
+   * **正在执行**的会话集合（sessionId → 开始时间）。
+   *
+   * 为什么需要：`inFlight` 轻路径是 **fire-and-forget**（不上送事件、不写消息），
+   * 它的正确性依赖"另有一个常规执行在收口"这一前提。但 server 侧的在飞登记可能
+   * **泄漏**（首字超时后未被清理）⇒ 后续消息被误判为 inFlight ⇒ 直送轻路径 ⇒
+   * **永远收不到回复**（实测踩到的黑洞）。
+   *
+   * 修复：worker 自己维护真值——轻路径执行前确认该会话**确有**常规执行在跑，
+   * 否则回退常规执行（保证消息一定有事件与落库）。
+   */
+  private readonly activeExecutions = new Map<string, number>();
   private server: http.Server | null = null;
 
   constructor(options: ExecServerOptions) {
@@ -1255,8 +1268,20 @@ export class ExecServer {
     // instance 生命周期事件（归属由原在飞执行统一收口，其完成回调在最后一个
     // step-finish 后出终态，server 端一次注销收口）。
     if (payload.inFlight && payload.sessionId) {
-      void this.runInFlightPrompt(payload);
-      return;
+      // ⚠️ **防空转**：确认该会话确有常规执行在跑，否则回退常规执行。
+      // 原因：server 的在飞登记可能泄漏（首字超时后未清理，TTL 30 分钟）⇒
+      // 后续消息被误标 inFlight ⇒ 直送 fire-and-forget 轻路径 ⇒ 无事件、无落库
+      // ⇒ 前端**永远收不到回复**（实测黑洞）。
+      const running = this.activeExecutions.has(payload.sessionId);
+      if (!running) {
+        this.logger.warn(
+          `[exec] 收到 inFlight 请求但会话 ${payload.sessionId} 并无在飞执行` +
+            '（server 在飞登记可能泄漏）→ 回退常规执行（保证事件与落库）',
+        );
+      } else {
+        void this.runInFlightPrompt(payload);
+        return;
+      }
     }
     void this.runExecution(payload);
   }
@@ -2460,6 +2485,9 @@ export class ExecServer {
       });
     } finally {
       trackInstanceEnd(sessionKey);
+      // 防空转真值注销（两键都清：请求 id 与最终创建的 id）
+      if (opencodeSessionId !== '') this.activeExecutions.delete(opencodeSessionId);
+      this.activeExecutions.delete(sessionKey);
     }
   }
 
@@ -2729,6 +2757,12 @@ export class ExecServer {
     // 而 v2 的 SSE 三件套（volatile 重连/accumulator 分帧/move 归属）是 v2 专有语义，
     // 搬进通用层只会把两者都做拧。收口点是"驱动吐出 vteam 语义"，不是"统一订阅方式"。
     let engineEvents: EngineEventSubscription | null = null;
+    // 诊断日志：确认事件通道的分支选择（dsh 应走这里，opencode 走 SSE）
+    this.logger.info(
+      `[engine-events] 事件通道判定：sseEnabled=${sseEnabled} ` +
+        `hasEventChannel=${hasEventChannel(this.driver)} ` +
+        `driverCtor=${(this.driver as { constructor?: { name?: string } }).constructor?.name ?? '?'}`,
+    );
     if (eventChannelAvailable) {
       engineEvents = this.driver.subscribeEvents(
         sessionID,
