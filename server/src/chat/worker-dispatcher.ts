@@ -3553,6 +3553,24 @@ export class WorkerDispatcher
       agentId,
       channelId: channel.id,
     });
+    // **会话状态收尾（关键）**：本轮成功完成 → session running→created。
+    //
+    // 此前成功路径不更新 DB 会话状态 ⇒ session 永久停在 running ⇒ 前端成员卡片
+    // 「工作中」永不消失（用户截图发现：多个角色显示工作中，但消息全部 sent、
+    // 没有任何 processing 行）。
+    // 用独立 try/catch 包住：状态清理失败不阻断消息落库主链。
+    if (sessionId) {
+      try {
+        await this.prisma.session.updateMany({
+          where: { id: sessionId, status: 'running' },
+          data: { status: 'created', lastActivityAt: new Date() },
+        });
+      } catch (cleanupErr) {
+        this.logger.warn(
+          `[dispatcher] 完成后会话状态清理失败 session=${sessionId}: ${this.describeError(cleanupErr)}`,
+        );
+      }
+    }
     // 群聊回退（team_group）时正文独白不落群聊（结论经 group_post 工具直发），
     // 仅幂等标记 + emitFinal 收尾
     if (channel.type === CHANNEL_TYPE.team_group) {

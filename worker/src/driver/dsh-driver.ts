@@ -62,6 +62,7 @@ import {
   toDriverMessage,
   type DshAssistantMessageData,
   type DshSessionEvent,
+  type DshTurnEndReason,
   type DshTurnOutcome,
 } from './dsh-event-map';
 import {
@@ -580,6 +581,15 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     // 别名解析：旧 id 可能已被新 id 取代（见 sessionAliases）
     const resolved = this.sessionAliases.get(sessionID) ?? sessionID;
     let mirror = this.sessions.get(resolved);
+    // **镜像已存在 ⇒ 直接返回**（绝不 resume）。
+    //
+    // 本驱动亲手创建过该会话时镜像必然存在；此时对"尚未跑过 turn"或"正在跑 turn"
+    // 的会话调 `session/resume` 会**挂住** ⇒ `awaitCompletion` 的轮询循环永久阻塞
+    // ⇒ 即使 `turn/end` 已到达也无法退出 ⇒ 消息永久 processing、会话永久 running
+    // （实测：turn/start=5 turn/end=5 但前端「工作中」永不消失）。
+    if (mirror !== undefined) {
+      return [...mirror.messages];
+    }
     if (mirror === undefined) {
       // ⚠️ 镜像缺失**不等于**会话失效（实测踩到的坑）：
       // DSH 的会话是**持久化**的（`$DSH_HOME/sessions/...`），worker 重启只会丢掉本进程的
@@ -1006,7 +1016,15 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         return parts.length === 0 ? [] : [{ kind: 'parts', parts, identity }];
       }
       case 'turn/end': {
-        const outcome = classifyTurnEnd(event.data as never);
+        // ⚠️ **必须传 `data.reason`，不是 `data`**：DSH 的 turn/end 结构是
+        // `{ turn, reason: { kind: 'completed'|'aborted'|'error' } }`
+        // （实测 event: {"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}）。
+        // 传整个 data 会让 classifyTurnEnd 读 `data.kind`（undefined）⇒ 一律判 error
+        // ⇒ 合成的 step-finish reason=error ⇒ awaitCompletion 的 findFinish（只认 stop）
+        // 永远不命中 ⇒ 无限轮询 ⇒ 消息永久 processing、会话永久 running。
+        const outcome = classifyTurnEnd(
+          (event.data as { reason?: DshTurnEndReason } | undefined)?.reason,
+        );
         const error = (event.data as Record<string, unknown> | undefined)?.error as
           | Record<string, unknown>
           | undefined;
@@ -1127,7 +1145,13 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   /** 消费一条 DSH 事件 → 更新镜像与 pending 表。 */
   private consumeEvent(event: DshSessionEvent): void {
     const sessionId = this.sessionIdOf(event);
-    if (sessionId === '') return;
+    if (sessionId === '') {
+      this.logger.warn('[dsh-driver] 事件无归属，丢弃 type=' + String(event.type));
+      return;
+    }
+    if (event.type === 'turn/end' || event.type === 'assistant/message') {
+      this.logger.info('[dsh-driver] consume ' + event.type + ' session=' + sessionId);
+    }
     // P3：先扇出给事件通道订阅者（exec-server 通过它上送 delta / 收口终态）
     this.fanoutEngineEvent(sessionId, event);
     const mirror = this.ensureMirror(sessionId);
@@ -1163,10 +1187,19 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         return;
       }
       case 'turn/end': {
-        const outcome = classifyTurnEnd(event.data as never);
+        // ⚠️ **必须传 `data.reason`，不是 `data`**：DSH 的 turn/end 结构是
+        // `{ turn, reason: { kind: 'completed'|'aborted'|'error' } }`
+        // （实测 event: {"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}）。
+        // 传整个 data 会让 classifyTurnEnd 读 `data.kind`（undefined）⇒ 一律判 error
+        // ⇒ 合成的 step-finish reason=error ⇒ awaitCompletion 的 findFinish（只认 stop）
+        // 永远不命中 ⇒ 无限轮询 ⇒ 消息永久 processing、会话永久 running。
+        const outcome = classifyTurnEnd(
+          (event.data as { reason?: DshTurnEndReason } | undefined)?.reason,
+        );
         mirror.lastOutcome = outcome;
         // 本轮定稿：聚合 parts + 合成 step-finish → **一条** vteam 消息入镜
         const turn = mirror.pendingTurn;
+        this.logger.info('[dsh-driver] turn/end 定稿: pendingTurn=' + (turn === undefined ? 'undefined' : 'parts=' + turn.parts.length) + ' mirror.messages=' + mirror.messages.length);
         if (turn !== undefined && turn.parts.length > 0) {
           const messageID = turn.lastMessageID ?? mirror.lastMessageID ?? `turn-${Date.now()}`;
           turn.parts.push(synthesizeStepFinish(messageID, outcome, turn.usage));
@@ -1178,6 +1211,7 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
           if (turn.providerID !== undefined) info.providerID = turn.providerID;
           if (turn.modelID !== undefined) info.modelID = turn.modelID;
           mirror.messages.push({ info, parts: turn.parts });
+          this.logger.info('[dsh-driver] 定稿入镜: messages=' + mirror.messages.length + ' parts=' + turn.parts.length + ' hasStepFinish=' + turn.parts.some((p) => p.type === 'step-finish'));
         }
         mirror.pendingTurn = undefined;
         if (turn !== undefined && turn.lastMessageID !== undefined) {
@@ -1315,6 +1349,11 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       assistantByMessage: new Map(),
       toolParts: new Map(),
     };
+  }
+
+  /** 公开入口：确保某会话的镜像存在（供池代理自愈登记时使用）。 */
+  ensureMirrorFor(sessionId: string): void {
+    this.ensureMirror(sessionId);
   }
 
   private ensureMirror(sessionId: string): SessionMirror {

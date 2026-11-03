@@ -160,11 +160,35 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
   }
 
   async sendMessage(sessionID: string, input: DriverPromptInput): Promise<DriverPromptResult> {
+    // **自愈归属**（关键）：worker 重启后池内"会话→角色"映射丢失，但会话在 DSH 侧
+    // 持久化。此时若走 __default__ 兜底，事件会写进 __default__ 运行时的镜像，
+    // 而 getMessages 查 developer 运行时 ⇒ awaitCompletion 永远看不到 step-finish
+    // ⇒ 消息永久 processing、会话永久 running（实测：定稿入镜了但循环不退出）。
+    // 修复：用本轮下发的 agent/system 就地建立正确归属。
+    if (this.pool.driverForSession(sessionID) === undefined) {
+      const role =
+        typeof input.agent === 'string' && input.agent !== '' ? input.agent : '__default__';
+      const persona =
+        typeof input.system === 'string' && input.system.trim() !== '' ? input.system : undefined;
+      this.logger.info(
+        `[dsh-pool] 会话 ${sessionID} 无归属 → 按本轮 agent=${role} 自愈登记（persona ${persona === undefined ? 0 : persona.length} 字）`,
+      );
+      const driver = await this.pool.runtimeFor(role, persona);
+      // 直接复用 server 给的会话 id（不新建）：DSH 侧会话持久化，驱动会
+      // 在 sendMessage 时按需 `session/resume` 把它接入当前运行时。
+      // 这样事件归属、getMessages、abort 全用同一个 id，不会错乱。
+      this.pool.bindSession(sessionID, role);
+      this.sessionRoles.set(sessionID, role);
+      driver.ensureMirrorFor(sessionID);
+      return driver.sendMessage(sessionID, input);
+    }
     return (await this.driverFor(sessionID)).sendMessage(sessionID, input);
   }
 
   async getMessages(sessionID: string, options?: DriverMessageQuery): Promise<DriverMessage[]> {
-    return (await this.driverFor(sessionID)).getMessages(sessionID, options);
+    const d = await this.driverFor(sessionID);
+    const r = await d.getMessages(sessionID, options);
+    return r;
   }
 
   async listQuestions(sessionID: string): Promise<DriverQuestionRequest[]> {

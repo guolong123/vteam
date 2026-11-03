@@ -2385,8 +2385,10 @@ export class ExecServer {
         }
       }
 
+      this.logger.info('[exec] sendAndAwait 返回，进入终态判定');
       // 终态判定（唯一出口）：事件证据优先于轮询证据。
       const verdict = gate.settle() ?? { verdict: 'succeeded' as const };
+      this.logger.info('[exec] 终态判定=' + String(verdict.verdict));
       if (verdict.verdict !== 'succeeded') {
         // durable 事件判定本轮失败/中断 → 不发 task.completed，改发错误状态
         this.logger.warn(

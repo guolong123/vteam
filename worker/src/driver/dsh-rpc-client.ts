@@ -377,6 +377,8 @@ export class DshRpcClient {
     if (method === 'session.event') {
       const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : '';
       const event = params?.event as DshSessionEvent | undefined;
+      if (event !== undefined && event.type === 'turn/end') {
+      }
       if (event !== undefined && typeof event.type === 'string') {
         this.handlers.onSessionEvent?.(event);
       }

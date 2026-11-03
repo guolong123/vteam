@@ -990,6 +990,7 @@ export async function awaitCompletion(
     collected = mergeMessages(collected, fresh);
     onPoll?.(fresh, Date.now() - startedAt);
     finish = findFinish(collected);
+    logger?.info('[prompt-await] 轮询 session=' + sessionID + ' collected=' + collected.length + ' finish=' + (finish === undefined ? 'none' : String(finish.reason)) + ' eventOutcome=' + (eventSignal?.peek() === null || eventSignal?.peek() === undefined ? 'null' : 'set'));
     if (finish) {
       // ② 轮询路判定完成 → 先给事件路一个**有界宽限期**补齐终态：让「轮询先到」与
       //    「事件先到」得到**同一个结论**（事件证据优先）。
