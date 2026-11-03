@@ -109,39 +109,66 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
    * 若会话已由某角色运行时创建 ⇒ 直接转发；否则（例如会话由 server 侧复用旧
    * instanceRef 但 worker 重启过）回落到默认运行时（保证不因找不到而失败）。
    */
-  private driverFor(sessionId: string): DshDriver {
+  /**
+   * 解析会话所属运行时。
+   *
+   * ⚠️ **兜底必须能自建**：worker 重启后，server 侧复用的是**旧 instanceRef**
+   * （会话 id 存在，但角色归属映射在内存里已丢）。若这里直接抛错，表现为
+   * 「成员会话异常终止 agent_error」（实测踩到）。
+   *
+   * 兜底策略（按可靠性排序）：
+   * 1. 有归属 → 直接返回
+   * 2. **只有 1 个角色运行时** → 用它（单角色场景最常见，最安全）
+   * 3. 多角色 → 用默认角色 `__default__`（现建；persona 会在首次拿到 system 时补）
+   */
+  private async driverFor(sessionId: string): Promise<DshDriver> {
     const owner = this.pool.driverForSession(sessionId);
     if (owner !== undefined) return owner;
-    // 兜底：默认运行时（`__default__` 角色）。若还没建，抛错由上层处理。
-    const fallback = this.pool.driverForSession('__fallback__');
-    if (fallback !== undefined) return fallback;
-    throw new Error(
-      `[dsh-pool] 会话 ${sessionId} 无归属角色运行时（可能 worker 重启后会话未重新绑定）`,
+
+    // 兜底 2：池内只有一个角色 → 该会话必然属于它
+    const roles = this.pool.listRoles();
+    if (roles.length === 1) {
+      const driver = await this.pool.runtimeFor(roles[0], undefined);
+      this.pool.bindSession(sessionId, roles[0]);
+      this.sessionRoles.set(sessionId, roles[0]);
+      this.logger.warn(
+        `[dsh-pool] 会话 ${sessionId} 无归属记录 → 归入唯一角色 ${roles[0]}（worker 重启后的常见情况）`,
+      );
+      return driver;
+    }
+
+    // 兜底 3：多角色场景 → 建默认角色运行时
+    this.logger.warn(
+      `[dsh-pool] 会话 ${sessionId} 无归属记录（池内 ${roles.length} 个角色）→ 用 __default__ 兜底`,
     );
+    const driver = await this.pool.runtimeFor('__default__', undefined);
+    this.pool.bindSession(sessionId, '__default__');
+    this.sessionRoles.set(sessionId, '__default__');
+    return driver;
   }
 
   async sendMessage(sessionID: string, input: DriverPromptInput): Promise<DriverPromptResult> {
-    return this.driverFor(sessionID).sendMessage(sessionID, input);
+    return (await this.driverFor(sessionID)).sendMessage(sessionID, input);
   }
 
   async getMessages(sessionID: string, options?: DriverMessageQuery): Promise<DriverMessage[]> {
-    return this.driverFor(sessionID).getMessages(sessionID, options);
+    return (await this.driverFor(sessionID)).getMessages(sessionID, options);
   }
 
   async listQuestions(sessionID: string): Promise<DriverQuestionRequest[]> {
-    return this.driverFor(sessionID).listQuestions(sessionID);
+    return (await this.driverFor(sessionID)).listQuestions(sessionID);
   }
 
   async replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void> {
-    return this.driverFor(sessionID).replyQuestion(sessionID, requestID, answers);
+    return (await this.driverFor(sessionID)).replyQuestion(sessionID, requestID, answers);
   }
 
   async rejectQuestion(sessionID: string, requestID: string): Promise<void> {
-    return this.driverFor(sessionID).rejectQuestion(sessionID, requestID);
+    return (await this.driverFor(sessionID)).rejectQuestion(sessionID, requestID);
   }
 
   async listPermissions(sessionID: string): Promise<DriverPermissionRequest[]> {
-    return this.driverFor(sessionID).listPermissions(sessionID);
+    return (await this.driverFor(sessionID)).listPermissions(sessionID);
   }
 
   async replyPermission(
@@ -149,11 +176,11 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
     permissionID: string,
     response: DriverPermissionResponse,
   ): Promise<void> {
-    return this.driverFor(sessionID).replyPermission(sessionID, permissionID, response);
+    return (await this.driverFor(sessionID)).replyPermission(sessionID, permissionID, response);
   }
 
   async abort(sessionID: string): Promise<void> {
-    return this.driverFor(sessionID).abort(sessionID);
+    return (await this.driverFor(sessionID)).abort(sessionID);
   }
 
   /** agent 目录：取第一个可用运行时（不区分角色）。 */
@@ -163,7 +190,7 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
   }
 
   async listTodos(sessionID: string, directory?: string): Promise<DriverTodo[]> {
-    return this.driverFor(sessionID).listTodos(sessionID, directory);
+    return (await this.driverFor(sessionID)).listTodos(sessionID, directory);
   }
 
   async listModels(): Promise<DriverModelInfo[]> {
@@ -182,17 +209,24 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
     return true;
   }
 
-  /** EngineEventChannel：按会话订阅（转发到角色运行时）。 */
+  /**
+   * EngineEventChannel：按会话订阅（转发到角色运行时）。
+   *
+   * ⚠️ 本方法必须是**同步**（接口契约）：不能 `await driverFor`。
+   * 事件订阅的时机是 exec-server 的 runSendAndAwait 开头——那时会话**已经**
+   * 由 createSession 建好并登记归属 ⇒ 同步查表即可命中。
+   * 万一未命中（极端时序），返回空句柄（轮询兜底路仍工作）。
+   */
   subscribeEvents(
     sessionId: string,
     onEvent: Parameters<DshDriver['subscribeEvents']>[1],
     onStatus?: Parameters<DshDriver['subscribeEvents']>[2],
   ): ReturnType<DshDriver['subscribeEvents']> {
-    let driver: DshDriver;
-    try {
-      driver = this.driverFor(sessionId);
-    } catch {
-      // 会话尚未归属（事件订阅可能早于 createSession）→ 返回空句柄
+    const driver = this.pool.driverForSession(sessionId);
+    if (driver === undefined) {
+      this.logger.warn(
+        `[dsh-pool] 事件订阅时会话 ${sessionId} 尚未登记归属 → 空句柄（轮询兜底继续）`,
+      );
       return { close: () => undefined };
     }
     return driver.subscribeEvents(sessionId, onEvent, onStatus);

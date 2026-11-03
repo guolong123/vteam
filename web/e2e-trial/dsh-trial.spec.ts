@@ -83,16 +83,20 @@ test("3. 停止按钮存在于运行中的会话", async ({ page }) => {
   await page.goto(`${BASE}/teams/tm_0000000001/session`);
 
   const devCard = page.getByRole("button", { name: /开发者-1/ }).first();
+  await expect(devCard).toBeVisible({ timeout: 20_000 });
   await devCard.click();
-  await page.waitForTimeout(1500);
+  // 等私聊 tab 激活（输入框 placeholder 变化或出现私聊标识）
+  await page.waitForTimeout(2500);
 
   const input = page.getByTestId("message-input");
-  await input.fill("请详细解释什么是虚拟团队，至少300字");
+  await expect(input).toBeVisible({ timeout: 15_000 });
+  // 用**超长任务**确保回合持续足够久（DSH 首字约 5s，写长文会跑几十秒）
+  await input.fill("请写一篇 800 字关于微服务架构的技术文章，要求详尽，分五节。");
   await input.press("Enter");
 
-  // 运行中应出现「停止」按钮（P5）
+  // 运行中应出现「停止」按钮（P5）：用轮询等待，避免固定超时错过窗口
   const stopBtn = page.locator('[data-testid="session-abort"]');
-  await expect(stopBtn).toBeVisible({ timeout: 45_000 });
+  await expect(stopBtn).toBeVisible({ timeout: 30_000 });
   await stopBtn.click();
   // 点击后不应报错（按钮消失或变为停止中）
   await page.waitForTimeout(3000);
