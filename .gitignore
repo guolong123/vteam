@@ -94,3 +94,7 @@ web/public/worker-src.version.json
 # Python bytecode（SDK / 脚本运行产物，不入库）
 __pycache__/
 *.pyc
+
+# 离线安装包产物（镜像 tar 单个 2.9GB，不入库；用 scripts/build-offline-package.sh 重新生成）
+/vteam-offline-*.tar.gz
+/offline-package/images/*.tar
