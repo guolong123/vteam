@@ -967,3 +967,78 @@ SSE 直接 abort）跑，不依赖真实后端：
 | 群聊页也切 DSH 风格 | ⬜ 未做（本方案默认只改私聊） |
 | 包体优化：shiki/katex 改动态 import | ⬜ 当前 `/teams/[id]/session` 272 kB，可接受；若要压，把 `MarkdownText` 与 `CodeBlock` 走 `next/dynamic` |
 | P4 的 DSH 特有消息类型（compaction / turn-usage / llm-retry…） | ⬜ 另排期（且 opencode 引擎无对应来源） |
+
+---
+
+## 13. 用户实测反馈的两个问题的归因与修复（2026-11-03 晚）
+
+现场：试用栈，worker 为 dsh 引擎。用户反馈两个现象。两个都是**真 bug**，且都在
+dsh 驱动的流式路径上 —— 即上一轮「恢复 sendDelta」把输出通路打开后暴露出来的问题。
+
+### 13.1 「执行失败：等待首字超时；模型无任何输出」是**误报**
+
+不是模型没输出，是 **vteam 把输出丢了**。从 worker 日志量化：
+
+| 指标 | 数值 |
+|---|---|
+| `plugin:vteam/stream-chunk` 被判「事件无归属」丢弃 | **9282** |
+| `assistant/stream-frame` 被判「事件无归属」丢弃 | **9308** |
+| 成功消费的 `assistant/message`（对照） | 87 |
+| 「等待首字超时」次数 | 3 |
+
+**根因**：`session.event` 通知的信封是 `{sessionId, event}`，而 `event.data` 里**没有**
+sessionId。`dsh-rpc-client.ts:378` 把信封 sessionId 取出来存进变量后**没有使用**
+（`:383` 只传了 `event`），驱动只能靠启发式反推归属：
+
+1. 本驱动只有一个会话；2. 只有一个会话有在途 turn；3. 只有一个会话在等 turn 结束。
+
+池代理的 `__default__` 角色会同时挂多个会话 ⇒ 三条启发式全部失效 ⇒ 事件被判
+「无归属」丢弃 ⇒ 前端拿不到首字 ⇒ `prompt-await` 看门狗超时 ⇒ **中断本轮**。
+所以「模型确实中断了」是**结果**，不是原因 —— 是 vteam 自己先把流掐了。
+
+**修复**：信封 sessionId 逐层透传（`DshRpcClientHandlers.onSessionEvent` 增加第二参数
+→ `consumeEvent(event, envelopeSessionId)` → `sessionIdOf` ⓪ 优先采用），启发式降为兜底。
+顺带删掉 `dsh-rpc-client` 里 `if (event.type === 'turn/end') { }` 的空壳死代码。
+
+### 13.2 思考/正文显示两遍
+
+**根因**：vendor 脚本同时挂了**两条**通道送同一批 chunk ——
+agent-loop 的 `live.push` hook（写 durable `plugin:vteam/stream-chunk`）
+与 server 侧对 `agent/assistant-stream` 的订阅（发 `assistant/stream-frame`）。
+两条都进 `accumulateChunkPart` 累积，文本就翻倍。
+
+**现场证据**（流式中间态，同一行消息）：
+
+```
+parts=4 :: reasoning#0=53 | reasoning#0=53 | text#1=140 | text#1=134
+```
+
+同 id 的 reasoning/text 各两份、长度还不同 —— 正是两条通道各自累积的结果。
+终态之所以看不出来，是因为终态走「整体覆写 content」，把重复冲掉了。
+
+**修复**：按会话做通道互斥（`liveChunkChannel`）——先到的通道生效，另一条丢弃；
+`turn/end` 时随 `liveTexts` 一起清理，避免本轮的选择残留到下一轮。
+
+### 13.3 验证（重建镜像后真机）
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 事件无归属丢弃 | 9282 / 9308 | **0** |
+| 首字超时 | 3 | **0** |
+| 并发两条私聊的回复 | 无（超时中断） | 两条都正常回复（「收到一」「收到二」） |
+| 流式中间态 part 数 | 4（重复） | **2**（reasoning + text） |
+| 终态 | — | `reasoning(211) + text(462) + step-finish`，无重复 |
+
+单测新增 3 条回归（`engine-events.spec.ts`）：多会话共存时带信封 id 仍能归属、
+同一 chunk 两通道只累积一次、无信封 id 且歧义时保守丢弃。
+worker 全量 1352 → **1375 通过**（新增 3 条），失败仍是同一批 16 条既有问题。
+
+### 13.4 本轮踩到的一个自查失误（记录以免重犯）
+
+第一次「验证通过」是**假验证**：我用 `tsc --noEmit` 做了类型检查（不产出 `dist`），
+随后把**上一次**（修复前）编译的 `dist` 注入了镜像，于是验证到的是旧行为
+（丢弃数为 0 只是恰好命中单会话启发式；而 4 个重复 part 恰恰是旧 bug 的表现）。
+重新 `npm run build` 后再注入，才得到上面的真数据。
+
+教训：**验证前先 `grep` 编译产物确认修复代码真的在里面**（本次用
+`grep -c envelopeSessionId dist/driver/dsh-driver.js` 确认 = 5）。
