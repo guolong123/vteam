@@ -265,6 +265,40 @@ function main() {
         `期望 ${JSON.stringify(CREATE_META_OLD)}`,
     );
   }
+  // ②'' 注入 stream-chunk 写入 helper（供 agent-loop hook 调用）
+  //
+  // 为什么用 helper 而不是在 hook 里直接写：`appendPluginRecord` 是
+  // `@deepseek-ai/dsh-session` 的导出函数，agent-loop 编译产物未必导入它；
+  // 而 SDK server 侧可以动态 import 并挂到 globalThis。
+  const HELPER_ANCHOR = 'const STREAM_ANCHOR';
+  const HELPER_CODE = `/* vteam stream helper */
+globalThis.__vteamAppendStreamChunk = (session, data) => {
+\tif (globalThis.__vteamAppendPluginRecord === undefined) return;
+\tglobalThis.__vteamAppendPluginRecord(session, 'plugin:vteam/stream-chunk', data);
+};
+`;
+
+  // ②'' 注入 stream-chunk 写入 helper（appendPluginRecord 自动带 ignorable: true）
+  const HELPER_MARK = '/* vteam stream helper */';
+  if (!patched.includes(HELPER_MARK)) {
+    const HELPER = [
+      '',
+      '/* vteam stream helper */',
+      'globalThis.__vteamAppendStreamChunk = async (session, data) => {',
+      '\ttry {',
+      '\t\tif (globalThis.__vteamAppendPluginRecord === undefined) {',
+      '\t\t\tconst mod = await import("@deepseek-ai/dsh-session");',
+      '\t\t\tglobalThis.__vteamAppendPluginRecord = mod.appendPluginRecord;',
+      '\t\t}',
+      '\t\tglobalThis.__vteamAppendPluginRecord(session, "plugin:vteam/stream-chunk", data);',
+      '\t} catch { /* best effort */ }',
+      '};',
+      '',
+    ].join('\n');
+    patched = patched + HELPER;
+    console.log('[vendor]   注入 stream-chunk helper（plugin:vteam/stream-chunk）');
+  }
+
   // ②' 流式帧转发（P7）：订阅 agent/assistant-stream → 经 session.event 实时通知客户端
   if (patched.includes(STREAM_ANCHOR) && !patched.includes('assistant/stream-frame')) {
     patched = patched.replace(STREAM_ANCHOR, `${STREAM_SUB}${STREAM_ANCHOR}`);
@@ -310,12 +344,16 @@ function main() {
       if (!loopSource.includes(PUSH_OLD)) {
         console.warn('[vendor]   warn: agent-loop live.push 锚点未命中');
       } else {
+        // 用 plugin record API（packages/core/session/src/index.ts:501）
+        // —— 它自动写 `ignorable: true`，DSH 自己的 GUI/读取路径遇到未知类型会安全跳过，
+        // 不会报 "unknown to this harness and not marked ignorable"（实测踩到）。
+        // 类型必须是 `plugin:` 前缀的小写段（PLUGIN_RECORD_TYPE 正则）。
         const PUSH_NEW = [
           PUSH_OLD,
-          '					// vteam stream chunk hook',
-          '					try {',
-          '						this.session.append("assistant/stream-chunk", { turn, step, chunk: JSON.parse(JSON.stringify(chunk)) }, { ignorable: true });',
-          '					} catch { /* best effort */ }',
+          '\t\t\t\t\t/* vteam stream chunk hook */',
+          '\t\t\t\t\ttry {',
+          '\t\t\t\t\t\tglobalThis.__vteamAppendStreamChunk?.(this.session, { turn, step, chunk });',
+          '\t\t\t\t\t} catch { /* best effort */ }',
         ].join('\n');
         const loopPatched = loopSource.replace(PUSH_OLD, PUSH_NEW);
         if (loopPatched !== loopSource) {

@@ -2511,7 +2511,21 @@ export class WorkerDispatcher
         `agent ${target.agentId} 绑定的 worker ${staleWorkerId} 不可用` +
           `${workerRow ? '（offline）' : '（不存在）'}，解绑并重新分配 worker`,
       );
-      await this.sessionLifecycle.unbindSession(sessionId);
+      // **dsh 引擎不丢弃 instanceRef**（关键）：
+      // DSH 的会话持久化在 `$DSH_HOME/sessions/` 磁盘上，worker 重启后可
+      // `session/resume` 续用；而 unbindSession 会清空 instanceRef ⇒ 下次派发
+      // 走 createSession 新建会话 ⇒ DSH 侧累积孤儿会话（实测：一轮试用后
+      // 5 个 vteam 会话对应 9 个 DSH 会话文件）。
+      // 故对 dsh 引擎只换 worker，保留会话引用；opencode 引擎维持既有行为
+      // （其会话在 serve 进程内存里，重启确实失效）。
+      const engine = (workerRow?.capabilities as { engine?: string } | undefined)?.engine;
+      if (engine !== 'dsh') {
+        await this.sessionLifecycle.unbindSession(sessionId);
+      } else {
+        this.logger.log(
+          `[dsh] worker ${staleWorkerId} 离线但保留会话引用 ${String(session.instanceRef)}（重启后可 resume）`,
+        );
+      }
       workerId = await this.workersService.assignWorker(assignmentReq);
       workerResolvedByAssignWorker = true;
       if (!workerId) {

@@ -871,12 +871,12 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       // ══ 流式 chunk（P7-b，vendored agent-loop hook）═══════════════════════
       //
       // vendored 的 `dsh-agent-loop` 在 `live.push(chunk)`（每个 token）处
-      // `session.append('assistant/stream-chunk', {turn, step, chunk})` ⇒
+      // `appendPluginRecord(session, 'plugin:vteam/stream-chunk', {turn, step, chunk})` ⇒
       // SDK server 的 `session/event` 订阅立刻转发 ⇒ 客户端拿到 token 级增量。
       //
       // 为什么不在 SDK server 订阅 `agent/assistant-stream`：该事件绑定在 agent
       // loopCtx 的 scope 上，server ctx 订阅零触发（实测）。
-      case 'assistant/stream-chunk': {
+      case 'plugin:vteam/stream-chunk': {
         const data = event.data as
           | { turn?: unknown; step?: unknown; chunk?: Record<string, unknown> }
           | undefined;

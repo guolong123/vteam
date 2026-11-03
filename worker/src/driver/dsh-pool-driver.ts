@@ -236,8 +236,10 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
   ): ReturnType<DshDriver['subscribeEvents']> {
     const driver = this.pool.driverForSession(sessionId);
     if (driver !== undefined) {
+      this.logger.info('[dsh-pool] 订阅命中 session=' + sessionId);
       return driver.subscribeEvents(sessionId, onEvent, onStatus);
     }
+    this.logger.warn('[dsh-pool] 订阅未命中，走兜底 session=' + sessionId);
     // **挂起订阅**（关键）：exec-server 在本轮开始前订阅，此时会话可能尚未建好。
     // 若直接返回空句柄 ⇒ 流式增量 / turn/end 全部丢失 ⇒ 无流式 + 状态永久 processing
     // （实测：日志 `stream-chunk 到达 ... 订阅者=0`）。
