@@ -162,18 +162,18 @@ export function buildDshPatch(input: DshPatchInput): string {
   // ② 系统提示词：**平铺修改** system-prompt 条目（不是 insert，它在 base 里已存在）
   // 这是 vteam 角色人设（岗位职责/协作协议）进模型 system 段的**唯一正规通道**——
   // 比"拼进用户消息前缀"更正确：不占用户消息、不进对话记录、KV cache 前缀稳定。
-  if (input.persona !== undefined) {
+  // **始终**写 system-prompt 行（读 env，缺省空串）：
+  // 驱动按角色重启运行时时只需变更 env，patch 不变 ⇒ 无需重写 patch。
+  // 这是唯一实测可靠的 persona 通道（preset 的 dsh-persona 行需要 agent scope，
+  // registry.register() 不满足 ⇒ 挂载失败）。
+  {
     lines.push('', '- id: system-prompt', '  config:');
-    lines.push(`    personaPrefix: !!js ${yamlEnvExpression('DSH_SYSTEM_PROMPT', input.persona.prefix)}`);
-    if (input.persona.suffix !== undefined) {
-      lines.push(`    personaSuffix: !!js ${yamlEnvExpression('DSH_SYSTEM_PROMPT_SUFFIX', input.persona.suffix)}`);
-    }
-    if (input.persona.includeHarnessIdentity !== undefined) {
-      lines.push(`    includeHarnessIdentity: ${input.persona.includeHarnessIdentity ? 'true' : 'false'}`);
-    }
-    if (input.persona.includeRuntimeContext !== undefined) {
-      lines.push(`    includeRuntimeContext: ${input.persona.includeRuntimeContext ? 'true' : 'false'}`);
-    }
+    lines.push(
+      `    personaPrefix: !!js process.env.DSH_SYSTEM_PROMPT ?? ''`,
+    );
+    lines.push(
+      `    personaSuffix: !!js process.env.DSH_SYSTEM_PROMPT_SUFFIX ?? ''`,
+    );
   }
 
   // ③ 默认模型：修改已有 agent-default-model 条目

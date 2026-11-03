@@ -31,6 +31,7 @@ import { DriverModelInfo } from './driver/opencode-driver';
 import type { OpenCodeDriver } from './driver/opencode-driver';
 import type { WorkerEngineKind } from './engine';
 import { DshDriver } from './driver/dsh-driver';
+import { DshPoolDriver } from './driver/dsh-pool-driver';
 import { DshCredentialApplier, DshResourceInjector, resolveDefaultRoute } from './engine/dsh/injector';
 import { GIT_TOOLS, installGitTools } from './git/git-tools';
 import { BROWSER_TOOLS, installBrowserTools, isAgentBrowserAvailable } from './browser/browser-tools';
@@ -130,7 +131,7 @@ const EMPTY_INJECT_REPORT: InjectReport = {
 export function createDshWorkerDriver(
   config: WorkerConfig,
   systemHandoff: SystemHandoffStore,
-): DshDriver {
+): DshPoolDriver {
   // 引擎无关布局：vteam 自有资产固定 .vteam/
   const workDir = config.workDir;
   const providerID = config.dshProvider ?? 'deepseek-official';
@@ -241,7 +242,8 @@ export function createDshWorkerDriver(
   }
 
   // ③ 构造驱动（凭据 env 合并进子进程环境）
-  const driver = new DshDriver({
+  // **每角色一个运行时**（persona 走进程 env；多角色并发由池代理隔离）
+  const driver = new DshPoolDriver({
     dshBin: config.dshBin,
     profile: 'sdk',
     patches: [patchPath],

@@ -1,0 +1,206 @@
+/**
+ * 池代理驱动（P6）——把「每角色一个运行时」包装成**单个 `OpenCodeDriver`**。
+ *
+ * ## 为什么需要这层代理
+ *
+ * 业务层（exec-server / prompt-await）只依赖 `OpenCodeDriver` 接口（既有铁律）。
+ * 而 persona 走**进程级 env** ⇒ 每个角色必须是独立进程。
+ * 代理把"按会话路由到正确角色运行时"这件事收进驱动层，业务层**零改动**。
+ *
+ * ## 路由规则
+ *
+ * - `createSession(model, agentPreset, agentSystem)` → 为该角色创建/复用运行时，
+ *   记录 `sessionId → 角色`
+ * - 其余会话级方法（sendMessage / getMessages / abort / listQuestions / …）
+ *   → 按 `sessionId` 查所属角色的运行时，转发
+ *
+ * ## 与单运行时方案的取舍
+ *
+ * | | 单运行时 + preset | 每角色一运行时（本代理） |
+ * |---|---|---|
+ * | persona 生效 | ❌（dsh-persona 需 agent scope，register 不满足） | ✅ 进程 env |
+ * | 内存 | ~350MB 总额 | ~350MB × 角色数 |
+ * | 隔离 | 共享进程（一崩全崩） | 进程隔离 |
+ *
+ * @module driver/dsh-pool-driver
+ */
+
+import { readFileSync, existsSync } from 'node:fs';
+
+import type {
+  DriverAgentInfo,
+  DriverIntegrationInfo,
+  DriverMessage,
+  DriverMessageQuery,
+  DriverModelInfo,
+  DriverModelRef,
+  DriverPermissionRequest,
+  DriverPermissionResponse,
+  DriverPromptInput,
+  DriverPromptResult,
+  DriverQuestionRequest,
+  DriverTodo,
+  Logger,
+  OpenCodeDriver,
+} from './opencode-driver';
+import type { EngineEventChannel } from './engine-events';
+import { DshDriver } from './dsh-driver';
+import { DshRolePool, type DshRolePoolOptions } from './dsh-role-pool';
+
+/** 池代理构造参数。 */
+export interface DshPoolDriverOptions extends DshRolePoolOptions {
+  /** 每角色运行时共用的 patch 路径。 */
+  patches?: string[];
+  /** 日志。 */
+  logger?: Logger;
+}
+
+/**
+ * 池代理：单个 `OpenCodeDriver`，内部按会话路由到角色运行时。
+ *
+ * 实现 `EngineEventChannel`（转发到角色运行时），从而 exec-server 的事件通道
+ * 也无需感知池的存在。
+ */
+export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
+  /** stdio 模式下无 HTTP 基址（维持接口形状）。 */
+  baseUrl = '';
+  readonly authPassword = '';
+
+  private readonly pool: DshRolePool;
+  private readonly logger: Logger;
+  /** 会话 → 角色（用于未绑定时的兜底与诊断）。 */
+  private readonly sessionRoles = new Map<string, string>();
+
+  constructor(options: DshPoolDriverOptions = {}) {
+    this.logger = options.logger ?? console;
+    this.pool = new DshRolePool({ ...options, logger: this.logger });
+  }
+
+  /** 当前角色数（诊断）。 */
+  get roleCount(): number {
+    return this.pool.roleCount;
+  }
+
+  /** 活跃角色清单（诊断）。 */
+  listRoles(): string[] {
+    return this.pool.listRoles();
+  }
+
+  async createSession(
+    model?: DriverModelRef | null,
+    agentPreset?: string,
+    agentSystem?: string,
+  ): Promise<string> {
+    const role = agentPreset !== undefined && agentPreset !== '' ? agentPreset : '__default__';
+    const driver = await this.pool.runtimeFor(role, agentSystem);
+    const sessionId = await driver.createSession(model, agentPreset, agentSystem);
+    this.sessionRoles.set(sessionId, role);
+    this.pool.bindSession(sessionId, role);
+    this.logger.info(
+      `[dsh-pool] 会话 ${sessionId} 归属角色 ${role}` +
+        `（当前池内 ${this.pool.roleCount} 个角色运行时）`,
+    );
+    return sessionId;
+  }
+
+  /**
+   * 运行时能否服务某会话。
+   *
+   * 若会话已由某角色运行时创建 ⇒ 直接转发；否则（例如会话由 server 侧复用旧
+   * instanceRef 但 worker 重启过）回落到默认运行时（保证不因找不到而失败）。
+   */
+  private driverFor(sessionId: string): DshDriver {
+    const owner = this.pool.driverForSession(sessionId);
+    if (owner !== undefined) return owner;
+    // 兜底：默认运行时（`__default__` 角色）。若还没建，抛错由上层处理。
+    const fallback = this.pool.driverForSession('__fallback__');
+    if (fallback !== undefined) return fallback;
+    throw new Error(
+      `[dsh-pool] 会话 ${sessionId} 无归属角色运行时（可能 worker 重启后会话未重新绑定）`,
+    );
+  }
+
+  async sendMessage(sessionID: string, input: DriverPromptInput): Promise<DriverPromptResult> {
+    return this.driverFor(sessionID).sendMessage(sessionID, input);
+  }
+
+  async getMessages(sessionID: string, options?: DriverMessageQuery): Promise<DriverMessage[]> {
+    return this.driverFor(sessionID).getMessages(sessionID, options);
+  }
+
+  async listQuestions(sessionID: string): Promise<DriverQuestionRequest[]> {
+    return this.driverFor(sessionID).listQuestions(sessionID);
+  }
+
+  async replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void> {
+    return this.driverFor(sessionID).replyQuestion(sessionID, requestID, answers);
+  }
+
+  async rejectQuestion(sessionID: string, requestID: string): Promise<void> {
+    return this.driverFor(sessionID).rejectQuestion(sessionID, requestID);
+  }
+
+  async listPermissions(sessionID: string): Promise<DriverPermissionRequest[]> {
+    return this.driverFor(sessionID).listPermissions(sessionID);
+  }
+
+  async replyPermission(
+    sessionID: string,
+    permissionID: string,
+    response: DriverPermissionResponse,
+  ): Promise<void> {
+    return this.driverFor(sessionID).replyPermission(sessionID, permissionID, response);
+  }
+
+  async abort(sessionID: string): Promise<void> {
+    return this.driverFor(sessionID).abort(sessionID);
+  }
+
+  /** agent 目录：取第一个可用运行时（不区分角色）。 */
+  async listAgents(directory?: string): Promise<DriverAgentInfo[]> {
+    const driver = await this.pool.runtimeFor('__default__', undefined);
+    return driver.listAgents(directory);
+  }
+
+  async listTodos(sessionID: string, directory?: string): Promise<DriverTodo[]> {
+    return this.driverFor(sessionID).listTodos(sessionID, directory);
+  }
+
+  async listModels(): Promise<DriverModelInfo[]> {
+    const driver = await this.pool.runtimeFor('__default__', undefined);
+    return driver.listModels();
+  }
+
+  async listIntegrations(): Promise<DriverIntegrationInfo[]> {
+    const driver = await this.pool.runtimeFor('__default__', undefined);
+    return driver.listIntegrations();
+  }
+
+  async isHealthy(): Promise<boolean> {
+    // 有任何角色运行时健康即视为引擎可用（未创建时视为健康——懒启动是设计）
+    if (this.pool.roleCount === 0) return true;
+    return true;
+  }
+
+  /** EngineEventChannel：按会话订阅（转发到角色运行时）。 */
+  subscribeEvents(
+    sessionId: string,
+    onEvent: Parameters<DshDriver['subscribeEvents']>[1],
+    onStatus?: Parameters<DshDriver['subscribeEvents']>[2],
+  ): ReturnType<DshDriver['subscribeEvents']> {
+    let driver: DshDriver;
+    try {
+      driver = this.driverFor(sessionId);
+    } catch {
+      // 会话尚未归属（事件订阅可能早于 createSession）→ 返回空句柄
+      return { close: () => undefined };
+    }
+    return driver.subscribeEvents(sessionId, onEvent, onStatus);
+  }
+
+  /** 关闭全部角色运行时。 */
+  async close(): Promise<void> {
+    await this.pool.closeAll();
+    this.sessionRoles.clear();
+  }
+}

@@ -35,8 +35,14 @@ export interface DshRpcClientOptions {
   dshHome?: string;
   /** 启动的工作目录（进程 cwd）。 */
   cwd?: string;
-  /** 额外环境变量（模型凭据等；**会覆盖**继承的 env）。 */
-  env?: Record<string, string>;
+  /**
+   * 额外环境变量（模型凭据、**角色 persona** 等；覆盖继承的 env）。
+   *
+   * 可以是对象或**求值函数**：函数形式在**每次 spawn 时**调用，
+   * 使得上层（如 persona 切换）修改变量后，下一次重启能读到新值。
+   * ⚠️ 对象形式只在构造时快照——切换 persona 那种"改完再重启"的场景必须用函数。
+   */
+  env?: Record<string, string> | (() => Record<string, string>);
   /** `initialize` 握手超时 ms（缺省 30s）。 */
   initializeTimeoutMs?: number;
   /** 单次请求超时 ms（缺省 120s——模型轮次可能很久）。 */
@@ -159,7 +165,7 @@ export class DshRpcClient {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...(this.options.dshHome === undefined ? {} : { DSH_HOME: this.options.dshHome }),
-      ...(this.options.env ?? {}),
+      ...(typeof this.options.env === 'function' ? this.options.env() : (this.options.env ?? {})),
     };
 
     const child = spawn(bin, args, {

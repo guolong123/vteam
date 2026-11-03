@@ -263,7 +263,18 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   constructor(options: DshDriverOptions = {}) {
     this.options = options;
     this.logger = options.logger ?? console;
-    this.client = new DshRpcClient({ ...options, logger: this.logger });
+    this.client = new DshRpcClient({
+      ...options,
+      // env 用**函数**形式：每次 spawn 时求值 ⇒ switchPersona 改完 options.env
+      // 后，下一次重启（close + ensureStarted）能读到新 persona（实测踩坑：
+      // 对象形式在构造时快照，导致 persona 永远不生效）。
+      env: () => {
+        const raw = this.options.env;
+        if (raw === undefined) return {};
+        return typeof raw === 'function' ? raw() : raw;
+      },
+      logger: this.logger,
+    });
 
     this.client.setHandlers({
       onSessionEvent: (event) => this.consumeEvent(event),
@@ -295,6 +306,7 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   async createSession(
     model?: DriverModelRef | null,
     agentPreset?: string,
+    agentSystem?: string,
   ): Promise<string> {
     const seed = `${Date.now()}-${Math.random()}`;
     const sessionId = `dsh-${createHash('sha256').update(seed).digest('hex').slice(0, 24)}`;
@@ -318,33 +330,32 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       }
     }
 
-    // P6：绑定 Agent preset（= vteam 的 Agent 身份）。
+    // ══ 角色身份（persona）══════════════════════════════════════════════
     //
-    // 为什么在 createSession 而不是 sendMessage：DSH 的 `agentPresets.select()`
-    // 要求会话**尚未开始首个 turn**（`agent-preset/locked`）。session/prompt 会隐式
-    // 建会话并立刻开 turn，那时已经晚了 ⇒ 必须"先建会话 + 立刻选 preset"。
+    // **实测唯一可靠通道**：进程级 env `DSH_SYSTEM_PROMPT`
+    // + patch 里 `system-prompt.personaPrefix: !!js process.env.DSH_SYSTEM_PROMPT`。
     //
-    // 这取代了早期的"进程级 persona + 重启运行时"方案：
-    // - 多角色**共享同一运行时**（一个进程承载 PM/开发/测试，省 ~2/3 内存）
-    // - 切换**零重启**
-    if (agentPreset !== undefined && agentPreset !== '') {
-      // 记录身份，**不在此处绑定**：此时拿不到 system（角色提示词在 execute 时才构建）。
-      // 真正绑定发生在 sendMessage 首次拿到 system 时（那里才有时机与内容）。
-      this.pendingPresetIds.set(sessionId, agentPreset);
-      try {
-        const result = (await this.client.request('session/create', {
-          sessionId,
-          agentPreset,
-        })) as { agentPreset?: string | null } | undefined;
-        this.logger.info(
-          `[dsh-driver] 会话 ${sessionId} 绑定 preset=${agentPreset}（registry 返回 ${String(result?.agentPreset)}）`,
-        );
-      } catch (err) {
-        this.logger.warn(
-          `[dsh-driver] preset 绑定失败（退回默认 persona）：${(err as Error).message}`,
-        );
-      }
+    // 已排除的方案（附证据）：
+    // ① 拼进用户消息前缀 —— 污染对话记录、每轮重复消耗 token（用户最初截图发现）
+    // ② preset 内 `dsh-persona` 行 —— README 明确要求 **agent scope**，而
+    //    `registry.register()` 建的是普通 scope ⇒ 挂载失败被静默记录，
+    //    system 里仍是 DSH 默认提示词（实测 4351 字无角色内容）
+    // ③ `meta.agentPreset` —— 只写会话事件、不激活 composition
+    //    （packages/core/session/src/index.ts:1201）
+    //
+    // 因为 env 是进程级，**换角色需重启运行时**。多角色并发由上层
+    // `DshRolePool` 保证：每个角色一个独立运行时进程（见 dsh-role-pool.ts）。
+    // 即：本类实例 = 一个角色的运行时；跨角色并发不在这里处理。
+    if (agentSystem !== undefined && agentSystem.trim() !== '') {
+      await this.switchPersona(agentSystem);
     }
+    if (agentPreset !== undefined && agentPreset !== '') {
+      this.logger.info(
+        `[dsh-driver] 会话 ${sessionId} 角色=${agentPreset}` +
+          `（persona ${agentSystem === undefined ? 0 : agentSystem.length} 字进进程 env）`,
+      );
+    }
+
     return sessionId;
   }
 
@@ -452,74 +463,19 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     // 子进程 ⇒ DSH 用的是它**自己的默认提示词**（Agent Teams / MCP resources /
     // present 工具…），vteam 的角色提示词完全丢失。
     //
-    // 根因：DSH 的 system prompt 是 **profile 级**（patch + spawn env），而 env 是
-    // 进程级 ⇒ 无法按会话区分。vteam 每个会话的角色不同，必须用**会话级**机制。
+    // 系统提示词：**每个角色运行时只注入一次**（进程级 env）。
     //
-    // 正确机制（源码核实）：`agentPresets.register({id, plugins})` 是**运行时 API**，
-    // plugins 里的 `dsh-persona.prefix` 就是该 preset 的 system 提示词。
-    // ⇒ 在**首次拿到 system 时**注册 preset 并绑定到本会话。
-    //
-    // 时机：必须在会话首个 turn 之前（`agent-preset/locked`）。sendMessage 在
-    // session/prompt 之前执行，且此时会话已由 createSession 建好但尚未跑 turn ⇒ 满足。
+    // 为什么在 sendMessage 兜底：server 侧的 `buildSystemInstructions` 在 execute 时
+    // 才构建（createSession 更早），故 createSession 拿到的 agentSystem 可能是空的。
+    // 本驱动实例 = 一个角色的运行时 ⇒ 首次拿到 system 时切换 persona 并重启，
+    // 之后同角色的所有会话复用（appliedPersona 幂等判断，不会重复重启）。
     if (
       typeof input.system === 'string' &&
       input.system.trim() !== '' &&
-      !this.presetBoundSessions.has(sessionID)
+      this.appliedPersona !== input.system
     ) {
+      await this.switchPersona(input.system);
       await this.ensureStarted();
-      // preset id：优先用 createSession 指定的身份；否则用派发时的 agent 名；
-      // 兜底用会话 id（保证唯一，避免与其它会话的 preset 冲突）
-      const presetId =
-        this.pendingPresetIds.get(sessionID) ??
-        (typeof input.agent === 'string' && input.agent !== '' ? input.agent : `sess-${sessionID}`);
-      const plugins: Array<Record<string, unknown>> = [
-        {
-          id: 'persona',
-          name: '@deepseek-ai/dsh-persona',
-          config: { prefix: input.system },
-        },
-        { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
-        { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
-      ];
-      // ⚠️ **必须显式声明模型路由**（实测踩坑）：
-      // preset 会创建独立的 plugin 子树，其 `agent-default-model` 若缺席则回落到
-      // DSH 内置默认 `deepseek-official`（而 vteam 用的是 opencode-go 网关）
-      // ⇒ 报 `llm-deepseek: no API key for provider route "deepseek-official"`。
-      // 故把运行时 initialize 时确定的路由写进 preset。
-      if (this.options.provider !== undefined && this.options.model !== undefined) {
-        plugins.push({
-          id: 'agent-default-model',
-          name: '@deepseek-ai/dsh-agent-default-model',
-          config: {
-            provider: this.options.provider,
-            model: this.options.model,
-          },
-        });
-      }
-      // 串行化（见 presetChain 说明）：并发 recompose 会踩踏 model 路由
-      const task = this.presetChain.then(async () => {
-        return (await this.client.request('session/create', {
-          sessionId: sessionID,
-          agentPreset: presetId,
-          agentPresetPlugins: plugins,
-          agentPresetName: presetId,
-        })) as { agentPreset?: string | null } | undefined;
-      });
-      this.presetChain = task.catch(() => undefined);
-      try {
-        const result = await task;
-        this.presetBoundSessions.add(sessionID);
-        this.logger.info(
-          `[dsh-driver] 会话 ${sessionID} 已绑定 preset=${presetId}` +
-            `（persona 长度 ${input.system.length} 字，registry 返回 ${String(result?.agentPreset)}）`,
-        );
-      } catch (err) {
-        // 绑定失败不阻断：退回"无系统提示"（至少能回复），但明确告警
-        // （静默会让 agent 失去角色认知而用户毫不知情——本次实测就是这样）
-        this.logger.error(
-          `[dsh-driver] preset 绑定失败（本轮**无角色提示词**）：${(err as Error).message}`,
-        );
-      }
     }
     mirror.systemSent = true;
 
@@ -987,7 +943,11 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   async switchPersona(prefix: string, suffix?: string): Promise<boolean> {
     // 用**已应用**的 persona 判断（appliedPersona 在切换成功后才更新），
     // 避免读 options.env 的初始值导致"每次都以为没切换过"（每次重启运行时）。
-    const current = this.appliedPersona ?? this.options.env?.DSH_SYSTEM_PROMPT ?? '';
+    const envMap =
+      typeof this.options.env === 'function'
+        ? this.options.env()
+        : this.options.env;
+    const current = this.appliedPersona ?? envMap?.DSH_SYSTEM_PROMPT ?? '';
     if (current === prefix) {
       return false;
     }
@@ -1006,8 +966,10 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         }
       }
       await new Promise((r) => setTimeout(r, 300));
+      const existingEnv =
+        typeof this.options.env === 'function' ? this.options.env() : (this.options.env ?? {});
       this.options.env = {
-        ...(this.options.env ?? {}),
+        ...existingEnv,
         DSH_SYSTEM_PROMPT: prefix,
         ...(suffix === undefined ? {} : { DSH_SYSTEM_PROMPT_SUFFIX: suffix }),
       };
