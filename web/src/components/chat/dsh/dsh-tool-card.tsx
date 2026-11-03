@@ -30,6 +30,7 @@ import {
 } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { StateDotState } from "@deepseek-ai/dsh-client-ui-primitives";
 import { DSH_COMMON_ZH } from "./dsh-labels";
+import { DshToolIO } from "./dsh-tool-io";
 import type { MsgToolStatus } from "@/src/components/chat/msg-tool";
 import {
   TOOL_IO_MAX_CHARS,
@@ -229,28 +230,8 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
       >
         {open && expandable ? (
           <div data-testid="dsh-tool-body" style={{ padding: "4px 0 8px 22px" }}>
-            {input.length > 0 ? (
-              <div data-testid="dsh-tool-input">
-                <div style={{ opacity: 0.6, fontSize: 11, marginBottom: 2 }}>输入</div>
-                <CodeBlock
-                  code={input.slice(0, TOOL_IO_MAX_CHARS)}
-                  showHeader={false}
-                  copyLabel={DSH_COMMON_ZH.copy}
-                  copiedLabel={DSH_COMMON_ZH.copied}
-                />
-              </div>
-            ) : null}
-            {output.length > 0 ? (
-              <div data-testid="dsh-tool-output">
-                <div style={{ opacity: 0.6, fontSize: 11, margin: "6px 0 2px" }}>输出</div>
-                <CodeBlock
-                  code={output.slice(0, TOOL_IO_MAX_CHARS)}
-                  showHeader={false}
-                  copyLabel={DSH_COMMON_ZH.copy}
-                  copiedLabel={DSH_COMMON_ZH.copied}
-                />
-              </div>
-            ) : null}
+            {/* 输入结构化 / 输出解包 / 读图渲染缩略图 —— 细节见 dsh-tool-io.tsx */}
+            <DshToolIO input={input} output={output} />
           </div>
         ) : null}
       </DisclosureRow>

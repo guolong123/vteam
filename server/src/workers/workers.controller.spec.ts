@@ -10,10 +10,12 @@ import { RegisterWorkerDto } from './dto/register-worker.dto';
 import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
 import { WorkerTokenRequest } from './worker-token.guard';
 import { WorkersController } from './workers.controller';
+import { WorkerClient } from './worker.client';
 import { WorkersService } from './workers.service';
 
 describe('WorkersController', () => {
   let controller: WorkersController;
+  let workerClientMock: { fetchFile: jest.Mock };
   let service: {
     register: jest.Mock;
     heartbeat: jest.Mock;
@@ -27,6 +29,7 @@ describe('WorkersController', () => {
   };
 
   beforeEach(async () => {
+    workerClientMock = { fetchFile: jest.fn() };
     service = {
       register: jest.fn(),
       heartbeat: jest.fn(),
@@ -50,6 +53,9 @@ describe('WorkersController', () => {
           provide: PrismaService,
           useValue: { user: { findUnique: jest.fn() } },
         },
+        // 图片预览端点（GET /workers/file）注入 WorkerClient 去 worker 工作区取字节；
+        // 本 spec 不测该端点，给空 mock 满足构造期解析即可。
+        { provide: WorkerClient, useValue: workerClientMock },
       ],
     }).compile();
 
@@ -230,5 +236,75 @@ describe('WorkersController', () => {
         Reflect.getMetadata(REQUIRE_PERMISSION_KEY, controller.requestShutdown),
       ).toBe('workers.edit');
     });
+  });
+
+  // ── GET /workers/file（图片预览端点）──────────────────────────────────
+  // 安全边界是本端点最需要钉死的部分：只放图片、只认绝对路径、找不到给 404。
+  const fakeRes = () => {
+    const res = {
+      statusCode: 0,
+      jsonBody: undefined as unknown,
+      headers: {} as Record<string, string>,
+      sent: undefined as unknown,
+      status(code: number) {
+        res.statusCode = code;
+        return res;
+      },
+      json(body: unknown) {
+        res.jsonBody = body;
+        return res;
+      },
+      setHeader(name: string, value: string) {
+        res.headers[name] = value;
+      },
+      send(body: unknown) {
+        res.sent = body;
+        return res;
+      },
+    };
+    return res;
+  };
+
+  it('GET /workers/file：相对路径 → 400 BAD_PATH', async () => {
+    const res = fakeRes();
+    await controller.getWorkerImage('relative/a.png', res as never);
+    expect(res.statusCode).toBe(400);
+    expect((res.jsonBody as { code: string }).code).toBe('BAD_PATH');
+  });
+
+  it('GET /workers/file：非图片扩展名 → 400 UNSUPPORTED_TYPE（不放开任意文件读取）', async () => {
+    const res = fakeRes();
+    await controller.getWorkerImage('/data/.env', res as never);
+    expect(res.statusCode).toBe(400);
+    expect((res.jsonBody as { code: string }).code).toBe('UNSUPPORTED_TYPE');
+  });
+
+  it('GET /workers/file：命中在线 worker → 200 + 图片 Content-Type', async () => {
+    service.findAll.mockResolvedValue([
+      { id: 'w_1', status: 'online', capabilities: {} },
+    ]);
+    service.findOne.mockResolvedValue({
+      id: 'w_1',
+      capabilities: { baseUrl: 'http://worker', execPort: 4198 },
+    });
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    workerClientMock.fetchFile.mockResolvedValue(bytes);
+    const res = fakeRes();
+    await controller.getWorkerImage('/data/w/tasks/t_1/a.png', res as never);
+    expect(res.statusCode).toBe(0); // 成功分支不写 status
+    expect(res.headers['Content-Type']).toBe('image/png');
+    expect(res.sent).toBe(bytes);
+  });
+
+  it('GET /workers/file：所有节点都没有该文件 → 404 FILE_NOT_FOUND', async () => {
+    service.findAll.mockResolvedValue([
+      { id: 'w_1', status: 'online', capabilities: {} },
+    ]);
+    service.findOne.mockResolvedValue({ id: 'w_1', capabilities: {} });
+    workerClientMock.fetchFile.mockRejectedValue(new Error('404'));
+    const res = fakeRes();
+    await controller.getWorkerImage('/data/w/tasks/t_1/missing.png', res as never);
+    expect(res.statusCode).toBe(404);
+    expect((res.jsonBody as { code: string }).code).toBe('FILE_NOT_FOUND');
   });
 });
