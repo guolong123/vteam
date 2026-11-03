@@ -594,6 +594,10 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       // 正确做法：先尝试 `session/resume` 恢复（DSH 支持持久化会话恢复，但不回放事件），
       // 再返回空镜像（历史经 resume 进入后续模型请求，前端只能看到新消息——P1 遗留）。
       try {
+        // ⚠️ 时序：getMessages 可能在运行时未启动时被调用（exec-server 的轮询路）。
+        // 此时 resume 会报"运行时未启动" ⇒ 误判为会话不存在 ⇒ 上层判定会话失效并重建。
+        // 修复：先确保运行时启动，再 resume。
+        if (!this.client.isRunning) await this.ensureStarted();
         await this.client.request('session/resume', { sessionId: sessionID }, 30_000);
         mirror = this.ensureMirror(sessionID);
         // resume 恢复了历史 ⇒ 历史首轮已含 system 前缀 ⇒ 后续不再重复拼接
