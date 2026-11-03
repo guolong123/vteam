@@ -234,6 +234,12 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    * DSH 的 `assistant/live-chunk` 是 token 级**增量**（text-delta 只带新增片段），
    * 而 exec-server 的增量准入是**单调全文**语义（拒绝同 part.id 文本变短）。
    * 故在此累积成全文再上送，复用既有准入逻辑（与 v2 SSE 口径一致）。
+   *
+   * ⚠️ **键必须带 sessionId 前缀**：本驱动服务**多个会话**（共享运行时模式，
+   * 见 `engine/dsh/runtime.ts` 的 perSessionRuntime 说明），而 DSH 的
+   * `turn`/`step`/`index` 都是**会话内**计数。键只用 `${turn}:${step}:${index}`
+   * 会让不同会话撞车 —— A 会话的文本被拼进 B 会话的增量里。生命周期见
+   * `clearLiveTexts`（turn/end 时按会话清理，避免 resume 后拼接陈旧文本）。
    */
   private readonly liveTexts = new Map<string, string>();
 
@@ -869,6 +875,73 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     }
   }
 
+  /**
+   * 流式 part 的稳定 id。
+   *
+   * **必须含 sessionId**：本驱动服务多个会话，而 DSH 的 `turn`/`step`/`index`
+   * 都是**会话内**计数 —— 不含 session 时不同会话会撞车（`liveTexts` 串扰）。
+   *
+   * 与终态 part id（`${messageID}:text`）不同是**刻意**的：终态由服务端
+   * 「整体覆写同一 processing 行的 content」收敛（`worker-dispatcher.ts`
+   * 的 task.completed 分支），不依赖两者 id 一致；反过来让流式 id 在
+   * 多轮/多会话下唯一才是正确性所在。
+   */
+  private livePartId(sessionId: string, turn: unknown, step: unknown, index: number): string {
+    return `${sessionId}:${String(turn)}:${String(step)}:${String(index)}`;
+  }
+
+  /**
+   * 流式 chunk → 累积全文 part（三条增量事件共用）。
+   *
+   * 只有 text-delta / reasoning-delta 产生 part；tool-call/usage/finish 由
+   * `assistant/message` 定稿统一处理。
+   *
+   * 为什么发**全文快照**而不是增量：exec-server 的 `tracker.admitSsePart` 是
+   * "单调全文"准入 —— 同 part.id 拒绝文本变短。发纯增量（长度始终很小）会被
+   * 判为"回退"而丢弃 ⇒ 前端无流式。
+   */
+  private accumulateChunkPart(
+    sessionId: string,
+    turn: unknown,
+    step: unknown,
+    chunk: Record<string, unknown>,
+  ): EngineEvent[] {
+    if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return [];
+    const index = typeof chunk.index === 'number' ? chunk.index : 0;
+    const text = typeof chunk.text === 'string' ? chunk.text : '';
+    if (text === '') return [];
+    const partId = this.livePartId(sessionId, turn, step, index);
+    const accumulated = (this.liveTexts.get(partId) ?? '') + text;
+    this.liveTexts.set(partId, accumulated);
+    return [
+      {
+        kind: 'parts',
+        parts: [
+          {
+            id: partId,
+            type: chunk.type === 'text-delta' ? 'text' : 'reasoning',
+            text: accumulated,
+          } as unknown as DriverContent,
+        ],
+      },
+    ];
+  }
+
+  /**
+   * 清理指定会话的流式累积（turn 结束时调用）。
+   *
+   * 为什么需要：`liveTexts` 是 driver 级、生命周期与进程相同。DSH 会话是**持久化**
+   * 的，worker 重启后 `session/resume` 会让 turn 计数从 1 重新开始 —— 若不清，
+   * 新一轮的增量会拼在上一轮的陈旧文本后面（前端表现为正文突然多出一大段旧内容）。
+   * 只删本会话前缀，避免误清其它并发会话的累积。
+   */
+  private clearLiveTexts(sessionId: string): void {
+    const prefix = `${sessionId}:`;
+    for (const key of this.liveTexts.keys()) {
+      if (key.startsWith(prefix)) this.liveTexts.delete(key);
+    }
+  }
+
   /** DSH 事件 → 零到多条 vteam 语义事件。 */
   private mapToEngineEvents(sessionId: string, event: DshSessionEvent): EngineEvent[] {
     // 上游身份：DSH 的 durable 事件带 seq（P2 的镜像同源）
@@ -892,27 +965,7 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
           | undefined;
         const chunk = data?.chunk;
         if (chunk === undefined) return [];
-        if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return [];
-        const index = typeof chunk.index === 'number' ? chunk.index : 0;
-        const text = typeof chunk.text === 'string' ? chunk.text : '';
-        if (text === '') return [];
-        const partId = `${String(data?.turn)}:${String(data?.step)}:${String(index)}`;
-        // 累积成全文快照（exec-server 的增量准入是单调全文语义）
-        const prev = this.liveTexts.get(partId) ?? '';
-        const accumulated = prev + text;
-        this.liveTexts.set(partId, accumulated);
-        return [
-          {
-            kind: 'parts',
-            parts: [
-              {
-                id: partId,
-                type: chunk.type === 'text-delta' ? 'text' : 'reasoning',
-                text: accumulated,
-              } as unknown as DriverContent,
-            ],
-          },
-        ];
+        return this.accumulateChunkPart(sessionId, data?.turn, data?.step, chunk);
       }
       // ══ 流式帧（P7，vendored 通道）══════════════════════════════════════
       //
@@ -926,27 +979,7 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         if (frame === undefined || frame.type !== 'chunk') return [];
         const chunk = frame.chunk as Record<string, unknown> | undefined;
         if (chunk === undefined) return [];
-        if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return [];
-        const index = typeof chunk.index === 'number' ? chunk.index : 0;
-        const text = typeof chunk.text === 'string' ? chunk.text : '';
-        if (text === '') return [];
-        const partId = `${String(frame.turn)}:${String(frame.step)}:${String(index)}`;
-        // 累积为全文快照（exec-server 的增量准入是"单调全文"语义，见 liveTexts 注释）
-        const prev = this.liveTexts.get(partId) ?? '';
-        const accumulated = prev + text;
-        this.liveTexts.set(partId, accumulated);
-        return [
-          {
-            kind: 'parts',
-            parts: [
-              {
-                id: partId,
-                type: chunk.type === 'text-delta' ? 'text' : 'reasoning',
-                text: accumulated,
-              } as unknown as DriverContent,
-            ],
-          },
-        ];
+        return this.accumulateChunkPart(sessionId, frame.turn, frame.step, chunk);
       }
       // ══ 流式增量（P7）══════════════════════════════════════════════════
       //
@@ -956,40 +989,14 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       //
       // 映射 text-delta / reasoning-delta → `EngineEvent.parts`（exec-server 串行
       // 上送 message.part.delta，前端 onMessagePartDelta 消费）。
-      // 聚合口径对齐 DSH 的 assistant.ts updateChunk（blocks[index] 累加）：
-      // 稳定 part id = `${turn}:${step}:${index}`。
+      // 聚合口径对齐 DSH 的 assistant.ts updateChunk（blocks[index] 累加）。
       case 'assistant/live-chunk': {
         const data = event.data as
           | { chunk?: Record<string, unknown>; turn?: unknown; step?: unknown }
           | undefined;
         const chunk = data?.chunk;
         if (chunk === undefined) return [];
-        // 只处理文本类增量；tool-call/usage/finish 由 assistant/message 定稿统一处理
-        if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return [];
-        const index = typeof chunk.index === 'number' ? chunk.index : 0;
-        const text = typeof chunk.text === 'string' ? chunk.text : '';
-        if (text === '') return [];
-        const partId = `${String(data?.turn)}:${String(data?.step)}:${String(index)}`;
-        // **累积为全文快照**（不是纯增量）：exec-server 的 `tracker.admitSsePart`
-        // 是"单调准入"——同 part.id 拒绝文本变短。v2 的 SSE 发送的就是累积全文，
-        // 若这里发纯增量（长度始终很小），每次都会被判为"回退"而丢弃 ⇒ 前端无流式。
-        // 故在本驱动内维护累积文本，每次发出的是"到目前为止的完整文本"。
-        const key = partId;
-        const prev = this.liveTexts.get(key) ?? '';
-        const accumulated = prev + text;
-        this.liveTexts.set(key, accumulated);
-        return [
-          {
-            kind: 'parts',
-            parts: [
-              {
-                id: partId,
-                type: chunk.type === 'text-delta' ? 'text' : 'reasoning',
-                text: accumulated,
-              } as unknown as DriverContent,
-            ],
-          },
-        ];
+        return this.accumulateChunkPart(sessionId, data?.turn, data?.step, chunk);
       }
 
       case 'assistant/message': {
@@ -1025,6 +1032,10 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
         const outcome = classifyTurnEnd(
           (event.data as { reason?: DshTurnEndReason } | undefined)?.reason,
         );
+        // 本轮已结束 → 释放本会话的流式累积。下一轮的 turn/step/index 会从新值
+        // 开始，但 DSH 会话 resume 后计数可能回退，不清就会把上一轮的陈旧文本
+        // 拼进新一轮增量（见 clearLiveTexts 说明）。
+        this.clearLiveTexts(sessionId);
         const error = (event.data as Record<string, unknown> | undefined)?.error as
           | Record<string, unknown>
           | undefined;

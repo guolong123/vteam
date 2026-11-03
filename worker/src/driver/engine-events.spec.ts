@@ -80,6 +80,11 @@ describe('DshDriver 事件通道（扇出行为）', () => {
     expect(received[0]?.parts?.[0]?.text).toBe('PONG');
   });
 
+  // ⚠️ DSH turn/end 的真实形状是 `{ turn, reason: { kind } }`（vteam P0 实测：
+  // {"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}）。
+  // 这三条用例此前喂的是**扁平** `{ kind }`，与 `0476387` 修复后的实现口径不符：
+  // completed/aborted 两条误红，error 那条因「未知 kind 也判 error」而**误绿**。
+  // 现统一改为真实形状，让它们真正守住 turn/end 分类。
   it('turn/end completed → terminal=succeeded', () => {
     const driver = newDriver();
     const received: EngineEvent[] = [];
@@ -88,7 +93,11 @@ describe('DshDriver 事件通道（扇出行为）', () => {
     (driver as any).ensureMirror(sessionId);
     driver.subscribeEvents(sessionId, (e) => received.push(e));
 
-    feed(driver, { type: 'turn/end', data: { kind: 'completed' }, seq: 42 });
+    feed(driver, {
+      type: 'turn/end',
+      data: { turn: 1, reason: { kind: 'completed' } },
+      seq: 42,
+    });
 
     expect(received[0]?.kind).toBe('terminal');
     expect(received[0]?.terminal).toBe('succeeded');
@@ -103,7 +112,10 @@ describe('DshDriver 事件通道（扇出行为）', () => {
     (driver as any).ensureMirror(sessionId);
     driver.subscribeEvents(sessionId, (e) => received.push(e));
 
-    feed(driver, { type: 'turn/end', data: { kind: 'aborted', reason: { kind: 'user' } } });
+    feed(driver, {
+      type: 'turn/end',
+      data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+    });
 
     expect(received[0]?.terminal).toBe('interrupted');
   });
@@ -118,7 +130,7 @@ describe('DshDriver 事件通道（扇出行为）', () => {
 
     feed(driver, {
       type: 'turn/end',
-      data: { kind: 'error', error: { message: 'AUTH 失败' } },
+      data: { turn: 1, reason: { kind: 'error' }, error: { message: 'AUTH 失败' } },
     });
 
     expect(received[0]?.terminal).toBe('failed');

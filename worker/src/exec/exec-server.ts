@@ -3015,7 +3015,15 @@ export class ExecServer {
     parts: DriverContent[],
     upstream?: UpstreamEventIdentity,
   ): Promise<void> {
-
+    // ⚠️ 本方法是**全部流式的唯一出口**：轮询路（enqueueDelta）、v2 SSE 事件路与
+    // dsh 引擎事件路（都经 enqueueParts）三条路径全部汇聚到这里。函数体被清空
+    // 等于两个引擎同时失去流式（commit 8a82c61 曾误删，2026-11-03 恢复）。
+    await this.sender.send(WORKER_EVENT_TYPES.MESSAGE_PART_DELTA, {
+      ...ctx,
+      parts,
+      status: 'streaming',
+      ...(upstream !== undefined ? { upstream } : {}),
+    });
   }
 }
 
