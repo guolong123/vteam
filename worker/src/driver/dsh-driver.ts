@@ -243,6 +243,17 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    */
   private readonly liveTexts = new Map<string, string>();
 
+  /**
+   * 每个会话当前生效的流式通道（`plugin` = durable plugin record，
+   * `frame` = vendored `assistant/stream-frame`）。
+   *
+   * 为什么要记：vendor 脚本同时挂了 agent-loop 的 `live.push` hook 与 server 侧的
+   * `agent/assistant-stream` 订阅，**同一个 chunk 会经两条通道各到一次**。
+   * 两条都累积会让正文/思考翻倍（实测：思考行显示两遍相同文字）。
+   * 故按会话做互斥，先到的那条通道生效，另一条丢弃。turn 结束时随 liveTexts 一起清。
+   */
+  private readonly liveChunkChannel = new Map<string, 'plugin' | 'frame'>();
+
   /** createSession 时指定的 preset 身份（供 sendMessage 首次绑定时复用）。 */
   private readonly pendingPresetIds = new Map<string, string>();
 
@@ -293,7 +304,8 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     });
 
     this.client.setHandlers({
-      onSessionEvent: (event) => this.consumeEvent(event),
+      // 信封 sessionId 一并透传：它才是事件的可靠归属来源（见 consumeEvent 说明）
+      onSessionEvent: (event, sessionId) => this.consumeEvent(event, sessionId),
       onSessionStatus: (status, sessionId) => {
         if (status === 'idle') this.notifyIdle(sessionId);
       },
@@ -940,6 +952,9 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     for (const key of this.liveTexts.keys()) {
       if (key.startsWith(prefix)) this.liveTexts.delete(key);
     }
+    // 通道互斥标记同理按会话清：新一轮重新竞争，避免上一轮的通道选择残留
+    // （例如上一轮 hook 生效、这一轮 hook 失效只剩 stream-frame 时不会一直丢帧）。
+    this.liveChunkChannel.delete(sessionId);
   }
 
   /** DSH 事件 → 零到多条 vteam 语义事件。 */
@@ -965,6 +980,7 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
           | undefined;
         const chunk = data?.chunk;
         if (chunk === undefined) return [];
+        this.liveChunkChannel.set(sessionId, 'plugin');
         return this.accumulateChunkPart(sessionId, data?.turn, data?.step, chunk);
       }
       // ══ 流式帧（P7，vendored 通道）══════════════════════════════════════
@@ -974,11 +990,19 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
       // `assistant/stream-frame` 经 session.event 实时通知。
       // 注意：上游 SDK 协议**没有**这条通道（`assistant/live-chunk` 只存在于
       // DSH Web GUI 客户端内部），故必须 vendor。
+      //
+      // ⚠️ **与上面的 `plugin:vteam/stream-chunk` 是同一批 chunk 的两条通道**：
+      // vendor 脚本同时挂了「agent-loop 的 live.push hook」和「server 侧订阅
+      // agent/assistant-stream」，所以每个 chunk 会到两次。若两条都累积，
+      // 正文/思考会**翻倍重复**（实测表现：思考行显示两遍同样的文字）。
+      // 故按会话做通道互斥：一旦本会话收到过 plugin record，就忽略 stream-frame。
       case 'assistant/stream-frame': {
+        if (this.liveChunkChannel.get(sessionId) === 'plugin') return [];
         const frame = (event.data as { frame?: Record<string, unknown> } | undefined)?.frame;
         if (frame === undefined || frame.type !== 'chunk') return [];
         const chunk = frame.chunk as Record<string, unknown> | undefined;
         if (chunk === undefined) return [];
+        this.liveChunkChannel.set(sessionId, 'frame');
         return this.accumulateChunkPart(sessionId, frame.turn, frame.step, chunk);
       }
       // ══ 流式增量（P7）══════════════════════════════════════════════════
@@ -1153,9 +1177,16 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     await this.client.start(params);
   }
 
-  /** 消费一条 DSH 事件 → 更新镜像与 pending 表。 */
-  private consumeEvent(event: DshSessionEvent): void {
-    const sessionId = this.sessionIdOf(event);
+  /**
+   * 消费一条 DSH 事件 → 更新镜像与 pending 表。
+   *
+   * @param envelopeSessionId - `session.event` 通知**信封**上的 sessionId。
+   *   必须优先于启发式反推：`event.data` 里没有 sessionId，而一个驱动会服务多个
+   *   会话（池代理的 `__default__` 角色尤其容易同时挂多个）。早先只靠启发式，
+   *   多会话时必然判成「无归属」并丢弃 —— 流式 chunk 被丢 ⇒ 首字超时误报。
+   */
+  private consumeEvent(event: DshSessionEvent, envelopeSessionId?: string): void {
+    const sessionId = this.sessionIdOf(event, envelopeSessionId);
     if (sessionId === '') {
       this.logger.warn('[dsh-driver] 事件无归属，丢弃 type=' + String(event.type));
       return;
@@ -1377,7 +1408,12 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   }
 
   /** 从事件里取 sessionId（DSH 事件有的带 `seq`/`turn`，会话 id 在事件外层或 data 里）。 */
-  private sessionIdOf(event: DshSessionEvent): string {
+  private sessionIdOf(event: DshSessionEvent, envelopeSessionId?: string): string {
+    // ⓪ 信封上的 sessionId 是最可靠的来源（`session.event` 由 server 按会话归属发出）。
+    //    放在最前：`event.data` 里的 sessionId 只部分事件有，启发式在多会话时必然失效。
+    if (typeof envelopeSessionId === 'string' && envelopeSessionId !== '') {
+      return envelopeSessionId;
+    }
     const data = event.data as Record<string, unknown> | undefined;
     if (typeof data?.sessionId === 'string' && data.sessionId !== '') return data.sessionId;
     // 事件层没有 sessionId 时兜底（池代理下同一角色多会话共用本实例，不能用 size===1 判断）：

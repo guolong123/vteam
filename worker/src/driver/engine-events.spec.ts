@@ -44,6 +44,80 @@ describe('hasEventChannel（运行期能力判定，不用 instanceof）', () =>
   });
 });
 
+describe('会话归属：信封 sessionId 优先于启发式（流式不被误丢）', () => {
+  const silent = { info: () => {}, warn: () => {}, error: () => {} };
+
+  /**
+   * 复现现场：池代理的 `__default__` 角色同时挂多个会话 ⇒ 「本驱动只有一个会话 /
+   * 只有一个在途 turn」的启发式必然失效。此时若不带信封 sessionId，
+   * `plugin:vteam/stream-chunk` 会被判成「无归属」丢弃 ⇒ 首字超时误报
+   * （实测丢过 9000+ 条并打出「模型无任何输出」）。
+   */
+  function driverWithTwoSessions(): DshDriver {
+    const driver = new DshDriver({ provider: 'mock', model: 'mock-model', logger: silent });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyDriver = driver as any;
+    anyDriver.ensureMirror('dsh-aaa');
+    anyDriver.ensureMirror('dsh-bbb');
+    return driver;
+  }
+
+  it('两个会话共存时，带信封 sessionId 的 chunk 仍能正确归属并扇出', () => {
+    const driver = driverWithTwoSessions();
+    const received: EngineEvent[] = [];
+    driver.subscribeEvents('dsh-bbb', (e) => received.push(e));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).consumeEvent(
+      {
+        type: 'plugin:vteam/stream-chunk',
+        data: { turn: 1, step: 0, chunk: { type: 'text-delta', index: 0, text: '你好' } },
+      },
+      'dsh-bbb',
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.kind).toBe('parts');
+    expect(received[0]?.parts?.[0]?.type).toBe('text');
+    expect(received[0]?.parts?.[0]?.text).toBe('你好');
+    // part id 含 sessionId：多会话下必须唯一
+    expect(String(received[0]?.parts?.[0]?.id)).toContain('dsh-bbb');
+  });
+
+  it('同一 chunk 经两条通道各到一次时只累积一次（否则正文/思考翻倍）', () => {
+    const driver = driverWithTwoSessions();
+    const received: EngineEvent[] = [];
+    driver.subscribeEvents('dsh-bbb', (e) => received.push(e));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyDriver = driver as any;
+
+    const chunk = { type: 'text-delta', index: 0, text: 'AB' };
+    // 通道一：durable plugin record
+    anyDriver.consumeEvent({ type: 'plugin:vteam/stream-chunk', data: { turn: 1, step: 0, chunk } }, 'dsh-bbb');
+    // 通道二：vendored stream-frame（同一个 chunk 的第二次到达）
+    anyDriver.consumeEvent(
+      { type: 'assistant/stream-frame', data: { frame: { type: 'chunk', turn: 1, step: 0, chunk } } },
+      'dsh-bbb',
+    );
+
+    // 只应有一次累积：文本是 'AB' 而不是 'ABAB'
+    expect(received).toHaveLength(1);
+    expect(received[0]?.parts?.[0]?.text).toBe('AB');
+  });
+
+  it('无信封 sessionId 且多会话歧义时仍丢弃（保守，不瞎猜）', () => {
+    const driver = driverWithTwoSessions();
+    const received: EngineEvent[] = [];
+    driver.subscribeEvents('dsh-bbb', (e) => received.push(e));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).consumeEvent({
+      type: 'plugin:vteam/stream-chunk',
+      data: { turn: 1, step: 0, chunk: { type: 'text-delta', index: 0, text: 'X' } },
+    });
+    expect(received).toHaveLength(0);
+  });
+});
+
 describe('DshDriver 事件通道（扇出行为）', () => {
   /** 直接调用私有的 consumeEvent 来模拟引擎事件到达（不启真实子进程）。 */
   function feed(driver: DshDriver, event: DshSessionEvent): void {

@@ -78,8 +78,17 @@ export interface DshServerRequestHandler {
 
 /** 事件订阅回调集合。 */
 export interface DshRpcClientHandlers {
-  /** 收到一条 `session.event`。 */
-  onSessionEvent?: (event: DshSessionEvent) => void;
+  /**
+   * 收到一条 `session.event`。
+   *
+   * ⚠️ **第二个参数必须传**：`session.event` 通知的信封上带 `sessionId`
+   * （`{sessionId, event}`），但 `event.data` 里**没有** sessionId。早先这里
+   * 只传 `event`，导致驱动只能靠「本驱动只有一个会话 / 只有一个在途 turn」
+   * 这类启发式反推归属 —— 池代理下一个驱动服务多会话时启发式必然失败，
+   * 事件被当成「无归属」丢弃（实测 `plugin:vteam/stream-chunk` 丢了 9000+ 条，
+   * 表现为「模型无任何输出」的首字超时误报）。信封上的 sessionId 是最可靠的来源。
+   */
+  onSessionEvent?: (event: DshSessionEvent, sessionId: string) => void;
   /** 收到 `session.status`（running/idle）。 */
   onSessionStatus?: (status: 'running' | 'idle', sessionId: string) => void;
 }
@@ -377,10 +386,10 @@ export class DshRpcClient {
     if (method === 'session.event') {
       const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : '';
       const event = params?.event as DshSessionEvent | undefined;
-      if (event !== undefined && event.type === 'turn/end') {
-      }
       if (event !== undefined && typeof event.type === 'string') {
-        this.handlers.onSessionEvent?.(event);
+        // 信封上的 sessionId 一并下发：event.data 里没有它，驱动单靠事件体无法归属
+        // （见 DshRpcClientHandlers.onSessionEvent 的说明）。
+        this.handlers.onSessionEvent?.(event, sessionId);
       }
       return;
     }
