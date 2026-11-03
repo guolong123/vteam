@@ -131,7 +131,8 @@ if [ "$QUICK" = "0" ] && [ -n "$TOKEN" ]; then
   sleep 8
   AB2=$(curl -s -m 10 -X POST "$API/channels/$CH_DEV/abort" -H "$AUTH" \
     -H 'Content-Type: application/json' -d "{\"teamMemberId\":\"$DEV_MEMBER\"}")
-  ok "TC-DSH-021 abort 返回 200" $([ "$(echo "$AB2" | jq -r '.aborted // "-"' | wc -c)" -gt 1 ]; echo $?) "body=$(echo "$AB2" | head -c 120)"
+  ABSTATE=$(echo "$AB2" | jq -r '.aborted // empty')
+  ok "TC-DSH-021 abort 返回 200" $([ -n "$ABSTATE" ]; echo $?) "body=$(echo "$AB2" | head -c 120)"
 else
   skip "TC-DSH-007/008/009/021" "--quick 或未登录，跳过真实模型轮"
 fi
