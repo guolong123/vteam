@@ -356,6 +356,30 @@ async function installHarness(
     if (method === "GET" && apiPath === "/channels") {
       return route.fulfill({ json: { items: [{ id: CHANNEL_ID, type: "team_group", teamId: TEAM_ID, taskId: null, agentId: null }], total: 1 } });
     }
+    // 团队任务列表（page.tsx 的 teamTasksQuery）：**必须 mock**。
+    // 不 mock 会经 route.fallback() 走真实后端，把真实团队的任务/成员实例漏进来
+    // （实测表现为成员面板出现 7 个真实成员、私聊 Tab 变成真实实例 id，
+    //  于是 dm-tab-private-ta_1 永远等不到）。本 spec 的设计前提是「零后端接触」。
+    if (method === "GET" && apiPath === "/tasks") {
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              id: TASK_ID,
+              title: "SU12 任务",
+              status: "in_progress",
+              createdAt: iso,
+              startedAt: null,
+              pendingReviewAt: null,
+              completedAt: null,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 100,
+        },
+      });
+    }
     if (method === "GET" && apiPath === `/channels/${CHANNEL_ID}/messages`) {
       if (options.groupHistory) return route.fulfill({ json: options.groupHistory });
       return route.fulfill({ json: options.longGroupHistory ? longGroupMessagesFixture() : messagesFixture() });
@@ -1974,13 +1998,13 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
 
   test("1. SSE 注入同会话 pending secret_input → 卡片进 awaiting-input；resolved 后清除；DOM 无 sentinel", async ({ page }) => {
     await openSecretToolSession(page);
-    const cards = page.getByTestId("msg-tool");
+    const cards = page.locator('[data-testid="msg-tool"], [data-testid="dsh-tool"]');
     await expect(cards).toHaveCount(2);
 
     // 基线：未注入 question 时 running 卡片保持 running，且不带新 testid
-    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"], [data-testid="dsh-tool"][data-status="running"], [data-testid="dsh-tool"][data-status="awaiting-input"]');
     await expect(running).toHaveAttribute("data-status", "running");
-    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toHaveCount(0);
 
     const seed: SecretQuestionSeed = {
       id: "aq_801",
@@ -1993,14 +2017,14 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
 
     // 字面状态断言：不只是「可见」，必须是第四个 data-status + 新 testid + 中文文案
     await expect(running).toHaveAttribute("data-status", "awaiting-input");
-    await expect(running.getByTestId("msg-tool-awaiting")).toBeVisible();
-    await expect(running.getByTestId("msg-tool-awaiting")).toContainText("等待填写敏感信息");
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toBeVisible();
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toContainText("等待填写敏感信息");
     await expect(running).toContainText("vteam_secret_command");
 
     // 终态卡片不受 question 影响（stale_state：part 已 completed 就不得回亮）
-    const done = page.locator('[data-testid="msg-tool"][data-status="success"]');
+    const done = page.locator('[data-testid="msg-tool"][data-status="success"], [data-testid="dsh-tool"][data-status="success"]');
     await expect(done).toHaveAttribute("data-status", "success");
-    await expect(done.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(done.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toHaveCount(0);
 
     await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-8-awaiting-input.png") });
     expect(await page.content()).not.toContain(SECRET_SENTINEL);
@@ -2009,14 +2033,14 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     await emitFrame(page, 402, "agent.question", resolvedSecretFrame(seed));
     await expect(page.getByTestId("question-modal")).toHaveCount(0);
     await expect(running).toHaveAttribute("data-status", "running");
-    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toHaveCount(0);
     await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-8-cleared.png") });
     expect(await page.content()).not.toContain(SECRET_SENTINEL);
   });
 
   test("2. 异会话 pending 不点亮；malformed（缺 sessionId/agentId）不点亮且不崩", async ({ page }) => {
     await openSecretToolSession(page);
-    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"], [data-testid="dsh-tool"][data-status="running"], [data-testid="dsh-tool"][data-status="awaiting-input"]');
     await expect(running).toHaveAttribute("data-status", "running");
 
     // 同 agent 群里另一个会话（ta_2 / a_tester）的 pending：不得点亮 a_developer 的卡片
@@ -2029,7 +2053,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     }));
     await expect(page.getByTestId("question-modal")).toBeVisible();
     await expect(running).toHaveAttribute("data-status", "running");
-    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toHaveCount(0);
 
     // malformed_input：缺 sessionId/agentId → 键集合为空，卡片不进第四态，页面不崩
     await emitFrame(page, 412, "agent.question", {
@@ -2047,7 +2071,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
       agentId: null,
     });
     await expect(running).toHaveAttribute("data-status", "running");
-    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toHaveCount(0);
     await expect(page.getByTestId("team-session-root")).toBeVisible();
     expect(await page.content()).not.toContain(SECRET_SENTINEL);
   });
@@ -2068,13 +2092,13 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     await page.getByTestId("dm-tab-private-ta_1").evaluate((el: HTMLElement) => el.click());
     await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
 
-    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"], [data-testid="dsh-tool"][data-status="running"], [data-testid="dsh-tool"][data-status="awaiting-input"]');
 
     // 补拉路径（刷新后仅凭 GET /questions，SSE 一帧不发）也必须点亮：
     // 弹窗在挂载时已入队，所以历史一落地卡片就是第四态（没有 running 基线可断言）。
     await expect(page.getByTestId("question-modal")).toBeVisible();
     await expect(running).toHaveAttribute("data-status", "awaiting-input");
-    await expect(running.getByTestId("msg-tool-awaiting")).toContainText("等待填写敏感信息");
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toContainText("等待填写敏感信息");
     expect(await page.content()).not.toContain(SECRET_SENTINEL);
 
     // 取消 = {secrets:null} → reply 成功 → 队列出队 → 卡片回落 running
@@ -2083,7 +2107,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     expect(state.replies[0]).toEqual({ questionId: "aq_821", payload: { secrets: null } });
     await expect(page.getByTestId("question-modal")).toHaveCount(0);
     await expect(running).toHaveAttribute("data-status", "running");
-    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toHaveCount(0);
     expect(await page.content()).not.toContain(SECRET_SENTINEL);
   });
 });
@@ -2133,7 +2157,7 @@ test.describe("sensitive-command-tool Todo9 全链路不回显", () => {
     await page.getByTestId("dm-tab-private-ta_1").click();
     await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
 
-    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"], [data-testid="dsh-tool"][data-status="running"], [data-testid="dsh-tool"][data-status="awaiting-input"]');
     await expect(running).toHaveAttribute("data-status", "running");
 
     const seed: SecretQuestionSeed = {
@@ -2145,7 +2169,7 @@ test.describe("sensitive-command-tool Todo9 全链路不回显", () => {
     };
     await emitFrame(page, 501, "agent.question", secretQuestionFrame(seed));
     await expect(running).toHaveAttribute("data-status", "awaiting-input");
-    await expect(running.getByTestId("msg-tool-awaiting")).toContainText("等待填写敏感信息");
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toContainText("等待填写敏感信息");
     await page.screenshot({ path: path.join(SECRET_TASK9_DIR, "task-9-awaiting-input.png") });
 
     await page.getByTestId("question-secret-input-0").fill(SECRET_SENTINEL);
@@ -2159,7 +2183,7 @@ test.describe("sensitive-command-tool Todo9 全链路不回显", () => {
 
     await emitFrame(page, 502, "agent.question", resolvedSecretFrame(seed));
     await expect(running).toHaveAttribute("data-status", "running");
-    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(running.locator('[data-testid="msg-tool-awaiting"], [data-testid="dsh-tool-awaiting"]')).toHaveCount(0);
     await page.screenshot({ path: path.join(SECRET_TASK9_DIR, "task-9-cleared.png") });
 
     const dom = await page.content();

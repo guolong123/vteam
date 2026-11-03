@@ -48,7 +48,9 @@ const STATUS_VIEW: Record<
   running: { label: "运行中", dot: "ongoing" },
   success: { label: "", dot: "done" },
   failed: { label: "失败", dot: "error" },
-  "awaiting-input": { label: "等待填写", dot: "warning" },
+  // 文案沿用 vteam 既有产品口径（MsgTool 的 awaiting-input 标签），不另造一套措辞
+  // —— 同一状态在两种渲染变体下必须叫同一个名字。
+  "awaiting-input": { label: "等待填写敏感信息", dot: "warning" },
 };
 
 /** 工具名 → DSH 风格标题。覆盖不到的回落工具原名（相当于 DSH 的 GenericToolCard）。 */
@@ -129,7 +131,15 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
               <span data-testid="dsh-tool-summary"> · {summary}</span>
             ) : null}
             {view.label.length > 0 ? (
-              <span data-testid="dsh-tool-status"> · {view.label}</span>
+              <span
+                // awaiting 徽章的语义入口：与 MsgTool 的 msg-tool-awaiting 等价。
+                // 敏感命令工具的「等待用户填写」是用户唯一的操作入口，必须可被断言到，
+                // 故 awaiting 时把 testid 让给它（其余状态用 dsh-tool-status）。
+                data-testid={status === "awaiting-input" ? "dsh-tool-awaiting" : "dsh-tool-status"}
+                data-status={status}
+              >
+                {" "}· {view.label}
+              </span>
             ) : null}
           </>
         }
