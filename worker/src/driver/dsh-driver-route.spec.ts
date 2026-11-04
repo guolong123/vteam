@@ -126,3 +126,28 @@ describe('DshDriver.switchRoute（模型路由切换）', () => {
     expect(close).not.toHaveBeenCalled();
   });
 });
+
+describe('DshDriver.ensureModel（复用会话每轮对齐）', () => {
+  it('委托到 switchRoute：会话在、运行时在 ⇒ 走 selectModel 不重启', async () => {
+    const { driver, request, close } = makeDriver({ isRunning: true, sessionIds: ['s1'] });
+
+    await driver.ensureModel({ providerID: 'p-new', modelID: 'm-new' });
+
+    expect(request).toHaveBeenCalledWith(
+      'session/selectModel',
+      { sessionId: 's1', provider: 'p-new', model: 'm-new' },
+      15_000,
+    );
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('model 为空/字段缺失 → 什么都不做（不误触发重启）', async () => {
+    const { driver, request, close } = makeDriver({ isRunning: true, sessionIds: ['s1'] });
+
+    await driver.ensureModel(null);
+    await driver.ensureModel({ providerID: '', modelID: 'm' });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+});

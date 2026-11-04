@@ -1095,3 +1095,24 @@ Provide a non-empty `safety_identifier` (or `user`) field.
 **故本次验证改用 `opencode` 免费线模型**（`opencode/deepseek-v4.1-flash-free`）跑通。
 若要正式支持 `opencode-go` + opencode 引擎，需要给 provider 配置加「默认请求体字段 /
 headers」能力（建议排在 §12.4 的后续项里）。
+
+### 15.5 已修：复用会话现在也会应用模型（消除 config/serve 漂移）
+
+§15.3 记的缺陷已修。模型此前**只在 `createSession` 里校验**，而复用会话时不走
+createSession ⇒ 改了成员模型不生效，日志出现 `config=glm-5.2 serve=glm-5.3` 漂移。
+
+修法分两层（**必须两层都有，这是本次踩到的点**）：
+
+1. `DshDriver.ensureModel(model)` —— 公开入口，幂等委托到 `switchRoute`；
+2. `DshPoolDriver.ensureModelFor(sessionId, model)` —— ⚠️ **exec-server 持有的 driver
+   其实是池**（`DshPoolDriver`，按角色分运行时），直接在 exec-server 上调
+   `driver.ensureModel` 会被 `typeof === 'function'` 判空**静默跳过**。
+   池层用 `pool.driverForSession(sessionId)`（**不 spawn**）定位该会话所属角色的运行时，
+   会话无归属时只告警放行（最坏本轮沿用旧模型，不阻断执行）。
+
+exec-server 在**建立或复用会话之后、下发之前**统一调用一次，覆盖两条路径。
+
+实测（复用会话、不复位）：`模型路由切换：glm-5.3 → glm-5.2` →
+`执行完成 model=opencode-go/glm-5.2 (config=glm-5.2 serve=glm-5.2)`，**零漂移**。
+
+单测 +2（`ensureModel` 委托到 selectModel 且不重启；model 为空不误触发重启）。

@@ -410,6 +410,22 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    *
    * 幂等：目标与当前一致时直接返回。
    */
+  /**
+   * 把运行时模型路由对齐到 `model`（**每个回合都调**，不只创建会话时）。
+   *
+   * 为什么需要：模型此前只在 createSession 里校验，而**复用会话时不会走
+   * createSession** => 改了成员模型也不生效，日志还会出现
+   * config=glm-5.2 serve=glm-5.3 的漂移（用户实测：必须停会话再发才行）。
+   * exec-server 在建立/复用会话后统一调用本方法即可覆盖两条路径。
+   *
+   * 幂等：目标与当前路由一致时 switchRoute 直接返回。
+   */
+  async ensureModel(model: DriverModelRef | null): Promise<void> {
+    if (model == null) return;
+    if (!model.providerID || !model.modelID) return;
+    await this.switchRoute(model.providerID, model.modelID);
+  }
+
   private async switchRoute(providerID: string, modelID: string): Promise<void> {
     if (this.switching === true) return;
     const targetRoute = `${providerID}/${modelID}`;

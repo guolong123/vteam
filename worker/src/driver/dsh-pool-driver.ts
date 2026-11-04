@@ -92,6 +92,28 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
     return this.pool.listRoles();
   }
 
+  /**
+   * 把**某个会话所属角色**运行时的模型路由对齐到 `model`（每个回合都调）。
+   *
+   * 为什么在池层：exec-server 持有的 driver 是池（按角色分运行时），模型路由是
+   * 每个 `DshDriver` 实例自己的状态。复用会话时不会走 createSession，模型检查
+   * 整个被跳过 ⇒ 改了成员模型也不生效（线上实测 config=glm-5.2 serve=glm-5.3 漂移）。
+   *
+   * 用 `driverForSession`（**不 spawn**）：会话没有归属时不代它启动新运行时，直接放行，
+   * 由下一轮 createSession 正常处理（最坏只是本轮沿用旧模型，不阻断执行）。
+   */
+  async ensureModelFor(sessionId: string, model: DriverModelRef | null): Promise<void> {
+    if (model == null) return;
+    const driver = this.pool.driverForSession(sessionId);
+    if (driver === undefined) {
+      this.logger.warn(
+        `[dsh-pool] 模型对齐跳过：会话 ${sessionId} 在池内无归属（可能进程重启后复用旧会话）`,
+      );
+      return;
+    }
+    await driver.ensureModel(model);
+  }
+
   async createSession(
     model?: DriverModelRef | null,
     agentPreset?: string,

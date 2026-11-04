@@ -2312,6 +2312,34 @@ export class ExecServer {
         trackInstanceRekey(sessionKey, opencodeSessionId);
         sessionKey = opencodeSessionId;
       }
+      // 模型路由对齐（**每个回合都做**，不只新建会话时）。
+      //
+      // 复用会话时不会走 createSession => 原先改了成员模型也不生效（用户实测：
+      // 必须停会话再发），且日志出现 config=glm-5.2 serve=glm-5.3 的漂移。
+      // 驱动若实现该可选能力则由它保证幂等（目标一致时不动运行时）。
+      {
+        const routable = this.driver as unknown as {
+          ensureModel?: (model: { providerID: string; modelID: string } | null) => Promise<void>;
+          ensureModelFor?: (
+            sessionId: string,
+            model: { providerID: string; modelID: string } | null,
+          ) => Promise<void>;
+        };
+        const desired = parseModelRef(payload.model);
+        if (desired !== 'invalid' && desired != null) {
+          try {
+            // dsh 池驱动：按会话定位所属角色运行时；单驱动（opencode）无此方法则跳过
+            if (typeof routable.ensureModelFor === 'function') {
+              await routable.ensureModelFor(opencodeSessionId, desired);
+            } else if (typeof routable.ensureModel === 'function') {
+              await routable.ensureModel(desired);
+            }
+          } catch (err) {
+            // 对齐失败不阻断本轮执行：驱动内部已有重启兜底，最坏是沿用旧模型
+            this.logger.warn(`[exec] 模型路由对齐失败：${(err as Error).message}`);
+          }
+        }
+      }
       // Per-agent browser isolation (option A)：按 opencode 会话预建 profile
       // 落点 browser-profiles/<scope>/（scope 派生规则见 browser-tools.ts
       // resolveBrowserScopeId；shim 运行时以 ToolContext.sessionID 取同一 scope，
