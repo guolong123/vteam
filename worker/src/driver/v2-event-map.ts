@@ -304,6 +304,43 @@ export class RunTerminalGate {
   private settled = false;
 
   /**
+   * 是否已出现「模型有输出」的**实证据**（非空 text 或任意 reasoning part）。
+   *
+   * 为什么闸门要管这件事（而不是让 prompt-await 自己判断）：
+   * `hasFirstToken()` 只看 `driver.getMessages()` 返回的消息，而 **dsh 驱动在
+   * `turn/end` 之前 `mirror.messages` 恒为空** —— part 攒在 `pendingTurn` 里、
+   * 定稿才入镜。于是纯轮询判定下，dsh 的「首字」永远不会出现 ⇒ 任何超过
+   * `firstTokenTimeoutMs`（试用环境 5 分钟）的回合都会被误判「模型无任何输出」
+   * 而 abort —— 哪怕流式 token 一直在哗哗地来（线上实测 08:42 那次）。
+   *
+   * 故由**事件/轮询的上送口**（exec-server 的 enqueueParts / enqueueDelta）把
+   * 「收到过输出」这条证据记进闸门，prompt-await 通过 `firstToken()` 读它。
+   */
+  private sawOutput = false;
+
+  /** 记录一次输出证据（任一非空 text / reasoning part 即可，只翻一次）。 */
+  noteOutput(parts: readonly DriverContent[]): void {
+    if (this.sawOutput) return;
+    for (const p of parts) {
+      if (p.type === 'text' && p.synthetic !== true && (p.text ?? '').trim() !== '') {
+        this.sawOutput = true;
+        return;
+      }
+      // reasoning **存在即算**（空壳也算）：opencode/dsh 都可能在思考期不落正文，
+      // 要求文本非空会把长时间纯思考误杀（见 prompt-await 的同款注释）。
+      if (p.type === 'reasoning' && p.synthetic !== true) {
+        this.sawOutput = true;
+        return;
+      }
+    }
+  }
+
+  /** `EventSignal.firstToken`：首字是否已出现（供 prompt-await 判定）。 */
+  firstToken(): boolean {
+    return this.sawOutput;
+  }
+
+  /**
    * 记录事件路的终态证据。
    *
    * @param outcome 终态判定

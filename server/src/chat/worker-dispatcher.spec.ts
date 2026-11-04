@@ -5586,7 +5586,18 @@ describe('WorkerDispatcher', () => {
       expect(prisma.message.update).toHaveBeenCalledWith({
         where: { id: 'm_proc' },
         data: expect.objectContaining({
-          content: { text: '执行失败：worker 无响应', parts: [] },
+          // 失败不得毁掉已生成内容：原 text 保留，错误以追加的 error part 呈现。
+          // 原实现是 { text: errorText, parts: [] }，把整轮流式内容抹掉
+          // （线上实测：用户反馈「模型思考和之前的消息都不见了」）。
+          content: {
+            text: '旧流式内容',
+            parts: [
+              expect.objectContaining({
+                type: 'error',
+                detail: '执行失败：worker 无响应',
+              }),
+            ],
+          },
           status: MESSAGE_STATUS.failed,
         }),
       });
@@ -5643,7 +5654,12 @@ describe('WorkerDispatcher', () => {
           senderId: 'a_product',
           senderInstanceId: 'tmm_0000000001',
           status: MESSAGE_STATUS.failed,
-          content: { text: 'agent 处理失败', parts: [] },
+          // 新建失败消息没有既有内容可保留：正文留空，错误只由 error part 承载
+          // （前端 dsh 变体渲染成红色错误块，bubble 变体同样走 MsgError）。
+          content: {
+            text: '',
+            parts: [expect.objectContaining({ type: 'error' })],
+          },
         }),
       });
       expect(realtime.broadcast).toHaveBeenCalledWith(

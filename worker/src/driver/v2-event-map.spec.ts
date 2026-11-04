@@ -857,3 +857,37 @@ describe('正文聚合（终态兜底补发用）', () => {
     expect(text).toBe('你好世界');
   });
 });
+
+// ── 首字信号（dsh 镜像为空场景的修复）────────────────────────────────
+describe('RunTerminalGate · 首字信号（noteOutput / firstToken）', () => {
+  it('非空 text 算首字', () => {
+    const gate = new RunTerminalGate();
+    expect(gate.firstToken()).toBe(false);
+    gate.noteOutput([{ type: 'text', text: 'hello' } as never]);
+    expect(gate.firstToken()).toBe(true);
+  });
+
+  it('reasoning 存在即算（空壳也算：思考期常常不落正文）', () => {
+    const gate = new RunTerminalGate();
+    gate.noteOutput([{ type: 'reasoning', text: '' } as never]);
+    expect(gate.firstToken()).toBe(true);
+  });
+
+  it('空文本 / synthetic / 非文本类 part 不算首字', () => {
+    const gate = new RunTerminalGate();
+    gate.noteOutput([
+      { type: 'text', text: '   ' } as never,
+      { type: 'text', text: 'x', synthetic: true } as never,
+      { type: 'tool', tool: 'read' } as never,
+      { type: 'step-finish' } as never,
+    ]);
+    expect(gate.firstToken()).toBe(false);
+  });
+
+  it('一旦点亮不再回退', () => {
+    const gate = new RunTerminalGate();
+    gate.noteOutput([{ type: 'text', text: 'a' } as never]);
+    gate.noteOutput([]);
+    expect(gate.firstToken()).toBe(true);
+  });
+});

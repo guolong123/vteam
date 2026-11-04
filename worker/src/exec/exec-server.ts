@@ -2645,11 +2645,31 @@ export class ExecServer {
     // 提取增量（extractNewParts）仍在 onPoll 内**同步**完成，保证去重时序与现状一致；
     // 只有「上送」排进串行链。发送失败仅记日志，不阻断链与主流程。
     let deltaChain: Promise<void> = Promise.resolve();
+    /**
+     * 首字证据登记（两条出队路径共用）。
+     *
+     * 为什么要记日志：dsh 这条路上「首字」原先**永远判不到**（驱动镜像在 turn/end 前
+     * 恒为空），导致任何长于 firstTokenTimeoutMs 的回合都被误判「模型无任何输出」。
+     * 修好后这一行每个回合只打一次，是「探活真的认到输出了」的最直接证据，
+     * 排障时不必再靠猜。
+     */
+    let firstTokenLogged = false;
+    const noteFirstToken = (parts: DriverContent[]): void => {
+      gate.noteOutput(parts);
+      if (!firstTokenLogged && gate.firstToken()) {
+        firstTokenLogged = true;
+        this.logger.info('[exec] 首字已确认（探活已认到模型输出）session=' + sessionID);
+      }
+    };
+
     const enqueueDelta = (messages: DriverMessage[]): number => {
       const fresh = tracker.extractNewParts(messages);
       if (fresh.length === 0) {
         return 0;
       }
+      // 首字证据（**轮询路**）：dsh 驱动的 getMessages() 在 turn/end 前恒为空，
+      // 只靠 prompt-await 的 hasFirstToken(collected) 永远判不到首字 ⇒ 长回合被误杀。
+      noteFirstToken(fresh);
       deltaChain = deltaChain
         .then(() => this.sendDelta(ctx, fresh))
         .catch((err: unknown) => {
@@ -2664,6 +2684,9 @@ export class ExecServer {
     const enqueueParts = (freshParts: DriverContent[], upstream?: UpstreamEventIdentity): void => {
       // 单调准入：SSE 重连/晚于轮询建立时，增量合成的 part 文本可能**短于**轮询路
       // 已上送的全文——admitSsePart 对同 part.id 拒绝回退快照且不降低基准（见 tracker）。
+      // 首字证据（**事件路**）：准入前先记，被准入守卫过滤掉的帧也算「模型有输出」——
+      // 它证明模型在吐 token，只是文本没推进（重复/回退快照）。
+      noteFirstToken(freshParts);
       const admitted = freshParts.filter((p) => tracker.admitSsePart(p, 'delta'));
       if (admitted.length === 0) {
         return;

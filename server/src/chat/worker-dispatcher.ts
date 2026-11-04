@@ -3954,9 +3954,35 @@ export class WorkerDispatcher
           status: MESSAGE_STATUS.processing,
         },
         orderBy: { createdAt: 'desc' },
-        select: { id: true },
+        select: { id: true, content: true },
       });
-      const content = { text: errorText, parts: [] } as Prisma.InputJsonValue;
+      // ⚠️ **保留已生成的流式内容**，只在末尾追加一条 error part。
+      //
+      // 原先这里是 `content = { text: errorText, parts: [] }` —— 整轮已流式展示的
+      // 思考/工具/正文**全部被抹掉**，界面上只剩一句错误。用户实测（2026-11-04 08:42）
+      // 的原话是「模型思考和之前的消息都不见了」，其实是失败落库把它们清空了。
+      // 失败不该毁掉已经产出的内容：保留原 parts + 文本，追加 {type:'error'} 让前端
+      // 在内容之后渲染红色错误块（MsgError kind=failed）。
+      const prevContent = (processingRow?.content ?? null) as
+        | { text?: unknown; parts?: unknown }
+        | null;
+      const prevText =
+        typeof prevContent?.text === 'string' ? prevContent.text : '';
+      const prevParts = Array.isArray(prevContent?.parts)
+        ? (prevContent.parts as unknown[])
+        : [];
+      const content = {
+        text: prevText,
+        parts: [
+          ...prevParts,
+          {
+            type: 'error',
+            kind: 'failed',
+            detail: errorText,
+            id: 'error:run-failed',
+          },
+        ],
+      } as Prisma.InputJsonValue;
       const message = processingRow
         ? await this.prisma.message.update({
             where: { id: processingRow.id },

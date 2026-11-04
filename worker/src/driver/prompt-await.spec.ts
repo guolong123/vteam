@@ -515,6 +515,68 @@ describe('describeTimeoutReason（首字超时根因诊断）', () => {
   });
 });
 
+describe('awaitCompletion · 事件路首字信号（dsh 镜像为空场景）', () => {
+  /**
+   * 复现线上事故（08:42）：dsh 驱动在 `turn/end` 之前 `mirror.messages` **恒为空**
+   * （part 攒在 pendingTurn 里，定稿才入镜），于是 `hasFirstToken(collected)` 永远
+   * 判不到首字 —— 任何超过 firstTokenTimeoutMs 的回合都被误判「模型无任何输出」而
+   * abort，哪怕流式 token 一直在来。
+   *
+   * 修复：由 exec-server 的 enqueueParts/enqueueDelta 把「收到过输出」记进闸门，
+   * prompt-await 通过 `eventSignal.firstToken()` 读它。
+   */
+  it('collected 恒空但事件路已报首字 → 不超时、持续等待完成', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    // 模拟 dsh：镜像里一直没有 assistant 消息（直到 turn/end 定稿）
+    getMessages.mockResolvedValue([]);
+
+    let sawOutput = false;
+    const gate = {
+      peek: () => null,
+      notePolling: () => undefined,
+      firstToken: () => sawOutput,
+    };
+    // 300ms 后事件路报「有输出」
+    setTimeout(() => {
+      sawOutput = true;
+    }, 20);
+
+    const promise = awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 80,
+      pollMs: 10,
+      eventSignal: gate,
+    });
+    // 再过一会儿补上终态，验证「首字后不再超时」而是正常收口
+    setTimeout(() => {
+      getMessages.mockResolvedValue([
+        asstMsg('a1', [textPart('done', 200), stepFinishPart()]),
+      ]);
+    }, 200);
+
+    const result = await promise;
+    expect(result.text).toBe('done');
+    expect(abort).not.toHaveBeenCalled();
+  });
+
+  it('事件路与轮询路都没输出 → 仍然按首字超时 abort（信号不能把超时挡死）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([]);
+    const gate = {
+      peek: () => null,
+      notePolling: () => undefined,
+      firstToken: () => false,
+    };
+    await expect(
+      awaitCompletion(driver, 'ses_1', {
+        firstTokenTimeoutMs: 40,
+        pollMs: 10,
+        eventSignal: gate,
+      }),
+    ).rejects.toBeInstanceOf(CompletionTimeoutError);
+    expect(abort).toHaveBeenCalled();
+  });
+});
+
 describe('awaitCompletion', () => {
   it('首次轮询即含 step-finish → 返回文本/tokens/cost，getMessages 只调 1 次', async () => {
     const { driver, getMessages } = mockDriver();
