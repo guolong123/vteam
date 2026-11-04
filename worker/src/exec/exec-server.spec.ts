@@ -214,6 +214,22 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
   throw new Error('waitFor 超时');
 }
 
+/**
+ * 模拟「该会话确有常规执行在跑」—— in-flight 轻路径的**前置条件**。
+ *
+ * 为什么不再直接发 inFlight 请求就行：后来加了**防空转守卫**
+ * （`exec-server.runExecution` 前置检查 `activeExecutions.has(sessionId)`）——
+ * server 的在飞登记可能泄漏（首字超时后未清理、TTL 30 分钟），漏掉的登记会让后续
+ * 普通消息被误标 inFlight ⇒ 走轻路径 ⇒ 无事件、无落库 ⇒ 前端永远收不到回复。
+ * 因此没有在飞执行时必须回退常规路径，测试也就必须先把在飞状态摆出来。
+ *
+ * 直接塞计数而不是真跑一轮常规执行：真跑要等首字超时（秒级）且容易 flaky。
+ */
+function seedActiveExecution(exec: ExecServer, sessionId: string): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (exec as any).activeExecutions.set(sessionId, 1);
+}
+
 /** FR-41：GET /file?path=...（可带 X-Worker-Token），返回状态码 + 原始响应字节。 */
 function getFile(
   port: number,
@@ -411,6 +427,8 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     const { sender, sent } = createSender();
     const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
+      // 前置：该会话确有常规执行在跑（否则防空转守卫会回退常规路径）
+      seedActiveExecution(exec, 'ses_flight');
     try {
       const res = await postExecute(bound, {
         taskId: 't_1',
@@ -449,6 +467,8 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     const { sender, sent } = createSender();
     const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
+      // 前置：该会话确有常规执行在跑（否则防空转守卫会回退常规路径）
+      seedActiveExecution(exec, 'ses_flight');
     try {
       const res = await postExecute(bound, { taskId: 't_1', sessionId: 'ses_flight', prompt: 'go', inFlight: true });
       expect(res.status).toBe(202);
@@ -633,7 +653,12 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
       });
       await waitFor(() => sent.length >= 5);
       // 原样透传：createSession 收到的引用不被解析/改写
-      expect(createSession).toHaveBeenCalledWith({ providerID: 'opencode', modelID: 'grok-code' });
+      // createSession 现签名 (model, agentPreset?, agentSystem?)：常规执行不带后两者
+      expect(createSession).toHaveBeenCalledWith(
+        { providerID: 'opencode', modelID: 'grok-code' },
+        undefined,
+        undefined,
+      );
       const completed = sent.find((s) => s.type === 'task.completed');
       expect(completed?.payload.model).toBe('opencode/grok-code');
       // ctx 扩散：会话上下文事件同样带 model（与 taskId/agentId 同为 ctx 成员）
@@ -652,7 +677,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     try {
       await postExecute(bound, { taskId: 't_1', prompt: 'go' });
       await waitFor(() => sent.length >= 5);
-      expect(createSession).toHaveBeenCalledWith(undefined);
+      expect(createSession).toHaveBeenCalledWith(undefined, undefined, undefined);
       const completed = sent.find((s) => s.type === 'task.completed');
       expect(completed?.payload.model).toBe('unknown');
     } finally {
@@ -1148,6 +1173,8 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
     const { sender, sent } = createSender();
     const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
     const bound = await exec.start();
+      // 前置：该会话确有常规执行在跑（否则防空转守卫会回退常规路径）
+      seedActiveExecution(exec, 'ses_flight');
     const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-flight-'));
     try {
       const res = await postExecute(bound, {
