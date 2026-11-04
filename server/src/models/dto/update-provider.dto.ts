@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 import { MODEL_PROVIDER_TYPES } from '../models.constants';
 
 /**
@@ -31,4 +31,21 @@ export class UpdateProviderDto {
   @IsString()
   @MaxLength(512)
   baseUrl?: string | null;
+
+  /**
+   * provider 级**固定请求头**（键值对）。null/{} = 清空。
+   *
+   * 典型用例：opencode-go 网关要求 `x-opencode-session`（实测：裸请求报
+   * MissingSessionID；加头立即通过；body 里放 user/safety_identifier 无效）。
+   * 值必须是**静态**字符串（不放密钥——密钥走凭据通道）。
+   */
+  @ApiPropertyOptional({
+    description:
+      'provider 级固定请求头（如 {"x-opencode-session":"vteam"}）；null/{} = 清空。值需为静态串，密钥请走凭据接口',
+    type: 'object',
+    additionalProperties: { type: 'string' },
+  })
+  @IsOptional()
+  @IsObject()
+  headers?: Record<string, string> | null;
 }

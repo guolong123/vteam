@@ -78,6 +78,11 @@ export interface ProviderModelEntry {
 export interface ModelProviderConfigEntry {
   /** OpenAI 兼容根（SDK 自行追加 /models 与 /chat/completions 路径） */
   baseUrl: string;
+  /**
+   * provider 级固定请求头（如 opencode-go 网关要求的 `x-opencode-session`）。
+   * worker 写入 opencode 配置的 `providers.<id>.settings.headers`。
+   */
+  headers?: Record<string, string>;
   /** 该 provider 在 server 目录中的模型集合（opencode 1.18.31 实测：
    * custom provider 不自动发现 `{baseURL}/models`，必须显式 models map） */
   models: Record<string, ProviderModelEntry>;

@@ -713,16 +713,22 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
      * provider 行（{providerType, baseUrl}）、getLocalProviderConfigs
      * （{providerID, modelID, baseUrl}）、listProviders 元数据（{providerID, providerType, baseUrl}）。 */
     const routeFindMany = (opts: {
-      providerRows: Array<{ providerType: string; baseUrl: string | null }>;
+      providerRows: Array<{
+        providerType: string;
+        baseUrl: string | null;
+        headers?: unknown;
+      }>;
       configRows?: Array<{
         providerID: string;
         modelID: string;
         baseUrl: string;
+        headers?: unknown;
       }>;
       metaRows?: Array<{
         providerID: string;
         providerType: string;
         baseUrl: string;
+        headers?: unknown;
       }>;
     }) => {
       prisma.model.findMany.mockImplementation(
@@ -771,7 +777,8 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(prisma.model.updateMany).toHaveBeenCalledWith({
         where: { providerID: 'vllm' },
-        data: { providerType: 'local', baseUrl: 'http://new:8000/v1' },
+        // headers：dto 未传 → 保持原值（此处原行为空）→ null
+        data: { providerType: 'local', baseUrl: 'http://new:8000/v1', headers: null },
       });
       expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
         [{ providerID: 'vllm', key: 'sk-raw-token' }],
@@ -805,9 +812,92 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(prisma.model.updateMany).toHaveBeenCalledWith({
         where: { providerID: 'p' },
-        data: { providerType: 'cloud', baseUrl: null },
+        data: { providerType: 'cloud', baseUrl: null, headers: null },
       });
       expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
+    });
+
+    it('headers 随 provider 配置下发（opencode-go 网关要求 x-opencode-session）', async () => {
+      routeFindMany({
+        providerRows: [
+          { providerType: 'custom', baseUrl: 'https://gw.example/v1', headers: null },
+        ],
+        configRows: [
+          {
+            providerID: 'gw',
+            modelID: 'm1',
+            baseUrl: 'https://gw.example/v1',
+            headers: { 'x-opencode-session': 'vteam' },
+          },
+        ],
+        metaRows: [
+          {
+            providerID: 'gw',
+            providerType: 'custom',
+            baseUrl: 'https://gw.example/v1',
+            headers: { 'x-opencode-session': 'vteam' },
+          },
+        ],
+      });
+      prisma.model.updateMany.mockResolvedValue({ count: 1 });
+      prisma.modelCredential.findUnique.mockResolvedValue({ revokedAt: null });
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'gw', credentialRef: 'iv:tag:data' },
+      ]);
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'gw', _count: { _all: 1 } },
+      ]);
+
+      await service.updateProvider('gw', {
+        headers: { 'x-opencode-session': 'vteam' },
+      } as never);
+
+      // ① 原子重写全部行的 headers
+      expect(prisma.model.updateMany).toHaveBeenCalledWith({
+        where: { providerID: 'gw' },
+        data: expect.objectContaining({
+          headers: { 'x-opencode-session': 'vteam' },
+        }),
+      });
+      // ② 下发负载必须带 headers（worker 据此写 opencode 的 settings.headers）
+      expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
+        expect.anything(),
+        undefined,
+        expect.objectContaining({
+          gw: expect.objectContaining({
+            headers: { 'x-opencode-session': 'vteam' },
+          }),
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('headers 显式空对象 → 清空（updateMany headers: null）', async () => {
+      routeFindMany({
+        providerRows: [
+          {
+            providerType: 'custom',
+            baseUrl: 'https://gw.example/v1',
+            headers: { 'x-opencode-session': 'old' },
+          },
+        ],
+        configRows: [],
+        metaRows: [
+          { providerID: 'gw', providerType: 'custom', baseUrl: 'https://gw.example/v1' },
+        ],
+      });
+      prisma.model.updateMany.mockResolvedValue({ count: 1 });
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'gw', _count: { _all: 1 } },
+      ]);
+
+      await service.updateProvider('gw', { headers: {} } as never);
+
+      expect(prisma.model.updateMany).toHaveBeenCalledWith({
+        where: { providerID: 'gw' },
+        data: expect.objectContaining({ headers: null }),
+      });
     });
 
     it('存在行但类型为 local 且缺 baseUrl → 400 MODEL_BASEURL_REQUIRED（不写库）', async () => {
@@ -864,7 +954,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(prisma.model.updateMany).toHaveBeenCalledWith({
         where: { providerID: 'p' },
-        data: { providerType: 'cloud', baseUrl: 'http://y:8000/v1' },
+        data: { providerType: 'cloud', baseUrl: 'http://y:8000/v1', headers: null },
       });
       expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
     });

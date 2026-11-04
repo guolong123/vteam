@@ -502,15 +502,19 @@ export class ModelsService implements OnModuleInit {
     providerID: string,
     dto: UpdateProviderDto,
   ): Promise<ProviderSummary> {
-    if (dto.providerType === undefined && dto.baseUrl === undefined) {
+    if (
+      dto.providerType === undefined &&
+      dto.baseUrl === undefined &&
+      dto.headers === undefined
+    ) {
       throw new BadRequestException({
         code: 'MODEL_PROVIDER_UPDATE_EMPTY',
-        message: 'providerType 与 baseUrl 至少需提供一项',
+        message: 'providerType、baseUrl 与 headers 至少需提供一项',
       });
     }
     const rows = await this.prisma.model.findMany({
       where: { providerID },
-      select: { providerType: true, baseUrl: true },
+      select: { providerType: true, baseUrl: true, headers: true },
     });
     if (rows.length === 0) {
       throw new NotFoundException({
@@ -528,9 +532,20 @@ export class ModelsService implements OnModuleInit {
       rawBaseUrl ?? undefined,
       effectiveType,
     );
+    // headers：显式 null/{} = 清空；缺省 = 保持原值（与 baseUrl 的「显式才改」语义一致）
+    const effectiveHeaders =
+      dto.headers === undefined
+        ? ((rows[0] as { headers?: unknown }).headers ?? null)
+        : dto.headers === null || Object.keys(dto.headers).length === 0
+          ? null
+          : (dto.headers as Prisma.InputJsonValue);
     await this.prisma.model.updateMany({
       where: { providerID },
-      data: { providerType: effectiveType, baseUrl: effectiveBaseUrl },
+      data: {
+        providerType: effectiveType,
+        baseUrl: effectiveBaseUrl,
+        headers: effectiveHeaders as never,
+      },
     });
     await this.maybeDispatchAfterShapeChange(providerID);
     const summary = await this.listProviders();
@@ -1434,6 +1449,25 @@ export class ModelsService implements OnModuleInit {
    * - 不按 enabled 过滤：opencode.json 只是引擎级注册，可用性由 server
    *   availability/目录 enabled 门控，避免启停模型还要重新下发配置。
    */
+  /**
+   * 归一 provider 级固定请求头：只接受「字符串键 → 字符串值」的对象，其余一律视为未配置。
+   *
+   * 安全边界：这里**不做**任何密钥校验（密钥应走凭据通道），但会丢弃非字符串值，
+   * 避免把 JSON 里的数组/对象原样写进 opencode 配置导致 serve 启动报错。
+   */
+  private normalizeProviderHeaders(raw: unknown): Record<string, string> | undefined {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return undefined;
+    }
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      const name = key.trim();
+      if (name === '' || typeof value !== 'string') continue;
+      out[name] = value;
+    }
+    return Object.keys(out).length === 0 ? undefined : out;
+  }
+
   async getLocalProviderConfigs(): Promise<
     Record<string, ModelProviderConfigEntry>
   > {
@@ -1445,6 +1479,7 @@ export class ModelsService implements OnModuleInit {
         name: true,
         baseUrl: true,
         capabilities: true,
+        headers: true,
       },
     } as never)) as unknown as {
       providerID: string;
@@ -1452,6 +1487,7 @@ export class ModelsService implements OnModuleInit {
       name: string;
       baseUrl: string | null;
       capabilities: unknown;
+      headers: unknown;
     }[];
     const map: Record<string, ModelProviderConfigEntry> = {};
     for (const row of rows) {
@@ -1461,7 +1497,13 @@ export class ModelsService implements OnModuleInit {
       }
       let entry = map[row.providerID];
       if (!entry) {
-        entry = { baseUrl: url, models: {} };
+        // provider 级固定请求头（全部行同值——updateProvider 原子重写，取首行即可）
+        const headers = this.normalizeProviderHeaders(row.headers);
+        entry = {
+          baseUrl: url,
+          ...(headers === undefined ? {} : { headers }),
+          models: {},
+        };
         map[row.providerID] = entry;
       } else if (entry.baseUrl !== url) {
         this.logger.warn(

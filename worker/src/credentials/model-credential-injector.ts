@@ -108,6 +108,12 @@ export interface ModelProviderConfigEntry {
   baseUrl: string;
   /** 双形状兼容：旧 server 下发 string[]，C8 起为 Record<modelID, ProviderModelEntry> */
   models: string[] | Record<string, ProviderModelEntry>;
+  /**
+   * provider 级固定请求头 → `providers.<id>.settings.headers`。
+   * 实测依据：opencode-go 网关只认 `x-opencode-session` 头（裸请求 MissingSessionID，
+   * body 里的 user/safety_identifier 无效，加头立即通过）。
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -336,10 +342,19 @@ export function buildProviderSection(
       continue;
     }
     const apiKey = keysByProvider.get(providerID);
+    // provider 级固定请求头（platform 下发）。openai-compatible provider 的
+    // `settings.headers` 会透传进每个请求 —— opencode-go 网关**只认**
+    // `x-opencode-session` 这个头（实测：裸请求 MissingSessionID；body 里放
+    // user/safety_identifier 无效；加头立即通过）。
+    const headers = cfg?.headers;
     section[providerID] = {
       name: providerID,
       package: OPENAI_COMPATIBLE_PACKAGE,
-      settings: apiKey ? { baseURL: baseUrl, apiKey } : { baseURL: baseUrl },
+      settings: {
+        baseURL: baseUrl,
+        ...(apiKey === undefined ? {} : { apiKey }),
+        ...(headers === undefined || Object.keys(headers).length === 0 ? {} : { headers }),
+      },
       models,
     };
   }

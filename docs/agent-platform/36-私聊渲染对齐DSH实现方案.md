@@ -1196,3 +1196,55 @@ its profile resolves VTEAM_PROVIDER_QWEN_LOCAL_KEY, which is not set
 **排查手法记一笔**：DSH 的模型调用失败**不打印到 worker stdout**，只在会话事件里
 （`assistant/attempt` 的 `finish.reason.failure.message` 与 `turn/end.reason.error`）。
 以后遇到「dsh 回合瞬间 turn/end 且无输出」，先解压会话文件看 `turn/end`，比翻日志快得多。
+
+---
+
+## 16. opencode 引擎支持 opencode-go 网关（provider 级固定请求头）
+
+### 16.1 结论先行：网关只认**请求头**
+
+之前记的「网关要 body 里的 `user`/`safety_identifier`」是**误判**。直接打网关三组对照：
+
+| 请求 | 结果 |
+|---|---|
+| 裸请求 | `MissingSessionID`（"Request is missing x-opencode-session"） |
+| 加头 `x-opencode-session: probe-session` | ✅ 正常返回 completion |
+| body 里加 `"user":"probe-user"` | ❌ 仍 `MissingSessionID` |
+
+所以 dsh 引擎一直能用这条路由（它有 `DSH_SESSION_HEADER`），而 opencode 引擎不行 ——
+差别就在**能不能配 provider 级请求头**。
+
+### 16.2 实现：provider 配置新增 `headers`
+
+| 层 | 改动 |
+|---|---|
+| DB | `models.headers` JSON 列（与 `baseUrl`/`providerType` 同源，`updateProvider` 按 providerID 原子重写全部行）；迁移 `20261104173000_add_model_provider_headers` |
+| server | `UpdateProviderDto.headers`（`IsObject`；显式 `null`/`{}` = 清空）；`getLocalProviderConfigs()` 带出 headers；`ModelProviderConfigEntry.headers` |
+| 下发 | `model-credentials` 的 `payload.providerConfigs[pid].headers`（沿用既有全量下发通道） |
+| worker | `buildProviderSection` 写 `providers.<id>.settings.headers`（openai-compatible 会透传进每个请求） |
+
+用法：
+
+```bash
+PATCH /api/v1/models/providers/opencode-go
+{ "providerType":"custom", "baseUrl":"https://opencode.ai/inference/go/v1",
+  "headers": { "x-opencode-session": "vteam-trial" } }
+```
+
+### 16.3 实测
+
+opencode worker 跑 `opencode-go/deepseek-v4.1-flash`：
+
+```
+[exec] 执行完成 model=opencode-go/deepseek-v4.1-flash (config=… serve=…) text=4 chars
+消息 sent | 网关通了
+```
+
+之前这条路在 opencode 引擎上必然 `MissingSessionID`（靠免费线 `opencode/*-free` 绕过）。
+
+### 16.4 部署坑（记一笔）
+
+**Prisma client 也要跟着进镜像**：只 `docker cp dist` 不改 `node_modules/.prisma` 的话，
+运行期报 `Unknown field 'headers' for select statement on model 'Model'`（HTTP 500）。
+增量部署时必须同时拷 `dist` + `prisma/migrations` + `node_modules/.prisma` + `node_modules/@prisma/client`，
+再跑 `init`（`prisma migrate deploy`）。

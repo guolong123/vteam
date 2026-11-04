@@ -325,6 +325,14 @@ export interface ProviderModelEntry {
 export interface ModelProviderConfigEntry {
   /** OpenAI 兼容根（SDK 自行追加 /models 与 /chat/completions 路径） */
   baseUrl: string;
+  /**
+   * provider 级固定请求头（如 opencode-go 网关要求的 `x-opencode-session`）。
+   *
+   * 实测依据：该网关**只认这个头** —— 裸请求报 `MissingSessionID`，body 里加
+   * `user`/`safety_identifier` 完全无效，加头立即通过。故必须写进
+   * `providers.<id>.settings.headers`（openai-compatible provider 会透传到请求）。
+   */
+  headers?: Record<string, string>;
   /** 该 provider 在 server 目录中的模型集合（opencode 1.18.31 实测：custom
    * provider 不自动发现 `{baseURL}/models`，必须显式 models map，否则静默不出现） */
   models: string[] | Record<string, ProviderModelEntry>;

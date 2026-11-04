@@ -210,6 +210,30 @@ function collectKeys(value: unknown, acc: Set<string> = new Set()): Set<string> 
 }
 
 describe('buildProviderSection（T7：opencode v2 形态的 providers 段组装）', () => {
+  it('provider 级 headers 写进 settings.headers（opencode-go 网关要求 x-opencode-session）', () => {
+    const section = buildProviderSection({
+      'opencode-go': {
+        baseUrl: 'https://opencode.ai/inference/go/v1',
+        models: ['deepseek-v4.1-flash'],
+        headers: { 'x-opencode-session': 'vteam-trial' },
+      },
+    }) as Record<string, { settings: Record<string, unknown> }>;
+
+    // 实测依据：该网关只认这个头——不带头 `MissingSessionID`，body 里放
+    // user/safety_identifier 无效。故必须落进 openai-compatible 的 settings.headers。
+    expect(section['opencode-go'].settings.headers).toEqual({
+      'x-opencode-session': 'vteam-trial',
+    });
+  });
+
+  it('无 headers → settings 不出现该键（不写空对象，避免内容幂等判定抖动）', () => {
+    const section = buildProviderSection({
+      'my-local': { baseUrl: 'http://192.168.10.10:18020/v1', models: ['q'] },
+    }) as Record<string, { settings: Record<string, unknown> }>;
+
+    expect('headers' in section['my-local'].settings).toBe(false);
+  });
+
   it('有效条目 → v2 段名 providers + package + settings.baseURL + models map', () => {
     const section = buildProviderSection({
       'my-local': { baseUrl: 'http://192.168.10.10:18020/v1', models: ['qwen3.8-27b'] },
