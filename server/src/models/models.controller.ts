@@ -10,6 +10,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Public } from '../auth/decorators/public.decorator';
+import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { AdminGuard } from '../users/admin.guard';
 import { CreateModelDto } from './dto/create-model.dto';
 import { QueryModelsDto } from './dto/query-models.dto';
@@ -187,6 +189,22 @@ export class ModelsController {
   })
   syncLive() {
     return this.modelsService.syncLiveModels();
+  }
+
+  /**
+   * GET /api/v1/models/worker-catalog → `{items:[{providerID, modelID, name}]}`
+   *
+   * worker 通道（`X-Worker-Token` 或用户 JWT）：dsh 引擎据此把平台已配置的**全部**
+   * 启用模型声明进 cordis patch，运行时才能识别并 `session/selectModel` 切换。
+   *
+   * ⚠️ 必须声明在 `@Get(':id')` **之前**，否则 'worker-catalog' 会被 `:id` 捕获。
+   */
+  @Public()
+  @UseGuards(WorkerOrJwtGuard)
+  @Get('worker-catalog')
+  @ApiOperation({ summary: 'worker 视角的启用模型清单（X-Worker-Token 或用户 JWT）' })
+  workerCatalog() {
+    return this.modelsService.workerCatalog();
   }
 
   /** GET /api/v1/models/:id → 200 + Model；不存在 → 404 MODEL_NOT_FOUND。 */

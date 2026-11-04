@@ -212,6 +212,14 @@ export interface EngineModelCredential {
   apiKey: string;
   /** 自定义端点（可选；OpenAI 兼容网关需要）。 */
   baseUrl?: string;
+  /**
+   * 该 provider 下**平台已配置的全部模型**（可选）。
+   *
+   * dsh 的 cordis patch 必须逐模型声明，运行时才认识、才切得动（`session/selectModel`）。
+   * 缺省时退化为「只声明凭据里的那一个 modelID」——那也是把平台模型挡在门外的原因：
+   * 平台配了 N 个模型，运行时只认得 1 个。
+   */
+  models?: Array<{ id: string; name: string }>;
 }
 
 /**

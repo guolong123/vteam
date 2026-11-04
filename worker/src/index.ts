@@ -181,7 +181,23 @@ export function createDshWorkerDriver(
     warn: (m) => console.warn(m),
     error: (m) => console.error(m),
   });
-  void credentials.apply([{ providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) }]);
+  /**
+   * 平台已配置模型目录（provider → 模型清单）。
+   *
+   * 为什么必须拉：dsh 的 cordis patch 要**逐模型声明**，运行时才认识、才切得动
+   * （`session/selectModel`）。此前只声明凭据里那一个 `modelID` ⇒ 平台配了 N 个模型，
+   * dsh 运行时只认得 1 个。
+   *
+   * 时序：本函数是同步的（调用方不 await），故先用 env 那条凭据把 patch 落盘保住启动，
+   * 目录拉到后**再 apply 一次**（apply 是整体重写、幂等）。dsh 运行时是**懒启动**
+   * （首次下发才 spawn），所以二次写入仍早于握手。
+   */
+  const modelCatalogForProvider = (catalog: Map<string, Array<{ id: string; name: string }>>) => {
+    const models = catalog.get(providerID);
+    return models === undefined || models.length === 0 ? {} : { models };
+  };
+  const credentialBase = { providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) };
+  void credentials.apply([credentialBase]);
 
   // P6：注入 **agent-preset roster**（多角色共享一个运行时）。
   //
@@ -228,6 +244,58 @@ export function createDshWorkerDriver(
     },
     workDir,
   );
+
+  // ②' 平台模型目录 →**二次 apply**（见上方 modelCatalogForProvider 的时序说明）
+  void (async () => {
+    try {
+      const url = `${config.serverUrl.replace(/\/+$/, '')}/api/v1/models/worker-catalog`;
+      const response = await fetch(url, {
+        headers: {
+          'X-Worker-Token': config.workerToken,
+          'x-worker-id': config.workerId,
+        },
+      });
+      if (!response.ok) {
+        console.warn(
+          `[worker/dsh] 模型目录拉取失败 HTTP ${response.status}（patch 只声明凭据里的 1 个模型）`,
+        );
+        return;
+      }
+      const payload = (await response.json()) as {
+        items?: Array<{ providerID?: unknown; modelID?: unknown; name?: unknown }>;
+      };
+      const catalog = new Map<string, Array<{ id: string; name: string }>>();
+      for (const item of payload.items ?? []) {
+        if (typeof item.providerID !== 'string' || typeof item.modelID !== 'string') continue;
+        const list = catalog.get(item.providerID) ?? [];
+        list.push({ id: item.modelID, name: typeof item.name === 'string' ? item.name : item.modelID });
+        catalog.set(item.providerID, list);
+      }
+      const extra = modelCatalogForProvider(catalog);
+      if (extra.models === undefined) {
+        console.log(`[worker/dsh] 平台模型目录里没有 provider=${providerID} 的模型（保持单模型声明）`);
+        return;
+      }
+      await credentials.apply([{ ...credentialBase, ...extra }]);
+      await injector.apply(
+        {
+          workDir,
+          skills: [],
+          tools: [],
+          mcpServers: [],
+          agentPolicies: [],
+          modelCredentials: [{ ...credentialBase, ...extra }],
+        },
+        workDir,
+      );
+      console.log(
+        `[worker/dsh] 模型目录已声明进 patch：provider=${providerID} 共 ${extra.models.length} 个模型` +
+          `（${extra.models.slice(0, 5).map((m) => m.id).join(', ')}${extra.models.length > 5 ? ' …' : ''}）`,
+      );
+    } catch (err) {
+      console.warn(`[worker/dsh] 模型目录注入失败：${(err as Error).message}`);
+    }
+  })();
 
   // ② **清理陈旧会话锁**（关键：否则 worker 重启后 resume 必然失败）
   //

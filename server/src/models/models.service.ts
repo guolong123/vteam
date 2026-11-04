@@ -166,6 +166,31 @@ export class ModelsService implements OnModuleInit {
     return { items: rows, total, page, pageSize };
   }
 
+  /**
+   * worker 视角的**启用模型清单**（`GET /models/worker-catalog`，worker token 可读）。
+   *
+   * 为什么需要：dsh 引擎的 cordis patch 必须把「该 provider 下平台已配置的**全部**模型」
+   * 声明出来，运行时才能识别并切换它们。此前 patch 只声明凭据里那一个 `modelID`，
+   * 于是平台配了再多模型，dsh 运行时也一个都不认识（`session/selectModel` 无从切起）。
+   *
+   * 只返回 worker 声明模型所需的最小字段（不含凭据/端点），且只返回 enabled 行 ——
+   * 这是 worker 通道，不该看到禁用项与管理字段。
+   */
+  async workerCatalog() {
+    const rows = await this.prisma.model.findMany({
+      where: { enabled: true },
+      orderBy: [{ providerID: 'asc' }, { modelID: 'asc' }],
+      select: { providerID: true, modelID: true, name: true },
+    });
+    return {
+      items: rows.map((row) => ({
+        providerID: row.providerID,
+        modelID: row.modelID,
+        name: row.name ?? row.modelID,
+      })),
+    };
+  }
+
   /** GET /models/:id：详情；不存在 → 404 MODEL_NOT_FOUND。 */
   async findOne(id: string) {
     const row = await this.prisma.model.findUnique({ where: { id } });

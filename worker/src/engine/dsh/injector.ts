@@ -208,12 +208,11 @@ export class DshResourceInjector implements ResourceInjector {
       api,
       baseURL,
       ...(headers === undefined ? {} : { headers }),
-      models: [
-        {
-          id: cred.modelID ?? 'deepseek-v4-flash',
-          name: cred.modelID ?? 'deepseek-v4-flash',
-        },
-      ],
+      models:
+        cred.models !== undefined && cred.models.length > 0
+          ? cred.models.map((m) => ({ id: m.id, name: m.name }))
+          : // 兜底：只声明凭据里的那一个模型（平台未提供目录时）
+            [{ id: cred.modelID ?? 'deepseek-v4-flash', name: cred.modelID ?? 'deepseek-v4-flash' }],
     };
   }
 

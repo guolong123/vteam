@@ -1,4 +1,5 @@
 import { PATH_METADATA } from '@nestjs/common/constants';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -71,6 +72,9 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
           provide: PrismaService,
           useValue: { user: { findUnique: jest.fn() } },
         },
+        // worker 通道端点（GET /models/worker-catalog）的方法级 @UseGuards(WorkerOrJwtGuard)
+        // 同样在 compile 时实例化，它注入 ConfigService，补一个空占位
+        { provide: ConfigService, useValue: { get: jest.fn() } },
       ],
     }).compile();
 

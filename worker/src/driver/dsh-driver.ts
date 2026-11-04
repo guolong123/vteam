@@ -418,6 +418,20 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     }
     this.switching = true;
     try {
+      // ══ 前置：运行时还没起来（懒启动）⇒ 只更新路由，什么都不用重启 ══
+      //
+      // 首次下发时 dsh 运行时尚未 spawn（ensureStarted 在 sendMessage 里才握手），
+      // 此时既没有在途回合、也没有需要迁移的会话 —— close 一个没起来的客户端是空操作。
+      // 之前这里会走进「重启」分支并打一条误导性的「重启运行时」日志。
+      if (!this.client.isRunning && this.sessions.size === 0) {
+        this.options.provider = providerID;
+        this.options.model = modelID;
+        this.logger.info(
+          `[dsh-driver] 模型路由已记录：→ ${targetRoute}（运行时尚未启动，下次握手直接用新路由）`,
+        );
+        return;
+      }
+
       // ══ 首选：运行期换模型（vendor 的 session/selectModel，不重启）══════
       const sessionIds = [...this.sessions.keys()];
       if (this.client.isRunning && sessionIds.length > 0) {

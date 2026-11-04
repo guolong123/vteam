@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { WorkersModule } from '../workers/workers.module';
 import { ModelsController } from './models.controller';
 import { ModelsService } from './models.service';
@@ -18,7 +19,13 @@ import { ModelsService } from './models.service';
 @Module({
   imports: [RealtimeModule, forwardRef(() => WorkersModule)],
   controllers: [ModelsController],
-  providers: [ModelsService, CredentialCryptoService, AdminGuard],
+  providers: [
+    ModelsService,
+    CredentialCryptoService,
+    AdminGuard,
+    // worker 通道（GET /models/worker-catalog，T4b 同款双通道鉴权）
+    WorkerOrJwtGuard,
+  ],
   exports: [ModelsService, CredentialCryptoService],
 })
 export class ModelsModule {}
