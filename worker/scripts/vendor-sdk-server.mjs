@@ -91,6 +91,33 @@ const CANCEL_CASE = `
  * 语义对齐 vteam：一个成员实例 = 一个 Agent = 一个 preset；
  * 团队里 PM/开发/测试并发时各用自己的 preset，**共享同一个运行时进程**。
  */
+/**
+ * `session/selectModel`：DSH 原生「按会话运行期换模型」能力。
+ *
+ * 上游 SDK 协议只有 7 个方法（无 selectModel），故 vteam 此前换模型只能
+ * 「重启运行时 + 重新 initialize」——代价 ~1s、必须等无在途回合、还会丢事件镜像。
+ *
+ * DSH 自己（GUI）换模型是**运行期**的：`sessionController.selectModel` 做两件事
+ *   1) `agent.session.append('model/selection', selected)` => 该会话**下一个请求**生效；
+ *   2) `ctx.agentDefaultModel.saveSelection(selected)`     => **进程默认**同步更新，
+ *      于是**新建会话也自动跟随**，不需要再重启。
+ *
+ * 故这里直接转发到 DSH 自己的实现，不重写语义（缓存/投影一致性由它保证）。
+ */
+const SELECT_MODEL_CASE = `
+\t\t\tcase "session/selectModel": {
+\t\t\t\tconst controller = this.ctx.get("sessionController");
+\t\t\t\tif (controller === undefined) throw new Error("sessionController service unavailable");
+\t\t\t\tconst sid = params?.sessionId;
+\t\t\t\tif (typeof sid !== "string" || sid.length === 0) throw new TypeError("session/selectModel requires a non-empty sessionId");
+\t\t\t\treturn await controller.selectModel({
+\t\t\t\t\tsessionId: sid,
+\t\t\t\t\tprovider: params?.provider,
+\t\t\t\t\tmodel: params?.model,
+\t\t\t\t\t...(params?.reasoningEffort === undefined ? {} : { reasoningEffort: params.reasoningEffort }),
+\t\t\t\t});
+\t\t\t}`;
+
 const CREATE_CASE = `
 \t\t\tcase "session/create": {
 \t\t\t\tconst sid = params?.sessionId;
@@ -210,8 +237,9 @@ function main() {
   const hasCancel = source.includes('case "session/cancel"');
   const hasSteer = source.includes('case "session/steer"');
   const hasCreate = source.includes('case "session/create"');
-  if (hasCancel && hasSteer && hasCreate) {
-    console.log('[vendor] 已打过补丁（create/cancel/steer 均存在），跳过');
+  const hasSelectModel = source.includes('case "session/selectModel"');
+  if (hasCancel && hasSteer && hasCreate && hasSelectModel) {
+    console.log('[vendor] 已打过补丁（create/cancel/steer/selectModel 均存在），跳过');
     return;
   }
 
@@ -256,7 +284,10 @@ function main() {
 \t\t\t`;
 
   // ① meta 补丁：建会话**直接带 preset**（避免 select() 的 recompose 丢 model）
-  if (patched.includes(CREATE_META_OLD)) {
+  if (patched.includes(CREATE_META_NEW)) {
+    // 幂等：已打过（重跑 vendor 只补新增 case 时会走到这里，不能抛错）
+    console.log('[vendor]   meta 补丁：已存在，跳过');
+  } else if (patched.includes(CREATE_META_OLD)) {
     patched = patched.replace(CREATE_META_OLD, CREATE_META_NEW);
     console.log('[vendor]   meta 补丁：建会话支持 agentPreset');
   } else {
@@ -307,17 +338,31 @@ globalThis.__vteamAppendStreamChunk = (session, data) => {
     throw new Error('[vendor] 流式转发锚点未命中：session/event 订阅处结构可能变化');
   }
 
-  // ③ 三个 case 插在 shutdown 之前（create → cancel → steer）
-  patched = patched.replace(
-    ANCHOR,
-    `${CREATE_CASE}\n${CANCEL_CASE}\n${STEER_CASE}\n${ANCHOR}`,
-  );
+  // ③ 只注入**缺失**的 case（幂等：已存在的再插一遍会在 switch 里产生重复 case）
+  const missingCases = [
+    hasCreate ? '' : CREATE_CASE,
+    hasCancel ? '' : CANCEL_CASE,
+    hasSteer ? '' : STEER_CASE,
+    hasSelectModel ? '' : SELECT_MODEL_CASE,
+  ]
+    .filter((c) => c !== '')
+    .join('\n');
+  if (missingCases !== '') {
+    patched = patched.replace(ANCHOR, `${missingCases}\n${ANCHOR}`);
+    console.log(
+      '[vendor]   注入 session case：' +
+        [hasCreate ? '' : 'create', hasCancel ? '' : 'cancel', hasSteer ? '' : 'steer', hasSelectModel ? '' : 'selectModel']
+          .filter((n) => n !== '')
+          .join('/'),
+    );
+  }
 
-  // 结构断言：两处 case 必须都在，且 default 分支未被破坏
+  // 结构断言：四个 case 必须都在，且 default 分支未被破坏
   if (
     !patched.includes('case "session/create"') ||
     !patched.includes('case "session/cancel"') ||
-    !patched.includes('case "session/steer"')
+    !patched.includes('case "session/steer"') ||
+    !patched.includes('case "session/selectModel"')
   ) {
     throw new Error('[vendor] 注入后断言失败：case 未写入');
   }

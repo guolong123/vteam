@@ -389,20 +389,72 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
   }
 
   /**
-   * 切换模型路由（重启运行时并以新路由握手）。
+   * 切换模型路由。
    *
-   * 为什么必须重启：DSH 的 `initialize` 携带 provider/model 且服务端会校验该路由
-   * （P0 实测 `no adapter registered for provider "..."` 即此校验），协议里**没有**
-   * per-session 或 per-prompt 的模型选择方法。所以"换模型"在 DSH 上等价于"换运行时"。
+   * ## 首选：**运行期**换（不重启）
+   *
+   * DSH 自己（GUI）换模型是运行期的，能力在 `sessionController.selectModel`：
+   *   ① 给该会话追加 `model/selection` durable 事件 ⇒ **下一个请求**生效；
+   *   ② 同步更新进程默认模型 ⇒ **新建会话也跟随**。
+   * 只是**上游 SDK 协议没有这个方法**（只有 7 个：initialize / session.prompt /
+   * session.resume / session.wait / working-directory.get|set / shutdown），
+   * 故此前只能"重启运行时 + 重新 initialize"。
+   *
+   * 本仓库的 `vendor-sdk-server.mjs` 已把 `session/selectModel` vendor 进去，
+   * 这里优先走它 —— 代价从「重启约 1s + 必须等无在途回合」降到「一次 RPC」。
+   *
+   * ## 兜底：重启运行时
+   *
+   * 目标镜像若是**旧构建**（没有该 vendor 方法）或所有会话都切失败，退回原路径：
+   * 先 cancel 释放 write handle → close → 下次 ensureStarted 用新路由握手。
    *
    * 幂等：目标与当前一致时直接返回。
    */
   private async switchRoute(providerID: string, modelID: string): Promise<void> {
     if (this.switching === true) return;
+    const targetRoute = `${providerID}/${modelID}`;
+    if (`${this.options.provider ?? ''}/${this.options.model ?? ''}` === targetRoute) {
+      return;
+    }
     this.switching = true;
     try {
+      // ══ 首选：运行期换模型（vendor 的 session/selectModel，不重启）══════
+      const sessionIds = [...this.sessions.keys()];
+      if (this.client.isRunning && sessionIds.length > 0) {
+        this.logger.info(
+          `[dsh-driver] 模型路由切换：${this.options.provider}/${this.options.model} → ${targetRoute}（selectModel 运行期生效）`,
+        );
+        let applied = 0;
+        for (const sessionId of sessionIds) {
+          try {
+            await this.client.request(
+              'session/selectModel',
+              { sessionId, provider: providerID, model: modelID },
+              15_000,
+            );
+            applied += 1;
+          } catch (err) {
+            // 单个会话切换失败（例如该会话尚未在 DSH 侧真正建立）不阻断其它会话
+            this.logger.warn(
+              `[dsh-driver] selectModel 失败 session=${sessionId}：${(err as Error).message}`,
+            );
+          }
+        }
+        if (applied > 0) {
+          this.options.provider = providerID;
+          this.options.model = modelID;
+          this.logger.info(
+            `[dsh-driver] 模型路由已切换（${applied}/${sessionIds.length} 个会话生效，**运行时未重启**）`,
+          );
+          return;
+        }
+        this.logger.warn(
+          '[dsh-driver] selectModel 全部失败（目标镜像可能无该 vendor 方法）→ 回退重启运行时',
+        );
+      }
+      // ══ 兜底：重启运行时（无会话 / 旧构建 / 全部失败）══════════════
       this.logger.info(
-        `[dsh-driver] 模型路由切换：${this.options.provider}/${this.options.model} → ${providerID}/${modelID}（重启运行时）`,
+        `[dsh-driver] 模型路由切换：${this.options.provider}/${this.options.model} → ${targetRoute}（重启运行时）`,
       );
       // ① 先停掉所有活跃回合并等它们收口：DSH 的会话有 **write handle 独占锁**
       //    （实测并发写会报 `session "..." is already owned by an active write handle`）。
