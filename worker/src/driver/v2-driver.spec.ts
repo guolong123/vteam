@@ -1729,11 +1729,32 @@ async function bootRealV2Server(
   }
   const port = await getRandomFreePort();
   const password = options.password ?? 't9-contract-test-pw';
+  // ⚠️ **必须把 opencode 的 HOME/XDG 指到可写临时目录**。
+  //
+  // 否则 serve 启动即崩（实测）：它要写 `<HOME>/.local/share/opencode/log/opencode.log`，
+  // 而沙箱/CI 往往不允许写宿主 HOME ⇒ 进程 exit=1，全套契约测试假红：
+  //   PlatformError: Unknown: FileSystem.open (/Users/xxx/.local/share/opencode/log/opencode.log)
+  //
+  // 顺带得到**隔离收益**：宿主的全局 opencode 配置（provider/agent/插件）不再进入
+  // 测试作用域，契约测试因此不受本机环境影响。
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-contract-home-'));
+  const isolatedEnv: NodeJS.ProcessEnv = {
+    HOME: isolatedHome,
+    XDG_DATA_HOME: path.join(isolatedHome, '.local', 'share'),
+    XDG_CONFIG_HOME: path.join(isolatedHome, '.config'),
+    XDG_CACHE_HOME: path.join(isolatedHome, '.cache'),
+    XDG_STATE_HOME: path.join(isolatedHome, '.local', 'state'),
+  };
   const child: ChildProcess = spawn(
     opencodeBinary,
     ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
     {
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password, ...(options.env ?? {}) },
+      env: {
+        ...process.env,
+        ...isolatedEnv,
+        OPENCODE_SERVER_PASSWORD: password,
+        ...(options.env ?? {}),
+      },
       cwd: options.cwd,
       // detached → 独立进程组，kill(-pid) 整体清理
       detached: true,
@@ -1798,6 +1819,12 @@ async function bootRealV2Server(
           resolve();
         });
       });
+      // 清掉隔离 HOME（serve 已退出，文件不会再被写）
+      try {
+        fs.rmSync(isolatedHome, { recursive: true, force: true });
+      } catch {
+        // 清理失败不影响测试结论
+      }
     },
   };
 }
