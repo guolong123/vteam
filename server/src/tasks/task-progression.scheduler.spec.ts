@@ -23,7 +23,11 @@ describe('TaskProgressionScheduler', () => {
     message: { create: jest.Mock; findFirst: jest.Mock };
     issue: { findFirst: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
+    session: { findUnique: jest.Mock };
     team: { findUnique: jest.Mock };
+    taskMessageChannel: { findMany: jest.Mock };
+    teamMessageChannel: { findMany: jest.Mock };
+    messageChannel: { findMany: jest.Mock };
     trigger: {
       findUnique: jest.Mock;
       findMany: jest.Mock;
@@ -109,6 +113,10 @@ describe('TaskProgressionScheduler', () => {
       message: { create: jest.fn(), findFirst: jest.fn() },
       issue: { findFirst: jest.fn() },
       agentQuestion: { findUnique: jest.fn() },
+      session: { findUnique: jest.fn() },
+      taskMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      teamMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      messageChannel: { findMany: jest.fn().mockResolvedValue([]) },
       team: {
         findUnique: jest
           .fn()
@@ -462,6 +470,134 @@ describe('TaskProgressionScheduler', () => {
       expect(call.taskId).toBeNull();
       expect(call.teamId).toBe('tm_9');
       expect(call.text).toContain('【托管确认】');
+    });
+
+    it('团队域自环（主 Agent 本人权限）→ 委托 MessageQuestionDispatcher 发卡片，不转发主 Agent', async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      const listener = realtime.subscribe.mock.calls[0][0];
+      const questionDispatcher = {
+        dispatchQuestionCard: jest.fn().mockResolvedValue(true),
+      };
+      (scheduler as any).questionDispatcher = questionDispatcher;
+      prisma.agentQuestion.findUnique.mockResolvedValue({
+        id: 'aq_9',
+        requestId: 'per_9',
+        kind: 'permission',
+        content: { title: 'external_directory', pattern: '/root/*' },
+        status: 'pending',
+        sessionId: 's_main',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findUnique.mockResolvedValue({
+        teamMemberId: 'tmm_main',
+      });
+
+      await listener({
+        type: 'agent.question',
+        payload: {
+          managed: true,
+          question: { taskId: 'team:tm_9', requestId: 'per_9' },
+          taskId: 'team:tm_9',
+          teamId: 'tm_9',
+        },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(questionDispatcher.dispatchQuestionCard).toHaveBeenCalledTimes(1);
+      expect(questionDispatcher.dispatchQuestionCard.mock.calls[0][0]).toBe(
+        'team:tm_9',
+      );
+      // 自环不转发主 Agent（主 Agent 即请求方，转发会死锁）
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('团队域自环卡片未送达（无绑定渠道）→ 不再打印「已委托」假成功，记 warn', async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      const listener = realtime.subscribe.mock.calls[0][0];
+      const questionDispatcher = {
+        dispatchQuestionCard: jest.fn().mockResolvedValue(false),
+      };
+      (scheduler as any).questionDispatcher = questionDispatcher;
+      const warnSpy = jest.spyOn((scheduler as any).logger, 'warn');
+      prisma.agentQuestion.findUnique.mockResolvedValue({
+        id: 'aq_9',
+        requestId: 'per_9',
+        kind: 'permission',
+        content: { title: 'external_directory' },
+        status: 'pending',
+        sessionId: 's_main',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findUnique.mockResolvedValue({
+        teamMemberId: 'tmm_main',
+      });
+
+      await listener({
+        type: 'agent.question',
+        payload: {
+          managed: true,
+          question: { taskId: 'team:tm_9', requestId: 'per_9' },
+          taskId: 'team:tm_9',
+          teamId: 'tm_9',
+        },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('自环卡片未送达'),
+      );
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('团队域自环且 MessageQuestionDispatcher 缺席 → 回退按 team_message_channels 解析（不误查任务绑定）', async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      const listener = realtime.subscribe.mock.calls[0][0];
+      (scheduler as any).questionDispatcher = undefined;
+      prisma.agentQuestion.findUnique.mockResolvedValue({
+        id: 'aq_9',
+        requestId: 'per_9',
+        kind: 'permission',
+        content: { title: 'external_directory' },
+        status: 'pending',
+        sessionId: 's_main',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findUnique.mockResolvedValue({
+        teamMemberId: 'tmm_main',
+      });
+      prisma.teamMessageChannel.findMany.mockResolvedValue([
+        { messageChannelId: 'mc_9' },
+      ]);
+      prisma.messageChannel.findMany.mockResolvedValue([
+        { id: 'mc_9', type: 'wecom_aibot', enabled: true },
+      ]);
+      prisma.taskMessageChannel.findMany.mockClear();
+
+      await listener({
+        type: 'agent.question',
+        payload: {
+          managed: true,
+          question: { taskId: 'team:tm_9', requestId: 'per_9' },
+          taskId: 'team:tm_9',
+          teamId: 'tm_9',
+        },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(prisma.teamMessageChannel.findMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_9' },
+        select: { messageChannelId: true },
+      });
+      expect(prisma.taskMessageChannel.findMany).not.toHaveBeenCalled();
     });
 
     it('resolved=true（收敛事件）不路由', async () => {

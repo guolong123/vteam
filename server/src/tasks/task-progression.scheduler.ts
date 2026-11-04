@@ -17,6 +17,7 @@ import {
 } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { ISSUE_STATUS } from '../issues/issues.constants';
+import { parseTeamScopedTaskId } from '../message-channels/message-channel.constants';
 import {
   TRIGGER_KIND,
   buildTriggerDedupKey,
@@ -153,7 +154,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       dispatchQuestionCard: (
         taskId: string,
         q: { id: string; requestId?: string; kind: string; content: any },
-      ) => Promise<void>;
+      ) => Promise<boolean>;
     },
     // todo-8：TriggerService 可选注入（缺席时仅内存循环工作，spec 旧用例零 provider 可编译）。
     @Optional()
@@ -947,15 +948,23 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
         );
         if (this.questionDispatcher) {
           try {
-            await this.questionDispatcher.dispatchQuestionCard(taskId, {
-              id: row.id,
-              requestId: row.requestId,
-              kind: row.kind,
-              content: row.content,
-            });
-            this.logger.log(
-              `[progression] 自环卡片已委托 MessageQuestionDispatcher taskId=${taskId} requestId=${row.requestId}`,
-            );
+            const delivered =
+              await this.questionDispatcher.dispatchQuestionCard(taskId, {
+                id: row.id,
+                requestId: row.requestId,
+                kind: row.kind,
+                content: row.content,
+              });
+            if (delivered) {
+              this.logger.log(
+                `[progression] 自环卡片已送达 MessageQuestionDispatcher taskId=${taskId} requestId=${row.requestId}`,
+              );
+            } else {
+              // 不再打印「已委托」假成功（P0：卡片没发出去却看起来成功，事故被掩盖 3.5h）
+              this.logger.warn(
+                `[progression] 自环卡片未送达（团队/任务无可用企微渠道或发送失败）taskId=${taskId} requestId=${row.requestId}`,
+              );
+            }
           } catch (err) {
             this.logger.error(
               `[progression] 自环卡片委托失败 taskId=${taskId}: ${this.describeError(err)}`,
@@ -1084,21 +1093,34 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * 自环卡片回退（MessageQuestionDispatcher 缺席时的降级路径）。
+   *
+   * 团队域（taskId=`team:<teamId>`）必须查 `team_message_channels`——按任务主键查
+   * `task_message_channels` 必然 0 行，会在告警里把「团队已绑定」误报成「无绑定」。
+   * 注意：本方法没有 adapter registry，只解析渠道并记录降级告警，不直接发卡；
+   * 生产装配下 MessageQuestionDispatcher 始终可用，只有测试/异常装配才会走到这里。
+   */
   private async fallbackWecomCard(
     taskId: string,
     row: { id: string; requestId: string; kind: string; content: unknown },
   ): Promise<void> {
+    const teamScopedId = parseTeamScopedTaskId(taskId);
     let links: Array<{ messageChannelId: string }>;
     try {
-      links = await (this.prisma as any).taskMessageChannel.findMany({
-        where: { taskId },
+      links = await (this.prisma as any)[
+        teamScopedId ? 'teamMessageChannel' : 'taskMessageChannel'
+      ].findMany({
+        where: teamScopedId ? { teamId: teamScopedId } : { taskId },
         select: { messageChannelId: true },
       });
     } catch {
       return;
     }
     if (!links || links.length === 0) {
-      this.logger.warn(`[progression] 自环无 wecom 渠道绑定 taskId=${taskId}`);
+      this.logger.warn(
+        `[progression] 自环无 wecom 渠道绑定 taskId=${taskId}${teamScopedId ? `（团队 ${teamScopedId} 未绑定团队消息渠道）` : ''}`,
+      );
       return;
     }
     const ids = links.map((l) => l.messageChannelId).filter(Boolean);
@@ -1117,8 +1139,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       );
       return;
     }
-    this.logger.log(
-      `[progression] 自环尝试直接发卡 taskId=${taskId} requestId=${row.requestId} channels=${channels.length}`,
+    this.logger.warn(
+      `[progression] 自环卡片回退路径无法直接发送（MessageQuestionDispatcher 未装配）taskId=${taskId} requestId=${row.requestId} channels=${channels.length}`,
     );
   }
 

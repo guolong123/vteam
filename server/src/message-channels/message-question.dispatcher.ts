@@ -14,7 +14,62 @@ import {
   MESSAGE_CHANNEL_TYPES,
   DELIVERY_DIRECTIONS,
   DELIVERY_STATUS,
+  parseTeamScopedTaskId,
 } from './message-channel.constants';
+
+/**
+ * 问题/权限卡片的纯文本兜底文案（卡片发不出去时保证用户侧有感知）。
+ *
+ * 与通知渠道期的文案同口径：权限请求带标题与路径 pattern（截断防刷屏），
+ * 单问题带题面，多问题只报数量。**不含任何交互动作**——兜底只负责"告知去处理"，
+ * 真正的批准/答复仍走 Web 弹窗或 opencode 原生页面（应答需要 aqId/requestId 上下文）。
+ */
+export function buildQuestionFallbackText(question: {
+  kind?: string;
+  content?: any;
+}): string {
+  const kind = question.kind ?? 'question';
+  const content = question.content ?? {};
+  if (kind === 'permission') {
+    const title =
+      typeof content.title === 'string' && content.title.trim().length > 0
+        ? content.title.trim()
+        : '权限请求';
+    const patternRaw =
+      typeof content.pattern === 'string'
+        ? content.pattern
+        : typeof content.type === 'string'
+          ? content.type
+          : '';
+    const pattern = String(patternRaw ?? '').slice(0, 512);
+    return `【权限请求】${title}${pattern ? ` - ${pattern}` : ''}（请前往 Web / opencode 页面处理）`;
+  }
+  const questions: any[] = Array.isArray(content.questions)
+    ? content.questions
+    : [];
+  if (questions.length > 1) {
+    return `【待确认】${questions.length} 个问题待处理，请前往 Web 处理`;
+  }
+  if (questions.length === 1) {
+    const q0 = questions[0] ?? {};
+    const text =
+      typeof q0.question === 'string'
+        ? q0.question
+        : typeof q0.header === 'string'
+          ? q0.header
+          : '';
+    return `【待确认】${text ? text.slice(0, 200) : '有 1 个问题待处理'}（请前往 Web 处理）`;
+  }
+  const fallback =
+    typeof content.text === 'string'
+      ? content.text
+      : typeof content.header === 'string'
+        ? content.header
+        : typeof content.title === 'string'
+          ? content.title
+          : '';
+  return `【待确认】${fallback ? fallback.slice(0, 200) : '有确认请求待处理'}（请前往 Web 处理）`;
+}
 
 @Injectable()
 export class MessageQuestionDispatcher
@@ -135,20 +190,35 @@ export class MessageQuestionDispatcher
     }
   }
 
+  /**
+   * 定向给任务/团队域发问题卡片（托管自环等平台内部路径调用）。
+   *
+   * 返回语义（P0：主 Agent 权限卡片静默丢失 aq_0000000478）：
+   * `true` = 至少一个渠道送达（卡片成功，或卡片失败但文本兜底成功）；
+   * `false` = 无绑定渠道 / 全部渠道发送失败——调用方据此记告警，不再打印「已委托」假成功日志。
+   */
   async dispatchQuestionCard(
     taskId: string,
     questionRow: { id: string; requestId?: string; kind: string; content: any },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const channels = await this.resolveWecomChannelsForTask(taskId);
     if (channels.length === 0) {
       this.logger.warn(
         `dispatchQuestionCard no wecom channels bound taskId=${taskId} aqId=${questionRow.id}`,
       );
-      return;
+      return false;
     }
+    let delivered = 0;
     for (const ch of channels) {
-      await this.dispatchToChannel(ch, questionRow);
+      const ok = await this.dispatchToChannel(ch, questionRow);
+      if (ok) delivered += 1;
     }
+    if (delivered === 0) {
+      this.logger.warn(
+        `dispatchQuestionCard all channels failed taskId=${taskId} aqId=${questionRow.id} channels=${channels.length}`,
+      );
+    }
+    return delivered > 0;
   }
 
   /**
@@ -186,18 +256,18 @@ export class MessageQuestionDispatcher
     }
   }
 
+  /**
+   * 解析问题/权限卡片的企微渠道（域分流：任务域查任务绑定，团队域查团队绑定）。
+   *
+   * `team:<teamId>`（团队直聊无任务）是团队域占位，不是任务主键——
+   * 必须走 `team_message_channels`（团队绑定），否则查任务绑定必然 0 行，
+   * 卡片静默丢失（生产事故 aq_0000000478：主 Agent 权限请求挂死 3.5h 无通知）。
+   */
   private async resolveWecomChannelsForTask(taskId: string): Promise<any[]> {
-    let links: Array<{ messageChannelId: string }>;
-    try {
-      links = await (this.prisma as any).taskMessageChannel.findMany({
-        where: { taskId },
-        select: { messageChannelId: true },
-      });
-    } catch {
-      return [];
-    }
-    if (!links || links.length === 0) return [];
-    const ids = links.map((l) => l.messageChannelId).filter(Boolean);
+    const teamScopedId = parseTeamScopedTaskId(taskId);
+    const ids = teamScopedId
+      ? await this.teamBoundChannelIds(teamScopedId)
+      : await this.taskBoundChannelIds(taskId);
     if (ids.length === 0) return [];
     let channels: any[];
     try {
@@ -211,94 +281,223 @@ export class MessageQuestionDispatcher
     } catch {
       return [];
     }
-    return channels;
+    return channels ?? [];
   }
 
+  /** 任务域企微渠道 id（task_message_channels；读失败/未绑定 → 空）。 */
+  private async taskBoundChannelIds(taskId: string): Promise<string[]> {
+    let links: Array<{ messageChannelId: string }>;
+    try {
+      links = await (this.prisma as any).taskMessageChannel.findMany({
+        where: { taskId },
+        select: { messageChannelId: true },
+      });
+    } catch {
+      return [];
+    }
+    if (!links || links.length === 0) return [];
+    return links.map((l) => l.messageChannelId).filter(Boolean);
+  }
+
+  /** 团队域企微渠道 id（team_message_channels；团队直聊无任务的唯一绑定源）。 */
+  private async teamBoundChannelIds(teamId: string): Promise<string[]> {
+    let links: Array<{ messageChannelId: string }>;
+    try {
+      links = await (this.prisma as any).teamMessageChannel.findMany({
+        where: { teamId },
+        select: { messageChannelId: true },
+      });
+    } catch {
+      return [];
+    }
+    if (!links || links.length === 0) return [];
+    return links.map((l) => l.messageChannelId).filter(Boolean);
+  }
+
+  /**
+   * 向单渠道送卡片（按渠道串行排队）。
+   *
+   * 返回语义：`true` = 卡片送达，或卡片失败后纯文本兜底送达；`false` = 两者都没成。
+   * 兜底动机（P0，aq_0000000478 同类事故）：企微模板卡片可能被机器人侧拒绝
+   * （权限/机型限制/errcode），若无兜底，用户侧完全无感、会话静默挂死在权限上。
+   * 兜底只发「请前往 Web/opencode 处理」一句话，不承载应答动作。
+   */
   private async dispatchToChannel(
     channel: any,
     question: { id: string; kind: string; content: any },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const prev = this.queues.get(channel.id) ?? Promise.resolve();
-    const next = prev
-      .then(async () => {
-        let deliveryId: string | null = null;
+    const run = prev.then(() => this.dispatchToChannelOnce(channel, question));
+    // 队列只跟踪「上一单已结束」，不传播结果（异常已在 Once 内收敛为 false）。
+    this.queues.set(
+      channel.id,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  }
+
+  /** 单次投递（脱离队列的实现体）：卡片失败 → 文本兜底；任何异常都不外抛。 */
+  private async dispatchToChannelOnce(
+    channel: any,
+    question: { id: string; kind: string; content: any },
+  ): Promise<boolean> {
+    let adapter: WecomAibotAdapter | undefined;
+    let deliveryId: string | null = null;
+    try {
+      const logRes = await this.delivery.log(
+        DELIVERY_DIRECTIONS.outbound,
+        'question_card',
+        'pending',
+        { channelId: channel.id, payload: question as unknown },
+      );
+      deliveryId = (logRes as { id: string })?.id ?? null;
+
+      adapter = this.registry.get(MESSAGE_CHANNEL_TYPES.wecom_aibot) as
+        WecomAibotAdapter | undefined;
+      if (!adapter || typeof (adapter as any).sendQuestionCard !== 'function') {
+        throw new Error(
+          `adapter not found for type ${MESSAGE_CHANNEL_TYPES.wecom_aibot}`,
+        );
+      }
+      const resolved = {
+        id: channel.id,
+        type: channel.type,
+        config: (channel.config as Record<string, any>) ?? {},
+        secrets: (channel.secrets as Record<string, any>) ?? {},
+        enabled: channel.enabled ?? true,
+      };
+      const res = await (adapter as any).sendQuestionCard(resolved, question);
+      if (deliveryId) {
         try {
-          const logRes = await this.delivery.log(
+          await this.delivery.finish(
+            deliveryId,
+            DELIVERY_STATUS.ok,
+            null,
+            question as unknown,
+            res as unknown,
+          );
+        } catch {}
+      }
+      this.logger.log(
+        `wecom question card sent channel=${channel.id} aqId=${question.id} kind=${question.kind}`,
+      );
+      return true;
+    } catch (e) {
+      const errMsg = (e as Error).message ?? String(e);
+      this.logger.error(
+        `dispatchToChannel failed channel=${channel.id} aqId=${question.id}: ${errMsg}`,
+      );
+      try {
+        if (deliveryId) {
+          await this.delivery.finish(
+            deliveryId,
+            DELIVERY_STATUS.failed,
+            errMsg,
+            question as unknown,
+            null,
+          );
+        } else {
+          await this.delivery.log(
             DELIVERY_DIRECTIONS.outbound,
             'question_card',
-            'pending',
-            { channelId: channel.id, payload: question as unknown },
+            DELIVERY_STATUS.failed,
+            {
+              channelId: channel.id,
+              error: errMsg,
+              payload: question as unknown,
+            },
           );
-          deliveryId = (logRes as { id: string })?.id ?? null;
-
-          const adapter = this.registry.get(
-            MESSAGE_CHANNEL_TYPES.wecom_aibot,
-          ) as WecomAibotAdapter | undefined;
-          if (
-            !adapter ||
-            typeof (adapter as any).sendQuestionCard !== 'function'
-          ) {
-            throw new Error(
-              `adapter not found for type ${MESSAGE_CHANNEL_TYPES.wecom_aibot}`,
-            );
-          }
-          const resolved = {
-            id: channel.id,
-            type: channel.type,
-            config: (channel.config as Record<string, any>) ?? {},
-            secrets: (channel.secrets as Record<string, any>) ?? {},
-            enabled: channel.enabled ?? true,
-          };
-          const res = await (adapter as any).sendQuestionCard(
-            resolved,
-            question,
-          );
-          if (deliveryId) {
-            try {
-              await this.delivery.finish(
-                deliveryId,
-                DELIVERY_STATUS.ok,
-                null,
-                question as unknown,
-                res as unknown,
-              );
-            } catch {}
-          }
-          this.logger.log(
-            `wecom question card sent channel=${channel.id} aqId=${question.id} kind=${question.kind}`,
-          );
-        } catch (e) {
-          const errMsg = (e as Error).message ?? String(e);
-          this.logger.error(
-            `dispatchToChannel failed channel=${channel.id} aqId=${question.id}: ${errMsg}`,
-          );
-          try {
-            if (deliveryId) {
-              await this.delivery.finish(
-                deliveryId,
-                DELIVERY_STATUS.failed,
-                errMsg,
-                question as unknown,
-                null,
-              );
-            } else {
-              await this.delivery.log(
-                DELIVERY_DIRECTIONS.outbound,
-                'question_card',
-                DELIVERY_STATUS.failed,
-                {
-                  channelId: channel.id,
-                  error: errMsg,
-                  payload: question as unknown,
-                },
-              );
-            }
-          } catch {}
         }
-      })
-      .catch(() => {});
+      } catch {}
+      return this.sendQuestionFallbackText(channel, question, adapter, errMsg);
+    }
+  }
 
-    this.queues.set(channel.id, next);
-    return next;
+  /**
+   * 卡片不可达时的纯文本兜底（第二道保险）。
+   *
+   * 只走 `sendNewMessage`（渠道级 lastChatid 已由入站消息维护），不发交互卡片——
+   * 保证用户至少知道「有权限/问题等你去 Web/opencode 处理」。
+   * 失败仅记日志与投递流水（kind='question_card_fallback'），不抛错。
+   */
+  private async sendQuestionFallbackText(
+    channel: any,
+    question: { id: string; kind: string; content: any },
+    adapter: WecomAibotAdapter | undefined,
+    cardError: string,
+  ): Promise<boolean> {
+    const send = (
+      adapter as unknown as
+        | {
+            sendNewMessage?: (
+              channelId: string,
+              text: string,
+            ) => Promise<boolean>;
+          }
+        | undefined
+    )?.sendNewMessage;
+    if (typeof send !== 'function') return false;
+    const text = buildQuestionFallbackText(question);
+    try {
+      const ok = await send.call(adapter, channel.id, text);
+      if (ok) {
+        this.logger.warn(
+          `question card fallback text sent channel=${channel.id} aqId=${question.id} kind=${question.kind} cardError=${cardError}`,
+        );
+        await this.logFallbackDelivery(
+          channel.id,
+          DELIVERY_STATUS.ok,
+          null,
+          question,
+        );
+        return true;
+      }
+      this.logger.error(
+        `question card fallback text not sent channel=${channel.id} aqId=${question.id}（sendNewMessage 返回 false）`,
+      );
+      await this.logFallbackDelivery(
+        channel.id,
+        DELIVERY_STATUS.failed,
+        'sendNewMessage returned false',
+        question,
+      );
+      return false;
+    } catch (e) {
+      const errMsg = (e as Error).message ?? String(e);
+      this.logger.error(
+        `question card fallback text failed channel=${channel.id} aqId=${question.id}: ${errMsg}`,
+      );
+      await this.logFallbackDelivery(
+        channel.id,
+        DELIVERY_STATUS.failed,
+        errMsg,
+        question,
+      );
+      return false;
+    }
+  }
+
+  /** 兜底文本的投递流水（失败静默：日志主路径已记）。 */
+  private async logFallbackDelivery(
+    channelId: string,
+    status: string,
+    error: string | null,
+    question: { id: string; kind: string; content: any },
+  ): Promise<void> {
+    try {
+      await this.delivery.log(
+        DELIVERY_DIRECTIONS.outbound,
+        'question_card_fallback',
+        status,
+        {
+          channelId,
+          ...(error ? { error } : {}),
+          payload: question as unknown,
+        },
+      );
+    } catch {}
   }
 }
