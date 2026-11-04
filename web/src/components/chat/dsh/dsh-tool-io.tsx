@@ -22,8 +22,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { CodeBlock, ImageLightbox } from "@deepseek-ai/dsh-client-ui-primitives";
+import { CommandText, ImageLightbox } from "@deepseek-ai/dsh-client-ui-primitives";
 import { getAuthToken } from "@/lib/api";
+import { DshToolBlocks, commandOf } from "./dsh-tool-blocks";
 import { DSH_COMMON_ZH } from "./dsh-labels";
 
 /** 输入解析结果：对象 → 键值对；非对象 → 原样单值。 */
@@ -164,6 +165,8 @@ function useAuthedImageUrl(filePath: string): string | null {
 }
 
 export interface DshToolIOProps {
+  /** 工具名（决定用哪个专用视图）。 */
+  toolName: string;
   input: string;
   output: string;
 }
@@ -174,8 +177,14 @@ export interface DshToolIOProps {
  * 输出是图片时：缩略图 + 元信息（尺寸/大小），点击开灯箱。
  * 输出是文本时：用 `CodeBlock`（无 header）显示，拿到 DSH 的代码排版与复制能力。
  */
-export function DshToolIO({ input, output }: DshToolIOProps) {
+export function DshToolIO({ toolName, input, output }: DshToolIOProps) {
   const inputEntries = useMemo(() => parseToolInput(input), [input]);
+  /**
+   * 命令类工具（bash/pwsh）把命令**单独提出来**渲染成一行命令块 ——
+   * 对齐 DSH：`CommandText` 是横向滚动的一行命令，而不是键值列表里的一串 JSON。
+   * 剩余的非命令字段（如 description）不再重复展示（DSH 也不展示）。
+   */
+  const command = useMemo(() => commandOf(input), [input]);
   const outputView = useMemo(() => parseToolOutput(output), [output]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -186,7 +195,25 @@ export function DshToolIO({ input, output }: DshToolIOProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {inputEntries.length > 0 ? (
+      {command !== null ? (
+        <div data-testid="dsh-tool-input">
+          <div style={{ opacity: 0.6, fontSize: 11, marginBottom: 2 }}>输入</div>
+          <div
+            data-testid="dsh-tool-command"
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              background: "var(--dsw-alias-markdown-code-block)",
+              fontFamily:
+                "var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)",
+              fontSize: 12,
+              lineHeight: "18px",
+            }}
+          >
+            <CommandText text={command} label="命令" />
+          </div>
+        </div>
+      ) : inputEntries.length > 0 ? (
         <div data-testid="dsh-tool-input">
           <div style={{ opacity: 0.6, fontSize: 11, marginBottom: 2 }}>输入</div>
           <div
@@ -277,12 +304,9 @@ export function DshToolIO({ input, output }: DshToolIOProps) {
       ) : outputView.text.length > 0 ? (
         <div data-testid="dsh-tool-output">
           <div style={{ opacity: 0.6, fontSize: 11, margin: "0 0 2px" }}>输出</div>
-          <CodeBlock
-            code={outputView.text.slice(0, 2000)}
-            showHeader={false}
-            copyLabel={DSH_COMMON_ZH.copy}
-            copiedLabel={DSH_COMMON_ZH.copied}
-          />
+          {/* 专用视图（read/grep/bash/diff），解析不出来自动回退文本代码块 */}
+          {/* 传**原始** output：专用视图要自己认 <type>file</type> 外壳 */}
+          <DshToolBlocks name={toolName} input={input} output={output} />
         </div>
       ) : null}
     </div>

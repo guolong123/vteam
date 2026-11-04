@@ -256,6 +256,12 @@ export const PAGES: PageTestidRef[] = [
       "dsh-tool-output",
       "dsh-body",
       "dsh-markdown",
+      // 过程折叠组（连续 reasoning/tool 收成一组，默认折叠降噪）
+      "dsh-process-group",
+      "dsh-process-summary",
+      "dsh-process-body",
+      // 命令类工具的入参命令块（bash/pwsh 把 command 单独提出来渲染）
+      "dsh-tool-command",
       "agent-worker-chip-<instanceId>",
       "agent-worker-running-<instanceId>",
       "agent-worker-option-<instanceId>-follow-team",

@@ -30,6 +30,7 @@ import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import type { RoleKey } from "@/src/theme/tokens";
 import { space } from "@/src/theme/tokens";
+import type { MarkdownLabels } from "@deepseek-ai/dsh-client-ui-primitives";
 import { ChatBubble, MessageIdentity } from "@/src/components/ui";
 import type { ChatBubbleAttachment } from "@/src/components/ui";
 import { MsgAborted } from "@/src/components/chat/msg-aborted";
@@ -38,6 +39,8 @@ import { DshMarkdown } from "./dsh-markdown";
 import { DshReasoning } from "./dsh-reasoning";
 import { DshToolCard } from "./dsh-tool-card";
 import { toDshBlocks } from "./dsh-parts-adapter";
+import type { DshBlock } from "./dsh-parts-adapter";
+import { DshProcessGroup } from "./dsh-process-group";
 import { useMarkdownLabels } from "./dsh-labels";
 
 /** 附属行容器：过程片段与正文挂在共享身份栏之下，左缩进 = 头像 28 + 身份栏间距 8。 */
@@ -144,45 +147,7 @@ export function DshMessage({
     >
       {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
       <div style={secondaryRows}>
-        {blocks.map((block) => {
-          switch (block.kind) {
-            case "reasoning":
-              return (
-                <DshReasoning
-                  key={block.key}
-                  text={block.text}
-                  running={block.running}
-                  labels={labels}
-                />
-              );
-            case "tool":
-              return (
-                <DshToolCard
-                  key={block.key}
-                  name={block.name}
-                  status={block.status}
-                  input={block.input}
-                  output={block.output}
-                />
-              );
-            case "text":
-              return (
-                <div key={block.key} data-testid="dsh-body" style={{ minWidth: 0 }}>
-                  <DshMarkdown text={block.text} streaming={block.streaming} labels={labels} />
-                </div>
-              );
-            case "error":
-              return (
-                <MsgError
-                  key={block.key}
-                  kind={block.errorKind}
-                  detail={block.detail}
-                />
-              );
-            default:
-              return null;
-          }
-        })}
+        {renderRuns(blocks, streaming, labels)}
         {attachment ? (
           <ChatBubble
             showIdentity={false}
@@ -198,4 +163,87 @@ export function DshMessage({
       </div>
     </div>
   );
+}
+
+/** 一个「过程块」（reasoning / tool / error）—— 会被收进过程组。 */
+function isProcessBlock(block: DshBlock): boolean {
+  return block.kind === "reasoning" || block.kind === "tool" || block.kind === "error";
+}
+
+/** 单个块渲染（过程组内外共用）。 */
+function renderBlock(block: DshBlock, labels: MarkdownLabels) {
+  switch (block.kind) {
+    case "reasoning":
+      return (
+        <DshReasoning key={block.key} text={block.text} running={block.running} labels={labels} />
+      );
+    case "tool":
+      return (
+        <DshToolCard
+          key={block.key}
+          name={block.name}
+          status={block.status}
+          input={block.input}
+          output={block.output}
+        />
+      );
+    case "text":
+      return (
+        <div key={block.key} data-testid="dsh-body" style={{ minWidth: 0 }}>
+          <DshMarkdown text={block.text} streaming={block.streaming} labels={labels} />
+        </div>
+      );
+    case "error":
+      return <MsgError key={block.key} kind={block.errorKind} detail={block.detail} />;
+    default:
+      return null;
+  }
+}
+
+/**
+ * 按「连续过程片段」分组渲染。
+ *
+ * - 连续 **≥2** 个过程块 → 合成一个可展开的 `DshProcessGroup`（降噪的主要来源）；
+ * - 单个过程块 → 原样平铺（为了一个思考行套一层折叠反而更难读）；
+ * - 正文块（text）永远平铺，保持「答案始终可见」。
+ *
+ * 为什么按**连续段**而不是「整轮一个组」：块之间可能夹着正文（中途汇报结论），
+ * 按连续段分组既降噪又不打乱时间线顺序。
+ */
+function renderRuns(blocks: DshBlock[], streaming: boolean, labels: MarkdownLabels) {
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    const block = blocks[i];
+    if (!isProcessBlock(block)) {
+      out.push(renderBlock(block, labels));
+      i += 1;
+      continue;
+    }
+    // 收集一段连续的过程块
+    const run: DshBlock[] = [];
+    while (i < blocks.length) {
+      const current = blocks[i];
+      if (!isProcessBlock(current)) break;
+      run.push(current);
+      i += 1;
+    }
+    if (run.length === 1) {
+      out.push(renderBlock(run[0], labels));
+      continue;
+    }
+    const toolCount = run.filter((b) => b.kind === "tool").length;
+    const reasoningCount = run.filter((b) => b.kind === "reasoning").length;
+    out.push(
+      <DshProcessGroup
+        key={`process-${run[0].key}`}
+        toolCount={toolCount}
+        reasoningCount={reasoningCount}
+        streaming={streaming}
+      >
+        {run.map((b) => renderBlock(b, labels))}
+      </DshProcessGroup>,
+    );
+  }
+  return out;
 }

@@ -231,7 +231,7 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
         {open && expandable ? (
           <div data-testid="dsh-tool-body" style={{ padding: "4px 0 8px 22px" }}>
             {/* 输入结构化 / 输出解包 / 读图渲染缩略图 —— 细节见 dsh-tool-io.tsx */}
-            <DshToolIO input={input} output={output} />
+            <DshToolIO toolName={name} input={input} output={output} />
           </div>
         ) : null}
       </DisclosureRow>
