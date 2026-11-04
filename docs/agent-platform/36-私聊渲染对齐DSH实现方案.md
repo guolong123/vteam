@@ -1042,3 +1042,56 @@ worker 全量 1352 → **1375 通过**（新增 3 条），失败仍是同一批
 
 教训：**验证前先 `grep` 编译产物确认修复代码真的在里面**（本次用
 `grep -c envelopeSessionId dist/driver/dsh-driver.js` 确认 = 5）。
+
+---
+
+## 14. 试用栈追加 opencode 引擎 worker（2026-11-04）
+
+目标：试用环境同时挂 **dsh** 与 **opencode** 两个引擎的 worker，验证 vteam 的双引擎
+能力（前文 §3.4 的兼容性矩阵此前只有 dsh 侧实测）。
+
+### 14.1 怎么加
+
+| 步骤 | 做法 |
+|---|---|
+| 镜像 | 复用 `vteam-worker:latest`（自带 `opencode v2.0.32` CLI，布局同为 `/app/dist`），用 `docker cp dist + commit` **只替换编译产物** —— 避开容器内 `npm ci`（内网太慢） |
+| 服务 | 试用 compose 加 `worker-opencode`：`WORKER_ADVERTISE_HOST` 必须是**同网络服务名**（控制面据此拼执行端点）、`OPENCODE_SERVER_PASSWORD` 必填（v2 恒开鉴权，为空 serve 起不来）、`OPENCODE_SERVE_PORT=4000` |
+| 凭据 | **opencode 的模型凭据走控制面下发**（`replayModelCredentials` 读 `model_credentials` → 心跳命令通道 → worker 写 `opencode.json`/`auth.json`），**不走容器 env**。故必须先在平台配置：<br>`POST /api/v1/models/providers/opencode-go/credentials {token}`<br>`PATCH /api/v1/models/providers/opencode-go {providerType:"custom", baseUrl}` |
+
+只配 key 不配 baseUrl 时，worker 会明确报：
+
+```
+credential store：provider=[opencode-go] 凭据已写入但 serve 未注册该 provider
+（既无 baseUrl 配置段也不是已知 integration）→ 该 provider 的模型不可用
+```
+
+配好 baseUrl 后热重载即生效（`opencode.json provider 段已更新`），worker 重启后
+上报 12~40 个模型，调度器开始派单。
+
+### 14.2 实测结果
+
+- worker 注册成功：`w_trial_opencode online`，engine=opencode；
+- 真实回合跑通：`[exec] 执行完成 session=ses_e5bd… model=opencode/deepseek-v4.1-flash-free text=10 chars`，
+  消息 `sent`、正文「opencode 通」；
+- 与 dsh worker 并存：平台列表同时有 `w_trial_dsh`(dsh) + `w_trial_opencode`(opencode)。
+
+### 14.3 已知缺口（**产品侧**，非 worker 问题）
+
+`opencode-go` 这条路由的网关要求请求体带 `user` 或 `safety_identifier`：
+
+```
+Upstream request failed: [invalid_request_error]
+This request requires an end-user identifier.
+Provide a non-empty `safety_identifier` (or `user`) field.
+```
+
+- dsh 引擎靠 **HTTP 头** `x-opencode-session` 满足（`DSH_SESSION_HEADER` env）；
+- opencode 引擎这边 vteam 的 provider 配置项只有 `providerType` / `baseUrl`
+  （`UpdateProviderDto`），**没有 headers、也没有默认请求体字段** ⇒ 该路由在 opencode
+  引擎上目前跑不通；
+- 手工往 worker 的 `opencode.json` 塞 `settings.headers["x-opencode-session"]` 实测
+  **无效**（网关要的是 body 字段，不是头）。
+
+**故本次验证改用 `opencode` 免费线模型**（`opencode/deepseek-v4.1-flash-free`）跑通。
+若要正式支持 `opencode-go` + opencode 引擎，需要给 provider 配置加「默认请求体字段 /
+headers」能力（建议排在 §12.4 的后续项里）。
