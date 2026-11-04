@@ -336,6 +336,14 @@ export function createDshWorkerDriver(
   //    systemHandoff 在 dsh 路径下只提供"on-disk 交接"，驱动不消费（P4 简化）。
   void systemHandoff;
 
+  // 凭据登记接线：把平台下发的 model-credentials 落到 DshCredentialApplier 的 spawn env。
+  //
+  // 为什么由池驱动暴露这个入口：dsh 的 provider 用 `apiKeyEnv` 引用 key（**进程级**），
+  // 无法像 opencode 那样写配置文件 + 热重载。旧代码在 dsh 上收到该命令会走
+  // opencode 的注入/重启路径 —— 结果必然报「serve 端点未就绪 ⇒ 重启 ⇒ 缺
+  // OPENCODE_SERVER_PASSWORD 失败」，每条噪日志都来自这里（用户实测）。
+  driver.setCredentialSink((creds) => credentials.apply(creds));
+
   console.log(
     `[worker/dsh] 驱动就绪：provider=${providerID} model=${modelID} ` +
       `patch=${patchPath} dshHome=${dshHomeDir}`,
@@ -601,8 +609,11 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
         modelPayload?.providerConfigs !== undefined
           ? `，providerConfigs=[${Object.keys(modelPayload.providerConfigs).join(', ')}]`
           : '';
+      // 措辞保持**引擎中性**：具体落地方式由后续引擎分支决定（opencode 写
+      // auth.json/opencode.json 并热重载；dsh 只登记 spawn env、不重启）。
+      // 之前这里写死「分派 auth.json/opencode.json 注入+热重载」，在 dsh 上是纯误导。
       console.log(
-        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]${cfgIDs}），分派 auth.json/opencode.json 注入+热重载`,
+        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]${cfgIDs}），分派凭据登记`,
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
@@ -1919,6 +1930,35 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         });
       }
       if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
+        // ══ dsh 引擎：**只登记 spawn env**，不碰 opencode 的 auth.json/opencode.json，
+        //    也不走 opencode 的重启路径 ══
+        //
+        // 为什么必须分支：dsh 没有 opencode serve，`serveEndpoint()` 恒为空 ⇒
+        // 热重载必然报「serve 端点未就绪」，再回退「重启」又走 opencode 启动逻辑 ⇒
+        // 必然报「缺 OPENCODE_SERVER_PASSWORD」。线上每条下发都留两行失败噪日志。
+        // dsh 的真实语义：key 走 `apiKeyEnv`（进程级）⇒ 登记后**下次运行时 spawn 生效**。
+        if (config.engine === 'dsh') {
+          const dshPayload = command.payload as ModelCredentialsPayload | undefined;
+          const creds = (dshPayload?.providerKeys ?? []).map((entry) => ({
+            providerID: entry.providerID,
+            apiKey: entry.key,
+            ...(dshPayload?.providerConfigs?.[entry.providerID]?.baseUrl === undefined
+              ? {}
+              : { baseUrl: dshPayload.providerConfigs[entry.providerID].baseUrl }),
+          }));
+          try {
+            await (driver as unknown as {
+              applyModelCredentials?: (c: typeof creds) => Promise<void>;
+            }).applyModelCredentials?.(creds);
+            console.log(
+              `[worker/dsh] 模型凭据已登记（providerKeys=[${creds.map((c) => c.providerID).join(', ')}]）` +
+                '：dsh 的 key 走 apiKeyEnv（进程级）⇒ 下个运行时 spawn 生效，本次不重启',
+            );
+          } catch (err) {
+            console.warn(`[worker/dsh] 模型凭据登记失败：${(err as Error).message}`);
+          }
+          continue;
+        }
         await handleModelCredentialsCommand(
           command,
           injectedAuthJsonPath,

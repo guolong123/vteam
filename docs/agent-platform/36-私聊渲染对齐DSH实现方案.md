@@ -1116,3 +1116,32 @@ exec-server 在**建立或复用会话之后、下发之前**统一调用一次�
 `执行完成 model=opencode-go/glm-5.2 (config=glm-5.2 serve=glm-5.2)`，**零漂移**。
 
 单测 +2（`ensureModel` 委托到 selectModel 且不重启；model 为空不误触发重启）。
+
+### 15.6 已修：dsh 收到 model-credentials 不再走 opencode 的失败重启
+
+**症状**：每次平台下发/回放模型凭据，dsh worker 都会打两行失败日志 ——
+
+```
+[config-reload] model-credentials（凭据注入）：serve 端点未就绪（baseUrl 为空）
+[worker] [restart] 重启失败: [opencode-server] v2 恒开鉴权：请设置环境变量 OPENCODE_SERVER_PASSWORD…
+```
+
+**根因**：worker 的 `model-credentials` 处理器**写死 opencode 语义**，没有引擎分支 ——
+写 opencode 的 `auth.json`/`opencode.json`、用 `serveEndpoint()` 校验热重载（dsh 没有
+serve ⇒ 恒失败）、再回退「重启」（走 opencode 启动逻辑 ⇒ 缺密码必失败）。
+
+**修法**：命令处理器加 dsh 分支 —— 只把凭据登记进 `DshCredentialApplier`
+（`VTEAM_PROVIDER_<ID>_KEY` 是 **spawn env**），**不写 opencode 文件、不重启**，
+并明确提示「下个运行时 spawn 生效」。接线路径：
+
+```
+createDshWorkerDriver → driver.setCredentialSink(creds => credentials.apply(creds))
+                      → 命令分支 driver.applyModelCredentials(creds)
+```
+
+顺带把 `dispatchCommands` 里那句写死「分派 auth.json/opencode.json 注入+热重载」的日志
+改成引擎中性的「分派凭据登记」（它在 dsh 上是纯误导）。
+
+**实测**：重启后 `重启失败` 计数 **0**；重新保存凭据后 dsh 只输出
+`模型凭据已登记（providerKeys=[opencode-go]）…本次不重启`；
+opencode worker 仍照常走原路径（内容未变时命中 F3 幂等守卫：`凭据未变化，跳过注入`）。

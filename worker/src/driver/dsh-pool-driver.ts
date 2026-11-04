@@ -44,6 +44,7 @@ import type {
   OpenCodeDriver,
 } from './opencode-driver';
 import type { EngineEventChannel } from './engine-events';
+import type { EngineModelCredential } from '../engine/types';
 import { DshDriver } from './dsh-driver';
 import { DshRolePool, type DshRolePoolOptions } from './dsh-role-pool';
 
@@ -90,6 +91,29 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
   /** 活跃角色清单（诊断）。 */
   listRoles(): string[] {
     return this.pool.listRoles();
+  }
+
+  /** 凭据登记实现（由 createDshWorkerDriver 注入实际 applier）。 */
+  private credentialSink?: (creds: EngineModelCredential[]) => Promise<void>;
+
+  /** 注入凭据登记实现（createDshWorkerDriver 构造时调用一次）。 */
+  setCredentialSink(sink: (creds: EngineModelCredential[]) => Promise<void>): void {
+    this.credentialSink = sink;
+  }
+
+  /**
+   * 登记平台下发的模型凭据（dsh 侧**只落 spawn env**，不做热生效）。
+   *
+   * dsh 的 provider 用 `apiKeyEnv` 引用 key（进程级），故换 key 必须重开运行时 ——
+   * 这不像 opencode 那样能写配置文件 + 热重载。这里只负责把值登进
+   * `DshCredentialApplier`，下一个运行时 spawn 时自然带上。
+   */
+  async applyModelCredentials(creds: EngineModelCredential[]): Promise<void> {
+    if (this.credentialSink === undefined) {
+      this.logger.warn('[dsh-pool] 凭据登记未接线（无 credentialSink），本次下发被忽略');
+      return;
+    }
+    await this.credentialSink(creds);
   }
 
   /**
