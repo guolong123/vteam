@@ -111,14 +111,25 @@ export class DshRolePool {
     );
     const driver = new DshDriver({
       ...this.options,
-      env: {
-        ...(this.options.env ?? {}),
+      // ⚠️ env 必须**延迟求值**（函数形式），不能在池构造时定格。
+      //
+      // 原因（线上实测黑洞）：平台凭据是**运行期**下发到 worker 的（model-credentials
+      // 命令），而池在构造时把 `options.env` 展开成静态对象 ⇒ 后来新增的 provider
+      // 凭据（如本地模型 qwen-local 的 VTEAM_PROVIDER_QWEN_LOCAL_KEY）永远进不了
+      // 子进程 env ⇒ DSH 报
+      //   `llm-pi-ai: no credential for provider route "qwen-local";
+      //    its profile resolves VTEAM_PROVIDER_QWEN_LOCAL_KEY, which is not set`
+      // 即便 patch 里已经声明了该 provider 也无济于事（patch 只写变量名）。
+      env: () => ({
+        ...(typeof this.options.env === 'function'
+          ? this.options.env()
+          : (this.options.env ?? {})),
         ...(agentSystem === undefined || agentSystem === ''
           ? {}
           : { DSH_SYSTEM_PROMPT: agentSystem }),
         // 让 patch 的 system-prompt 行读到该角色的 persona（缺省回落到空）
         DSH_VTEAM_ROLE: agentPreset,
-      },
+      }),
       logger: this.logger,
     });
     const runtime: RoleRuntime = { driver, sessions: new Set(), lastUsedAt: Date.now() };

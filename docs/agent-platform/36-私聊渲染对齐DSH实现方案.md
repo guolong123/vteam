@@ -1145,3 +1145,54 @@ createDshWorkerDriver → driver.setCredentialSink(creds => credentials.apply(cr
 **实测**：重启后 `重启失败` 计数 **0**；重新保存凭据后 dsh 只输出
 `模型凭据已登记（providerKeys=[opencode-go]）…本次不重启`；
 opencode worker 仍照常走原路径（内容未变时命中 F3 幂等守卫：`凭据未变化，跳过注入`）。
+
+### 15.7 已修：平台新增本地模型在 dsh 上连不上（两个独立原因）
+
+用户新增本地模型 `qwen-local/qwen3.8-27b` 后，opencode 引擎正常、**dsh 引擎失败**，
+报 `[dsh-rpc] initialize 失败: no adapter registered for provider "qwen-local"`。
+
+排查后是**两个**叠加原因，必须都修：
+
+**① patch 只声明 env 里那一个 provider**（`no adapter registered`）
+
+dsh 的 cordis patch 此前只声明 `DSH_PROVIDER` 那一个 provider（`opencode-go`）。
+平台新增的 `qwen-local` 有凭据、会下发到 worker，但 patch 里没有它 ⇒ initialize 走
+新路由时 DSH 直接拒。opencode 引擎没这问题 —— 它的 provider 配置天然按平台全量重建。
+
+修法：凭据 sink 从「只登记 env」改为「登记 + **按全量凭据重建 patch**」：
+
+```
+createDshWorkerDriver → driver.setCredentialSink(async creds => {
+    await credentials.apply(enriched);   // ① spawn env
+    await injector.apply({... modelCredentials: enriched}, workDir);  // ② 重建 patch
+})
+```
+合并规则：env 那条 provider 必须始终保留（否则默认路由找不到 adapter）。
+
+**② spawn env 在池构造时被定格**（`no credential for provider route`）
+
+patch 修好后仍然失败，这一步的排错靠**读 DSH 会话事件**（最直接的证据源）：
+
+```bash
+# /data/dsh-home/sessions/**/session.v4.jsonl.zstd 解压后看 turn/end
+llm-pi-ai: no credential for provider route "qwen-local";
+its profile resolves VTEAM_PROVIDER_QWEN_LOCAL_KEY, which is not set
+```
+
+根因：`DshRolePool` 构造时把 `options.env` **展开成静态对象**
+（`env: { ...credentials.envVars, ... }`），而凭据是运行期下发的 ⇒ 后到的 provider 凭据
+永远进不了子进程 env。patch 只写**变量名**，真值得从 spawn env 进子进程，所以两边必须
+同时到位。
+
+修法：env 改为**延迟求值**（DSH 的 `env` 选项本来就支持 `Record | () => Record`）：
+
+- `index.ts`：`env: () => ({ ...credentials.envVars, ...injector.personaEnv() })`
+- `DshRolePool.runtimeFor`：透传函数形式，再叠加该角色的 `DSH_SYSTEM_PROMPT` / `DSH_VTEAM_ROLE`
+
+**验证**：dsh worker 绑定后跑回合 ——
+`执行完成 model=qwen-local/qwen3.8-27b (config=qwen-local/qwen3.8-27b serve=qwen-local/qwen3.8-27b) text=8 chars`，
+消息 `sent | dsh本地通`。
+
+**排查手法记一笔**：DSH 的模型调用失败**不打印到 worker stdout**，只在会话事件里
+（`assistant/attempt` 的 `finish.reason.failure.message` 与 `turn/end.reason.error`）。
+以后遇到「dsh 回合瞬间 turn/end 且无输出」，先解压会话文件看 `turn/end`，比翻日志快得多。

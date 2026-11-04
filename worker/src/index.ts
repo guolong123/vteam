@@ -192,10 +192,20 @@ export function createDshWorkerDriver(
    * 目录拉到后**再 apply 一次**（apply 是整体重写、幂等）。dsh 运行时是**懒启动**
    * （首次下发才 spawn），所以二次写入仍早于握手。
    */
-  const modelCatalogForProvider = (catalog: Map<string, Array<{ id: string; name: string }>>) => {
-    const models = catalog.get(providerID);
-    return models === undefined || models.length === 0 ? {} : { models };
+  /** 平台模型目录（provider → 模型清单），由启动时拉取填充。 */
+  let catalogByProvider = new Map<string, Array<{ id: string; name: string }>>();
+
+  /** 给凭据补上「该 provider 在平台上的全部模型」（dsh patch 需逐模型声明）。 */
+  const withCatalogModels = (cred: {
+    providerID: string;
+    modelID?: string;
+    apiKey: string;
+    baseUrl?: string;
+  }) => {
+    const models = catalogByProvider.get(cred.providerID);
+    return models === undefined || models.length === 0 ? cred : { ...cred, models };
   };
+
   const credentialBase = { providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) };
   void credentials.apply([credentialBase]);
 
@@ -240,7 +250,7 @@ export function createDshWorkerDriver(
       tools: [],
       mcpServers: [],
       agentPolicies: [],
-      modelCredentials: [{ providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) }],
+      modelCredentials: [withCatalogModels(credentialBase)],
     },
     workDir,
   );
@@ -271,12 +281,11 @@ export function createDshWorkerDriver(
         list.push({ id: item.modelID, name: typeof item.name === 'string' ? item.name : item.modelID });
         catalog.set(item.providerID, list);
       }
-      const extra = modelCatalogForProvider(catalog);
-      if (extra.models === undefined) {
-        console.log(`[worker/dsh] 平台模型目录里没有 provider=${providerID} 的模型（保持单模型声明）`);
-        return;
-      }
-      await credentials.apply([{ ...credentialBase, ...extra }]);
+      catalogByProvider = catalog;
+      const enriched = withCatalogModels(credentialBase) as typeof credentialBase & {
+        models?: Array<{ id: string; name: string }>;
+      };
+      await credentials.apply([enriched]);
       await injector.apply(
         {
           workDir,
@@ -284,13 +293,16 @@ export function createDshWorkerDriver(
           tools: [],
           mcpServers: [],
           agentPolicies: [],
-          modelCredentials: [{ ...credentialBase, ...extra }],
+          modelCredentials: [enriched],
         },
         workDir,
       );
+      const declared = enriched.models ?? [];
       console.log(
-        `[worker/dsh] 模型目录已声明进 patch：provider=${providerID} 共 ${extra.models.length} 个模型` +
-          `（${extra.models.slice(0, 5).map((m) => m.id).join(', ')}${extra.models.length > 5 ? ' …' : ''}）`,
+        declared.length === 0
+          ? `[worker/dsh] 平台模型目录里没有 provider=${providerID} 的模型（保持单模型声明）`
+          : `[worker/dsh] 模型目录已声明进 patch：provider=${providerID} 共 ${declared.length} 个模型` +
+              `（${declared.slice(0, 5).map((m) => m.id).join(', ')}${declared.length > 5 ? ' …' : ''}）`,
       );
     } catch (err) {
       console.warn(`[worker/dsh] 模型目录注入失败：${(err as Error).message}`);
@@ -319,8 +331,12 @@ export function createDshWorkerDriver(
     cwd: workDir,
     provider: providerID,
     model: modelID,
-    // persona env 与凭据 env 合并（patch 只写变量名，真值从这里进子进程）
-    env: { ...credentials.envVars, ...injector.personaEnv() },
+    // persona env 与凭据 env 合并（patch 只写变量名，真值从这里进子进程）。
+    //
+    // ⚠️ 必须是**函数**：凭据是运行期下发的（model-credentials 命令），构造时展开成
+    // 静态对象会让后到的 provider 凭据（如本地模型）永远进不了子进程 env ——
+    // 实测表现为 `no credential for provider route "qwen-local"`。
+    env: () => ({ ...credentials.envVars, ...injector.personaEnv() }),
     // 会话级 expertise：DSH 的模型路由在 initialize 固定
     approvalRequests: true,
     userQuestions: true,
@@ -342,7 +358,39 @@ export function createDshWorkerDriver(
   // 无法像 opencode 那样写配置文件 + 热重载。旧代码在 dsh 上收到该命令会走
   // opencode 的注入/重启路径 —— 结果必然报「serve 端点未就绪 ⇒ 重启 ⇒ 缺
   // OPENCODE_SERVER_PASSWORD 失败」，每条噪日志都来自这里（用户实测）。
-  driver.setCredentialSink((creds) => credentials.apply(creds));
+  driver.setCredentialSink(async (creds) => {
+    // ① 登记 spawn env（apiKeyEnv 是进程级 ⇒ 下个运行时 spawn 生效）
+    const incoming = creds.length > 0 ? creds : [credentialBase];
+    // 合并 env 那条：env 配的 provider 必须始终在 patch 里，
+    // 否则默认路由（resolveDefaultRoute 取首个）可能找不到 adapter。
+    const merged = incoming.some((c) => c.providerID === credentialBase.providerID)
+      ? incoming
+      : [credentialBase, ...incoming];
+    const enriched = merged.map((c) => withCatalogModels(c));
+    await credentials.apply(enriched);
+    // ② **重建 patch**：把平台上有凭据的**所有** provider 都声明进去。
+    //
+    // 为什么必须重建：patch 此前只声明 env 里那一个 provider（`DSH_PROVIDER`）。
+    // 用户在平台新增本地模型（如 qwen-local）后凭据会下发到 worker，但 patch 里没有
+    // 该 provider ⇒ initialize 走新路由时报 `no adapter registered for provider
+    // "qwen-local"`（线上实测）。opencode 引擎没这问题 —— 它的 provider 配置本来就按
+    // 平台全量重建。
+    await injector.apply(
+      {
+        workDir,
+        skills: [],
+        tools: [],
+        mcpServers: [],
+        agentPolicies: [],
+        modelCredentials: enriched,
+      },
+      workDir,
+    );
+    console.log(
+      `[worker/dsh] patch 已按凭据重建：providers=[${enriched.map((c) => c.providerID).join(', ')}]` +
+        '（下个运行时 spawn 生效）',
+    );
+  });
 
   console.log(
     `[worker/dsh] 驱动就绪：provider=${providerID} model=${modelID} ` +
