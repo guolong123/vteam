@@ -240,6 +240,11 @@ export const PAGES: PageTestidRef[] = [
       "question-secret-cancel",
       "question-secret-submit",
       "msg-tool-awaiting",
+      // 长 system 消息（任务 brief 等）的一行标记 + 展开态正文
+      "system-marker",
+      "system-marker-toggle",
+      "system-marker-time",
+      "system-marker-text",
       // 私聊 DSH 变体（variant="dsh"，对齐 DSH Web 的渲染层）：
       // dsh-message = 消息根；dsh-reasoning(-summary/-body) = 折叠思考行；
       // dsh-tool(-summary/-status/-body/-input/-output) = 折叠工具卡；

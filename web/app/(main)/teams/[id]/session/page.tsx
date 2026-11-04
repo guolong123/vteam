@@ -27,7 +27,7 @@ import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, Ses
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
-import { LoadingIndicator, MsgError, QuestionModal, MsgParts } from "@/src/components/chat";
+import { LoadingIndicator, MsgError, QuestionModal, MsgParts, SystemMarker, SYSTEM_MARKER_COLLAPSE_THRESHOLD } from "@/src/components/chat";
 import type { QuestionModalData, QuestionModalSubmitPayload } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
@@ -1735,8 +1735,16 @@ export default function TeamSessionPage() {
                 );
               }
               if (msg.senderType === "system") {
+                // 平台在任务状态机节点写入的 system 消息：短的（「任务已开始，主 Agent：x」）
+                // 一行就够，保持原气泡观感；长的（任务 brief 200+ 字）按气泡铺开会变成
+                // 一个压过 agent 回复的大灰块，故改用「一行标记 + 点击展开」。
+                const systemText = ((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string;
                 return withSeparator(
-                  <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />,
+                  systemText.length > SYSTEM_MARKER_COLLAPSE_THRESHOLD ? (
+                    <SystemMarker key={msg.id} text={systemText} time={formatTime(msg.createdAt)} />
+                  ) : (
+                    <ChatBubble key={msg.id} text={systemText} type="system" time={formatTime(msg.createdAt)} />
+                  ),
                 );
               }
               return withSeparator(

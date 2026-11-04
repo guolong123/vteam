@@ -23,6 +23,8 @@ export { MsgUnknownPart, safePartType, summarizeUnknownPart } from "./msg-unknow
 export type { MsgUnknownPartProps } from "./msg-unknown-part";
 export { MsgParts } from "./msg-parts";
 export type { MsgPartsProps, PartShape } from "./msg-parts";
+export { SystemMarker, systemHeadline, SYSTEM_MARKER_COLLAPSE_THRESHOLD } from "./system-marker";
+export type { SystemMarkerProps } from "./system-marker";
 export { MsgLineBox } from "./msg-line-box";
 export type { MsgLineBoxProps, MsgLineBoxTone } from "./msg-line-box";
 export { QuestionModal } from "./question-modal";
