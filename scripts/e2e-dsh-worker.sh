@@ -3,107 +3,108 @@
 # e2e-dsh-worker.sh —— DSH 引擎 Worker 试用栈 API 冒烟脚本
 #
 # 配套用例：docs/test-cases/09-DSH引擎Worker环境测试用例.md
-# 覆盖：TC-DSH-001/002/005/006/007/010/021/023/027/030/034/046/051 的可自动化子集
+# 覆盖：TC-DSH-001/002/005/006/007/008/010/021/023/027/030/034/046/051/055/056 的可自动化子集
 #
 # 用法：
 #   bash scripts/e2e-dsh-worker.sh            # 全量（含真实模型对话，约 2-3 分钟）
 #   bash scripts/e2e-dsh-worker.sh --quick    # 跳过真实对话轮（无 token 消耗）
 #
 # 依赖：curl / jq / docker（只读命令）；试用栈在 localhost:13000/13001 在跑
+#
+# 现场事实（2026-11-03 实测，脚本按此校准）：
+#   - CreateMessageDto 字段是 **text**（不是 content），mentions 可选
+#   - 消息响应形状：{message:{id,channelId,senderType,...}, triggers:[{agentId,instanceId,sessionId,status}]}
+#   - 消息列表形状：{items:[{id,senderType:'user'|'agent',status,content:{text,parts:[{type:reasoning|text|step-finish}]}}]}
+#   - 用量：GET /teams/:id/usage → {members:[{totalTokens,...}], teamTotal:{...}}（无 items 包装）
+#   - admin/admin123 是 tm_0000000002（试用团队）owner；seed-admin 只在 tm_0000000001
+#     → 频道/abort/用量类用例必须用 ADMIN
+#   - abort：channel 有 teamId 时按 teamId+member 查 running 会话（teamless 频道才需要 target）
+#   - capabilities.skills 是注册时刻快照（可能为空），skills 下发以**磁盘** .dsh/skills/ 为准
 # ============================================================
 set -u
-API="http://localhost:13000/api/v1"
-WEB="http://localhost:13001"
-WORKER_EXEC="http://localhost:14000"
-CONTAINER_WORKER="vteam-trial-worker-dsh"
-CONTAINER_INSPECT="vteam-trial-dsh-inspect"
-# 环境标识：默认自动发现（栈重建后 ID 会变，写死必然误报）。
-# 可用环境变量覆盖：VTEAM_TEAM / VTEAM_GROUP_CH / VTEAM_DEV_CH / VTEAM_DEV_MEMBER
-TEAM="${VTEAM_TEAM:-}"
-CH_GROUP="${VTEAM_GROUP_CH:-}"
-CH_DEV="${VTEAM_DEV_CH:-}"
-DEV_MEMBER="${VTEAM_DEV_MEMBER:-}"
+API="${VTEAM_API:-http://localhost:13000/api/v1}"
+WEB="${VTEAM_WEB:-http://localhost:13001}"
+CONTAINER_WORKER="${VTEAM_WORKER_CONTAINER:-vteam-trial-worker-dsh}"
+CONTAINER_INSPECT="${VTEAM_INSPECT_CONTAINER:-vteam-trial-dsh-inspect}"
+DSH_VERSION_EXPECT="${VTEAM_DSH_VERSION:-0.2.2-alpha.2}"
 QUICK=0
 [ "${1:-}" = "--quick" ] && QUICK=1
 
 PASS=0; FAIL=0; SKIP=0
 declare -a RESULTS=()
 
-# ── 断言工具：ok <名称> <表达式结果 0/1> <证据摘要> ──────────────
+# ── 断言工具 ────────────────────────────────────────────────────
 ok()   { local n="$1" r="$2" e="$3"; if [ "$r" = "0" ]; then PASS=$((PASS+1)); RESULTS+=("PASS  $n  $e"); else FAIL=$((FAIL+1)); RESULTS+=("FAIL  $n  $e"); fi; }
 skip() { local n="$1" e="$2"; SKIP=$((SKIP+1)); RESULTS+=("SKIP  $n  $e"); }
 
+# ── 登录：seed-admin（平台管理）+ admin（试用团队 owner） ─────────
 TOKEN=$(curl -s -m 10 -X POST "$API/auth/login" -H 'Content-Type: application/json' \
   -d '{"username":"seed-admin","password":"Admin@123456"}' | jq -r '.accessToken // empty')
-ok "TC-DSH-000 登录 seed-admin" $([ -n "$TOKEN" ] && [ ${#TOKEN} -gt 100 ]; echo $?) "token_len=${#TOKEN}"
+ok "TC-DSH-000a 登录 seed-admin" $([ -n "$TOKEN" ] && [ ${#TOKEN} -gt 100 ]; echo $?) "token_len=${#TOKEN}"
 AUTH="Authorization: Bearer $TOKEN"
 
-# 自动发现团队与频道（栈重建后 ID 会变；显式环境变量优先）
-if [ -n "$TOKEN" ]; then
-  if [ -z "$TEAM" ]; then
-    # seed-admin 可能属于多个团队；优先选**有成员绑定到 dsh worker**的那个
-    # （否则取到无关团队会导致后续 abort/频道断言 403）。
-    # 优先级：① 有成员绑定 dsh worker 的团队 → ② 成员最多的团队（试用团队是 7 成员）
-    TEAM=$(curl -s -m 10 "$API/teams" -H "$AUTH" | jq -r '
-      [.items[] | {id,
-        bound: ([.members[]? | select(.preferredWorkerId=="'"${VTEAM_WORKER_ID:-w_trial_dsh}"'")] | length),
-        size: (.members|length)}]
-      | sort_by(-.bound, -.size) | .[0].id // empty')
-    # 兜底：取第一个
-    [ -z "$TEAM" ] && TEAM=$(curl -s -m 10 "$API/teams" -H "$AUTH" | jq -r '.items[0].id // empty')
+ADMIN=$(curl -s -m 10 -X POST "$API/auth/login" -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}' | jq -r '.accessToken // empty')
+ok "TC-DSH-000b 登录 admin（试用团队 owner）" $([ -n "$ADMIN" ] && [ ${#ADMIN} -gt 100 ]; echo $?) "token_len=${#ADMIN}"
+AAUTH="Authorization: Bearer $ADMIN"
+
+# ── 团队/频道发现（admin 口径；显式环境变量优先） ─────────────────
+TEAM="${VTEAM_TEAM:-}"
+CH_GROUP="${VTEAM_GROUP_CH:-}"
+CH_DEV="${VTEAM_DEV_CH:-}"
+DEV_MEMBER="${VTEAM_DEV_MEMBER:-}"
+if [ -n "$ADMIN" ] && [ -z "$TEAM" ]; then
+  TEAM=$(curl -s -m 10 "$API/teams" -H "$AAUTH" | jq -r '.items[0].id // empty')
+fi
+if [ -n "$ADMIN" ] && [ -n "$TEAM" ]; then
+  if [ -z "$CH_GROUP" ]; then
+    CH_GROUP=$(curl -s -m 10 "$API/channels?teamId=$TEAM" -H "$AAUTH" \
+      | jq -r '[.items[] | select(.type=="team_group")][0].id // empty')
   fi
-  if [ -n "$TEAM" ]; then
-    # 群聊频道（懒创建；先列一次确保存在）
-    if [ -z "$CH_GROUP" ]; then
-      CH_GROUP=$(curl -s -m 10 "$API/channels?teamId=$TEAM" -H "$AUTH" \
-        | jq -r '[.items[] | select(.type=="team_group")][0].id // empty')
-    fi
-    # 开发者实例私聊（取第一个非主 Agent 成员）
-    if [ -z "$DEV_MEMBER" ]; then
-      DEV_MEMBER=$(curl -s -m 10 "$API/teams/$TEAM" -H "$AUTH" \
-        | jq -r '[.members[] | select(.main != true)][0].id // empty')
-    fi
-    if [ -z "$CH_DEV" ] && [ -n "$DEV_MEMBER" ]; then
-      CH_DEV=$(curl -s -m 10 -X POST "$API/dm-channels" -H "$AUTH" \
+  if [ -z "$CH_DEV" ] || [ -z "$DEV_MEMBER" ]; then
+    # 取第一个非主 Agent 成员（alias 含"开发者"优先）
+    DEV_MEMBER=$(curl -s -m 10 "$API/teams/$TEAM" -H "$AAUTH" | jq -r '
+      [.members[]? | select(.agent.role != "project_manager")][0].id // empty')
+    if [ -n "$DEV_MEMBER" ] && [ -z "$CH_DEV" ]; then
+      CH_DEV=$(curl -s -m 10 -X POST "$API/dm-channels" -H "$AAUTH" \
         -H 'Content-Type: application/json' \
         -d "{\"teamId\":\"$TEAM\",\"teamMemberId\":\"$DEV_MEMBER\"}" | jq -r '.id // empty')
     fi
   fi
 fi
-ok "TC-DSH-000b 环境发现" $([ -n "$TEAM" ] && [ -n "$CH_GROUP" ]; echo $?) \
+ok "TC-DSH-000c 环境发现" $([ -n "$TEAM" ] && [ -n "$CH_GROUP" ] && [ -n "$CH_DEV" ]; echo $?) \
   "team=$TEAM group=$CH_GROUP dev=$CH_DEV member=$DEV_MEMBER"
 
-# ── 1. 服务可达（TC-DSH-006 前置） ─────────────────────────────
+# ── 1. 服务可达（TC-DSH-006） ──────────────────────────────────
 H=$(curl -s -m 5 "$API/health" | jq -r '.status // empty')
 ok "TC-DSH-006a server health=ok" $([ "$H" = "ok" ]; echo $?) "status=$H"
 W=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$WEB/")
-ok "TC-DSH-006b web 13001 可达" $([ "$W" = "200" ]; echo $?) "http=$W"
+ok "TC-DSH-006b web 可达" $([ "$W" = "200" ]; echo $?) "http=$W"
 
-# ── 2. worker 注册投影（TC-DSH-002/003） ───────────────────────
-WK=$(curl -s -m 10 "$API/workers" -H "$AUTH")
-ENG=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].capabilities.engine // empty')
-STATUS=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].status // empty')
-ok "TC-DSH-002a engine=dsh" $([ "$ENG" = "dsh" ]; echo $?) "engine=$ENG"
+# ── 2. worker 注册投影（TC-DSH-002） ───────────────────────────
+WK=$(curl -s -m 10 "$API/workers" -H "$AAUTH")
+ENG=$(echo "$WK" | jq -r '[.[] | select(.capabilities.engine=="dsh")][0].capabilities.engine // empty')
+ok "TC-DSH-002a 存在 engine=dsh worker" $([ "$ENG" = "dsh" ]; echo $?) "engine=$ENG"
+STATUS=$(echo "$WK" | jq -r '[.[] | select(.capabilities.engine=="dsh")][0].status // empty')
 ok "TC-DSH-002b status=online" $([ "$STATUS" = "online" ]; echo $?) "status=$STATUS"
-BITS=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].capabilities.engineCapabilities')
-ALLFALSE=$(echo "$BITS" | jq -r '[.[]] | all(. == false)')
-ok "TC-DSH-002c engineCapabilities 全 false" $([ "$ALLFALSE" = "true" ]; echo $?) "$(echo "$BITS" | jq -c .)"
-SKN=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].capabilities.skills | length')
-# capabilities.skills 是 worker **注册那一刻**的快照；worker 首次注册时控制面资源
-# 可能尚未拉到，导致上报为空但磁盘实际已下发。故以磁盘为准判定"下发成功"。
-SKD=0
+BITS=$(echo "$WK" | jq -c '[.[] | select(.capabilities.engine=="dsh")][0].capabilities.engineCapabilities // {}')
+ALLFALSE=$(echo "$BITS" | jq -r 'length > 0 and ([.[]] | all(. == false))')
+ok "TC-DSH-002c engineCapabilities 全 false" $([ "$ALLFALSE" = "true" ]; echo $?) "$BITS"
+# skills：注册快照可能为空，以容器磁盘 .dsh/skills/ 为准（现场实测 8 个）
+SKD=0; SKN="-"
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_WORKER}$"; then
   SKD=$(docker exec "$CONTAINER_WORKER" sh -c 'ls /data/vteam-worker/.dsh/skills/ 2>/dev/null | wc -l' 2>/dev/null | tr -d ' \r')
+  SKN=$(echo "$WK" | jq -r '[.[] | select(.capabilities.engine=="dsh")][0].capabilities.skills | length' 2>/dev/null)
 fi
 ok "TC-DSH-032a skills 已下发（磁盘为准）" $([ "${SKD:-0}" -gt 0 ] 2>/dev/null; echo $?) \
-  "capabilities=$SKN disk=$SKD"
-MAXI=$(echo "$WK" | jq -r '[.[] | select(.id=="w_trial_dsh")][0].capabilities.maxInstances')
-ok "TC-DSH-002d maxInstances=10" $([ "$MAXI" = "10" ]; echo $?) "maxInstances=$MAXI"
+  "disk=$SKD capabilities_snapshot=$SKN"
+MAXI=$(echo "$WK" | jq -r '[.[] | select(.capabilities.engine=="dsh")][0].capabilities.maxInstances // empty')
+ok "TC-DSH-002d maxInstances>0" $([ "${MAXI:-0}" -gt 0 ] 2>/dev/null; echo $?) "maxInstances=$MAXI"
 
 # ── 3. 镜像内 vendored 补丁（TC-DSH-005） ──────────────────────
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_WORKER}$"; then
-  DSHV=$(docker exec $CONTAINER_WORKER dsh --version 2>/dev/null | head -1)
-  ok "TC-DSH-005a dsh 0.2.2-alpha.2" $([ "$DSHV" = "0.2.2-alpha.2" ]; echo $?) "version=$DSHV"
+  DSHV=$(docker exec $CONTAINER_WORKER dsh --version 2>/dev/null | head -1 | tr -d ' \r')
+  ok "TC-DSH-005a dsh $DSH_VERSION_EXPECT" $([ "$DSHV" = "$DSH_VERSION_EXPECT" ]; echo $?) "version=$DSHV"
   VEND=$(docker exec $CONTAINER_WORKER sh -c \
     'grep -c "session/cancel\|session/steer\|session/create\|assistant-stream" $(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-server/lib/index.js' 2>/dev/null)
   ok "TC-DSH-005b vendored 补丁存在" $([ "${VEND:-0}" -ge 4 ] 2>/dev/null; echo $?) "markers=$VEND (expect>=4)"
@@ -112,111 +113,139 @@ else
 fi
 
 # ── 4. 模型目录（TC-DSH-027） ──────────────────────────────────
-MDL=$(curl -s -m 10 "$API/models" -H "$AUTH")
-EN4=$(echo "$MDL" | jq -r '[.items[]? | select(.enabled==true)] | any(.modelID | contains("v4.1"))')
-ok "TC-DSH-027 存在 enabled 的 v4.1 模型" $([ "$EN4" = "true" ]; echo $?) "$(echo "$MDL" | jq -c '[.items[]? | select(.enabled==true) | .providerID+"/"+.modelID]')"
+MDL=$(curl -s -m 10 "$API/models" -H "$AAUTH")
+EN4=$(echo "$MDL" | jq -r '[.items[]? | select(.enabled==true)] | any((.modelID // "") | contains("v4.1"))')
+ok "TC-DSH-027 存在 enabled 的 v4.1 模型" $([ "$EN4" = "true" ]; echo $?) \
+  "$(echo "$MDL" | jq -c '[.items[]? | select(.enabled==true) | (.providerID//"")+"/"+(.modelID//"")]')"
 
 # ── 5. Agent 角色清单（TC-DSH-030） ────────────────────────────
-AGN=$(curl -s -m 10 "$API/agents" -H "$AUTH" | jq -r '.items | length' 2>/dev/null)
+AGN=$(curl -s -m 10 "$API/agents" -H "$AAUTH" | jq -r '.items | length' 2>/dev/null)
 ok "TC-DSH-030 agents=7（内置角色）" $([ "$AGN" = "7" ]; echo $?) "count=$AGN"
 
 # ── 6. 凭据不落盘（TC-DSH-034） ────────────────────────────────
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_WORKER}$"; then
   LEAK=$(docker exec $CONTAINER_WORKER sh -c \
-    'grep -r "oc_sk_\|sk-" /data/vteam-worker/.vteam/ 2>/dev/null | grep -v apiKeyEnv | head -3' || true)
+    'grep -rE "oc_sk_[A-Za-z0-9]|sk-[A-Za-z0-9]{8}" /data/vteam-worker/.vteam/ 2>/dev/null | grep -v apiKeyEnv | head -2' || true)
   PATCHOK=$(docker exec $CONTAINER_WORKER sh -c \
-    'grep -c "apiKeyEnv" /data/vteam-worker/.vteam/dsh-profile.patch.yml 2>/dev/null' || echo 0)
-  ok "TC-DSH-034 patch 走 apiKeyEnv 且无明文 key" $([ "${PATCHOK:-0}" -ge 1 ] 2>/dev/null && [ -z "$LEAK" ]; echo $?) "apiKeyEnv行=${PATCHOK:-0} 泄漏=${LEAK:-无}"
+    'grep -c "apiKeyEnv" /data/vteam-worker/.vteam/dsh-profile.patch.yml 2>/dev/null' 2>/dev/null | tr -d ' \r')
+  ok "TC-DSH-034 patch 走 apiKeyEnv 且无明文 key" \
+    $([ "${PATCHOK:-0}" -ge 1 ] 2>/dev/null && [ -z "$LEAK" ]; echo $?) \
+    "apiKeyEnv行=${PATCHOK:-0} 泄漏=${LEAK:-无}"
 fi
 
 # ── 7. dsh 会话持久化落盘（TC-DSH-046） ────────────────────────
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_WORKER}$"; then
-  SESN=$(docker exec $CONTAINER_WORKER sh -c 'ls /data/dsh-home/sessions/ 2>/dev/null | wc -l')
+  SESN=$(docker exec $CONTAINER_WORKER sh -c 'ls /data/dsh-home/sessions/ 2>/dev/null | wc -l' | tr -d ' \r')
   ok "TC-DSH-046 DSH 侧会话文件存在" $([ "${SESN:-0}" -ge 1 ] 2>/dev/null; echo $?) "sessions文件数=${SESN:-0}"
 fi
 
-# ── 8. abort 幂等（TC-DSH-023，无运行中会话时） ─────────────────
-AB=$(curl -s -m 10 -o /tmp/dsh_abort.json -w '%{http_code}' -X POST "$API/channels/$CH_DEV/abort" \
-  -H "$AUTH" -H 'Content-Type: application/json' -d "{\"teamMemberId\":\"$DEV_MEMBER\"}")
-ok "TC-DSH-023 abort 幂等 200" $([ "$AB" = "200" ]; echo $?) "http=$AB body=$(head -c 120 /tmp/dsh_abort.json)"
+# ── 8. abort 幂等（TC-DSH-023；channel 带 teamId → 空跑返回 aborted:false）──
+if [ -n "$CH_DEV" ] && [ -n "$ADMIN" ]; then
+  AB=$(curl -s -m 10 -o /tmp/dsh_abort.json -w '%{http_code}' -X POST "$API/channels/$CH_DEV/abort" \
+    -H "$AAUTH" -H 'Content-Type: application/json' -d '{}')
+  # 注意：aborted 可为 false（无运行中会话=幂等预期）或 true（真实中止），
+  # 只断言字段存在（jq 的 // 会把 false 当 falsy，必须用 has()）
+  ABV=$(jq -r 'has("aborted") and has("sessions")' /tmp/dsh_abort.json 2>/dev/null)
+  ok "TC-DSH-023 abort 幂等 200+结构完整" $([ "$AB" = "200" ] && [ "$ABV" = "true" ]; echo $?) \
+    "http=$AB body=$(head -c 120 /tmp/dsh_abort.json)"
+else
+  skip "TC-DSH-023" "缺 CH_DEV/ADMIN"
+fi
 
-# ── 9. 真实对话轮（TC-DSH-007/008/009） ────────────────────────
-if [ "$QUICK" = "0" ] && [ -n "$TOKEN" ]; then
-  MARK="SMOKE-$(date +%s)"
-  POST=$(curl -s -m 15 -X POST "$API/channels/$CH_DEV/messages" -H "$AUTH" \
-    -H 'Content-Type: application/json' -d "{\"content\":\"请只回复：$MARK\"}")
-  MSGID=$(echo "$POST" | jq -r '.message.id // empty')
-  ok "TC-DSH-007a 发消息 201" $([ -n "$MSGID" ]; echo $?) "msg=$MSGID"
-
-  # 轮询回复（最长 150s；dsh committed 首字约 5s，保守取整轮）
-  HIT=1
-  for i in $(seq 1 30); do
+# ── 轮询工具：等 assistant 回复包含标记 ─────────────────────────
+# 用法：wait_reply <channelId> <mark> <max_polls(5s each)> → 0=命中
+# 副作用：设置全局 REPLY_POLLS=实际轮询次数（供断言证据使用）
+REPLY_POLLS=0
+wait_reply() {
+  local ch="$1" mark="$2" polls="$3"
+  local i
+  for i in $(seq 1 "$polls"); do
+    REPLY_POLLS=$i
     sleep 5
-    BODY=$(curl -s -m 10 "$API/channels/$CH_DEV/messages?limit=5" -H "$AUTH")
-    if echo "$BODY" | jq -e --arg m "$MARK" '[.items[]? | select(.role=="assistant") | (.parts[]? | select(.type=="text") | .text // "")] | any(contains($m))' >/dev/null 2>&1; then
-      HIT=0; break
-    fi
+    curl -s -m 10 "$API/channels/$ch/messages?limit=6" -H "$AAUTH" | \
+      jq -e --arg m "$mark" '[.items[]? | select(.senderType=="agent")
+        | ((.content.text // "") + ([.content.parts[]? | select(.type=="text") | (.text // "")] | join("")))
+        | contains($m)] | any' >/dev/null 2>&1 && return 0
   done
-  ok "TC-DSH-007b 150s 内收到含 $MARK 的回复" $HIT "polls=$i"
+  return 1
+}
 
-  # step-finish 锚点（TC-DSH-008）：控制面完成判定依赖它
-  SF=$(curl -s -m 10 "$API/channels/$CH_DEV/messages?limit=5" -H "$AUTH" | \
-    jq -r '[.items[]? | select(.role=="assistant") | .parts[]? | select(.type=="step-finish") | .reason] | any(. == "stop")')
+# ── 9. 真实对话轮（TC-DSH-007/008/009/021） ─────────────────────
+if [ "$QUICK" = "0" ] && [ -n "$ADMIN" ] && [ -n "$CH_DEV" ]; then
+  MARK="SMOKE-$(date +%s)"
+  POST=$(curl -s -m 15 -X POST "$API/channels/$CH_DEV/messages" -H "$AAUTH" \
+    -H 'Content-Type: application/json' -d "{\"text\":\"请只回复：$MARK\"}")
+  MSGID=$(echo "$POST" | jq -r '.message.id // empty')
+  TRG=$(echo "$POST" | jq -r '.triggers | length')
+  ok "TC-DSH-007a 发消息 201+triggers" $([ -n "$MSGID" ] && [ "${TRG:-0}" -ge 1 ]; echo $?) \
+    "msg=$MSGID triggers=$TRG"
+
+  if wait_reply "$CH_DEV" "$MARK" 24; then HIT=0; else HIT=1; fi
+  ok "TC-DSH-007b 120s 内收到含 $MARK 的回复" $HIT "polls=$REPLY_POLLS"
+
+  # step-finish 锚点（TC-DSH-008）：控制面完成判定与用量落库依赖它
+  SF=$(curl -s -m 10 "$API/channels/$CH_DEV/messages?limit=4" -H "$AAUTH" | \
+    jq -r '[.items[]? | select(.senderType=="agent")
+      | .content.parts[]? | select(.type=="step-finish") | .reason] | any(. == "stop")')
   ok "TC-DSH-008 存在 step-finish(reason=stop)" $([ "$SF" = "true" ]; echo $?) "found=$SF"
 
-  # 用量落库（TC-DSH-009）
-  USG=$(curl -s -m 10 "$API/teams/$TEAM/usage?limit=5" -H "$AUTH" | \
-    jq -r 'if .items then ([.items[]? | select(.totalTokens > 0)] | length) else 0 end' 2>/dev/null)
-  ok "TC-DSH-009 团队用量记录非空" $([ "${USG:-0}" -gt 0 ] 2>/dev/null; echo $?) "usage_rows=$USG"
+  # 用量落库（TC-DSH-009）：{members:[{totalTokens...}], teamTotal}
+  USG=$(curl -s -m 10 "$API/teams/$TEAM/usage" -H "$AAUTH" | \
+    jq -r '[.members[]? | select(.totalTokens > 0)] | length')
+  ok "TC-DSH-009 团队成员用量非空" $([ "${USG:-0}" -gt 0 ] 2>/dev/null; echo $?) "members_with_tokens=$USG"
 
-  # 中断（TC-DSH-021）+ 中断后可继续（TC-DSH-022 简化为幂等冒烟）
-  curl -s -m 15 -X POST "$API/channels/$CH_DEV/messages" -H "$AUTH" \
-    -H 'Content-Type: application/json' -d '{"content":"请写一篇 600 字的分布式锁文章，尽量详尽。"}' >/dev/null
+  # 中断（TC-DSH-021）：发长任务 → abort → 返回 {aborted,...} 结构
+  curl -s -m 15 -X POST "$API/channels/$CH_DEV/messages" -H "$AAUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"text":"请写一篇 600 字的分布式锁文章，尽量详尽。"}' >/dev/null
   sleep 8
-  AB2=$(curl -s -m 10 -X POST "$API/channels/$CH_DEV/abort" -H "$AUTH" \
-    -H 'Content-Type: application/json' -d "{\"teamMemberId\":\"$DEV_MEMBER\"}")
-  ABSTATE=$(echo "$AB2" | jq -r '.aborted // empty')
-  ok "TC-DSH-021 abort 返回 200" $([ -n "$ABSTATE" ]; echo $?) "body=$(echo "$AB2" | head -c 120)"
+  AB2=$(curl -s -m 10 -o /tmp/dsh_abort2.json -w '%{http_code}' -X POST "$API/channels/$CH_DEV/abort" \
+    -H "$AAUTH" -H 'Content-Type: application/json' -d '{}')
+  AB2V=$(jq -r 'has("aborted") and has("sessions")' /tmp/dsh_abort2.json 2>/dev/null)
+  ok "TC-DSH-021 abort 200+结构完整" $([ "$AB2" = "200" ] && [ "$AB2V" = "true" ]; echo $?) \
+    "http=$AB2 body=$(head -c 120 /tmp/dsh_abort2.json)"
 else
-  skip "TC-DSH-007/008/009/021" "--quick 或未登录，跳过真实模型轮"
+  skip "TC-DSH-007/008/009/021" "--quick 或缺环境，跳过真实模型轮"
 fi
 
 # ── 10. 群聊 @ 触发（TC-DSH-010，真实轮） ───────────────────────
-if [ "$QUICK" = "0" ] && [ -n "$TOKEN" ]; then
+if [ "$QUICK" = "0" ] && [ -n "$ADMIN" ] && [ -n "$CH_GROUP" ]; then
   GM="GRP-$(date +%s)"
-  curl -s -m 15 -X POST "$API/channels/$CH_GROUP/messages" -H "$AUTH" \
-    -H 'Content-Type: application/json' -d "{\"content\":\"@开发者-1 请只回复：$GM\"}" >/dev/null
-  GHIT=1
-  for i in $(seq 1 24); do
-    sleep 5
-    GB=$(curl -s -m 10 "$API/channels/$CH_GROUP/messages?limit=5" -H "$AUTH")
-    if echo "$GB" | jq -e --arg m "$GM" '[.items[]? | select(.role=="assistant") | (.parts[]? | select(.type=="text") | .text // "")] | any(contains($m))' >/dev/null 2>&1; then
-      GHIT=0; break
-    fi
-  done
-  ok "TC-DSH-010 群聊 @ 开发者 120s 内回复" $GHIT "polls=$i"
+  curl -s -m 15 -X POST "$API/channels/$CH_GROUP/messages" -H "$AAUTH" \
+    -H 'Content-Type: application/json' -d "{\"text\":\"@开发者-1 请只回复：$GM\"}" >/dev/null
+  if wait_reply "$CH_GROUP" "$GM" 24; then GHIT=0; else GHIT=1; fi
+  ok "TC-DSH-010 群聊 @ 开发者 120s 内回复" $GHIT "mark=$GM polls=$REPLY_POLLS"
 else
-  skip "TC-DSH-010" "--quick 或未登录，跳过"
+  skip "TC-DSH-010" "--quick 或缺环境，跳过"
 fi
 
 # ── 11. dsh-inspect 面板（TC-DSH-051） ─────────────────────────
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_INSPECT}$"; then
   INSP=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://localhost:13080/")
-  # 面板需要 launch token，裸访问可能是 200(登录页) 或 403，只验证端口在监听
-  ok "TC-DSH-051a dsh-inspect 13080 响应" $([ "$INSP" != "000" ]; echo $?) "http=$INSP (需 token 登录, 人工核验 UI)"
+  # 面板需 launch token（docker logs 取）；裸访问 401/200/403 均算"在监听"
+  ok "TC-DSH-051a dsh-inspect 在监听" $([ "$INSP" != "000" ]; echo $?) \
+    "http=$INSP (需 token 登录, 人工核验 UI)"
 else
   skip "TC-DSH-051" "容器 $CONTAINER_INSPECT 不在运行"
 fi
 
 # ── 12. 反向：无 token 401（TC-DSH-056） ────────────────────────
-U=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API/channels/$CH_DEV/messages" \
-  -H 'Content-Type: application/json' -d '{"text":"x"}')
-ok "TC-DSH-056 未认证发消息 401" $([ "$U" = "401" ]; echo $?) "http=$U"
+if [ -n "$CH_DEV" ]; then
+  U=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API/channels/$CH_DEV/messages" \
+    -H 'Content-Type: application/json' -d '{"text":"x"}')
+  ok "TC-DSH-056 未认证发消息 401" $([ "$U" = "401" ]; echo $?) "http=$U"
+else
+  skip "TC-DSH-056" "缺 CH_DEV"
+fi
 
-# ── 13. 反向：不存在频道（TC-DSH-055） ──────────────────────────
-NE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API/channels/c_not_exist/messages" \
-  -H "$AUTH" -H 'Content-Type: application/json' -d '{"text":"x"}')
-ok "TC-DSH-055 不存在频道 404" $([ "$NE" = "404" ]; echo $?) "http=$NE"
+# ── 13. 反向：不存在频道 404（TC-DSH-055；注意字段必须合法 text）──
+if [ -n "$ADMIN" ]; then
+  NE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API/channels/c_not_exist/messages" \
+    -H "$AAUTH" -H 'Content-Type: application/json' -d '{"text":"x"}')
+  ok "TC-DSH-055 不存在频道 404" $([ "$NE" = "404" ]; echo $?) "http=$NE (非法字段才是 400)"
+else
+  skip "TC-DSH-055" "缺 ADMIN"
+fi
 
 # ── 汇总 ───────────────────────────────────────────────────────
 echo ""

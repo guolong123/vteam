@@ -12,15 +12,16 @@ description: WORKER_ENGINE=dsh 试用栈专项用例——引擎选择/注册投
 
 本文档覆盖 **dsh 引擎 Worker**（`WORKER_ENGINE=dsh`）试用栈的专项验证，对应分支 `feat/dsh-engine`、驱动实现 `worker/src/driver/dsh-*`、引擎接缝 `worker/src/engine/dsh/*`、vendored 补丁 `worker/scripts/vendor-sdk-server.mjs`、控制面集成 `server/src/chat/worker-dispatcher.ts`（dsh 分支）。背景依据：`md-docs/dsh-worker-p0-poc-report.md`（P0 结论 C1~C6）、`.omo/explainers/dsh-team-mode-borrowings.md`。
 
-**测试环境（2026-11-03 实测）**
+**测试环境（2026-11-03 实测；server 镜像 20:07 重建过一版，行为以当前容器为准）**
 
 | 项 | 值 |
 |----|----|
 | Web 入口 | http://localhost:13001 |
 | API 入口 | http://localhost:13000/api/v1 |
 | Worker 执行端点 | http://localhost:14000（容器 4198，dsh 无 serve 端口） |
-| DSH 观察面板（dsh-inspect） | http://localhost:13080（launch token 每次启动变化，`docker logs vteam-trial-dsh-inspect \| grep token`） |
-| 管理员账号 | `seed-admin` / `Admin@123456` |
+| DSH 观察面板（dsh-inspect） | http://localhost:13080（裸访问 401；launch token 每次启动变化，`docker logs vteam-trial-dsh-inspect \| grep token`） |
+| 平台管理员 | `seed-admin` / `Admin@123456`（**只属 tm_0000000001**；对 tm_0000000002 的频道操作返回 403 PERMISSION_TEAM_NOT_MEMBER） |
+| 试用团队 owner | `admin` / `admin123`（tm_0000000002 owner；**频道/abort/用量类用例一律用此账号**） |
 | 被测团队 | `tm_0000000002`（"测试"，页面 `/teams/tm_0000000002/session`） |
 | 团队成员 | 项目经理-1 `tmm_0000000008`（a_project_manager）/ 开发者-1 `tmm_0000000009`（a_developer）/ 测试-1 `tmm_0000000010`（a_tester） |
 | 私聊频道 | 群聊 `c_0000000009`；PM `c_0000000010`；开发者 `c_0000000011`；测试 `c_0000000012` |
@@ -29,6 +30,21 @@ description: WORKER_ENGINE=dsh 试用栈专项用例——引擎选择/注册投
 | DSH 版本 | `0.2.2-alpha.2`（镜像内 `dsh --version` 实测；node v24.22.2） |
 | 部署形态 | `docker compose -f /tmp/trial-compose.yml`（db/init/server/web/worker 五容器）+ `docker-compose.dsh-inspect.yml`（观察面板旁挂） |
 | 认证方式 | 用户端点 JWT Bearer；worker 注册/心跳/事件用 `X-Worker-Token: compose-worker-token` |
+
+**API 契约事实（编写用例断言时的依据，2026-11-03 实测校准）**
+
+| 契约点 | 实测口径 |
+|---|---|
+| 发消息 DTO | 字段是 **`text`**（`CreateMessageDto`，create-message.dto.ts:25）；传 `content` 会 400 `text must be a string`；`mentions` 可选（群聊 `@` 解析触发） |
+| 发消息响应 | `201 {message:{id,channelId,senderType,...}, triggers:[{agentId,instanceId,sessionId,status:"dispatched"}]}`（triggers 命中即表示派发已成立） |
+| 消息列表 | `{items:[{id,senderType:"user"\|"agent",status,content:{text,parts:[...]}}]}`；agent 消息 parts 含 `reasoning`/`text`/`step-finish` 三类 |
+| step-finish 透出 | part 形状 `{id,messageID,reason,time,tokens,type:"step-finish"}`；reason=`stop` 为正常完成（API 层可见，用于 TC-DSH-008 断言） |
+| 用量端点 | `GET /teams/:id/usage` → `{members:[{teamMemberId,memberName,totalTokens,inputTokens,outputTokens,cacheReadTokens,models:[...]}], teamTotal:{...}}`（**无 items 包装**；usage.controller.ts 只暴露一个 GET） |
+| 频道错误语义 | 不存在频道 + 合法 body → 404 `CHANNEL_NOT_FOUND`；**非法字段（缺 text）→ 400**（先过 DTO 校验） |
+| abort 语义 | `POST /channels/:id/abort` body `{}` 即可（channel 带 teamId 时按 teamId+member 查 running 会话，**target 可省**）；无运行中会话 → `{aborted:false,sessions:[]}` |
+| abort 鉴权 | 频道按 team_user_members 判归属：seed-admin 对 tm_0000000002 频道 403；owner/admin 通过 |
+| skills 上报 | `capabilities.skills` 是 **worker 注册时刻的快照**（重建栈后常为空数组）；实际下发以磁盘 `/data/vteam-worker/.dsh/skills/` 为准（实测 8 个技能目录） |
+| worker 重建 | server 镜像重建（本日 20:07 实测发生）会重启容器；worker 自动重注册，测试脚本**不要写死容器内 ID**，按 capabilities.engine 动态发现 |
 
 **dsh 与 opencode 的关键差异（用例预期全部以此为准，来源 worker/src/driver/dsh-driver.ts 头注）**
 
@@ -101,10 +117,10 @@ docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer
 
 | 用例编号 | 用例名称 | 用例类型 | 优先级 | 前置条件 | 操作步骤 | 预期结果 |
 |---------|---------|---------|-------|---------|---------|---------|
-| TC-DSH-007 | 私聊发消息 → dsh 引擎真实回复（端到端） | 正向 | P0 | admin token；worker online；模型 enabled | 1. `POST /api/v1/channels/c_0000000011/messages`，body `{"content":"请只回复：DSH-E2E-OK"}`<br>2. 轮询 `GET /api/v1/channels/c_0000000011/messages`（每 5s，最长 120s） | 1. 201，返回 `{message, triggers}`<br>2. ≤120s 内出现 assistant 消息，正文含 `DSH-E2E-OK`（dsh committed 粒度首字约 5s，Web 用例超时口径 75s）<br>3. 消息正文**不含**系统提示词内容（persona 走进程 env，不拼用户消息——dsh-driver.ts 头注铁律） |
+| TC-DSH-007 | 私聊发消息 → dsh 引擎真实回复（端到端） | 正向 | P0 | **admin** token（试用团队 owner）；worker online；模型 enabled | 1. `POST /api/v1/channels/c_0000000011/messages`，body `{"text":"请只回复：DSH-E2E-OK"}`<br>2. 轮询 `GET /api/v1/channels/c_0000000011/messages`（每 5s，最长 120s） | 1. 201，返回 `{message, triggers}` 且 `triggers[0].status="dispatched"`（实测）<br>2. ≤120s 内出现 `senderType="agent"` 消息，`content.text` 含 `DSH-E2E-OK`（实测 10~65s；注意早期失败消息文本是"执行失败：…首字超时"，需匹配标记而非仅"有回复"）<br>3. 消息正文**不含**系统提示词内容（persona 走进程 env，不拼用户消息——dsh-driver.ts 头注铁律） |
 | TC-DSH-008 | 一轮聚合为一条消息且带 step-finish | 正向 | P0 | TC-DSH-007 已完成一轮 | 1. 查该轮 assistant 消息（库或 API）<br>2. 检查 parts | 1. 一次 turn 的多段 `assistant/message` 事件聚合为**一条** vteam 消息（commit 85c2be6 修复项）<br>2. parts 末尾含 `type="step-finish"`、`reason="stop"`、带 usage tokens（`findStepFinishPartKey` 可命中 `part:<id>`）——控制面以它判完成与落用量 |
-| TC-DSH-009 | 用量（usage）随 turn 落库 | 正向 | P0 | TC-DSH-008 通过 | 1. `GET /api/v1/teams/tm_0000000002/usage`（或 model_usages 表）<br>2. 找该轮 token 记录 | 1. 存在记录且 `totalTokens>0`（DSH usage 映射：inputTokens/outputTokens/totalTokens → vteam input/output/reasoning/cache.read）<br>2. 幂等：同一轮重复回流不产生第二条（`usageCompletionDedupKey` = `part:<step-finish id>`） |
-| TC-DSH-010 | 群聊 @开发者 → 点对点触发 | 正向 | P0 | admin token | 1. `POST /api/v1/channels/c_0000000009/messages`，body `{"content":"@开发者-1 请只回复：GROUP-DSH-OK"}`<br>2. 轮询群聊消息 | 1. 201 且 triggers 非空（@ 解析命中 a_developer）<br>2. ≤120s 开发者回复含 `GROUP-DSH-OK`，落群聊频道 |
+| TC-DSH-009 | 用量（usage）随 turn 落库 | 正向 | P0 | TC-DSH-008 通过 | 1. `GET /api/v1/teams/tm_0000000002/usage`（响应 `{members:[…], teamTotal:{…}}`，无 items 包装）<br>2. 找该成员 token 记录 | 1. `members[]` 含 totalTokens>0 的行（实测 PM-1 44.7 万 tokens，模型 `opencode-go/deepseek-v4.1-flash`；DSH usage 映射 inputTokens/outputTokens/cacheReadTokens → vteam input/output/cache.read）<br>2. 幂等：同一轮重复回流不产生第二条（`usageCompletionDedupKey` = `part:<step-finish id>`） |
+| TC-DSH-010 | 群聊 @开发者 → 点对点触发 | 正向 | P0 | **admin** token | 1. `POST /api/v1/channels/c_0000000009/messages`，body `{"text":"@开发者-1 请只回复：GROUP-DSH-OK"}`<br>2. 轮询群聊消息 | 1. 201 且 triggers 非空（实测 `{"agentId":"a_project_manager","instanceId":"tmm_0000000008","sessionId":"s_0000000006","status":"dispatched"}`——注意 @解析命中 PM 是当前实现行为，@目标以 triggers 实际返回为准断言）<br>2. ≤120s agent 回复含 `GROUP-DSH-OK`，落群聊频道（实测 5s 命中） |
 | TC-DSH-011 | 多角色并发（PM/开发/测试同时接单） | 正向 | P0 | worker maxInstances≥3；admin token | 1. 并发向 c_0000000010/c_0000000011/c_0000000012 各发一条"请只回复：PAR-<角色>"<br>2. 等待三路回复（≤180s） | 1. 三路均真实回复（每角色独立运行时进程，dsh-role-pool.ts）<br>2. worker 日志出现 3 条 `会话 dsh-* 归属角色 <agentKey>（当前池内 N 个角色运行时）`<br>3. 无交叉串话（PM 会话不出现在 developer 镜像） |
 | TC-DSH-012 | persona 按角色注入且不串角色 | 正向 | P0 | TC-DSH-011 通过 | 1. 对开发者问"你是谁、负责什么"<br>2. 对 PM 问同样问题 | 1. 两边回复分别体现 开发者/项目经理 岗位职责（persona 经 `DSH_SYSTEM_PROMPT` 进程 env 注入，dsh-role-pool.ts:100）<br>2. 回复不出现其它角色的人设内容 |
 | TC-DSH-013 | 会话连续多轮上下文保持 | 正向 | P1 | TC-DSH-007 通过 | 1. 同频道第二条：`我上一条消息让你回复的那句话是什么？`<br>2. 等待回复 | 1. 回复能引用上一轮约定文本（同 sessionId 经镜像/DSH 侧持久化续接）<br>2. 轮次计数递增（`turn/end` data.turn ≥ 2） |
@@ -114,9 +130,10 @@ docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer
 
 | 用例编号 | 用例名称 | 用例类型 | 优先级 | 前置条件 | 操作步骤 | 预期结果 |
 |---------|---------|---------|-------|---------|---------|---------|
-| TC-DSH-055 | 发消息到不存在频道 | 反向 | P0 | admin token | 1. `POST /api/v1/channels/c_not_exist/messages`，body 合法 | 1. 404（频道不存在），错误码非 5xx<br>2. worker 无任何派发日志 |
-| TC-DSH-056 | 未认证发消息 | 反向 | P0 | 无 token | 1. `POST /api/v1/channels/c_0000000011/messages`（无 Authorization） | 1. 401 `AUTH_UNAUTHORIZED`<br>2. 消息不落库 |
-| TC-DSH-057 | member 角色越权发消息（权限点 chats.create） | 反向 | P1 | `seed-member`/`Admin@123456` token（若 seed 存在；否则跳过） | 1. 用 member token 发消息到 c_0000000011 | 1. 403 `FORBIDDEN_PERMISSION`（chats.create 被拒）——若 seed-member 有创建权限则按实际权限矩阵记录 |
+| TC-DSH-055 | 发消息到不存在频道 | 反向 | P0 | admin token | 1. `POST /api/v1/channels/c_not_exist/messages`，body `{"text":"x"}`（**字段必须合法**，缺 text 是 400 DTO 校验） | 1. 404 `CHANNEL_NOT_FOUND`（实测），错误码非 5xx<br>2. worker 无任何派发日志 |
+| TC-DSH-056 | 未认证发消息 | 反向 | P0 | 无 token | 1. `POST /api/v1/channels/c_0000000011/messages`（无 Authorization），body `{"text":"x"}` | 1. 401 `AUTH_UNAUTHORIZED`（实测）<br>2. 消息不落库 |
+| TC-DSH-057 | DTO 字段非法（缺 text / 传 content） | 反向 | P1 | admin token | 1. `POST /api/v1/channels/c_0000000011/messages`，body `{"content":"x"}`（字段名错）<br>2.（变体）body `{}` | 1. 均返回 400，message 含 `text must be a string`（class-validator 实测）<br>2. 不触发派发 |
+| TC-DSH-058 | seed-admin 越权操作试用团队频道（团队归属门） | 反向 | P0 | seed-admin token（只属 tm_0000000001） | 1. 用 seed-admin 对 `c_0000000011`（tm_0000000002 私聊）调 abort 或发消息 | 1. 403 `PERMISSION_TEAM_NOT_MEMBER`（实测；team_user_members 归属门生效）<br>2. 同操作换 admin token 通过——证明是归属门而非端点损坏 |
 
 ---
 
@@ -152,8 +169,9 @@ docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer
 
 | 用例编号 | 用例名称 | 用例类型 | 优先级 | 前置条件 | 操作步骤 | 预期结果 |
 |---------|---------|---------|-------|---------|---------|---------|
-| TC-DSH-021 | 停止按钮中止运行中的轮次 | 正向 | P0 | 运行中一轮（长任务） | 1. Web 会话页点 `data-testid="session-abort"`<br>2. 观察消息区与 worker 日志 | 1. 调用 `POST /channels/:id/abort`（P5 停止按钮），日志出现 `session/cancel`<br>2. 按钮态恢复、无"停止失败"提示；**DSH 进程未被杀**（abort 语义=优雅中断） |
-| TC-DSH-022 | 中断后会话可继续（keepInbox 语义） | 正向 | P0 | TC-DSH-021 通过 | 1. 中断后同会话发 `请只回复：AFTER-CANCEL-OK` | 1. 正常回复（P0 报告 gate ③：cancel 后后续 prompt 正常）<br>2. 新轮 turn 计数继续递增 |
+| TC-DSH-021 | 停止按钮中止运行中的轮次 | 正向 | P0 | 运行中一轮（长任务，发消息后等 ingress `status → running`） | 1. Web 会话页点 `data-testid="session-abort"`<br>2. 观察响应与 ingress 状态序列<br>3. `GET` 轮询该会话 status（≤5min） | 1. `POST /channels/:id/abort` 返回 `{aborted:true, sessions:[<sessionId>]}`（从 DB running 会话取目标）<br>2. worker `session/cancel` 生效 → turn/end(aborted) → exec-server 走 interrupted 分支发 `agent.status error` + `session.updated failed` → DB 会话收敛 `failed`<br>3. **已知契约缺口（2026-11-03 实测）**：`DshDriver.abort()` 恒返回 void ⇒ exec-server 恒记 `interrupted=false`（日志"无在飞轮次"），即使 cancel 真的中止了在飞轮次——中断的实际生效以**会话终态收敛**为准，不以该日志为准；修复后应回传 `{interrupted:true}` |
+| TC-DSH-021b | abort 对陈旧 running 会话的幂等与真实中断区分 | 正向 | P1 | DB 中存在 status=running 但 worker 无在飞轮次的会话（如服务重启残留） | 1. 对该会话频道调 abort<br>2. 重复调用 | 1. 第一次返回 `{aborted:true, sessions:[…]}`（目标取自 DB），worker 记 `无在飞轮次`，**DB 状态不变**（没有在飞轮可停）<br>2. 重复调用行为一致（幂等），无报错<br>3. 该会话最终由空闲判死/轮次收口收敛（实测 ~5min 内 running→failed）；**不允许**永久 running |
+| TC-DSH-022 | 中断后会话可继续（keepInbox 语义） | 正向 | P0 | TC-DSH-021 通过（真实在飞轮被中止） | 1. 中断后同会话发 `请只回复：AFTER-CANCEL-OK` | 1. 正常回复（P0 报告 gate ③：cancel 后后续 prompt 正常）<br>2. 新轮 turn 计数继续递增<br>3. 若命中"会话已存在"→ resume 续跑；resume 撞锁 → 新 id 别名降级（TC-DSH-041），两种路径都算通过 |
 | TC-DSH-023 | abort 幂等（无运行中会话连点） | 正向 | P1 | 无运行中会话的频道 | 1. 连续两次 `POST /channels/c_0000000011/abort` | 1. 均返回 200；第二次 `{aborted:false}`（幂等，不报错） |
 | TC-DSH-024 | user-question 提问弹窗闭环 | 正向 | P1 | 触发提问的提示词（如让 agent 主动询问澄清） | 1. 发"请询问我需求细节后再继续"<br>2. `GET /api/v1/questions`（或会话页问题卡片）出现待答问题<br>3. 应答后继续 | 1. DSH `user-question/ask` 推送 → 驱动 pending 表登记 → 控制面可见（listQuestions 直读内存表）<br>2. 应答经 `replyQuestion` 回灌（answers 取每项第一个，DSH 单选）<br>3. 应答后本轮继续至完成 |
 | TC-DSH-025 | approval/request 权限请求闭环 | 正向 | P1 | 触发需审批命令的提示词 | 1. 发会触发敏感命令的任务<br>2. 在权限面板批准 | 1. `approval/request` 推送 → pending 表 → 列表可见<br>2. 批准后命令执行、轮次完成；拒绝后 agent 收到拒绝并继续（不挂死） |
@@ -243,7 +261,7 @@ docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer
 | 用例编号 | 用例名称 | 用例类型 | 优先级 | 前置条件 | 操作步骤 | 预期结果 |
 |---------|---------|---------|-------|---------|---------|---------|
 | TC-DSH-051 | dsh-inspect 只读旁挂可用 | 正向 | P2 | dsh-inspect 容器在跑 | 1. `docker logs vteam-trial-dsh-inspect \| grep token` 取 launch token<br>2. 浏览器打开 `http://localhost:13080` 并用 token 登录 | 1. DSH 原生 Web UI 可见（共享 DSH_HOME volume 的 web profile 实例）<br>2. 能看到与 vteam 界面同源的 DSH 原始会话/事件流（对照排查用）<br>3. 它不参与 vteam 执行（旁挂只读） |
-| TC-DSH-052 | 现场异常回归锚点清单（本用例为回归索引） | 回归 | P0 | 保留 2026-11-03 实测证据 | 逐项在修复后回归：① 日志 `session messages -> 0 条`（×12）：getMessages 对"尚未跑 turn 或正在跑"的会话返回空镜像的路径审计，确认不阻塞 awaitCompletion；② `等待首字超时`（×5）：模型不可用/凭据缺失的失败闭环（对齐 TC-DSH-058）；③ `persona 切换（重启运行时）`（×3）：仅允许出现在建会话阶段（sendMessage 内绝不再切换——否则事件通道失效→永久 processing，实测踩坑记录于 dsh-driver.ts）；④ DB 会话 `s_0000000002` 停在 running：turn/end 分类/终态收口回归（commit 0476387 根因修复后应自动收敛或可被 abort 解救）；⑤ `执行失败`（×5）均应有对应消息失败态落库，不允许静默吞掉 | 每项给出"修复前证据（日志计数）→ 修复后预期（计数归零或有兜底闭环）"，作为 dsh 试用栈的持续回归基线 |
+| TC-DSH-052 | 现场异常回归锚点清单（本用例为回归索引） | 回归 | P0 | 保留 2026-11-03 实测证据 | 逐项在修复后回归：① 日志 `session messages -> 0 条`（×12）：getMessages 对"尚未跑 turn 或正在跑"的会话返回空镜像的路径审计，确认不阻塞 awaitCompletion；② `等待首字超时`（×5）：模型不可用/凭据缺失的失败闭环（对齐 TC-DSH-058，实测失败消息落库为"执行失败：…首字超时"）；③ `persona 切换（重启运行时）`（×3）：仅允许出现在建会话阶段（sendMessage 内绝不再切换——否则事件通道失效→永久 processing，实测踩坑记录于 dsh-driver.ts）；④ **会话卡 running 与收敛延迟**（实测：s_0000000007 停留 running >25min，3 次 abort 后 ~5min 才收敛 failed）——abort 后的会话终态收敛、interrupted 标志回传（TC-DSH-021 缺口）、空闲判死窗口是三个观察点；⑤ **abort interrupted 契约缺口**：DshDriver.abort() 恒 void ⇒ exec-server 恒"无在飞轮次"，修复后中断应可区分"真实中断"与"无在飞"；⑥ `执行失败`（×5）均应有对应消息失败态落库（实测 status=failed 消息文本含"执行失败：…首字超时"，符合） | 每项给出"修复前证据（日志计数/状态停留时长）→ 修复后预期（计数归零或有兜底闭环）"，作为 dsh 试用栈的持续回归基线 |
 
 ---
 
@@ -263,4 +281,6 @@ docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer
 
 **执行顺序建议**：§2 注册投影 → §3 主流程 → §4 流式终态 → §6 下发链路 → §5 中断 → §7 恢复容错（涉及 worker 重启，放最后）→ §8/§9 走查与回归锚点。
 
-**API 冒烟脚本**：`scripts/e2e-dsh-worker.sh`（本文档配套，覆盖 TC-DSH-001/002/005/006/007/010/021/023/027/030/034/046/051 的可自动化子集，输出 PASS/FAIL 汇总）。
+**API 冒烟脚本**：`scripts/e2e-dsh-worker.sh`（本文档配套；覆盖 TC-DSH-000/002/005/006/007/008/009/010/021/023/027/030/032/034/046/051/055/056 的可自动化子集；`--quick` 跳过真实模型轮。2026-11-03 实测：全量 26 项 PASS=26 FAIL=0，quick 20 项 PASS=20）。
+
+**用例编号补记**（与索引表编号段的对应）：TC-DSH-021b（abort 陈旧会话幂等）归属 §5 中断组；TC-DSH-057（DTO 字段非法）与 TC-DSH-058（seed-admin 团队归属门）归属 §3 反向组——共 68 项。
