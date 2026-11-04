@@ -322,6 +322,18 @@ describe('系统提示词走 persona 通道（不拼进用户消息）', () => {
    * 每轮重复消耗 token、破坏 KV cache 前缀稳定。
    * 正确机制：DSH 的 `dsh-system-prompt.personaPrefix`（patch + spawn env）。
    * 故 contentBlocks **必须保持纯净**（只含真正的用户内容）。
+   *
+   * ⚠️ **第二次契约变更**（本组用例曾因此变红）：persona 的**写入点**从
+   * `sendMessage` 移到了 `createSession`。原因见 dsh-driver 里的实测注释 ——
+   * 在 sendMessage 里 switchPersona 会 close + 重启运行时，而事件通道在「本轮开始前」
+   * 刚订阅，运行时一重启订阅立即失效 ⇒ turn/end 收不到 ⇒ sendAndAwait 卡死
+   * ⇒ 消息永久 processing（线上「永久工作中」的根因）。故 sendMessage 里**绝不再切换**，
+   * 本驱动实例 = 一个角色的运行时（多角色由 DshRolePool 各起运行时）。
+   *
+   * 于是本组断言改为：
+   * - contentBlocks 纯净 —— 仍然在 `sendMessage` 上验（那是每轮的实际路径）；
+   * - persona env —— 在 `createSession` 上验（唯一写入点）；
+   * - 额外锚一条**不变量**：`sendMessage` 不得再改 persona（否则又回到重启卡死）。
    */
   const silent = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -360,16 +372,44 @@ describe('系统提示词走 persona 通道（不拼进用户消息）', () => {
     expect(blocks).not.toContain('岗位职责');
   });
 
-  it('system 进入 persona env（DSH 正规通道）', async () => {
+  /** 把 client 的 request/close 桩掉：persona 切换会 cancel 会话 + 关运行时。 */
+  function stubClient(driver: DshDriver): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).client.request = async () => ({});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).client.close = async () => {};
+  }
+
+  it('system 进入 persona env（唯一写入点：createSession）', async () => {
     const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
-    const { personaEnv } = await captureBlocks(driver, 'p-2', '【岗位职责】你是项目经理', '你好');
-    expect(personaEnv).toBe('【岗位职责】你是项目经理');
+    stubClient(driver);
+
+    await driver.createSession(null, undefined, '【岗位职责】你是项目经理');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((driver as any).options.env?.DSH_SYSTEM_PROMPT).toBe('【岗位职责】你是项目经理');
   });
 
   it('system 为空时不设置 persona env', async () => {
     const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
-    const { blocks, personaEnv } = await captureBlocks(driver, 'p-3', '', '只有正文');
-    expect(blocks).toBe('只有正文');
-    expect(personaEnv).toBe('');
+    stubClient(driver);
+
+    await driver.createSession(null, undefined, '   ');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((driver as any).options.env?.DSH_SYSTEM_PROMPT).toBeUndefined();
+  });
+
+  it('不变量：sendMessage **不**再切换 persona（否则重启运行时会让事件通道失效）', async () => {
+    const driver = new DshDriver({ provider: 'mock', model: 'm', logger: silent });
+    stubClient(driver);
+    // 预置一个已生效的 persona，模拟「建会话时已定好」
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (driver as any).options.env = { DSH_SYSTEM_PROMPT: '建会话时的角色' };
+
+    await captureBlocks(driver, 'p-4', '另一个角色', '你好');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((driver as any).options.env?.DSH_SYSTEM_PROMPT).toBe('建会话时的角色');
   });
 });

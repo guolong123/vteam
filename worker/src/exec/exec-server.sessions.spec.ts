@@ -156,10 +156,14 @@ describe('T10 会话/模型端点（决策 D3：控制面不再直连 opencode�
         });
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ sessionId: 'ses_new' });
-        expect(createSession).toHaveBeenCalledWith({
-          providerID: 'opencode',
-          modelID: 'gpt-5',
-        });
+        // createSession 现签名为 (model, agentPreset?, agentSystem?)：
+        // 本端点只下发模型，后两个参数缺省（undefined）。断言显式写出，避免以后
+        // 再加中间参数时又被 jest 的「参数个数不同」判红。
+        expect(createSession).toHaveBeenCalledWith(
+          { providerID: 'opencode', modelID: 'gpt-5' },
+          undefined,
+          undefined,
+        );
       } finally {
         await stop();
       }
@@ -171,7 +175,7 @@ describe('T10 会话/模型端点（决策 D3：控制面不再直连 opencode�
       try {
         const res = await request(port, 'POST', '/sessions', { token: WORKER_TOKEN });
         expect(res.status).toBe(200);
-        expect(createSession).toHaveBeenCalledWith(undefined);
+        expect(createSession).toHaveBeenCalledWith(undefined, undefined, undefined);
       } finally {
         await stop();
       }
