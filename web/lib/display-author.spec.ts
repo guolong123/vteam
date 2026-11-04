@@ -17,6 +17,10 @@ test("B9 裸 id 判定：三类 id 命中、非 id 串与非字符串不误伤",
   expect(isRawSenderId("a_0000000001")).toBe(true);
   expect(isRawSenderId("tmm_404")).toBe(true);
   expect(isRawSenderId("ta_99")).toBe(true);
+  // 下划线形态的真实 id（早期漏掉导致裸 id 上屏：B5 external 那条）
+  expect(isRawSenderId("a_ghost_ext")).toBe(true);
+  expect(isRawSenderId("a_product_manager")).toBe(true);
+  expect(isRawSenderId("tmm_0000000008")).toBe(true);
   // 非 id：角色名、别名、空串、非字符串、含大写/连字符的 id 形态
   expect(isRawSenderId("Dev-1")).toBe(false);
   expect(isRawSenderId("开发者")).toBe(false);

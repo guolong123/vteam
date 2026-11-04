@@ -12,8 +12,15 @@
  * 由展示组件回落到安全的角色标签，而不是把 senderId/memberId/instanceId 塞进可见文本。
  */
 
-/** 裸 id 形态：agentId（a_）、团队成员 id（tmm_）、任务实例 id（ta_）+ 小写字母数字。 */
-export const RAW_SENDER_ID_PATTERN = /^(?:a|tmm|ta)_[0-9a-z]+$/;
+/**
+ * 裸 id 形态：agentId（a_）、团队成员 id（tmm_）、任务实例 id（ta_）+ 小写字母/数字/**下划线**。
+ *
+ * ⚠️ 下划线必须算进来：早期只写 `[0-9a-z]+`，于是 `a_ghost_ext`、`a_product_manager`
+ * 这类**带下划线的真实 id** 逃过过滤，被当成作者名直接显示在界面上
+ * （B5 用例实测：external 渠道那条把 senderId 原样渲染成作者）。
+ * 判定仍是**全串锚定**，不会误伤 `meta_index` 这种只是含 `a_` 子串的普通文本。
+ */
+export const RAW_SENDER_ID_PATTERN = /^(?:a|tmm|ta)_[0-9a-z_]+$/;
 
 /** 该字符串是否是裸 sender/成员/实例 id（整串判定，不做子串误伤）。 */
 export function isRawSenderId(value: unknown): value is string {

@@ -1224,7 +1224,8 @@ test.describe("B5 author 与角色并列，B9 禁止裸 id 兜底", () => {
   const at = (day: number, h: number, m: number) => new Date(2026, 8, day, h, m).toISOString();
 
   /** 计划 Acceptance 指定的裸 id 扫描口径，作用于可见 DOM 文本（innerText，不含 testid 属性）。 */
-  const RAW_ID_SCAN = /a_[0-9a-z]+|tmm_[0-9a-z]+|ta_[0-9a-z]+/;
+  // 必须含下划线：`a_ghost_ext` 这类 id 曾因口径太窄而逃过扫描（同时逃过页面过滤）
+  const RAW_ID_SCAN = /a_[0-9a-z_]+|tmm_[0-9a-z_]+|ta_[0-9a-z_]+/;
 
   interface B5Row {
     id: string;
@@ -1354,7 +1355,10 @@ test.describe("B5 author 与角色并列，B9 禁止裸 id 兜底", () => {
     expect(await unmappedMember.innerText()).not.toMatch(RAW_ID_SCAN);
 
     const external = b5Row(page, 4);
-    await expect(external.getByTestId("chat-bubble-author").locator(":scope > span").first()).toHaveText("开发者");
+    // 外部渠道的裸 id 被 B9 过滤后**不能**回落平台角色标签（那会给外部联系人挂上
+    // 假的「开发者」身份，见 page.tsx 里 role={undefined} 的注释），也不能露出裸 id；
+    // 正确语义是中性兜底「外部用户」，且身份行本身必须仍然可见。
+    await expect(external.getByTestId("chat-bubble-author").locator(":scope > span").first()).toHaveText("外部用户");
     await expect(external.getByTestId("chat-bubble-author")).not.toContainText("a_ghost_ext");
     expect(await external.innerText()).not.toMatch(RAW_ID_SCAN);
 
@@ -1376,7 +1380,7 @@ test.describe("B5 author 与角色并列，B9 禁止裸 id 兜底", () => {
     await expect(externalBadge).toHaveCount(1);
     await expect(externalBadge).toBeVisible();
     await expect(externalBadge).toHaveText("外部渠道");
-    await expect(external.getByTestId("chat-bubble-author").locator(":scope > span").first()).toHaveText("开发者");
+    await expect(external.getByTestId("chat-bubble-author").locator(":scope > span").first()).toHaveText("外部用户");
     expect(await external.innerText()).not.toMatch(RAW_ID_SCAN);
 
     const mention = b5Row(page, 7);

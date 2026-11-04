@@ -196,7 +196,12 @@ export function ChatBubble({
     );
   }
 
-  const showHeader = showIdentity && !isUser && (author || roleTheme);
+  // 外部渠道消息**总是**渲染身份行：它代表「某个外部联系人说过话」，
+  // 即使 senderId 是裸 id 被 B9 过滤掉（author=undefined）也要给一行中性兜底
+  // （`authorRoleDisplay` 会回落「外部用户」），而不是整行消失——否则那条消息
+  // 看起来像是自己说的（B5 用例实测：过滤掉裸 id 后身份行直接不见了）。
+  const showHeader =
+    showIdentity && !isUser && (author || roleTheme || senderType === "external");
   const hasText = text.trim().length > 0;
   const needsCollapse = hasText && text.length > CHAT_COLLAPSE_THRESHOLD;
   return (
