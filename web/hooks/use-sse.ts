@@ -177,8 +177,59 @@ function connect(conn: SharedConnection): void {
     conn.es = null;
     if (conn.refCount <= 0) return; // 已无订阅者，不重连（等待关闭）
     if (conn.retryTimer) clearTimeout(conn.retryTimer);
-    conn.retryTimer = setTimeout(() => connect(conn), RECONNECT_DELAY_MS);
+    /**
+     * SSE 的鉴权 token 是**建连时刻**拼进 URL 的（EventSource 无法改 header），
+     * 所以 accessToken 一续期，旧连接就永远 401、且重连只会拿旧 token 继续失败。
+     * 这里每次重连前先比对「连接 key 里的 token」与 store 当前 token：
+     * 不一致 → 主动续期（若无 refreshToken 则续期返回 null）后，用新 token 重建连接，
+     * 并把旧连接从池中摘除、把订阅者迁到新 key 的连接上。
+     */
+    conn.retryTimer = setTimeout(() => {
+      void reconnectWithFreshToken(conn);
+    }, RECONNECT_DELAY_MS);
   };
+}
+
+/**
+ * SSE 断线重连：token 未变 → 原连接重建；token 已变（续期过）→ 迁移到新连接。
+ *
+ * 迁移细节：旧连接（key=`old|all`）里的订阅者 listener 集合原样搬到新连接，
+ * 引用计数同步转移，旧连接关闭并从池里删除——否则页面会一直订阅在废弃连接上。
+ */
+async function reconnectWithFreshToken(conn: SharedConnection): Promise<void> {
+  if (conn.refCount <= 0) return;
+  const current = useAuthStore.getState().token;
+  const connToken = conn.key.split("|")[0];
+  if (!current || current === connToken) {
+    connect(conn);
+    return;
+  }
+  // token 变了：把订阅者迁到新 key 的连接（新连接首次挂载时会自行建立）
+  const nextKey = `${current}|all`;
+  let next = pool.get(nextKey);
+  if (!next) {
+    next = {
+      key: nextKey,
+      es: null,
+      listeners: conn.listeners,
+      refCount: conn.refCount,
+      lastId: conn.lastId,
+      skipHistory: conn.skipHistory,
+      retryTimer: null,
+      closeTimer: null,
+    };
+    pool.set(nextKey, next);
+    connect(next);
+  } else {
+    // 已存在同 token 连接：把订阅者并入，引用计数相加
+    for (const listener of conn.listeners) next.listeners.add(listener);
+    next.refCount += conn.refCount;
+  }
+  conn.listeners = new Set();
+  conn.refCount = 0;
+  conn.es?.close();
+  conn.es = null;
+  pool.delete(conn.key);
 }
 
 export interface UseSSEOptions<T = unknown> {

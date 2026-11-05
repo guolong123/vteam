@@ -106,7 +106,9 @@ function LoginForm() {
       });
       // 记住我：勾选 → localStorage 跨会话；未勾选 → sessionStorage 会话级
       useAuthStore.getState().setPersistMode(rememberMe);
-      setAuth(res.accessToken, res.user);
+      // 同时保存 refreshToken（7 天有效）：accessToken 2h 到期后由 api 层静默续期，
+      // 实现「记住我」下 1 周免登录；未勾选记住我时它随 sessionStorage 一起会话级失效。
+      setAuth(res.accessToken, res.refreshToken, res.user);
       // 落地页按角色分流（管理员进统计看板、成员进团队工作台），规则单点在 lib/landing.ts
       router.push(resolveLandingPath(res.user));
     } catch (err) {
@@ -294,7 +296,7 @@ function LoginForm() {
                 disabled={submitting}
                 style={{ width: 14, height: 14, accentColor: "#0D9488", cursor: "pointer" }}
               />
-              记住我
+              记住我（1 周内免登录）
             </label>
             <button
               type="button"

@@ -129,6 +129,7 @@ test("5. 技能（skills）已下发到 worker", async ({ page }) => {
   const token = await apiToken();
   const res = await fetch(`${API}/workers`, { headers: { Authorization: `Bearer ${token}` } });
   const json = (await res.json()) as Array<{
+    status?: string;
     capabilities?: { skills?: string[]; engine?: string };
   }>;
   // 只取**在线**的 dsh worker（离线残留节点会干扰断言）

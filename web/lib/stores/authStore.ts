@@ -6,7 +6,8 @@ import {
   persist,
   type StateStorage,
 } from "zustand/middleware";
-import { setAuthToken, setUnauthorizedHandler } from "@/lib/api";
+import { setAuthToken, setRefreshHandler, setUnauthorizedHandler } from "@/lib/api";
+import { jwtExpiryMs, proactiveRefreshDelayMs } from "@/lib/jwt";
 
 export const AUTH_PERSIST_KEY = "agent-platform-auth";
 
@@ -57,9 +58,15 @@ export interface User {
 
 interface AuthState {
   token: string | null;
+  /**
+   * refresh token（默认 7 天有效）：仅用于续期，不参与任何业务请求鉴权。
+   * 有了它，accessToken（默认 2h）到期后可静默换新，实现「记住我」下 1 周免登录。
+   * 旧持久化数据可能没有该字段（上线前登录的用户）→ 那批人到期后仍需重登一次。
+   */
+  refreshToken: string | null;
   user: User | null;
-  /** 登录成功后写入 token 与 user，并同步到 api 层。 */
-  setAuth: (token: string, user: User) => void;
+  /** 登录成功后写入 token/refreshToken/user，并同步到 api 层。 */
+  setAuth: (token: string, refreshToken: string | null, user: User) => void;
   /** 仅更新 token（如 refresh 后），同步到 api 层。 */
   setToken: (token: string | null) => void;
   /** 仅更新 user 信息。 */
@@ -80,21 +87,26 @@ interface AuthState {
  */
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (setStore, getStore) => ({
       token: null,
+      refreshToken: null,
       user: null,
 
-      setAuth: (token, user) => {
+      setAuth: (token, refreshToken, user) => {
         setAuthToken(token);
-        set({ token, user });
+        setStore({ token, refreshToken, user });
+        scheduleProactiveRefresh({ token, refreshToken });
       },
 
+      /** 仅换 accessToken（旧调用方兼容路径）：沿用 store 里已有的 refreshToken 排期。 */
       setToken: (token) => {
+        const refreshToken = getStore().refreshToken;
         setAuthToken(token);
-        set({ token });
+        setStore({ token });
+        scheduleProactiveRefresh({ token, refreshToken });
       },
 
-      setUser: (user) => set({ user }),
+      setUser: (user) => setStore({ user }),
 
       setPersistMode: (remember) => {
         persistMode = remember ? "remember" : "session";
@@ -102,7 +114,8 @@ export const useAuthStore = create<AuthState>()(
 
       logout: () => {
         setAuthToken(null);
-        set({ token: null, user: null });
+        clearProactiveRefresh();
+        setStore({ token: null, refreshToken: null, user: null });
       },
     }),
     {
@@ -110,19 +123,116 @@ export const useAuthStore = create<AuthState>()(
       storage: createJSONStorage(() => dualStorage),
       partialize: (state) => ({
         token: state.token,
+        refreshToken: state.refreshToken,
         user: state.user,
       }),
       onRehydrateStorage: () => (state) => {
-        // localStorage → memory 水合完成后，把 token 同步到 api 层
+        // localStorage → memory 水合完成后，把 token 同步到 api 层，
+        // 并按 token 剩余寿命排期主动续期（刷新页面后同样保持免登录）。
+        // ⚠️ 此处**不能**引用 useAuthStore：同步存储下水合可能发生在 create() 期间，
+        // 那时 const 绑定尚未完成（TDZ）→ 直接用 state 里的 token 对排期即可。
         if (state?.token) {
           setAuthToken(state.token);
+          scheduleProactiveRefresh({
+            token: state.token,
+            refreshToken: state.refreshToken ?? null,
+          });
         }
       },
     }
   )
 );
 
-// 模块加载时注册 401 处理器：token 失效 → 清登录态 + 重定向 /login。
+/* ------------------------------------------------------------------ *
+ * token 续期（保证「记住我」下 1 周免登录）
+ * ------------------------------------------------------------------ */
+
+/** 在飞刷新 Promise（单飞：并发 401 只发一次 POST /auth/refresh）。 */
+let inflightRefresh: Promise<string | null> | null = null;
+/** 主动续期定时器（到期前按剩余寿命排期刷新）。 */
+let proactiveTimer: ReturnType<typeof setTimeout> | null = null;
+/** 主动续期提前量下限（与 lib/jwt 同源口径的最小值）。 */
+const PROACTIVE_MIN_DELAY_MS = 60_000;
+
+function clearProactiveRefresh(): void {
+  if (proactiveTimer !== null) {
+    clearTimeout(proactiveTimer);
+    proactiveTimer = null;
+  }
+}
+
+/**
+ * 调 POST /auth/refresh 换新 token 对并写回 store。
+ *
+ * 单飞语义：并发调用共享同一个在飞 Promise——多个请求同时 401 时只打一次刷新，
+ * 否则刷新竞态会让后到的响应覆盖先到的（服务端每次刷新都签发新对，多个在飞刷新
+ * 各自的 refreshToken 都合法，覆盖虽不致命但会多打请求、浪费窗口）。
+ *
+ * 失败语义：refreshToken 过期/账号禁用 → 返回 null（**不在这里登出**，
+ * 由调用方 api 层判定是否触发 unauthorizedHandler），避免刷新失败时把用户
+ * 的「刚刚还能用的页面」直接清掉。
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  if (inflightRefresh) return inflightRefresh;
+  const refreshToken = useAuthStore.getState().refreshToken;
+  if (!refreshToken) return null;
+
+  inflightRefresh = (async () => {
+    try {
+      // 动态 import 规避循环依赖：api.ts ← authStore.ts（顶部静态 import 会成环）
+      const { request } = await import("@/lib/api");
+      const pair = await request<{ accessToken: string; refreshToken: string }>(
+        "/auth/refresh",
+        { method: "POST", body: { refreshToken } }
+      );
+      // 同步 api 模块token + store（含新 refreshToken：服务端每次刷新轮换一对，
+      // 不写回会让下一次续期用旧 refreshToken —— 旧值仍有效但浪费窗口）。
+      setAuthToken(pair.accessToken);
+      useAuthStore.setState({
+        token: pair.accessToken,
+        refreshToken: pair.refreshToken,
+      });
+      scheduleProactiveRefresh({
+        token: pair.accessToken,
+        refreshToken: pair.refreshToken,
+      });
+      return pair.accessToken;
+    } catch {
+      return null;
+    } finally {
+      inflightRefresh = null;
+    }
+  })();
+  return inflightRefresh;
+}
+
+/**
+ * 排期「到期前主动续期」：按 accessToken 的 exp 算出剩余寿命后按 80% 处刷新。
+ * 主动刷新的价值：用户长时间挂在页面上时，不会在某个操作瞬间撞 401（虽然 401
+ * 也已经能自动重试，但主动刷新省掉那一次失败往返，SSE/轮询也更平滑）。
+ * token 无法解析 exp → 不排期（依赖 401 被动续期兜底）。
+ */
+function scheduleProactiveRefresh(auth: {
+  token: string | null;
+  refreshToken: string | null;
+}): void {
+  clearProactiveRefresh();
+  if (typeof window === "undefined") return;
+  const { token, refreshToken } = auth;
+  if (!token || !refreshToken) return;
+  const expiry = jwtExpiryMs(token);
+  const delay = proactiveRefreshDelayMs(expiry);
+  if (delay === null) return;
+  proactiveTimer = setTimeout(() => {
+    proactiveTimer = null;
+    void refreshAccessToken();
+  }, Math.max(delay, PROACTIVE_MIN_DELAY_MS));
+}
+
+// 注册刷新处理器（api 层 401 时调用）：返回新 token 或 null。
+setRefreshHandler(refreshAccessToken);
+
+// 模块加载时注册 401 处理器：token 真的失效（续期也失败）→ 清登录态 + 重定向 /login。
 // next/router 在 lib 层不可靠，用 window.location；SSR 环境 window 不存在时跳过。
 setUnauthorizedHandler(() => {
   useAuthStore.getState().logout();

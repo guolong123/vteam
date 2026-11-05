@@ -35,6 +35,30 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
 }
 
+/**
+ * 刷新处理器（续期链路的核心接缝）。
+ * api 层不 import authStore（避免循环依赖），由 authStore 注册：
+ * - 返回新的 accessToken（内部会调 POST /auth/refresh 并写回 store）
+ * - refreshToken 失效（服务端 401 AUTH_REFRESH_INVALID）时返回 `null`
+ *   ⇒ api 层据此判定「真的没救了」才触发 unauthorizedHandler（登出跳登录）
+ * - 并发安全由 authStore 保证单飞（多个请求同时 401 只发一次 refresh）
+ */
+type RefreshHandler = () => Promise<string | null>;
+
+let refreshHandler: RefreshHandler | null = null;
+
+/** 注册刷新处理器（authStore 调用；传 null 可注销）。 */
+export function setRefreshHandler(handler: RefreshHandler | null): void {
+  refreshHandler = handler;
+}
+
+/** 这些路径的 401 属于「凭证本身错误」，绝不能触发续期（否则死循环）。 */
+const NO_REFRESH_PATHS = ['/auth/login', '/auth/refresh', '/auth/register'];
+
+function isRefreshablePath(path: string): boolean {
+  return !NO_REFRESH_PATHS.some((p) => path.startsWith(p));
+}
+
 export interface RequestOptions extends Omit<RequestInit, "body"> {
   /** 请求体，自动 JSON 序列化。传 undefined 则不带 body。 */
   body?: unknown;
@@ -70,39 +94,71 @@ export async function request<T>(
     }
   }
 
-  const finalHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(headers as Record<string, string> | undefined),
-  };
-  if (accessToken) {
-    finalHeaders.Authorization = `Bearer ${accessToken}`;
-  }
   // multipart：FormData 不 JSON 序列化，且不设 Content-Type
   // （浏览器自动携带 multipart/form-data; boundary=...，手设会导致 boundary 丢失 400）
   const isFormData = body instanceof FormData;
-  if (isFormData) {
-    delete finalHeaders["Content-Type"];
-  }
 
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
-      ...rest,
-      headers: finalHeaders,
-      body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
-    });
-  } catch (err) {
-    // 网络层失败（断网 / CORS / 后端不可达）
-    throw new ApiError(0, {
-      code: "NETWORK_ERROR",
-      message:
-        err instanceof Error ? err.message : "网络请求失败，请检查连接",
-    });
+  /** 按当前 accessToken 组装请求头（续期后重试需重新取值）。 */
+  const buildHeaders = (): Record<string, string> => {
+    const h: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(headers as Record<string, string> | undefined),
+    };
+    if (accessToken) {
+      h.Authorization = `Bearer ${accessToken}`;
+    }
+    if (isFormData) {
+      delete h["Content-Type"];
+    }
+    return h;
+  };
+
+  const doFetch = async (): Promise<Response> => {
+    try {
+      return await fetch(url, {
+        ...rest,
+        headers: buildHeaders(),
+        body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (err) {
+      // 网络层失败（断网 / CORS / 后端不可达）
+      throw new ApiError(0, {
+        code: "NETWORK_ERROR",
+        message:
+          err instanceof Error ? err.message : "网络请求失败，请检查连接",
+      });
+    }
+  };
+
+  let resp = await doFetch();
+
+  /**
+   * 401 自动续期（保证「记住我」下 1 周内不用重新登录）：
+   * accessToken 默认只有 2h，到期后所有接口都会 401。此前实现是**直接登出跳登录页**，
+   * 用户表现为「登录后很短时间就被踢出」。现在的处理：
+   * 1. 首次 401 + 该端点不是登录/刷新本身 → 调 refreshHandler（内部单飞 POST /auth/refresh，
+   *    成功则把新 accessToken 写回 store 与本模块）；
+   * 2. 拿到新 token → **原请求自动重试一次**（用户完全无感，表单/上传等 POST 也照样重放；
+   *    FormData 未被消费，可安全重发）；
+   * 3. 刷新失败（refreshToken 也过期/账号被禁用）→ 才走 unauthorizedHandler（清登录态跳登录）。
+   * 只重试一次，避免 refresh 端点异常时的无限循环。
+   */
+  if (
+    resp.status === 401 &&
+    accessToken &&
+    refreshHandler &&
+    isRefreshablePath(path)
+  ) {
+    const renewed = await refreshHandler();
+    if (renewed) {
+      accessToken = renewed;
+      resp = await doFetch();
+    }
   }
 
   if (!resp.ok) {
-    // 401 且请求携带 token（登录/注册等 Public 无 token 的 401 如密码错误不触发）：
-    // token 失效 → 由已注册 handler 清登录态并跳登录页
+    // 401 且请求携带 token（登录/注册等 Public 无 token 的 401 如密码错误不触发，
+    // 或续期也失败）：token 真的失效 → 由已注册 handler 清登录态并跳登录页
     if (resp.status === 401 && accessToken) {
       unauthorizedHandler?.();
     }
