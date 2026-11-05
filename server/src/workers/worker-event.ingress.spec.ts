@@ -16,6 +16,7 @@ import {
   WorkerEventIngress,
 } from './worker-event.ingress';
 import { WorkerEventDto } from './dto/worker-event.dto';
+import { WorkerClient } from './worker.client';
 
 /** 构造 WorkerEventDto（协议形状与 DTO 字段一致）。 */
 function event(
@@ -3374,12 +3375,189 @@ describe('WorkerEventIngress', () => {
       );
     });
 
+    /**
+     * 回归（线上 k8s tm_0000000004 / worker-37 事故）：托管模式下**主 Agent 自己**的
+     * permission 请求曾同时被两头吞掉 —— 实时帧带 managedMode=true（前端
+     * `page.tsx:1101` 直接 return 丢弃弹窗），调度器又因自环改走企业微信卡片（团队无渠道
+     * 则卡片不发），导致 serve 侧 pending 永久挂起（实测 2608s / 37min 两次），
+     * 只有用户打开 opencode 页面才松开。
+     */
+    describe('主 Agent 自环 permission：自动放行 + 留痕（不再等人）', () => {
+      it('发起者 == team.mainAgentMemberId 的 permission → permissionReply(always) + 行终态 + 群留痕，且不广播 pending 帧', async () => {
+        const workerClient = {
+          permissionReply: jest.fn().mockResolvedValue(undefined),
+        };
+        const ingressWithClient = new WorkerEventIngress(
+          prisma as unknown as PrismaService,
+          realtime as unknown as RealtimeService,
+          idGen as unknown as IdGeneratorService,
+          workerClient as unknown as WorkerClient,
+        );
+        prisma.session.findUnique
+          // 第 1 次：会话归属解析（团队 + 主 Agent 成员）
+          .mockResolvedValueOnce({
+            taskId: null,
+            agentId: 'a_pm',
+            teamId: 'tm_9',
+            teamMemberId: 'tmm_main',
+          })
+          // 第 2 次：instanceRef 反查（s_ 主键 → ses_ 会话）
+          .mockResolvedValueOnce({ instanceRef: 'ses_abc' });
+        prisma.team.findUnique.mockResolvedValue({
+          managedMode: true,
+          mainAgentMemberId: 'tmm_main',
+        });
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_1',
+          capabilities: { baseUrl: 'http://w:4199' },
+        });
+        prisma.agentQuestion.create.mockResolvedValue({
+          id: 'aq_9',
+          status: 'pending',
+        });
+        prisma.agentQuestion.update.mockResolvedValue({
+          id: 'aq_9',
+          status: 'resolved',
+        });
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_grp' });
+        prisma.message.create.mockResolvedValue({ id: 'm_9' });
+
+        const e = event('w_1', 'evw_loop', 'session.permission', {
+          sessionId: 's_9',
+          permissionId: 'per_loop',
+          type: 'external_directory',
+          pattern: '/data/repos/*',
+        });
+
+        expect(await ingressWithClient.handleEvent(e)).toBe(true);
+        // ① 向 serve 放行 always（不是 once/reject）
+        expect(workerClient.permissionReply).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'w_1' }),
+          {
+            sessionId: 'ses_abc',
+            permissionId: 'per_loop',
+            response: 'always',
+          },
+        );
+        // ② 落库终态 resolved + 留痕标记
+        expect(prisma.agentQuestion.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: 'aq_9' },
+            data: expect.objectContaining({
+              status: 'resolved',
+              answers: expect.objectContaining({ autoAllowed: true }),
+            }),
+          }),
+        );
+        // ③ 群留痕（审计可见）
+        expect(prisma.message.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              channelId: 'c_grp',
+              senderType: SENDER_TYPE.system,
+            }),
+          }),
+        );
+        // ④ 不再广播 pending 帧（弹出一个已无意义的框）
+        expect(realtime.emit).toHaveBeenCalledWith(
+          EVENT_TYPES.AGENT_QUESTION,
+          expect.objectContaining({ resolved: true }),
+          expect.anything(),
+        );
+        expect(realtime.emit).not.toHaveBeenCalledWith(
+          EVENT_TYPES.AGENT_QUESTION,
+          expect.objectContaining({ resolved: undefined, managed: true }),
+          expect.anything(),
+        );
+      });
+
+      it('非主 Agent（普通成员）的 permission → 不放行，仍按托管路径广播（作用域不越界）', async () => {
+        const workerClient = {
+          permissionReply: jest.fn().mockResolvedValue(undefined),
+        };
+        const ingressWithClient = new WorkerEventIngress(
+          prisma as unknown as PrismaService,
+          realtime as unknown as RealtimeService,
+          idGen as unknown as IdGeneratorService,
+          workerClient as unknown as WorkerClient,
+        );
+        prisma.session.findUnique.mockResolvedValueOnce({
+          taskId: null,
+          agentId: 'a_tester',
+          teamId: 'tm_9',
+          teamMemberId: 'tmm_tester',
+        });
+        prisma.team.findUnique.mockResolvedValue({
+          managedMode: true,
+          mainAgentMemberId: 'tmm_main',
+        });
+
+        const e = event('w_1', 'evw_tester', 'session.permission', {
+          sessionId: 's_9',
+          permissionId: 'per_tester',
+          type: 'external_directory',
+          pattern: '/tmp/*',
+        });
+
+        expect(await ingressWithClient.handleEvent(e)).toBe(true);
+        expect(workerClient.permissionReply).not.toHaveBeenCalled();
+        expect(realtime.emit).toHaveBeenCalledWith(
+          EVENT_TYPES.AGENT_QUESTION,
+          expect.objectContaining({ managed: true }),
+          expect.anything(),
+        );
+      });
+
+      it('主 Agent 自身 permission 的实时帧 managedMode 恒 false（与 GET /questions 的 toDtos 同口径 → 刷新前也弹窗）', async () => {
+        const workerClient = {
+          permissionReply: jest.fn().mockRejectedValue(new Error('worker down')),
+        };
+        const ingressWithClient = new WorkerEventIngress(
+          prisma as unknown as PrismaService,
+          realtime as unknown as RealtimeService,
+          idGen as unknown as IdGeneratorService,
+          workerClient as unknown as WorkerClient,
+        );
+        prisma.session.findUnique.mockResolvedValueOnce({
+          taskId: null,
+          agentId: 'a_pm',
+          teamId: 'tm_9',
+          teamMemberId: 'tmm_main',
+        });
+        prisma.team.findUnique.mockResolvedValue({
+          managedMode: true,
+          mainAgentMemberId: 'tmm_main',
+        });
+        prisma.agentQuestion.create.mockResolvedValue({
+          id: 'aq_9',
+          status: 'pending',
+        });
+        // 放行失败（worker 不可达）→ 必须回落弹窗，且 managedMode=false（不能被前端过滤）
+
+        const e = event('w_1', 'evw_fallback', 'session.permission', {
+          sessionId: 's_9',
+          permissionId: 'per_fallback',
+          type: 'external_directory',
+          pattern: '/data/*',
+        });
+
+        expect(await ingressWithClient.handleEvent(e)).toBe(true);
+        const pendingFrame = (realtime.emit as jest.Mock).mock.calls.find(
+          (c) => c[0] === EVENT_TYPES.AGENT_QUESTION,
+        );
+        expect(pendingFrame).toBeDefined();
+        // 关键：managedMode=false（否则前端 page.tsx:1101 直接丢弃弹窗）
+        expect(pendingFrame![1].question.managedMode).toBe(false);
+        // 且不带 managed 标记（调度器不再走「主 Agent 确认」路由）
+        expect(pendingFrame![1].managed).toBeUndefined();
+      });
+    });
+
     it('requestId 已存在且 pending → 更新 content 不新建（幂等）；已终态 → 跳过不重复上报', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValueOnce({
         id: 'aq_1',
         status: 'pending',
-      });
-      const e = event('w_1', 'evw_q2', 'session.question', {
+      });      const e = event('w_1', 'evw_q2', 'session.question', {
         sessionId: 's_1',
         requestId: 'que_1',
         taskId: 't_1',

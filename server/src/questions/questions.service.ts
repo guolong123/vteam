@@ -733,6 +733,13 @@ export class QuestionsService {
   /**
    * 僵尸/超期 pending 终态落库（expired + answers 留痕 reason）并广播收敛（resolved=true →
    * 前端 onAgentQuestion 关闭弹窗）。仅处理未终态记录，重复调用幂等（where 带 status）。
+   *
+   * ⚠️ **必须同时释放 serve 侧 pending**（本方法排在落库之前的唯一硬约束）：
+   * 只把 DB 行标 expired + 广播收敛＝**假收敛**——前端弹窗关了，但 worker/serve 仍在等
+   * 那个 requestId 的答复，会话会一直挂到工具超时/进程重启。线上实测（k8s
+   * tm_0000000004 worker-37）：aq_0000000488 11:14 触发，12:57 惰性过期后 serve 侧权限
+   * 依然 pending，同一会话的 shell 工具实际挂 2608s，只有用户打开 opencode 页面才解开。
+   * 释放是 **best-effort**：转发失败只记 warn（僵尸行本身已终态，不能因此回滚）。
    */
   private async expire(row: AgentQuestion, reason: string): Promise<void> {
     this.platformResolvers.delete(row.requestId);
@@ -747,6 +754,8 @@ export class QuestionsService {
     this.logger.warn(
       `[questions] ${row.id} 僵尸/超期 pending 已终态（expired）：${reason}`,
     );
+    // 先释放 serve（否则会话继续挂死）；失败吞错，不阻断后续收敛广播。
+    await this.releasePendingOnServe(updated, reason);
     // 收敛帧 payload 口径同 reply（团队会话行 taskId 空 → 补 team:<teamId>，
     // 否则前端 team: 段过滤丢帧、过期收敛页签无感）。
     const expireTeamId = await this.teamIdOf(updated.taskId, updated.sessionId);
@@ -766,6 +775,95 @@ export class QuestionsService {
       },
       expireTeamId ? { type: 'team', id: expireTeamId } : { type: 'global' },
     );
+  }
+
+  /**
+   * 超期/僵尸行在 **serve 侧**的释放（best-effort，永不抛错）。
+   *
+   * 语义：超时不等于用户答复——必须让 worker/serve 知道「没人会来了」，否则模型侧
+   * 的待决权限/提问会一直把会话挂在原地（实测挂 2608s）。释放一律走 **reject**
+   * （附带可读原因，模型据此降级执行），绝不用 once/always 冒充人工批准。
+   *
+   * 平台旁路行（platform question / secret_input）不发 worker：serve 本就没有该
+   * requestId（reply 的 forwardReply 同样短路），转发必 404。
+   */
+  private async releasePendingOnServe(
+    row: AgentQuestion,
+    reason: string,
+  ): Promise<void> {
+    try {
+      if (this.isPlatformQuestion(row) || row.kind === AGENT_QUESTION_KINDS.SECRET_INPUT) {
+        return;
+      }
+      const target = await this.resolveServeTarget(row);
+      if (!target) {
+        return;
+      }
+      if (row.kind === AGENT_QUESTION_KINDS.QUESTION) {
+        // 提问无 reject 语义：answers=null 即拒绝。
+        await this.workerClient.questionReply(target.worker, {
+          sessionId: target.opencodeSessionId,
+          requestId: row.requestId,
+          answers: null,
+        });
+      } else {
+        await this.workerClient.permissionReply(target.worker, {
+          sessionId: target.opencodeSessionId,
+          permissionId: row.requestId,
+          response: 'reject',
+        });
+      }
+      this.logger.log(
+        `[questions] ${row.id} 已向 serve 释放 pending（${row.kind}，reason=${reason}）`,
+      );
+    } catch (err) {
+      // 404 = serve 早已无该请求（会话重启/请求消失），与「释放成功」等价；其余只告警。
+      this.logger.warn(
+        `[questions] ${row.id} serve 侧释放失败（忽略，行已终态）: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * 解析 serve 转发目标（会话 instanceRef + 所属 worker）。逻辑与 forwardReply 同源，
+   * 但**永不抛错**（超期路径是兜底链，失败只能降级为"释放不了"）。
+   */
+  private async resolveServeTarget(row: AgentQuestion): Promise<{
+    opencodeSessionId: string;
+    worker: { id: string; capabilities: unknown };
+  } | null> {
+    try {
+      const session = await this.prisma.session.findUnique({
+        where: { id: row.sessionId },
+        select: { workerId: true, instanceRef: true },
+      });
+      const opencodeSessionId = row.sessionId.startsWith('ses_')
+        ? row.sessionId
+        : session?.instanceRef;
+      if (!opencodeSessionId) {
+        return null;
+      }
+      const workerId =
+        session?.workerId ??
+        (row.sessionId.startsWith('ses_')
+          ? await this.findTeamSessionWorker(row.taskId, row.agentId)
+          : null);
+      const worker = workerId
+        ? await this.prisma.worker.findUnique({
+            where: { id: workerId },
+            select: { id: true, capabilities: true },
+          })
+        : null;
+      if (!worker) return null;
+      return {
+        opencodeSessionId,
+        worker: { id: worker.id, capabilities: worker.capabilities },
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**

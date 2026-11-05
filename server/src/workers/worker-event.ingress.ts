@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import {
@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeScope } from '../realtime/realtime.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerEventDto } from './dto/worker-event.dto';
+import { WorkerClient } from './worker.client';
 import { WORKER_ERRORS } from './workers.constants';
 import {
   concatText,
@@ -392,6 +393,10 @@ export class WorkerEventIngress {
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeService,
     private readonly idGen: IdGeneratorService,
+    // 主 Agent 自环权限的自动放行需要直连 worker 回复 serve（best-effort）。
+    // @Optional：既有单测零 provider 构造仍可编译（缺席时该功能降级为「不自动放行」）。
+    @Optional()
+    private readonly workerClient?: WorkerClient,
   ) {}
 
   /** 订阅 task.completed 回流（T10 WorkerDispatcher 构造时注册：落库+广播+emitFinal）。 */
@@ -1394,14 +1399,22 @@ export class WorkerEventIngress {
     // 团队域恒需解析：团队会话 payload.taskId 为空 → emit scope、managedMode、payload
     // taskId 三处都依赖 session.teamId；任务态会话行为不变（scope 仍按 taskId 发 task 域）。
     let teamId: string | null = null;
+    // 请求方团队成员 id：与 QuestionsService.toDtos 的「主 Agent 自环降级」判据同源。
+    let requesterMemberId: string | null = null;
     if (sessionId) {
       const session = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        select: { taskId: true, agentId: true, teamId: true },
+        select: {
+          taskId: true,
+          agentId: true,
+          teamId: true,
+          teamMemberId: true,
+        },
       });
       taskId = taskId ?? session?.taskId;
       agentId = agentId ?? session?.agentId;
       teamId = session?.teamId ?? null;
+      requesterMemberId = session?.teamMemberId ?? null;
     }
     const content: Prisma.InputJsonValue =
       kind === 'question'
@@ -1449,10 +1462,20 @@ export class WorkerEventIngress {
     // 托管模式检测：团队 managedMode=true → 请求改由主 Agent 确认（前端不弹窗）。
     // payload 带 managed 标记（TaskProgressionScheduler 订阅 realtime bus 据此 dispatch 给主 Agent），
     // question.managedMode 供 GET /questions 补拉路径前端过滤弹窗。
+    //
+    // ⚠️ **主 Agent 自己发起的请求必须失效（否则死锁）**：托管语义是「主 Agent 代用户确认」，
+    // 而主 Agent 无法自确认（QUESTION_SELF_CONFIRMATION_FORBIDDEN）⇒ 若仍带 managedMode，
+    // 前端按它把弹窗过滤掉、调度器又因自环改走企业微信卡片（团队无企微渠道时卡片根本不发）
+    // ⇒ 用户永远看不到弹窗、serve 侧权限请求永久 pending、会话挂死到 30min 惰性过期也解不开。
+    // 实测（k8s tm_0000000004 worker-37）：PM 自身 external_directory 权限 aq_0000000488
+    // 19:14 触发 → 19:57 打开页面才被看到，工具挂 2608s。
+    //
+    // 判据与 QuestionsService.toDtos 严格同源（两处必须同时降级，否则「刷新才弹窗」复现：
+    // toDtos 走 GET /questions 已降级、ingress 走实时帧未降级 ⇒ 只有刷新才看得见）。
     const managedMode = teamId
-      ? await this.teamManagedModeById(teamId)
+      ? await this.managedModeForRequester(teamId, requesterMemberId)
       : taskId
-        ? await this.teamManagedModeOfTask(taskId)
+        ? await this.teamManagedModeOfTask(taskId, requesterMemberId)
         : false;
     // 团队会话（payload.taskId 空）补 `team:<teamId>` 与顶层 teamId，且 scope 发 team 域：
     // ① use-sse 的 team: 段按 payload.taskId==='team:<id>' 契约匹配（dispatcher 侧同形状），
@@ -1465,6 +1488,30 @@ export class WorkerEventIngress {
       : teamId
         ? { type: 'team', id: teamId }
         : { type: 'global' };
+    // ---- 主 Agent 自环权限：自动放行（不再等人）----
+    // 为什么必须自动放行而不能只弹窗：托管模式下「主 Agent 代用户确认」对主 Agent 本人
+    // 不成立（自确认被 QUESTION_SELF_CONFIRMATION_FORBIDDEN 拒），而人类大概率不会盯着
+    // 页面（线上 44min/37min 两次挂死就是这么发生的：serve 侧 pending 一直等到用户打开
+    // opencode 页面才被松手）。故对**发起者 == 团队主 Agent 的 permission 请求**：
+    // 直接 permissionReply(always) 并在团队群聊留 system 痕迹（谁、什么动作、什么资源），
+    // 使越权动作事后可见。作用域严格限定：其它成员的请求仍走「主 Agent 确认」原路。
+    // question 类不自动放行——替模型编造答案不是「批准」语义，那不是本修复的范围。
+    const autoAllowed = await this.autoAllowMainAgentPermission({
+      row,
+      requestId,
+      sessionId: storeSessionId,
+      kind,
+      content,
+      taskId: payloadTaskId,
+      teamId,
+      agentId: agentId ?? null,
+      requesterMemberId,
+      workerId: dto.workerId,
+    });
+    if (autoAllowed) {
+      // 行已由自动放行终态化 ⇒ 不再广播 pending 帧（否则前端弹出一个已无意义的框）。
+      return true;
+    }
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -1488,6 +1535,220 @@ export class WorkerEventIngress {
       scope,
     );
     return true;
+  }
+
+  /**
+   * 主 Agent 自环权限的**自动放行**（作用域严格限定，见调用点注释）。
+   *
+   * 触发条件（全部满足才放行，任一不满足即原样走人工/托管路径）：
+   * 1. `kind === 'permission'`（question 不自动答——替模型编答案不是批准语义）；
+   * 2. 有团队归属，且请求方成员 == `team.mainAgentMemberId`（自环判据）；
+   * 3. workerClient 可用（单测/缺 provider 时降级为不自动放行）。
+   *
+   * 放行动作：向 worker `/question-reply` 发 `response:'always'`（该 action+resource 组合
+   * 后续不再重复问）→ 行终态为 resolved 并留痕 `answers={autoAllowed,...}` → 团队群聊
+   * 落一条 system 消息（审计可见）→ emit resolved 收敛帧（其他页签弹窗若已弹出则关闭）。
+   *
+   * **失败策略**：放行失败（worker 不可达）→ 回滚为 pending 原状并返回 false，
+   * 让调用方继续走正常的弹窗广播（绝不把用户唯一的可见渠道也丢掉）。
+   *
+   * @returns true = 已终态化（调用方不得再广播 pending 帧）；false = 未放行，按原路径继续。
+   */
+  private async autoAllowMainAgentPermission(input: {
+    row: { id: string; status: string };
+    requestId: string;
+    sessionId: string;
+    kind: string;
+    content: Prisma.InputJsonValue;
+    taskId: string | null;
+    teamId: string | null;
+    agentId: string | null;
+    requesterMemberId: string | null;
+    workerId: string;
+  }): Promise<boolean> {
+    if (input.kind !== 'permission') return false;
+    const workerClient = this.workerClient;
+    if (!workerClient) return false;
+    if (!input.teamId || !input.requesterMemberId) return false;
+    // 一旦 serve 真的收到 always（行已终态化），后续步骤的异常**不得**回滚成
+    // 「未放行」——否则调用方会再广播一条 pending 帧，前端弹出一个其实早已放行的框，
+    // 用户点了也没有意义（serve 侧权限已消费）。故用 committed 记住已生效。
+    let committed = false;
+    try {
+      const team = (await this.prisma.team.findUnique({
+        where: { id: input.teamId },
+        select: { mainAgentMemberId: true },
+      })) as { mainAgentMemberId?: string | null } | null;
+      const isMainAgentOwn =
+        !!team?.mainAgentMemberId &&
+        team.mainAgentMemberId === input.requesterMemberId;
+      if (!isMainAgentOwn) return false;
+
+      // serve 侧会话 id：worker 上送的 storeSessionId 若已是 ses_ 直接用；s_ 主键则反查
+      // session.instanceRef（与 QuestionsService.forwardReply 同口径）。
+      const opencodeSessionId = input.sessionId.startsWith('ses_')
+        ? input.sessionId
+        : ((
+            await this.prisma.session.findUnique({
+              where: { id: input.sessionId },
+              select: { instanceRef: true },
+            })
+          ) as { instanceRef?: string | null } | null)?.instanceRef ?? null;
+      if (!opencodeSessionId) return false;
+      const workerRow = (await this.prisma.worker.findUnique({
+        where: { id: input.workerId },
+        select: { id: true, capabilities: true },
+      })) as { id: string; capabilities: unknown } | null;
+      if (!workerRow) return false;
+
+      const workerClient = this.workerClient;
+      if (!workerClient) return false;
+      await workerClient.permissionReply(
+        { id: workerRow.id, capabilities: workerRow.capabilities },
+        {
+          sessionId: opencodeSessionId,
+          permissionId: input.requestId,
+          response: 'always',
+        },
+      );
+      // serve 已消费该权限请求：从这里起异常不得回滚成「未放行」。
+      committed = true;
+      const updated = await this.prisma.agentQuestion.update({
+        where: { id: input.row.id },
+        data: {
+          status: 'resolved',
+          answers: {
+            response: 'always',
+            autoAllowed: true,
+            reason: '主 Agent 自环权限：托管模式下无人可确认，自动放行',
+          } as Prisma.InputJsonValue,
+        },
+      });
+      this.logger.log(
+        `[ingress] 主 Agent 自环权限已自动放行（always）requestId=${input.requestId} ` +
+          `session=${input.sessionId} task=${input.taskId ?? '-'} agent=${input.agentId ?? '-'}`,
+      );
+      await this.postAutoAllowNotice(input);
+      await this.realtime.emit(
+        EVENT_TYPES.AGENT_QUESTION,
+        {
+          question: {
+            id: updated.id,
+            requestId: input.requestId,
+            sessionId: input.sessionId,
+            taskId: input.taskId,
+            agentId: input.agentId,
+            kind: input.kind,
+            content: input.content,
+            status: 'resolved',
+            managedMode: false,
+          },
+          taskId: input.taskId,
+          teamId: input.teamId,
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+          resolved: true,
+        },
+        input.taskId && !input.taskId.startsWith('team:')
+          ? { type: 'task', id: input.taskId }
+          : { type: 'team', id: input.teamId },
+      );
+      return true;
+    } catch (err) {
+      // serve 已收到 always（权限已消费）→ 仍算放行成功，绝不回落到「广播 pending 帧」。
+      if (committed) {
+        this.logger.warn(
+          `[ingress] 权限已放行但善后步骤失败（不再回落弹窗）requestId=${input.requestId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return true;
+      }
+      // 放行失败 → 保持 pending 原状，交回调用方的弹窗广播（不能让唯一可见渠道也塌掉）。
+      this.logger.warn(
+        `[ingress] 主 Agent 自环权限自动放行失败，回落人工弹窗 requestId=${input.requestId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    }
+  }
+
+   /**
+   * 自动放行的审计留痕：团队群聊落一条 system 消息（谁被自动放行了什么）。
+   * 复用 postStallNoticeToTeamGroup 同款落库 + broadcast 形状；任何失败只 warn。
+   */
+  private async postAutoAllowNotice(input: {
+    taskId: string | null;
+    teamId: string | null;
+    agentId: string | null;
+    content: Prisma.InputJsonValue;
+    requestId: string;
+  }): Promise<void> {
+    if (!input.teamId) return;
+    try {
+      const channel = await this.prisma.chatChannel.findFirst({
+        where: {
+          teamId: input.teamId,
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      const channelId = (channel as { id?: string } | null)?.id;
+      if (!channelId) return;
+      const detail = (input.content ?? {}) as {
+        type?: unknown;
+        pattern?: unknown;
+        title?: unknown;
+      };
+      const action = typeof detail.type === 'string' ? detail.type : 'permission';
+      const pattern = Array.isArray(detail.pattern)
+        ? detail.pattern.join('、')
+        : typeof detail.pattern === 'string'
+          ? detail.pattern
+          : '';
+      const text =
+        `【自动放行】主 Agent（${input.agentId ?? '-'}）自身的权限请求已自动允许（always）：` +
+        `${action}${pattern ? ` · ${pattern}` : ''}。` +
+        `原因：托管模式下主 Agent 无法自确认，无人值守时会永久挂死（requestId=${input.requestId}）。` +
+        '如该动作不该被允许，请在此后收紧该 Agent 的权限策略。';
+      const id = await this.idGen.nextId('m');
+      await this.prisma.message.create({
+        data: {
+          id,
+          channelId,
+          taskId: input.taskId && !input.taskId.startsWith('team:') ? input.taskId : null,
+          senderType: SENDER_TYPE.system,
+          senderId: null,
+          content: { text, parts: [] },
+          mentions: null,
+          status: MESSAGE_STATUS.sent,
+        } as any,
+      });
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        {
+          message: {
+            id,
+            channelId,
+            senderType: SENDER_TYPE.system,
+            senderId: null,
+            content: { text, parts: [] },
+            mentions: [],
+            status: MESSAGE_STATUS.sent,
+            createdAt: new Date().toISOString(),
+          },
+        },
+        { type: 'channel', id: channelId },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[ingress] 自动放行留痕失败（忽略）requestId=${input.requestId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   // ---- 幂等 ----
@@ -1531,7 +1792,10 @@ export class WorkerEventIngress {
   }
 
   /** 任务归属团队的托管开关（Todo9 团队化：读 team.managedMode；无归属 → false）。 */
-  private async teamManagedModeOfTask(taskId: string): Promise<boolean> {
+  private async teamManagedModeOfTask(
+    taskId: string,
+    requesterMemberId?: string | null,
+  ): Promise<boolean> {
     try {
       const task = await this.prisma.task.findUnique({
         where: { id: taskId },
@@ -1539,22 +1803,48 @@ export class WorkerEventIngress {
       });
       const teamId = (task as { teamId?: string | null } | null)?.teamId;
       if (!teamId) return false;
-      return await this.teamManagedModeById(teamId);
+      return await this.teamManagedModeById(teamId, requesterMemberId);
     } catch {
       return false;
     }
   }
 
   /** 团队直接维度的托管开关（团队会话 payload.taskId 为空，经 session.teamId 走此路）。 */
-  private async teamManagedModeById(teamId: string): Promise<boolean> {
+  private async teamManagedModeById(
+    teamId: string,
+    requesterMemberId?: string | null,
+  ): Promise<boolean> {
+    return this.managedModeForRequester(teamId, requesterMemberId);
+  }
+
+  /**
+   * 托管标记的**唯一**判据（QuestionsService.toDtos 与本体 ingestion 必须同口径）。
+   *
+   * 请求方是团队主 Agent 本人 → 恒 false：主 Agent 无法自确认（confirmByAgent 返回
+   * QUESTION_SELF_CONFIRMATION_FORBIDDEN），且调度器的自环分支在企业微信渠道缺失时
+   * 不发任何卡片 ⇒ 若仍标记托管，前端会把唯一的弹窗渠道过滤掉，serve 侧权限请求
+   * 永久 pending（线上 aq_0000000488/0489/0490 实测挂死 44min / 37min）。
+   * 主 Agent 无请求方身份（membership 不可解析）→ 保持团队原值（不静默放宽）。
+   */
+  private async managedModeForRequester(
+    teamId: string,
+    requesterMemberId?: string | null,
+  ): Promise<boolean> {
     try {
       const team = await this.prisma.team.findUnique({
         where: { id: teamId },
-        select: { managedMode: true },
+        select: { managedMode: true, mainAgentMemberId: true },
       });
-      return (
-        (team as { managedMode?: boolean | null } | null)?.managedMode ?? false
-      );
+      const row = team as {
+        managedMode?: boolean | null;
+        mainAgentMemberId?: string | null;
+      } | null;
+      if (!row) return false;
+      const isMainAgentOwn =
+        !!row.mainAgentMemberId &&
+        !!requesterMemberId &&
+        requesterMemberId === row.mainAgentMemberId;
+      return isMainAgentOwn ? false : (row.managedMode ?? false);
     } catch {
       return false;
     }

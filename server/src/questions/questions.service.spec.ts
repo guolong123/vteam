@@ -198,6 +198,106 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(list).toEqual([]);
     });
 
+    /**
+     * 回归（线上 k8s worker-37）：30min 惰性过期曾只把 DB 行标 expired + 广播收敛，
+     * **从不向 serve 释放 pending** ⇒ 弹窗关闭了但会话仍挂着（实测挂 2608s，只有用户
+     * 打开 opencode 页面才松开）。超时必须真的松手，否则「超时会解开」是假象。
+     */
+    it('超期过期必须同时向 serve 释放 pending（permission → reject 带原因；不是假收敛）', async () => {
+      const stale = aqRow({
+        id: 'aq_stale2',
+        requestId: 'per_stale2',
+        sessionId: 's_1',
+        kind: 'permission',
+        status: 'pending',
+        createdAt: new Date(Date.now() - 31 * 60 * 1000),
+        content: {
+          type: 'external_directory',
+          title: 'external_directory',
+          pattern: '/data/repos/*',
+        },
+      });
+      prisma.agentQuestion.findMany
+        .mockResolvedValueOnce([stale])
+        .mockResolvedValueOnce([]);
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({
+          id: 'aq_stale2',
+          status: 'expired',
+          kind: 'permission',
+          requestId: 'per_stale2',
+        }),
+      );
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_x',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: { baseUrl: 'http://w:4199' },
+      });
+
+      await service.findAll({ taskId: 't_1', status: 'pending' });
+
+      // 关键：真的向 worker 发了 reject（让模型降级，而不是继续等）
+      expect(workerClient.permissionReply).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_1' }),
+        {
+          sessionId: 'ses_x',
+          permissionId: 'per_stale2',
+          response: 'reject',
+        },
+      );
+      // 行仍终态 expired，且收敛帧照常
+      expect(prisma.agentQuestion.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'aq_stale2' },
+          data: expect.objectContaining({ status: 'expired' }),
+        }),
+      );
+    });
+
+    it('超期过期时 serve 释放失败（worker 不可达）→ 只告警，不阻断终态与收敛广播', async () => {
+      const stale = aqRow({
+        id: 'aq_stale3',
+        requestId: 'per_stale3',
+        kind: 'permission',
+        status: 'pending',
+        createdAt: new Date(Date.now() - 31 * 60 * 1000),
+      });
+      prisma.agentQuestion.findMany
+        .mockResolvedValueOnce([stale])
+        .mockResolvedValueOnce([]);
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({
+          id: 'aq_stale3',
+          status: 'expired',
+          kind: 'permission',
+          requestId: 'per_stale3',
+        }),
+      );
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_x',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.permissionReply.mockRejectedValueOnce(
+        new Error('worker down'),
+      );
+
+      const list = await service.findAll({ taskId: 't_1', status: 'pending' });
+
+      expect(list).toEqual([]);
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({ resolved: true }),
+        expect.anything(),
+      );
+    });
+
     it('pending 未超 TTL → 不过期不重查（原样返回）', async () => {
       const fresh = aqRow({ id: 'aq_fresh', createdAt: new Date() });
       prisma.agentQuestion.findMany.mockResolvedValue([fresh]);
