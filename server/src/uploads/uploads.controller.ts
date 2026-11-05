@@ -29,8 +29,11 @@ import {
  * 通用文件上传端点（平台文件存储基础，FILE-01/02、UX-10 共享）。
  * - POST /api/v1/uploads（multipart，字段 file）→ 201 `{url, name, size, ext}`
  * - 缺 file → 400 `UPLOAD_FILE_REQUIRED`
- * - 扩展名不在白名单 → 400 `UPLOAD_FILE_TYPE_NOT_ALLOWED`（fileFilter 拦截）
- * - 超过 10MB → 413（multer limits，与 skills 上传同款机制）
+ * - 类型不限：任意扩展名 / 无扩展名文件均放行（能否读取由模型自行判断处理，
+ *   如 zip 由模型解压；控制面不设类型白名单）
+ * - 超过 20MB → 413（multer limits，与 skills 上传同款机制）
+ * - 静态下载（GET /uploads/*）统一带 `Content-Disposition: attachment` 强制下载 +
+ *   nosniff + CSP sandbox，杜绝上传的 .html/.svg 在本源内联执行
  * - 可选 multipart 字段 taskId：存在时落盘后同步归档为 file 产出物（与 Agent MCP
  *   submit_artifact 上传链路一致，进文档库）；归档失败仅 warn 不阻断上传成功返回。
  * 鉴权：全局 JwtAuthGuard（APP_GUARD）兜底认证——登录用户即可上传
@@ -61,7 +64,7 @@ export class UploadsController {
           type: 'string',
           format: 'binary',
           description:
-            '待上传文件（白名单扩展名：pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt，上限 10MB）',
+            '待上传文件（任意扩展名/无扩展名均可，不做类型白名单；上限 20MB）',
         },
         taskId: {
           type: 'string',
@@ -109,7 +112,9 @@ export class UploadsController {
     await this.artifactsService.archiveFile(taskId, {
       fileRef: meta.url,
       storedUrl: meta.url,
-      storedName: file.originalname,
+      // 用 meta.name（已修复 latin1/UTF-8 错位）而非 file.originalname：中文文件名
+      // 否则会以乱码形态进产出物库（与上传响应/DTO 口径保持一致）。
+      storedName: meta.name,
       sha256,
     });
   }

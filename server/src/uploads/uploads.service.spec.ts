@@ -1,9 +1,8 @@
-import { BadRequestException } from '@nestjs/common';
 import * as fs from 'node:fs';
-import { FILE_SIZE_LIMIT, UPLOAD_ERRORS } from './uploads.constants';
+import { FILE_SIZE_LIMIT } from './uploads.constants';
 import { FileStorageService, StoredFile } from './uploads.service';
 
-describe('FileStorageService（文件存储基础：文件名生成 / 白名单 / multer 策略 / 元数据）', () => {
+describe('FileStorageService（文件存储基础：文件名生成 / 不限类型 / multer 策略 / 元数据）', () => {
   describe('extractExtension', () => {
     it('提取小写扩展名（含大写扩展名归一）', () => {
       expect(FileStorageService.extractExtension('需求文档.PDF')).toBe('pdf');
@@ -32,88 +31,49 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
     });
   });
 
-  describe('assertAllowed（扩展名白名单）', () => {
+  describe('类型不限（取消扩展名白名单，任意扩展名/无扩展名均可上传）', () => {
     it.each([
       'a.pdf',
-      'b.doc',
-      'c.docx',
-      'd.xls',
-      'e.xlsx',
-      'f.csv',
-      'g.png',
-      'h.jpg',
-      'i.jpeg',
-      'j.gif',
-      'k.webp',
-      'l.md',
-      'm.txt',
-      'n.json',
-    ])('接受白名单文件 %s', (originalname) => {
-      expect(() =>
-        FileStorageService.assertAllowed({
-          originalname,
-          mimetype: 'application/octet-stream',
-        }),
-      ).not.toThrow();
+      'b.docx',
+      'c.zip',
+      'd.tar.gz',
+      'e.html',
+      'f.svg',
+      'g.exe',
+      'h.sh',
+      'i',
+      'j.',
+      '.hidden',
+    ])('任意文件 %s 都有合法落盘文件名（不被拦截）', (originalname) => {
+      const filename = FileStorageService.generateFilename(originalname);
+      expect(filename).toBeTruthy();
+      expect(filename).not.toContain('/');
+      expect(filename).not.toContain('\\');
     });
 
-    it.each(['a.exe', 'b.html', 'c.js', 'd.sh', 'e', 'f.', 'g.svg'])(
-      '拒绝非法/无扩展名文件 %s → 400 UPLOAD_FILE_TYPE_NOT_ALLOWED',
-      (originalname) => {
-        expect(() =>
-          FileStorageService.assertAllowed({
-            originalname,
-            mimetype: 'application/octet-stream',
-          }),
-        ).toThrow(
-          expect.objectContaining({
-            response: expect.objectContaining({
-              code: UPLOAD_ERRORS.FILE_TYPE_NOT_ALLOWED,
-            }),
-          }),
-        );
-      },
-    );
+    it('multer options 不再挂 fileFilter（类型判断交给模型侧，控制面恒放行）', () => {
+      const options = FileStorageService.buildMulterOptions();
+      expect(Object.keys(options)).not.toContain('fileFilter');
+    });
 
-    it('不依赖 mimetype（octet-stream 亦按扩展名放行，扩展名是可控类型信号）', () => {
-      expect(() =>
-        FileStorageService.assertAllowed({
-          originalname: 'a.pdf',
-          mimetype: 'application/octet-stream',
-        }),
-      ).not.toThrow();
+    it('不再导出白名单校验入口（assertAllowed 已移除）', () => {
+      expect(
+        (FileStorageService as unknown as Record<string, unknown>)
+          .assertAllowed,
+      ).toBeUndefined();
     });
   });
 
   describe('buildMulterOptions（diskStorage 策略）', () => {
-    it('组装 storage / limits(10MB) / fileFilter', () => {
+    it('组装 storage / limits(20MB)，不挂 fileFilter', () => {
       const options = FileStorageService.buildMulterOptions();
       expect(options.storage).toBeDefined();
       expect(options.limits).toEqual({ fileSize: FILE_SIZE_LIMIT });
-      expect(typeof options.fileFilter).toBe('function');
+      expect(Object.keys(options)).not.toContain('fileFilter');
     });
 
-    it('fileFilter 接受白名单文件、拒绝非法文件（cb 语义）', async () => {
-      const options = FileStorageService.buildMulterOptions();
-      const accept = await new Promise<{ err: Error | null; ok: boolean }>(
-        (resolve) =>
-          options.fileFilter(
-            null,
-            { originalname: 'ok.pdf', mimetype: 'application/pdf' },
-            (err, ok) => resolve({ err, ok }),
-          ),
-      );
-      const reject = await new Promise<{ err: Error | null; ok: boolean }>(
-        (resolve) =>
-          options.fileFilter(
-            null,
-            { originalname: 'bad.exe', mimetype: 'application/octet-stream' },
-            (err, ok) => resolve({ err, ok }),
-          ),
-      );
-      expect(accept).toEqual({ err: null, ok: true });
-      expect(reject.ok).toBe(false);
-      expect(reject.err).toBeInstanceOf(BadRequestException);
+    it('大小上限为 20MB（与前端/worker 对齐）', () => {
+      expect(FILE_SIZE_LIMIT).toBe(20 * 1024 * 1024);
     });
   });
 
@@ -150,6 +110,34 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
         path: '/tmp/uploads/abc-123',
       };
       expect(new FileStorageService().describe(file).ext).toBe('');
+    });
+
+    it('中文文件名被 busboy 按 latin1 解码（乱码）→ 响应 name 还原为正确中文', () => {
+      // 模拟浏览器提交 UTF-8 字节、busboy 默认 latin1 解码后的 originalname
+      const garbled = Buffer.from('需求文档（终版）.PDF', 'utf8').toString(
+        'latin1',
+      );
+      const file: StoredFile = {
+        fieldname: 'file',
+        originalname: garbled,
+        encoding: '7bit',
+        mimetype: 'application/pdf',
+        size: 2048,
+        destination: '/tmp/uploads',
+        filename: 'abc-123.pdf',
+        path: '/tmp/uploads/abc-123.pdf',
+      };
+      const meta = new FileStorageService().describe(file);
+      expect(meta.name).toBe('需求文档（终版）.PDF');
+      expect(meta.ext).toBe('pdf');
+    });
+
+    it('generateFilename 取 latin1 错位文件名的扩展名仍正确、磁盘名只有 UUID+ext', () => {
+      const garbled = Buffer.from('压缩包.zip', 'utf8').toString('latin1');
+      const filename = FileStorageService.generateFilename(garbled);
+      expect(filename).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.zip$/,
+      );
     });
   });
 

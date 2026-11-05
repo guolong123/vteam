@@ -399,6 +399,10 @@ model Message {
   attachmentUrl    String?  @map("attachment_url")
   attachmentName   String?  @map("attachment_name")
   attachmentType   String?  @map("attachment_type")
+  // 多附件（一条消息可带 N 个文件，JSON 数组 [{url,name,size,ext}]）：
+  // 新链路以本列为主，上面三字段保留为「首个附件」的兼容读路径（旧前端/旧 MCP 契约不炸）。
+  // 读取统一走 normalizeMessageAttachments（本列优先、三字段回退单元素）。
+  attachments      Json?    @map("attachments")
   status           String   @default("sent")
   createdAt        DateTime @default(now()) @map("created_at")
 

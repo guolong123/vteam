@@ -48,12 +48,15 @@ RUN npm i -g "${OPENCODE_CLI_SPEC}" "${AGENT_BROWSER_SPEC}" "${BUN_SPEC}" && \
 # 系统依赖：git 工具链 + Agent 常用命令 + Chrome 运行库
 # 说明：git/openssh-client 为 git 工具链路保留；python3/pip3（Agent 跑脚本/数据分析）、
 # curl（HTTP 请求）、jq（JSON 处理）、bash（Agent 脚本常依赖 bash）、wget（下载）、
-# ca-certificates（HTTPS）。Chrome 的 30+ lib 由下一步 `agent-browser install --with-deps` 补齐，
+# ca-certificates（HTTPS）；unzip/zip/xz-utils（多附件放宽格式后，用户可发压缩包，
+# Agent 需能在执行目录自行解压——zip/tar.gz/xz 均有命令行工具可用，python3 亦可兜底）。
+# Chrome 的 30+ lib 由下一步 `agent-browser install --with-deps` 补齐，
 # 此处只装 worker 本身需要的最小集，避免重复。
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       git openssh-client \
       python3 python3-pip curl jq bash wget ca-certificates procps \
+      unzip zip xz-utils \
       fonts-noto-cjk fonts-noto-color-emoji fonts-liberation fontconfig \
       fonts-noto fonts-dejavu-core fonts-freefont-ttf fonts-unifont 2>/dev/null || \
       apt-get install -y --no-install-recommends \

@@ -564,6 +564,7 @@ describe('PlatformMcpService', () => {
             senderType: 'user',
             senderId: 'u_1',
             text: '你好',
+            attachments: [],
             attachmentUrl: null,
             attachmentName: null,
             attachmentType: null,
@@ -575,6 +576,7 @@ describe('PlatformMcpService', () => {
             senderType: 'agent',
             senderId: null,
             text: '收到',
+            attachments: [],
             attachmentUrl: null,
             attachmentName: null,
             attachmentType: null,
@@ -603,7 +605,7 @@ describe('PlatformMcpService', () => {
       });
     });
 
-    it('含附件消息返回附件字段（attachmentUrl/attachmentName/attachmentType + senderInstanceId，无附件为 null）', async () => {
+    it('旧单附件三字段行（无新列）→ attachments 回退为单元素数组，旧三字段保留', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([
@@ -638,13 +640,55 @@ describe('PlatformMcpService', () => {
         senderType: 'user',
         senderId: 'u_1',
         text: '见附件',
+        attachments: [
+          { url: '/uploads/uuid-1.png', name: '截图.png', ext: 'png' },
+        ],
         attachmentUrl: '/uploads/uuid-1.png',
         attachmentName: '截图.png',
         attachmentType: 'png',
         senderInstanceId: null,
         createdAt: '2026-08-07T00:00:02.000Z',
       });
+      expect(result.items[1].attachments).toEqual([]);
       expect(result.items[1].senderInstanceId).toBe('tmm_1');
+    });
+
+    it('多附件（新列）+ 非法条目丢弃：chat_history 透出全部合法附件 + 首附件三字段', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_0000000030',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_1',
+          senderInstanceId: null,
+          content: { text: '两个文件', parts: [] },
+          // 新列：第 2 条缺 url（非法）→ helper 丢弃；第 3 条与第 1 条同 url → 去重
+          attachments: [
+            { url: '/uploads/a.png', name: '图A.png', ext: 'png', size: 1024 },
+            { name: '没有地址.txt' },
+            { url: '/uploads/a.png', name: '重复.png', ext: 'png' },
+            { url: '/uploads/b.zip', name: '包.zip', ext: 'zip', size: 2048 },
+          ],
+          // 旧三字段为双写投影（= 首个附件）
+          attachmentUrl: '/uploads/a.png',
+          attachmentName: '图A.png',
+          attachmentType: 'png',
+          createdAt: new Date('2026-08-07T00:00:04Z'),
+        },
+      ]);
+
+      const result = await service.chatHistory(ctx, { taskId });
+
+      expect(result.items[0].attachments).toEqual([
+        { url: '/uploads/a.png', name: '图A.png', ext: 'png', size: 1024 },
+        { url: '/uploads/b.zip', name: '包.zip', ext: 'zip', size: 2048 },
+      ]);
+      expect(result.items[0]).toMatchObject({
+        attachmentUrl: '/uploads/a.png',
+        attachmentName: '图A.png',
+        attachmentType: 'png',
+      });
     });
 
     it('sinceId 游标过滤 + limit 分页透传（正序续拉，多取 1 条探底）', async () => {
@@ -851,6 +895,7 @@ describe('PlatformMcpService', () => {
             senderType: 'user',
             senderId: 'u_1',
             text: '私聊你好',
+            attachments: [],
             attachmentUrl: null,
             attachmentName: null,
             attachmentType: null,

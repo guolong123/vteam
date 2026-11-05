@@ -63,6 +63,58 @@ describe('UploadsController', () => {
     expect(artifactsService.archiveFile).not.toHaveBeenCalled();
   });
 
+  it('任意扩展名（.zip/.html 等）照常上传（无类型白名单拦截）', async () => {
+    const zipFile: StoredFile = {
+      ...file,
+      originalname: '归档.zip',
+      mimetype: 'application/zip',
+      filename: 'uuid-2.zip',
+      path: '/tmp/uploads/uuid-2.zip',
+    };
+    service.describe.mockReturnValue({
+      url: '/uploads/uuid-2.zip',
+      name: '归档.zip',
+      size: 4096,
+      ext: 'zip',
+    });
+
+    const result = await controller.upload(zipFile, {});
+
+    expect(service.describe).toHaveBeenCalledWith(zipFile);
+    expect(result).toEqual({
+      url: '/uploads/uuid-2.zip',
+      name: '归档.zip',
+      size: 4096,
+      ext: 'zip',
+    });
+  });
+
+  it('无扩展名文件照常上传（ext 为空串，不拒绝）', async () => {
+    const noExtFile: StoredFile = {
+      ...file,
+      originalname: 'Makefile',
+      mimetype: 'application/octet-stream',
+      filename: 'uuid-3',
+      path: '/tmp/uploads/uuid-3',
+    };
+    service.describe.mockReturnValue({
+      url: '/uploads/uuid-3',
+      name: 'Makefile',
+      size: 128,
+      ext: '',
+    });
+
+    const result = await controller.upload(noExtFile, {});
+
+    expect(service.describe).toHaveBeenCalledWith(noExtFile);
+    expect(result).toEqual({
+      url: '/uploads/uuid-3',
+      name: 'Makefile',
+      size: 128,
+      ext: '',
+    });
+  });
+
   it('带 taskId：读落盘文件计算 sha256 → 归档为 file 产出物，返回上传元数据', async () => {
     service.describe.mockReturnValue({
       url: '/uploads/uuid-1.docx',

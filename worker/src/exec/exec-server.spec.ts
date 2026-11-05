@@ -30,8 +30,8 @@ import { getLoad, resetInstanceCount } from '../instance-tracker';
 import {
   ExecServer,
   KNOWN_SESSIONS_LIMIT,
+  MAX_ATTACHMENT_BYTES,
   MAX_FILE_FETCH_BYTES,
-  MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_PLAN_DOC_BYTES,
   MAX_PLAN_UPLOAD_BYTES,
   resolveUsageModelKey,
@@ -1126,7 +1126,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
   });
 });
 
-describe('ExecServer：POST /execute 图片附件（问题二：图片进执行上下文）', () => {
+describe('ExecServer：POST /execute 附件（图片进视觉，非图片落盘+注记）', () => {
   const realFetch = (globalThis as unknown as { fetch: unknown }).fetch;
   afterEach(() => {
     (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
@@ -1136,6 +1136,17 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
     const stub = jest.fn().mockResolvedValue({ ok, status, arrayBuffer: async () => bytes });
     (globalThis as unknown as { fetch: unknown }).fetch = stub;
     return stub;
+  }
+
+  function sentParts(sendMessage: jest.Mock): Array<Record<string, unknown>> {
+    return (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+  }
+
+  function noteText(parts: Array<Record<string, unknown>>): string {
+    return parts
+      .filter((p) => p.type === 'text')
+      .map((p) => String(p.text ?? ''))
+      .join('\n');
   }
 
   it('/uploads/ 相对路径 + serverBaseUrl → 下载落盘 attachments/ + file part 并入 prompt', async () => {
@@ -1155,11 +1166,113 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
       expect(res.status).toBe(202);
       await waitFor(() => sendMessage.mock.calls.length > 0);
       expect(stub).toHaveBeenCalledWith('http://server:3000/uploads/a.png', expect.anything());
-      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      const parts = sentParts(sendMessage);
       const file = parts.find((p) => p.type === 'file') as Record<string, unknown> | undefined;
       expect(file).toMatchObject({ type: 'file', mime: 'image/png', filename: 'a.png' });
       expect(String(file?.url)).toMatch(/^file:\/\//);
       expect(fs.existsSync(join(workDir, 'attachments', 'a.png'))).toBe(true);
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('多图片：每个附件都落盘 + 每个图片一个 file part（视觉链路不变）', async () => {
+    const stub = stubDownload(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-multi-'));
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_1',
+        prompt: '对比两张图',
+        directory: workDir,
+        attachments: [
+          { url: '/uploads/u1.png', mime: 'image/png', filename: 'before.png' },
+          { url: '/uploads/u2.jpg', mime: 'image/jpeg', filename: 'after.jpg' },
+        ],
+      });
+      expect(res.status).toBe(202);
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      expect(stub).toHaveBeenCalledTimes(2);
+      const files = sentParts(sendMessage).filter((p) => p.type === 'file') as Array<Record<string, unknown>>;
+      expect(files).toHaveLength(2);
+      expect(files.map((f) => f.filename)).toEqual(['before.png', 'after.jpg']);
+      expect(files.map((f) => f.mime)).toEqual(['image/png', 'image/jpeg']);
+      expect(fs.existsSync(join(workDir, 'attachments', 'before.png'))).toBe(true);
+      expect(fs.existsSync(join(workDir, 'attachments', 'after.jpg'))).toBe(true);
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('zip 落盘 + notes 指引（绝对/相对路径、扩展名、大小、建议），无 file part', async () => {
+    const zipBytes = Buffer.from('PK\u0003\u0004zip');
+    stubDownload(zipBytes);
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-zip-'));
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_1',
+        prompt: '解压看看',
+        directory: workDir,
+        attachments: [{ url: '/uploads/u1.zip', mime: 'application/octet-stream', filename: 'bundle.zip' }],
+      });
+      expect(res.status).toBe(202);
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      const parts = sentParts(sendMessage);
+      expect(parts.some((p) => p.type === 'file')).toBe(false);
+      const dest = join(workDir, 'attachments', 'bundle.zip');
+      expect(fs.existsSync(dest)).toBe(true);
+      expect(fs.readFileSync(dest).equals(zipBytes)).toBe(true);
+      const notes = noteText(parts);
+      expect(notes).toContain(dest);
+      expect(notes).toContain('attachments/bundle.zip');
+      expect(notes).toContain('.zip');
+      expect(notes).toContain(`${zipBytes.length} bytes`);
+      expect(notes).toContain('unzip');
+      expect(notes).toContain('如实告知用户');
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('中文文件名：落盘保留可读中文名（不再整名替换下划线），note 指向该路径', async () => {
+    const zipBytes = Buffer.from('PK\u0003\u0004zh');
+    stubDownload(zipBytes);
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-cjk-'));
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_cjk',
+        prompt: '看看这个压缩包',
+        directory: workDir,
+        attachments: [{ url: '/uploads/u_cjk.zip', mime: 'application/octet-stream', filename: '需求说明（终版）.zip' }],
+      });
+      expect(res.status).toBe(202);
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      const parts = sentParts(sendMessage);
+      const dest = join(workDir, 'attachments', '需求说明（终版）.zip');
+      expect(fs.existsSync(dest)).toBe(true);
+      expect(fs.readFileSync(dest).equals(zipBytes)).toBe(true);
+      const notes = noteText(parts);
+      expect(notes).toContain('attachments/需求说明（终版）.zip');
+      expect(notes).toContain('需求说明（终版）.zip');
+      // 旧实现会把中文整名替换成下划线；本用例锁住「可读中文名」回归
+      expect(notes).not.toMatch(/attachments\/_+\./);
       await waitFor(() => sent.length >= 5);
     } finally {
       await exec.stop();
@@ -1188,7 +1301,7 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
       expect(res.status).toBe(202);
       await waitFor(() => sendMessage.mock.calls.length > 0);
       expect(sendMessage).toHaveBeenCalledTimes(1);
-      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      const parts = sentParts(sendMessage);
       const file = parts.find((p) => p.type === 'file') as Record<string, unknown> | undefined;
       expect(file).toMatchObject({ type: 'file', mime: 'image/png', filename: 'a.png' });
       expect(fs.existsSync(join(workDir, 'attachments', 'a.png'))).toBe(true);
@@ -1217,7 +1330,7 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
       });
       await waitFor(() => sendMessage.mock.calls.length > 0);
       expect(stub).not.toHaveBeenCalled();
-      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      const parts = sentParts(sendMessage);
       expect(parts.some((p) => p.type === 'file')).toBe(false);
       expect(parts.some((p) => p.type === 'text' && String(p.text).includes('未能送达'))).toBe(true);
       await waitFor(() => sent.length >= 5);
@@ -1227,8 +1340,40 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
     }
   });
 
-  it('超 MAX_IMAGE_ATTACHMENT_BYTES → 跳过落盘 + 注记文本，不阻断执行', async () => {
-    stubDownload(Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES + 1, 1));
+  it('非法 URL（data:/ftp://）逐个跳过：不下载、不落盘，各留一条如实注记', async () => {
+    const stub = stubDownload(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-bad-'));
+    try {
+      await postExecute(bound, {
+        taskId: 't_1',
+        prompt: '看附件',
+        directory: workDir,
+        attachments: [
+          { url: 'data:text/plain;base64,QQ==', mime: 'text/plain', filename: 'x.txt' },
+          { url: 'ftp://evil.example.com/a.zip', mime: 'application/octet-stream', filename: 'y.zip' },
+        ],
+      });
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      expect(stub).not.toHaveBeenCalled();
+      const parts = sentParts(sendMessage);
+      expect(parts.some((p) => p.type === 'file')).toBe(false);
+      const notes = noteText(parts);
+      expect(notes.match(/未能送达/g)).toHaveLength(2);
+      expect(fs.existsSync(join(workDir, 'attachments', 'x.txt'))).toBe(false);
+      expect(fs.existsSync(join(workDir, 'attachments', 'y.zip'))).toBe(false);
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('超 MAX_ATTACHMENT_BYTES（20MB）→ 跳过落盘 + 注记文本，不阻断执行', async () => {
+    stubDownload(Buffer.alloc(MAX_ATTACHMENT_BYTES + 1, 1));
     const { driver, sendMessage } = mockDriver();
     const { sender, sent } = createSender();
     const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
@@ -1242,10 +1387,38 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
         attachments: [{ url: '/uploads/big.png', mime: 'image/png', filename: 'big.png' }],
       });
       await waitFor(() => sendMessage.mock.calls.length > 0);
-      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      const parts = sentParts(sendMessage);
       expect(parts.some((p) => p.type === 'file')).toBe(false);
       expect(fs.existsSync(join(workDir, 'attachments', 'big.png'))).toBe(false);
-      expect(parts.some((p) => p.type === 'text' && String(p.text).includes('超过'))).toBe(true);
+      const notes = noteText(parts);
+      expect(notes).toContain('超过');
+      expect(notes).toContain(`${MAX_ATTACHMENT_BYTES}`);
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('超 20MB 的压缩包同样跳过落盘，模型按注记如实告知用户', async () => {
+    stubDownload(Buffer.alloc(MAX_ATTACHMENT_BYTES + 1, 2));
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-bigzip-'));
+    try {
+      await postExecute(bound, {
+        taskId: 't_1',
+        prompt: '解压看看',
+        directory: workDir,
+        attachments: [{ url: '/uploads/huge.zip', mime: 'application/octet-stream', filename: 'huge.zip' }],
+      });
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      const parts = sentParts(sendMessage);
+      expect(parts.some((p) => p.type === 'file')).toBe(false);
+      expect(fs.existsSync(join(workDir, 'attachments', 'huge.zip'))).toBe(false);
+      expect(noteText(parts)).toContain('压缩后重发');
       await waitFor(() => sent.length >= 5);
     } finally {
       await exec.stop();

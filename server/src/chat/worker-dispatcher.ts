@@ -82,6 +82,7 @@ import {
   isStaleToolOnlyContent,
   stripInjectedPromptParts,
 } from './message-parts';
+import { normalizeMessageAttachments } from './message-attachments';
 import {
   AGENT_QUESTION_KINDS,
   AGENT_QUESTION_STATUS,
@@ -2955,14 +2956,16 @@ export class WorkerDispatcher
       // worker-event.ingress.ts 的 `<目标频道>|<agentId>` 定位键（resolveDeltaStreamKey 同源）。
       this.ingress.invalidateDeltaStream(cleanupChannel.id, target.agentId);
     }
-    const imageAttach = await this.resolveImageAttachments(request.messageId);
+    const attachmentRef = await this.resolveMessageAttachments(
+      request.messageId,
+    );
     // 注入模式在执行提示词首行前置机内说明；消息回写仍用不带说明的 prompt
     //（注入说明只随 execute 载荷下发，见 IN_FLIGHT_INJECT_NOTICE 注释）。
     const promptForExec = injectFlight
       ? `${IN_FLIGHT_INJECT_NOTICE}\n\n${prompt}`
       : prompt;
-    const finalPrompt = imageAttach
-      ? `${promptForExec}\n\n${imageAttach.pointer}`
+    const finalPrompt = attachmentRef
+      ? `${promptForExec}\n\n${attachmentRef.pointer}`
       : promptForExec;
     const memoryIndex = taskIdForPrompt
       ? await this.buildTeamMemoryIndex(teamId, {
@@ -3110,7 +3113,7 @@ export class WorkerDispatcher
         // 注入模式：worker 侧仅追加 prompt 到在飞会话，不建跟踪/不出终态事件。
         ...(injectFlight ? { inFlight: true } : {}),
         ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),
-        ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
+        ...(attachmentRef ? { attachments: attachmentRef.attachments } : {}),
         system: buildSystemInstructions(agentIdentity, systemOpts),
       });
     } catch (err) {
@@ -5899,14 +5902,11 @@ export class WorkerDispatcher
     return this.ensureTaskWorkDir(taskId);
   }
 
-  /** 可进执行上下文的图片扩展名（对齐 web IMAGE_EXTS + uploads 白名单交集；非图片行为不变）。 */
-  private static readonly IMAGE_ATTACHMENT_EXTS: ReadonlySet<string> = new Set([
-    'png',
-    'jpg',
-    'jpeg',
-    'gif',
-  ]);
-
+  /**
+   * 图片扩展名 → MIME（与 web IMAGE_EXTS 的图片集对齐：png/jpg/jpeg/gif/webp）。
+   * 其余扩展名一律 `application/octet-stream`——控制面不预设类型白名单（uploads 允许
+   * 任意扩展名），能否解析交给模型侧判断。
+   */
   private static readonly IMAGE_ATTACHMENT_MIME: Readonly<
     Record<string, string>
   > = {
@@ -5914,41 +5914,67 @@ export class WorkerDispatcher
     jpg: 'image/jpeg',
     jpeg: 'image/jpeg',
     gif: 'image/gif',
+    webp: 'image/webp',
   };
 
+  /** 扩展名 → 下发用 MIME：图片走 image/*（进模型视觉），其余按二进制流下发。 */
+  private static attachmentMimeOf(ext: string): string {
+    return (
+      WorkerDispatcher.IMAGE_ATTACHMENT_MIME[ext] ?? 'application/octet-stream'
+    );
+  }
+
   /**
-   * 触发消息的图片附件 → 执行附件引用（问题二：用户发的图进执行上下文）。
-   * 仅 /uploads/ 落盘 + 图片扩展名才携带；其余（无附件/非图片/查询失败）返回 null，
-   * 调用方保持纯文本分派，行为与此前一致。
+   * 触发消息的**全部附件** → 执行附件引用 + prompt 指针（多附件 UX-10 的最后一公里）。
+   *
+   * 读取统一经 `normalizeMessageAttachments`：`messages.attachments` Json 列优先，
+   * 缺失时回退旧三字段单元素（2026-11-05 之前的历史行）。
+   *
+   * 下发策略：
+   * - **只下发 `/uploads/` 引用**（控制面自己托管的文件）：外链 http(s)/file:// 等一律
+   *   跳过，保持既有安全边界（worker 侧还会再校验同源）。
+   * - 图片（png/jpg/jpeg/gif/webp）→ `image/*`，worker 落盘后进模型视觉上下文；
+   * - 其余（pdf/zip/docx/…）→ `application/octet-stream`，worker 落盘到执行目录
+   *   `attachments/`，由模型自行解压/解析/读取。
+   * - 指针逐条追加进 prompt：图片「已放入上下文请查看」；非图片给出落盘位置与
+   *   「无法处理时如实告知用户」，避免模型对看不见的文件编造内容。
+   *
+   * 无附件 / 无 /uploads 引用 / 查询失败 → 返回 null，调用方保持纯文本分派（不抛错）。
    */
-  private async resolveImageAttachments(
+  private async resolveMessageAttachments(
     messageId: string,
   ): Promise<{ attachments: ExecuteAttachment[]; pointer: string } | null> {
     try {
       const row = await this.prisma.message.findUnique({
         where: { id: messageId },
         select: {
+          // 新链路唯一真相 + 旧三字段兼容投影（normalizeMessageAttachments 统一归一）
+          attachments: true,
           attachmentUrl: true,
           attachmentName: true,
           attachmentType: true,
         },
       });
-      const url = row?.attachmentUrl ?? null;
-      if (!url || !url.startsWith('/uploads/')) return null;
-      const ext = (row?.attachmentType ?? '').toLowerCase();
-      if (!WorkerDispatcher.IMAGE_ATTACHMENT_EXTS.has(ext)) return null;
-      const filename =
-        row?.attachmentName?.trim() || url.split('/').pop() || 'image';
-      return {
-        attachments: [
-          {
-            url,
-            mime: WorkerDispatcher.IMAGE_ATTACHMENT_MIME[ext],
-            filename,
-          },
-        ],
-        pointer: `【附件图片】用户附了一张图片（${filename}），已放入本次执行的上下文，请查看图片内容后再作答。`,
-      };
+      const list = row ? normalizeMessageAttachments(row) : [];
+      if (list.length === 0) return null;
+      const attachments: ExecuteAttachment[] = [];
+      const pointers: string[] = [];
+      for (const item of list) {
+        // 安全边界：只下发控制面托管的 /uploads/ 引用，外链/本地路径不进入执行上下文
+        if (!item.url.startsWith('/uploads/')) continue;
+        const mime = WorkerDispatcher.attachmentMimeOf(item.ext);
+        const filename = item.name;
+        attachments.push({ url: item.url, mime, filename });
+        const isImage =
+          WorkerDispatcher.IMAGE_ATTACHMENT_MIME[item.ext] !== undefined;
+        pointers.push(
+          isImage
+            ? `【附件图片】用户附了一张图片（${filename}），已放入本次执行的上下文，请查看图片内容后再作答。`
+            : `【附件文件】用户附了文件（${filename}），文件已随消息发送，worker 会下载到执行目录（attachments/${filename}），请用可用工具读取/解压/解析；无法处理时如实告知用户。`,
+        );
+      }
+      if (attachments.length === 0) return null;
+      return { attachments, pointer: pointers.join('\n') };
     } catch (err) {
       void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(

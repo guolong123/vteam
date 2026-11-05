@@ -41,10 +41,10 @@ curl -X POST http://192.168.10.78:13000/api/v1/auth/login \
 5. 产出物列表**无 `search?` 参数**：`QueryArtifactsDto` 仅含 `type`/`accepted`/`page`/`pageSize`（`12 §6.1` 提及的名称筛选未实现）。
 6. 产出物端点仅挂 `artifacts.view` / `artifacts.create` 权限点（`PermissionGuard`），**未实现 09 §2.3 的 `[project]` 团队成员校验**：member 角色（`{all:false}`）对 `view` 放行、对 `create` 拒绝，即成员可查看任意任务产出物列表（跨团队也可见，属实现现状）。
 7. **doc/file 产出物落盘**（P2 修复）：worker 回流携带真实内容（`content` 非空）时经 `FileStorageService.saveTextFile` 落盘 `server/uploads/` 生成可访问 `/uploads/<uuid>.<ext>` URL，替换 worker 容器路径占位；仅 `fileRef` 无 `content` 时 `fileUrl` 归一化为 `/uploads/<basename>`，磁盘缺失则 `fileSize=null`，前端降级为纯文本展示（不再渲染死链）。
-8. **上传大小上限为 10MB**（`uploads.constants` `FILE_SIZE_LIMIT`），非 12 篇 §5.2 所述 50MB（50MB 是控制面拉取产出物的协议上限，上传端点不适用）；类型白名单按**扩展名**校验：pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt。
+8. **上传大小上限为 20MB**（`uploads.constants` `FILE_SIZE_LIMIT`，2026-11 由 10MB 上调），非 12 篇 §5.2 所述 50MB（50MB 是控制面拉取产出物的协议上限，上传端点不适用）；**扩展名白名单已取消**（任意扩展名/无扩展名均可上传，静态服务以强制下载头兜底安全）。
 9. 心跳响应实际为 `{workerId, status, lastHeartbeatAt, commands?}`（携带下行命令数组，pull 模型，一次有效）；离线判定 30s（10s 心跳 × 3 周期，`WORKER_OFFLINE_TIMEOUT_MS=30_000`），HealthChecker 每 10s 扫描。
 10. `PATCH /workers/:id` 请求体仅 `{defaultModelId?}`（C8 默认模型配置）：非空须存在于 models 目录且 enabled，否则 400 `MODEL_NOT_FOUND`；`null`=清除；缺省=幂等跳过。
-11. **无扩展名文件上传被拒**：原用例预期「无扩展名上传 201、纯 UUID 文件名」，实际 `uploads.service.ts` 校验 `!ext` 直接拦截（400 `UPLOAD_FILE_TYPE_NOT_ALLOWED`，白名单仅接受扩展名文件），`TC-UPL-055` 已按实现改为反向用例。
+11. **无扩展名文件上传已放行**：原实现 `uploads.service.ts` 校验 `!ext` 直接拦截（400 `UPLOAD_FILE_TYPE_NOT_ALLOWED`）；2026-11 放宽上传限制后白名单移除，无扩展名文件落盘为纯 UUID 文件名，`TC-UPL-055` 已改为正向用例。
 
 **执行安全提示**：
 
@@ -139,7 +139,7 @@ curl -X POST http://192.168.10.78:13000/api/v1/auth/login \
 
 ## 4. 文件上传用例（TC-UPL）
 
-> `POST /api/v1/uploads` 为通用文件上传端点（multipart，字段名 `file`），全局 `JwtAuthGuard` 认证（登录用户即可上传，普通成员能力）；返回 `{url, name, size, ext}`，落盘 `server/uploads/`（`UPLOAD_DIR` 可覆盖），静态服务 `/uploads/*` 由 `main.ts` 挂载可访问。类型白名单按扩展名：pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt；大小上限 10MB。以下 API 用例默认前置条件为「已用 `admin`/`admin123` 登录获得 admin accessToken」。
+> `POST /api/v1/uploads` 为通用文件上传端点（multipart，字段名 `file`），全局 `JwtAuthGuard` 认证（登录用户即可上传，普通成员能力）；返回 `{url, name, size, ext}`，落盘 `server/uploads/`（`UPLOAD_DIR` 可覆盖），静态服务 `/uploads/*` 由 `main.ts` 挂载可访问。**不限制扩展名**（任意扩展名/无扩展名均可，zip/代码/数据等照收；模型能读的按既有逻辑读，不能读的由 Agent 自行决定处理，如解压）；单文件大小上限 20MB。`/uploads/*` 静态响应统一带 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff` + `Content-Security-Policy: default-src 'none'; sandbox`（放宽白名单后的补偿：.html/.svg 等不会在本源内联执行）。以下 API 用例默认前置条件为「已用 `admin`/`admin123` 登录获得 admin accessToken」。
 
 ### 4.1 正向用例
 
@@ -148,15 +148,15 @@ curl -X POST http://192.168.10.78:13000/api/v1/auth/login \
 | TC-UPL-052 | 上传合法文件成功 | 正向 | P0 | admin accessToken；本地准备 `需求说明.md` | 1. `POST /api/v1/uploads`，Header：`Authorization: Bearer <accessToken>`，form-data 字段 `file=@需求说明.md` | 1. 返回 `201 Created`，响应体 `{url:"/uploads/<uuid>.md", name:"需求说明.md", size:<字节数>, ext:"md"}`<br>2. `url` 以 `/uploads/` 开头且文件名含 UUID（杜绝重名） |
 | TC-UPL-053 | 上传后经 /uploads URL 下载验证 | 正向 | P0 | `TC-UPL-052` 已返回 `url` | 1. `GET http://192.168.10.78:13000/api/v1/uploads/<uuid>.md`（或 web 入口 `/uploads/...`） | 1. 返回 `200 OK`，响应内容与上传文件完全一致（读/写同目录，静态服务可达） |
 | TC-UPL-054 | 中文文件名 / 大写扩展名归一化 | 正向 | P2 | admin accessToken；准备 `需求报告.PDF`、`报告.txt` | 1. `POST /api/v1/uploads`，file=`需求报告.PDF`<br>2.（变体）file=`报告.txt` | 1. 返回 `201 Created`，`ext` 一律为小写（`"pdf"`/`"txt"`），`name` 保留原始文件名（含中文/大小写），`url` 含小写扩展名 |
-| TC-UPL-055 | 无扩展名文件上传被拒 | 反向 | P2 | admin accessToken；准备 `README`（无扩展名） | 1. `POST /api/v1/uploads`，file=`README` | 1. 返回 `400 Bad Request`，`code=UPLOAD_FILE_TYPE_NOT_ALLOWED`，message「文件类型不允许：仅支持 pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt」（`uploads.service.ts` 校验 `!ext` 直接拦截，无扩展名等同非法类型，与 TC-UPL-057 同分支；单测已锁定该行为）<br>2. 不落盘 |
+| TC-UPL-055 | 无扩展名 / 任意扩展名文件均可上传（白名单已取消） | 正向 | P2 | admin accessToken；准备 `README`（无扩展名）、`evil.exe`、`src.zip` | 1. `POST /api/v1/uploads`，file=`README`<br>2. 变体 file=`evil.exe`<br>3. 变体 file=`src.zip` | 1. 均返回 `201 Created`，`ext` 依次为 `""`/`"exe"`/`"zip"`，磁盘文件名仍为 UUID（无扩展名时纯 UUID）<br>2. 不再有 `UPLOAD_FILE_TYPE_NOT_ALLOWED` 分支（`fileFilter` 已移除）；文件只落盘不执行，能否读取/解压由 Agent 侧自行决定 |
 
 ### 4.2 反向用例
 
 | 用例编号 | 用例名称 | 用例类型 | 优先级 | 前置条件 | 操作步骤 | 预期结果 |
 |---------|---------|---------|-------|---------|---------|---------|
 | TC-UPL-056 | 上传：未携带 file 字段 | 反向 | P0 | admin accessToken | 1. `POST /api/v1/uploads`，Header：`Authorization: Bearer <accessToken>`，不带任何文件字段 | 1. 返回 `400 Bad Request`，`code=UPLOAD_FILE_REQUIRED`，message「缺少 file 文件（multipart 字段名 file）」（实测）<br>2. 不落盘任何文件 |
-| TC-UPL-057 | 上传：扩展名不在白名单 | 反向 | P0 | admin accessToken；准备 `evil.exe` | 1. `POST /api/v1/uploads`，file=`evil.exe`<br>2.（变体）file=`script.js` | 1. 返回 `400 Bad Request`，`code=UPLOAD_FILE_TYPE_NOT_ALLOWED`，message「文件类型不允许：仅支持 pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt」（实测）<br>2. 不落盘（fileFilter 拦截） |
-| TC-UPL-058 | 上传：超过 10MB 大小上限 | 反向 | P1 | admin accessToken；准备 >10MB 的 `big.bin`（用 dd 生成 11MB 临时文件） | 1. `POST /api/v1/uploads`，file=`big.bin` | 1. 返回 `413 Payload Too Large`（multer `limits.fileSize=10MB` 触发，与 skills 上传同款机制）<br>2. 不产生完整落盘文件 |
+| TC-UPL-057 | 上传 HTML 后经静态服务访问：强制下载不内联执行（安全回归） | 反向 | P0 | admin accessToken；准备 `evil.html`（内容含 `<script>`） | 1. `POST /api/v1/uploads`，file=`evil.html`，拿到 `url`<br>2. `GET <url>`（浏览器直接导航） | 1. 上传返回 `201`（不再按扩展名拦截）<br>2. `GET` 返回 `200` 且响应头含 `Content-Disposition: attachment`、`X-Content-Type-Options: nosniff`、`Content-Security-Policy: default-src 'none'; sandbox` → 浏览器按下载处理，脚本不在本站源内联执行 |
+| TC-UPL-058 | 上传：超过 20MB 大小上限 | 反向 | P1 | admin accessToken；准备 >20MB 的 `big.bin`（用 dd 生成 21MB 临时文件） | 1. `POST /api/v1/uploads`，file=`big.bin` | 1. 返回 `413 Payload Too Large`（multer `limits.fileSize=20MB` 触发，与 skills 上传同款机制）<br>2. 不产生完整落盘文件 |
 | TC-UPL-059 | 上传：未认证访问 | 反向 | P0 | 无 token | 1. `POST /api/v1/uploads`，file=`a.txt`（不带 Authorization 头） | 1. 返回 `401 Unauthorized`，`code=AUTH_UNAUTHORIZED`（全局 JwtAuthGuard 拦截） |
 | TC-UPL-060 | 上传：multipart 字段名错误 | 反向 | P1 | admin accessToken；准备 `a.txt` | 1. `POST /api/v1/uploads`，Header：`Authorization: Bearer <accessToken>`，form-data 字段名用 `filename`（而非 `file`） | 1. 返回 `400 Bad Request`，`code=UPLOAD_FILE_REQUIRED`（`@UploadedFile()` 取不到 file 字段，等价于缺文件）<br>2. 不落盘任何文件 |
 
@@ -168,8 +168,8 @@ curl -X POST http://192.168.10.78:13000/api/v1/auth/login \
 |------|------|------|------|------|
 | Worker 节点管理 | TC-WKR | 12 | 16 | 28 |
 | 产出物与文档库 | TC-ART | 14 | 9 | 23 |
-| 文件上传 | TC-UPL | 3 | 6 | 9 |
-| **合计** | — | **29** | **31** | **60** |
+| 文件上传 | TC-UPL | 4 | 5 | 9 |
+| **合计** | — | **30** | **30** | **60** |
 **覆盖端点清单**（均为 `/api/v1` 前缀，含 API 与 Web 页面）：
 
 - Workers（8 端点）：`POST /workers/register`、`POST /workers/:id/heartbeat`、`GET /workers`、`GET /workers/:id`、`PATCH /workers/:id`、`POST /workers/:id/restart`、`POST /workers/:id/shutdown`、`POST /worker/events`
@@ -177,4 +177,4 @@ curl -X POST http://192.168.10.78:13000/api/v1/auth/login \
 - Uploads（2 端点）：`POST /uploads`、`GET /uploads/:file`（静态服务，经 API 或 web 入口访问）
 - Web 页面（2 页）：Worker 节点页（§2.11）、任务详情与文档库页（§2.7）
 
-**反向覆盖维度**：worker 注册/心跳/事件 token 缺失、错误、tokenHash 不匹配（401）、注册/心跳参数非法（400）、worker 不存在（404）、未认证访问（401）、非管理员管理操作越权（403）、事件未注册 worker（404）、事件非法 type（400）、事件幂等重放（202 去重）、产出物声明非法（type/title/content/fileRef 交叉校验，400）、归档到不存在任务（外键约束）、产出物/版本不存在（404）、版本号非整数（400）、已验收版本不可覆盖（409）、上传缺文件/非法类型（400）、上传超限（413）、未认证上传（401）等，均已覆盖。
+**反向覆盖维度**：worker 注册/心跳/事件 token 缺失、错误、tokenHash 不匹配（401）、注册/心跳参数非法（400）、worker 不存在（404）、未认证访问（401）、非管理员管理操作越权（403）、事件未注册 worker（404）、事件非法 type（400）、事件幂等重放（202 去重）、产出物声明非法（type/title/content/fileRef 交叉校验，400）、归档到不存在任务（外键约束）、产出物/版本不存在（404）、版本号非整数（400）、已验收版本不可覆盖（409）、上传缺文件（400）、上传超限（413）、上传内容强制下载不可内联执行（Content-Disposition/nosniff/CSP）、未认证上传（401）等，均已覆盖。

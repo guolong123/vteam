@@ -95,6 +95,7 @@ describe('WorkerDispatcher', () => {
       deleteMany: jest.Mock;
       findMany: jest.Mock;
       findFirst: jest.Mock;
+      findUnique: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
     };
@@ -234,6 +235,8 @@ describe('WorkerDispatcher', () => {
         findMany: jest.fn().mockResolvedValue([]),
         // 默认无 processing 流式消息 → handleTaskCompleted 走 create 落库路径（兼容既有测试）
         findFirst: jest.fn().mockResolvedValue(null),
+        // 触发消息附件查询：默认无附件行 → 纯文本分派（附件用例单独 mock）
+        findUnique: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
         // dm-sse-no-refresh：dispatch 前清理目标频道残留 processing（无残留时 count=0）
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -10843,7 +10846,8 @@ describe('WorkerDispatcher', () => {
       );
     });
 
-    it('触发消息带图片附件 → execute 携带 attachments + prompt 追加图片指引', async () => {
+    it('触发消息带图片附件（legacy 三字段）→ execute 携带 attachments + prompt 追加图片指引', async () => {
+      // attachments 列缺失（2026-11-05 之前的历史行）→ normalizeMessageAttachments 回退旧三字段
       (prisma.message as any).findUnique = jest.fn().mockResolvedValue({
         attachmentUrl: '/uploads/uuid-1.png',
         attachmentName: 'shot.png',
@@ -10860,9 +10864,10 @@ describe('WorkerDispatcher', () => {
       ]);
       expect(execArgs.prompt[0].text).toContain('【附件图片】');
       expect(execArgs.prompt[0].text).toContain('shot.png');
+      expect(execArgs.prompt[0].text).toContain('已放入本次执行的上下文');
     });
 
-    it('触发消息带非图片附件（pdf）→ 不携带 attachments，纯文本分派不变', async () => {
+    it('触发消息带非图片附件（pdf）→ 同样下发 + pointer 含文件名与落盘/解析指引', async () => {
       (prisma.message as any).findUnique = jest.fn().mockResolvedValue({
         attachmentUrl: '/uploads/uuid-2.pdf',
         attachmentName: 'doc.pdf',
@@ -10874,8 +10879,142 @@ describe('WorkerDispatcher', () => {
         prompt: Array<{ text: string }>;
         attachments?: unknown;
       };
+      // 非图片不再被丢弃：按 application/octet-stream 下发，worker 落盘后交模型自行解析
+      expect(execArgs.attachments).toEqual([
+        {
+          url: '/uploads/uuid-2.pdf',
+          mime: 'application/octet-stream',
+          filename: 'doc.pdf',
+        },
+      ]);
+      const prompt = execArgs.prompt[0].text;
+      expect(prompt).toContain('【附件文件】');
+      expect(prompt).toContain('doc.pdf');
+      expect(prompt).toContain('attachments/doc.pdf');
+      expect(prompt).toContain('如实告知用户');
+      expect(prompt).not.toContain('【附件图片】');
+    });
+
+    it('attachments 列多图 → 全部下发，pointer 逐条列出（列优先于 legacy 三字段）', async () => {
+      (prisma.message as any).findUnique = jest.fn().mockResolvedValue({
+        attachments: [
+          {
+            url: '/uploads/uuid-1.png',
+            name: 'before.png',
+            ext: 'png',
+            size: 12,
+          },
+          {
+            url: '/uploads/uuid-2.jpg',
+            name: 'after.jpg',
+            ext: 'jpg',
+            size: 34,
+          },
+        ],
+        // 旧投影只指向首个附件——列存在时必须以列为准（两个都下发）
+        attachmentUrl: '/uploads/uuid-1.png',
+        attachmentName: 'before.png',
+        attachmentType: 'png',
+      } as any);
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        prompt: Array<{ text: string }>;
+        attachments?: Array<Record<string, unknown>>;
+      };
+      expect(execArgs.attachments).toEqual([
+        {
+          url: '/uploads/uuid-1.png',
+          mime: 'image/png',
+          filename: 'before.png',
+        },
+        {
+          url: '/uploads/uuid-2.jpg',
+          mime: 'image/jpeg',
+          filename: 'after.jpg',
+        },
+      ]);
+      const prompt = execArgs.prompt[0].text;
+      expect(prompt.match(/【附件图片】/g)).toHaveLength(2);
+      expect(prompt).toContain('before.png');
+      expect(prompt).toContain('after.jpg');
+    });
+
+    it('attachments 列一图一 zip → 图片与文件都下发，pointer 各一条（图片/文件区分）', async () => {
+      (prisma.message as any).findUnique = jest.fn().mockResolvedValue({
+        attachments: [
+          { url: '/uploads/uuid-1.png', name: 'shot.png', ext: 'png', size: 8 },
+          {
+            url: '/uploads/uuid-2.zip',
+            name: 'bundle.zip',
+            ext: 'zip',
+            size: 99,
+          },
+        ],
+      } as any);
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        prompt: Array<{ text: string }>;
+        attachments?: Array<Record<string, unknown>>;
+      };
+      expect(execArgs.attachments).toEqual([
+        { url: '/uploads/uuid-1.png', mime: 'image/png', filename: 'shot.png' },
+        {
+          url: '/uploads/uuid-2.zip',
+          mime: 'application/octet-stream',
+          filename: 'bundle.zip',
+        },
+      ]);
+      const prompt = execArgs.prompt[0].text;
+      expect(prompt.match(/【附件图片】/g)).toHaveLength(1);
+      expect(prompt.match(/【附件文件】/g)).toHaveLength(1);
+      expect(prompt).toContain('attachments/bundle.zip');
+      expect(prompt).toContain('读取/解压/解析');
+    });
+
+    it('webp 图片按 image/webp 下发；非 /uploads 外链引用一律不下发（安全边界）', async () => {
+      (prisma.message as any).findUnique = jest.fn().mockResolvedValue({
+        attachments: [
+          { url: 'https://evil.example.com/x.png', name: 'x.png', ext: 'png' },
+          { url: '/uploads/uuid-9.webp', name: 'ok.webp', ext: 'webp' },
+        ],
+      } as any);
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        prompt: Array<{ text: string }>;
+        attachments?: Array<Record<string, unknown>>;
+      };
+      expect(execArgs.attachments).toEqual([
+        {
+          url: '/uploads/uuid-9.webp',
+          mime: 'image/webp',
+          filename: 'ok.webp',
+        },
+      ]);
+      const prompt = execArgs.prompt[0].text;
+      expect(prompt).toContain('ok.webp');
+      expect(prompt).not.toContain('evil.example.com');
+      expect(prompt).not.toContain('x.png');
+    });
+
+    it('附件查询失败 → 降级纯文本分派（不抛错、不带 attachments）', async () => {
+      (prisma.message as any).findUnique = jest
+        .fn()
+        .mockRejectedValue(new Error('db down'));
+      const d = createDispatcher();
+      await expect(d.dispatch(teamRequest() as any)).resolves.toEqual({
+        replies: [],
+      });
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        prompt: Array<{ text: string }>;
+        attachments?: unknown;
+      };
       expect(execArgs.attachments).toBeUndefined();
-      expect(execArgs.prompt[0].text).not.toContain('【附件图片】');
+      const prompt = execArgs.prompt[0].text;
+      expect(prompt).not.toContain('【附件图片】');
+      expect(prompt).not.toContain('【附件文件】');
     });
 
     it('team-mode 团队上下文行：chat_history 与 group_post 均传 teamId', async () => {

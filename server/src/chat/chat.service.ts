@@ -31,6 +31,11 @@ import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
 import { MessageDispatcher } from './message-dispatcher';
 import {
+  legacyAttachmentFields,
+  normalizeMessageAttachments,
+  toStoredAttachments,
+} from './message-attachments';
+import {
   concatText,
   isInjectedPromptPart,
   stripInjectedPromptParts,
@@ -90,7 +95,10 @@ type ChannelRow = {
   agent?: { id: string; name: string } | null;
 };
 
-/** 消息行（messages 表；content/mentions 为 Json 列，附件三字段可空）。 */
+/**
+ * 消息行（messages 表；content/mentions/attachments 为 Json 列，
+ * 附件旧三字段可空 = 首个附件的兼容投影，见 message-attachments.ts）。
+ */
 type MessageRow = {
   id: string;
   channelId: string;
@@ -99,6 +107,7 @@ type MessageRow = {
   senderInstanceId?: string | null;
   content: Prisma.JsonValue;
   mentions: Prisma.JsonValue | null;
+  attachments?: Prisma.JsonValue | null;
   attachmentUrl: string | null;
   attachmentName: string | null;
   attachmentType: string | null;
@@ -1139,6 +1148,17 @@ export class ChatService {
       }
     }
 
+    // 附件归一化（多附件）：新数组优先、旧三字段回退单元素、非法条目丢弃、按 url 去重、
+    // 截断到 MAX_MESSAGE_ATTACHMENTS（全部逻辑收敛在 message-attachments helper）。
+    // 注：请求 DTO 是 class 实例（无 JsonValue 索引签名），helper 只按对象字段读取，收窄即可。
+    const attachments = normalizeMessageAttachments({
+      attachments: dto.attachments as unknown as Prisma.JsonValue | undefined,
+      attachmentUrl: dto.attachmentUrl,
+      attachmentName: dto.attachmentName,
+      attachmentType: dto.attachmentType,
+    });
+    // 双写：新列存完整数组；旧三字段存首个附件（旧前端/旧 MCP 读路径兼容）。
+    const storedAttachments = toStoredAttachments(attachments);
     const message = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
@@ -1150,13 +1170,8 @@ export class ChatService {
         mentions: mentionsStored as Prisma.InputJsonValue,
         status: MESSAGE_STATUS.sent,
         ...(dto.externalChatId ? { externalChatId: dto.externalChatId } : {}),
-        ...(dto.attachmentUrl
-          ? {
-              attachmentUrl: dto.attachmentUrl,
-              attachmentName: dto.attachmentName ?? null,
-              attachmentType: dto.attachmentType ?? null,
-            }
-          : {}),
+        ...(storedAttachments ? { attachments: storedAttachments } : {}),
+        ...legacyAttachmentFields(attachments),
       },
     });
 
@@ -1566,7 +1581,9 @@ export class ChatService {
   /**
    * 群 @ 触发 DM 镜像：为单个已 dispatched 显式目标落一条触发用户消息的逐字拷贝。
    * content/mentions 按落库行原样复制（含 parts 推理/工具/文本，前端渲染与群侧一致）；
-   * 附件三字段随行透传；senderType=user + 同 senderId；taskId 置空（DM 无任务分区）。
+   * 附件随行透传：新列数组 + 旧三字段（= 首个附件）双写（源行可能是旧三字段历史行，
+   * 故统一经 normalizeMessageAttachments 归一化后再写）；senderType=user + 同 senderId；
+   * taskId 置空（DM 无任务分区）。
    */
   private async mirrorGroupMentionToDm(
     teamId: string,
@@ -1593,6 +1610,9 @@ export class ChatService {
       agentId,
     );
     if (!privateChannelId) return;
+    // 附件归一化：源行新列优先、旧三字段回退单元素（历史行兼容），镜像行双写。
+    const attachments = normalizeMessageAttachments(sourceMessage);
+    const storedAttachments = toStoredAttachments(attachments);
     const mirror = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
@@ -1602,13 +1622,8 @@ export class ChatService {
         content: sourceMessage.content as Prisma.InputJsonValue,
         mentions: (sourceMessage.mentions ?? []) as Prisma.InputJsonValue,
         status: MESSAGE_STATUS.sent,
-        ...(sourceMessage.attachmentUrl
-          ? {
-              attachmentUrl: sourceMessage.attachmentUrl,
-              attachmentName: sourceMessage.attachmentName ?? null,
-              attachmentType: sourceMessage.attachmentType ?? null,
-            }
-          : {}),
+        ...(storedAttachments ? { attachments: storedAttachments } : {}),
+        ...legacyAttachmentFields(attachments),
       },
     });
     await this.realtime.broadcast(
@@ -2013,8 +2028,14 @@ export class ChatService {
     return { ...member.agent, role: roleKeyOf(member) };
   }
 
-  /** 消息 DTO（09 篇 §2.4）：content/mentions 透传 Json；createdAt ISO8601；附件三字段透出（可空）。 */
+  /**
+   * 消息 DTO（09 篇 §2.4）：content/mentions 透传 Json；createdAt ISO8601。
+   * 附件输出为新数组 `attachments`（新列优先、旧三字段回退单元素）+ 旧三字段
+   * （= 首个附件的兼容投影，旧前端仍可直接读）。
+   */
   private toMessageDto(row: MessageRow) {
+    const attachments = normalizeMessageAttachments(row);
+    const legacy = legacyAttachmentFields(attachments);
     return {
       id: row.id,
       channelId: row.channelId,
@@ -2023,9 +2044,10 @@ export class ChatService {
       senderInstanceId: row.senderInstanceId ?? null,
       content: this.sanitizeInjectedAgentContent(row.senderType, row.content),
       mentions: row.mentions ?? [],
-      attachmentUrl: row.attachmentUrl,
-      attachmentName: row.attachmentName,
-      attachmentType: row.attachmentType,
+      attachments,
+      attachmentUrl: legacy.attachmentUrl ?? null,
+      attachmentName: legacy.attachmentName ?? null,
+      attachmentType: legacy.attachmentType ?? null,
       status: row.status,
       createdAt: row.createdAt.toISOString(),
     };

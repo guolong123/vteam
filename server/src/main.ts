@@ -31,7 +31,23 @@ async function bootstrap() {
   // 静态文件服务：/uploads/* → server uploads 目录（上传端点磁盘存储目录，读/写同源）。
   // 文件经 UPLOAD_DIR 可覆盖（默认 server/uploads，upload.constants resolveUploadDir 同源）；
   // 目录不存在时静态挂载不报错，首次上传由 multer destination 递归创建。
-  app.useStaticAssets(resolveUploadDir(), { prefix: '/uploads/' });
+  //
+  // 安全响应头（放宽上传扩展名白名单后的必要补偿，不是安全倒退）：
+  // 上传端点已不限扩展名（zip / html / svg / 代码等均可落盘），若浏览器把 .html/.svg
+  // 当作本站源的文档内联渲染，即可拿到本源权限执行脚本 ⇒ 故对 /uploads 下所有响应强制：
+  // - Content-Disposition: attachment → 顶层导航一律下载，不在本源渲染；
+  // - X-Content-Type-Options: nosniff → 禁止浏览器按内容嗅探 MIME；
+  // - Content-Security-Policy: default-src 'none'; sandbox → 万一被当文档解析也无外链/脚本。
+  // 说明：Content-Disposition 只影响顶层导航，不影响 <img src="/uploads/x.png"> 等子资源
+  // 加载（浏览器对子资源忽略该头），图片预览/缩略图展示保持可用。
+  app.useStaticAssets(resolveUploadDir(), {
+    prefix: '/uploads/',
+    setHeaders: (res) => {
+      res.setHeader('Content-Disposition', 'attachment');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    },
+  });
 
   app.use(
     express.json({

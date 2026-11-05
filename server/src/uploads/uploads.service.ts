@@ -4,8 +4,8 @@ import { promises as fsp } from 'fs';
 import { existsSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { diskStorage } from 'multer';
+import { repairMultipartText } from './filename-encoding';
 import {
-  ALLOWED_EXTENSIONS,
   FILE_SIZE_LIMIT,
   resolveUploadDir,
   UPLOAD_ERRORS,
@@ -27,12 +27,6 @@ export interface StoredFile {
   path: string;
 }
 
-/** fileFilter 校验入参（字段子集：仅需要名字与 mimetype）。 */
-export interface FileCandidate {
-  originalname: string;
-  mimetype: string;
-}
-
 /** 上传成功响应体（GET /uploads/{filename} 可达，FILE-01/02、UX-10 复用该结构）。 */
 export interface UploadedFileMeta {
   /** 可访问的相对 URL（经 web rewrite / 直接命中 server 静态服务）。 */
@@ -50,22 +44,23 @@ export interface UploadedFileMeta {
  *
  * 职责拆分：
  * - **静态方法**：供任意 `FileInterceptor('file', FileStorageService.buildMulterOptions())`
- *   装饰器在模块编译期复用（diskStorage 存储策略 / 大小限制 / 扩展名白名单 fileFilter）；
+ *   装饰器在模块编译期复用（diskStorage 存储策略 / 大小限制）；
  *   纯函数可单测，不依赖实例状态。
  * - **实例方法**：`describe(file)` 生成上传响应元数据（DI 注入，供 controller 及
  *   后续上传消费方复用同一声明）。
  *
  * 存储约定（对齐 uploads.constants.ts）：server/uploads/（UPLOAD_DIR 可覆盖）、
- * 文件名 `UUID.<ext>`、扩展名白名单校验、10MB 上限。
+ * 文件名 `UUID.<ext>`、**不限扩展名**（任意类型/无扩展名均放行）、20MB 上限。
  */
 @Injectable()
 export class FileStorageService {
   /**
    * 构建 multer 磁盘存储策略（controller 装饰器用）：
    * - destination：落盘 resolveUploadDir()（目录缺失时递归创建）
-   * - filename：UUID + 白名单扩展名（generateFilename）
-   * - limits：10MB（超限走 multer → Nest 413，与 skills 上传同款机制）
-   * - fileFilter：扩展名白名单校验，非法类型 → 400 UPLOAD_FILE_TYPE_NOT_ALLOWED
+   * - filename：UUID + 扩展名（generateFilename；无扩展名 → 纯 UUID）
+   * - limits：20MB（超限走 multer → Nest 413，与 skills 上传同款机制）
+   * - 不再挂 fileFilter：任意扩展名 / 无扩展名一律放行，由模型自行决定如何处理
+   *   （能否读取属于模型侧能力判断，控制面不预设类型白名单）。
    */
   static buildMulterOptions() {
     return {
@@ -82,23 +77,7 @@ export class FileStorageService {
         },
       }),
       limits: { fileSize: FILE_SIZE_LIMIT },
-      fileFilter: FileStorageService.buildFileFilter(),
     };
-  }
-
-  /**
-   * 扩展名白名单校验（类型安全关键路径）。非法 → 抛 400 `UPLOAD_FILE_TYPE_NOT_ALLOWED`。
-   * 以**扩展名**为准而非 mimetype：浏览器/工具常把不同类型统一上报为
-   * application/octet-stream，扩展名才是可控的类型信号（返回的 ext 与校验同源）。
-   */
-  static assertAllowed(file: FileCandidate): void {
-    const ext = FileStorageService.extractExtension(file.originalname);
-    if (!ext || !(ALLOWED_EXTENSIONS as readonly string[]).includes(ext)) {
-      throw new BadRequestException({
-        code: UPLOAD_ERRORS.FILE_TYPE_NOT_ALLOWED,
-        message: `文件类型不允许：仅支持 ${ALLOWED_EXTENSIONS.join('/')}`,
-      });
-    }
   }
 
   /** 提取小写扩展名（`报告.PDF` → `pdf`；无点/点结尾 → null）。 */
@@ -108,35 +87,26 @@ export class FileStorageService {
     return originalname.slice(dot + 1).toLowerCase();
   }
 
-  /** 生成磁盘文件名：`UUID.<ext>`（保留扩展名，杜绝重名/路径穿越）。 */
+  /** 生成磁盘文件名：`UUID.<ext>`（保留扩展名，杜绝重名/路径穿越）。
+   *  扩展名同样取自**修复编码后**的原始名（busboy 以 latin1 解码中文文件名，
+   *  见 filename-encoding.ts；扩展名 ASCII 通常不受影响，但保持单一可信来源）。 */
   static generateFilename(originalname: string): string {
-    const ext = FileStorageService.extractExtension(originalname);
+    const ext = FileStorageService.extractExtension(
+      repairMultipartText(originalname),
+    );
     return ext ? `${randomUUID()}.${ext}` : randomUUID();
   }
 
-  /** multer fileFilter：白名单校验通过接受，否则拒绝（multer abort → 400）。 */
-  private static buildFileFilter() {
-    return (
-      _req: unknown,
-      file: FileCandidate,
-      cb: (error: Error | null, acceptFile: boolean) => void,
-    ): void => {
-      try {
-        FileStorageService.assertAllowed(file);
-        cb(null, true);
-      } catch (err) {
-        cb(err as Error, false);
-      }
-    };
-  }
-
-  /** 上传成功响应元数据：`{url: '/uploads/<filename>', name, size, ext}`。 */
+  /** 上传成功响应元数据：`{url: '/uploads/<filename>', name, size, ext}`。
+   *  `name` 经 repairMultipartText 修复 latin1/UTF-8 错位（中文文件名乱码根因），
+   *  保证落库/展示/下载文件名与用户选择时一致。 */
   describe(file: StoredFile): UploadedFileMeta {
+    const name = repairMultipartText(file.originalname);
     return {
       url: `/uploads/${file.filename}`,
-      name: file.originalname,
+      name,
       size: file.size,
-      ext: FileStorageService.extractExtension(file.originalname) ?? '',
+      ext: FileStorageService.extractExtension(name) ?? '',
     };
   }
 
@@ -150,15 +120,17 @@ export class FileStorageService {
     content: string,
     originalName: string,
   ): Promise<UploadedFileMeta> {
+    // 产出物标题可能来自中文内容/worker 路径：与上传链路同口径修复 latin1 错位
+    const safeName = repairMultipartText(originalName);
     const dir = resolveUploadDir();
     await fsp.mkdir(dir, { recursive: true });
-    const filename = FileStorageService.generateFilename(originalName);
+    const filename = FileStorageService.generateFilename(safeName);
     await fsp.writeFile(join(dir, filename), content, 'utf8');
     return {
       url: `/uploads/${filename}`,
-      name: originalName,
+      name: safeName,
       size: Buffer.byteLength(content, 'utf8'),
-      ext: FileStorageService.extractExtension(originalName) ?? '',
+      ext: FileStorageService.extractExtension(safeName) ?? '',
     };
   }
 
@@ -171,15 +143,17 @@ export class FileStorageService {
     content: Buffer,
     originalName: string,
   ): Promise<UploadedFileMeta> {
+    // 与 saveTextFile 同口径：产出物原始名同样可能是 latin1 错位的中文
+    const safeName = repairMultipartText(originalName);
     const dir = resolveUploadDir();
     await fsp.mkdir(dir, { recursive: true });
-    const filename = FileStorageService.generateFilename(originalName);
+    const filename = FileStorageService.generateFilename(safeName);
     await fsp.writeFile(join(dir, filename), content);
     return {
       url: `/uploads/${filename}`,
-      name: originalName,
+      name: safeName,
       size: content.length,
-      ext: FileStorageService.extractExtension(originalName) ?? '',
+      ext: FileStorageService.extractExtension(safeName) ?? '',
     };
   }
 

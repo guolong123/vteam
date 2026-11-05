@@ -29,6 +29,11 @@ import {
   DispatchExecutionKind,
   WorkerDispatcher,
 } from '../chat/worker-dispatcher';
+import {
+  legacyAttachmentFields,
+  normalizeMessageAttachments,
+  type MessageAttachmentMeta,
+} from '../chat/message-attachments';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
 import { FileStorageService } from '../uploads/uploads.service';
@@ -397,13 +402,17 @@ export type ExecContext =
   | { kind: 'team'; teamId: string; callerId: string };
 
 /** chat_history 返回的消息行（text 从 content Json 提取，对齐计划 1.2 契约）。
- *  附件三字段 + senderInstanceId 透出（无附件时 null，Agent 据此调 read_file 读取）。 */
+ *  附件：新数组 `attachments`（多附件，≤MAX_MESSAGE_ATTACHMENTS）为核心字段；
+ *  旧三字段保留为「首个附件」投影（旧 MCP 消费者兼容）。无附件时 `attachments=[]`
+ *  且三字段 null（Agent 据此调 read_file 读取）。 */
 export interface ChatHistoryItem {
   id: string;
   senderType: string;
   senderId: string | null;
   text: string;
   createdAt: string;
+  /** 全部附件（新列优先、旧三字段回退单元素；无附件为 []）。 */
+  attachments: MessageAttachmentMeta[];
   attachmentUrl?: string | null;
   attachmentName?: string | null;
   attachmentType?: string | null;
@@ -8832,26 +8841,35 @@ export class PlatformMcpService implements OnModuleInit {
     });
   }
 
+  /**
+   * chat_history 行映射：text 从 content Json 提取；附件经 message-attachments helper
+   * 归一化（新列优先、旧三字段回退单元素），输出新数组 attachments（恒为数组）+
+   * 旧三字段（= 首个附件投影，旧 MCP 消费者兼容）。
+   */
   private toChatHistoryItem(row: {
     id: string;
     senderType: string;
     senderId: string | null;
     senderInstanceId: string | null;
     content: Prisma.JsonValue;
+    attachments?: Prisma.JsonValue | null;
     attachmentUrl: string | null;
     attachmentName: string | null;
     attachmentType: string | null;
     createdAt: Date;
   }): ChatHistoryItem {
     const content = (row.content ?? {}) as { text?: unknown };
+    const attachments = normalizeMessageAttachments(row);
+    const legacy = legacyAttachmentFields(attachments);
     return {
       id: row.id,
       senderType: row.senderType,
       senderId: row.senderId,
       text: typeof content.text === 'string' ? content.text : '',
-      attachmentUrl: row.attachmentUrl ?? null,
-      attachmentName: row.attachmentName ?? null,
-      attachmentType: row.attachmentType ?? null,
+      attachments,
+      attachmentUrl: legacy.attachmentUrl ?? null,
+      attachmentName: legacy.attachmentName ?? null,
+      attachmentType: legacy.attachmentType ?? null,
       senderInstanceId: row.senderInstanceId ?? null,
       createdAt: row.createdAt.toISOString(),
     };
@@ -8890,7 +8908,11 @@ export class PlatformMcpService implements OnModuleInit {
     return dto;
   }
 
-  /** 消息 DTO（对齐 ChatService.toMessageDto）：content/mentions 透传 Json；createdAt ISO8601。 */
+  /**
+   * 消息 DTO（对齐 ChatService.toMessageDto）：content/mentions 透传 Json；createdAt ISO8601。
+   * 附件输出新数组 `attachments`（helper 归一化：新列优先、旧三字段回退单元素；无附件为 []）
+   * + 旧三字段保留（= 首个附件投影）。group_post 等单附件写入路径不变，广播仍能带出新数组。
+   */
   private toMessageDto(row: {
     id: string;
     channelId: string;
@@ -8899,12 +8921,15 @@ export class PlatformMcpService implements OnModuleInit {
     senderInstanceId: string | null;
     content: Prisma.JsonValue;
     mentions: Prisma.JsonValue | null;
+    attachments?: Prisma.JsonValue | null;
     attachmentUrl: string | null;
     attachmentName: string | null;
     attachmentType: string | null;
     status: string;
     createdAt: Date;
   }) {
+    const attachments = normalizeMessageAttachments(row);
+    const legacy = legacyAttachmentFields(attachments);
     return {
       id: row.id,
       channelId: row.channelId,
@@ -8913,9 +8938,10 @@ export class PlatformMcpService implements OnModuleInit {
       senderInstanceId: row.senderInstanceId ?? null,
       content: row.content,
       mentions: row.mentions ?? [],
-      attachmentUrl: row.attachmentUrl,
-      attachmentName: row.attachmentName,
-      attachmentType: row.attachmentType,
+      attachments,
+      attachmentUrl: legacy.attachmentUrl ?? null,
+      attachmentName: legacy.attachmentName ?? null,
+      attachmentType: legacy.attachmentType ?? null,
       status: row.status,
       createdAt: row.createdAt.toISOString(),
     };

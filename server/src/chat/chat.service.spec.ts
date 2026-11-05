@@ -115,6 +115,7 @@ describe('ChatService', () => {
     senderId: userId,
     content: { text: '你好', parts: [] },
     mentions: [],
+    attachments: null,
     attachmentUrl: null,
     attachmentName: null,
     attachmentType: null,
@@ -621,12 +622,16 @@ describe('ChatService', () => {
       expect(prisma.session.findFirst).not.toHaveBeenCalled();
     });
 
-    it('UX-10 带附件：attachmentUrl/Name/Type 落库 + 响应透出（分发/广播不受影响）', async () => {
+    it('UX-10 旧单附件契约：三字段归一化为单元素数组双写（新列 + 旧三字段），响应透出 attachments 长度 1', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([]);
       idGen.nextId.mockResolvedValue('m_0000000001');
+      // DB 双写后的行：新列数组 + 旧三字段（= 首个附件投影）
       prisma.message.create.mockResolvedValue(
         messageRow({
+          attachments: [
+            { url: '/uploads/abc.png', name: '架构图.png', ext: 'png' },
+          ],
           attachmentUrl: '/uploads/abc.png',
           attachmentName: '架构图.png',
           attachmentType: 'png',
@@ -641,15 +646,21 @@ describe('ChatService', () => {
       };
       const result = await service.createMessage(channelId, userId, dto as any);
 
-      // 落库：附件三字段随消息写入（无附件消息不携带——条件展开）
+      // 落库双写：新列存归一化数组，旧三字段存首个附件（旧前端/MCP 兼容）
       expect(prisma.message.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
+          attachments: [
+            { url: '/uploads/abc.png', name: '架构图.png', ext: 'png' },
+          ],
           attachmentUrl: '/uploads/abc.png',
           attachmentName: '架构图.png',
           attachmentType: 'png',
         }),
       });
-      // 响应 DTO 透出附件（前端气泡渲染数据源）
+      // 响应 DTO：新数组（长度 1）+ 旧三字段保留
+      expect((result.message as any).attachments).toEqual([
+        { url: '/uploads/abc.png', name: '架构图.png', ext: 'png' },
+      ]);
       expect(result.message).toMatchObject({
         attachmentUrl: '/uploads/abc.png',
         attachmentName: '架构图.png',
@@ -660,7 +671,56 @@ describe('ChatService', () => {
       );
     });
 
-    it('UX-10 无附件：落库 data 不带附件字段，响应透出 null', async () => {
+    it('UX-10 多附件：2 个附件落库数组 + 首附件三字段 + 非法/重复条目丢弃', async () => {
+      allowAccess();
+      (prisma as any).teamMember.findMany.mockResolvedValue([]);
+      idGen.nextId.mockResolvedValue('m_0000000001');
+      const stored = [
+        { url: '/uploads/a.png', name: '图A.png', ext: 'png', size: 1024 },
+        { url: '/uploads/b.pdf', name: '文档.pdf', ext: 'pdf', size: 2048 },
+      ];
+      prisma.message.create.mockResolvedValue(
+        messageRow({
+          attachments: stored,
+          attachmentUrl: '/uploads/a.png',
+          attachmentName: '图A.png',
+          attachmentType: 'png',
+        }),
+      );
+
+      const dto = {
+        text: '两个附件',
+        attachments: [
+          { url: '/uploads/a.png', name: '图A.png', ext: 'png', size: 1024 },
+          // 非法条目（缺 url）→ helper 丢弃
+          { name: '没有地址.txt' },
+          // 重复 url → 按 url 去重仅保留首个
+          { url: '/uploads/a.png', name: '重复.png', ext: 'png' },
+          // ext 缺省 → 从文件名派生；size 缺省 → 不落 0
+          { url: '/uploads/b.pdf', name: '文档.pdf', size: 2048 },
+        ],
+      };
+      const result = await service.createMessage(channelId, userId, dto as any);
+
+      // 落库：新列只含 2 个合法附件；旧三字段 = 首个附件
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          attachments: stored,
+          attachmentUrl: '/uploads/a.png',
+          attachmentName: '图A.png',
+          attachmentType: 'png',
+        }),
+      });
+      // 响应 DTO：数组 2 个 + 旧三字段 = 首个附件
+      expect((result.message as any).attachments).toEqual(stored);
+      expect(result.message).toMatchObject({
+        attachmentUrl: '/uploads/a.png',
+        attachmentName: '图A.png',
+        attachmentType: 'png',
+      });
+    });
+
+    it('UX-10 无附件：落库 data 不带附件列/三字段，响应 attachments 为空数组且旧三字段 null', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([]);
       idGen.nextId.mockResolvedValue('m_0000000001');
@@ -675,6 +735,12 @@ describe('ChatService', () => {
           data: expect.objectContaining({ attachmentUrl: expect.anything() }),
         }),
       );
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          data: expect.objectContaining({ attachments: expect.anything() }),
+        }),
+      );
+      expect((result.message as any).attachments).toEqual([]);
       expect(result.message).toMatchObject({
         attachmentUrl: null,
         attachmentName: null,
@@ -1687,7 +1753,7 @@ describe('ChatService', () => {
       expect(result.source).toBe('session');
     });
 
-    it('流式聚合行（processing）createdAt 最早 → 排序后钉到列表末尾', async () => {
+    it('流式聚合行（processing）createdAt 最早 → 严格按 createdAt 升序（不钉尾，保持真实时间线）', async () => {
       allowAccess(privateChannel());
       (prisma.session as any).findMany = jest
         .fn()
@@ -1734,16 +1800,16 @@ describe('ChatService', () => {
       const result = await service.getSessionHistory(channelId, userId);
 
       const items = result.items as Array<Record<string, any>>;
-      // 非 processing 行保持 createdAt 升序，processing 聚合行钉到末尾
+      // 严格按 createdAt 升序（processing 钉尾会打乱真实对话顺序，已废弃）
       expect(items.map((m) => m.id)).toEqual([
+        'm_0000000001',
         'm_0000000002',
         'm_0000000003',
-        'm_0000000001',
       ]);
-      expect(items[2].status).toBe(MESSAGE_STATUS.processing);
+      expect(items[0].status).toBe(MESSAGE_STATUS.processing);
     });
 
-    it('多条 processing 行 → 全部钉到末尾且保持彼此 createdAt 升序', async () => {
+    it('多条 processing 行 → 全部按 createdAt 升序（不钉尾，保持真实时间线）', async () => {
       allowAccess(privateChannel());
       (prisma.session as any).findMany = jest
         .fn()
@@ -1791,12 +1857,12 @@ describe('ChatService', () => {
       const result = await service.getSessionHistory(channelId, userId);
 
       const items = result.items as Array<Record<string, any>>;
-      // sent(3000) < user(6000) 保持原序；processing(1000) < processing(4000) 钉尾升序
+      // 严格按 createdAt 升序：1000 → 3000 → 4000 → 6000（processing 不钉尾）
       expect(items.map((m) => m.id)).toEqual([
-        'm_0000000002',
-        'm_0000000004',
         'm_0000000001',
+        'm_0000000002',
         'm_0000000003',
+        'm_0000000004',
       ]);
     });
 
@@ -3803,6 +3869,49 @@ describe('ChatService', () => {
         },
         { type: 'channel', id: 'c_dm_exist' },
       );
+    });
+
+    it('群 @ 带多附件 → 镜像行复制新列数组 + 旧三字段（= 首个附件）', async () => {
+      allowGroupTeam();
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+      prisma.chatChannel.create.mockResolvedValue({ id: 'c_dm_9' } as any);
+      idGen.nextId
+        .mockResolvedValueOnce('m_0000000101')
+        .mockResolvedValueOnce('c_dm_9')
+        .mockResolvedValueOnce('m_0000000102');
+      (prisma.message.create as jest.Mock).mockImplementation(
+        async (args: any) => ({
+          ...args.data,
+          createdAt: new Date('2026-08-07T00:00:00Z'),
+        }),
+      );
+
+      await service.createMessage(channelId, userId, {
+        text: '@开发者-1 见附件',
+        mentions: [
+          {
+            type: 'agent',
+            agentId: 'a_developer',
+            instanceId: 'tmm_0000000009',
+          },
+        ],
+        attachments: [
+          { url: '/uploads/a.png', name: '图A.png', ext: 'png', size: 1024 },
+          { url: '/uploads/b.zip', name: '包.zip', size: 2048 },
+        ],
+      } as any);
+
+      // 恰好一次镜像：群 1 + 镜像 1
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      const mirrorCall = (prisma.message.create as jest.Mock).mock.calls[1][0];
+      // 新列数组完整复制（second 的 ext 由文件名派生），旧三字段 = 首个附件
+      expect(mirrorCall.data.attachments).toEqual([
+        { url: '/uploads/a.png', name: '图A.png', ext: 'png', size: 1024 },
+        { url: '/uploads/b.zip', name: '包.zip', ext: 'zip', size: 2048 },
+      ]);
+      expect(mirrorCall.data.attachmentUrl).toBe('/uploads/a.png');
+      expect(mirrorCall.data.attachmentName).toBe('图A.png');
+      expect(mirrorCall.data.attachmentType).toBe('png');
     });
 
     it('@all 广播 → 不镜像（仅群消息落库广播）', async () => {

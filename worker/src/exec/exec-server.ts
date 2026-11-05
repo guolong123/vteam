@@ -169,17 +169,26 @@ export interface QuestionReplyRequestPayload {
   response?: 'once' | 'always' | 'reject';
 }
 
-/** POST /execute 的单个图片附件引用（轻量引用，不含字节；worker 按需下载落盘）。 */
+/**
+ * POST /execute 的单个附件引用（轻量引用，不含字节；worker 按需下载落盘）。
+ * 图片（mime=image/*）落盘后进模型视觉上下文；其余类型落盘到工作目录
+ * `attachments/` 并在 prompt 里给出本地路径/大小/建议，由模型自行解压/解析。
+ */
 export interface ExecuteAttachment {
   /** /uploads/… 相对路径或 http(s) 绝对 URL（file:// 等本地路径拒绝）。 */
   url: string;
-  /** MIME（如 image/png；缺省按扩展名推断）。 */
+  /** MIME（图片如 image/png；缺省按扩展名推断；非图片按 application/octet-stream）。 */
   mime?: string;
-  /** 原文件名（缺省取 url basename，用于落盘命名与 file part）。 */
+  /** 原文件名（缺省取 url basename，用于落盘命名与 prompt 指引）。 */
   filename?: string;
 }
 
-/** FR-41：GET /file 单文件大小上限（10MB，超限 413，对齐 server FILE_SIZE_LIMIT）。 */
+/**
+ * FR-41：GET /file 单文件大小上限（10MB，超限 413）。
+ * 这是「控制面从 worker 拉取产出物文件」的独立预算，与消息附件下载上限
+ * MAX_ATTACHMENT_BYTES（20MB，对齐 server uploads 的 FILE_SIZE_LIMIT）互不影响：
+ * 上传白名单取消后 server 上传上限升到 20MB，但本端点语义未变，仍保持 10MB。
+ */
 export const MAX_FILE_FETCH_BYTES = 10 * 1024 * 1024;
 
 /**
@@ -211,12 +220,24 @@ export const MAX_PLAN_UPLOAD_BYTES = 1024 * 1024;
 export const PLAN_DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.\-]*\.md$/;
 
 /**
- * 问题二图片附件下载上限（5MB）。
- * uploads 端允许 10MB，但进执行上下文的图片走模型视觉通道：5MB 覆盖手机截图/
- * 相机直出常规尺寸，超限则跳过该图并在 prompt 内注明（模型如实告知用户重发，
- * 不静默谎称看见）。与 MAX_FILE_FETCH_BYTES（控制面拉取）解耦，互不影响。
+ * 单个附件（图片 / 文档 / 压缩包等）下载上限（20MB，与 server uploads 侧
+ * `FILE_SIZE_LIMIT` 对齐——控制面放行的文件都能送达执行上下文）。
+ * 超限不落盘，改在 prompt 内注明（模型如实告知用户重发/压缩，不静默谎称看见）。
+ * 与 MAX_FILE_FETCH_BYTES（GET /file 控制面拉取，10MB）解耦，互不影响。
  */
-export const MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * 图片扩展名 → MIME（与 server 下发口径一致：png/jpg/jpeg/gif/webp）。
+ * 仅这些类型进模型视觉链路；其余扩展名按文件落盘交模型自行解析。
+ */
+const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
 
 /**
  * 待答复项检测的**会话范围上限**（FIFO 淘汰最旧的）。
@@ -1292,7 +1313,7 @@ export class ExecServer {
    * 完成事件由原在飞执行统一收口——本路径不复用 runExecution：不建 load 跟踪、
    * 不做 baselineIds 快照、不做 completion 轮询/首字等待、不建 delta tracker
    * （流式输出由原执行的 SSE/poll 覆盖）。parts 组装复用常规路径的
-   * prepareAttachmentParts（图片附件照常落盘并入 file part）；sendMessage 仅
+   * prepareAttachmentParts（全部附件照常落盘：图片并入 file part、其余落盘+注记）；sendMessage 仅
    * fire-and-forget，失败仅 logger.warn 不重试、不上送事件、绝不上抛（异步任务无捕获方）。
    */
   private async runInFlightPrompt(payload: ExecuteRequestPayload): Promise<void> {
@@ -2539,9 +2560,15 @@ export class ExecServer {
   }
 
   /**
-   * 附件图片落盘 + file parts 组装（问题二：用户发的图进执行上下文）。
-   * 成功 → serve 可读的本地 file part（实测 file:// URL 形状）；失败/超限/非法
-   * → notes 文本（并入 prompt 尾部，模型如实告知用户，不静默谎称看见）。
+   * 附件下载落盘 + parts 组装（多附件 UX-10：图片进视觉上下文，其余交模型自行处理）。
+   *
+   * - **全部附件**都下载到 `<directory>/attachments/`（文件名清洗保留扩展名、防穿越）；
+   * - 图片（mime=image/*）→ serve 可读的本地 file part（opencode 视觉链路，与引入前一致）；
+   * - 非图片（zip/pdf/docx/…）→ **只加 notes 文本**：绝对路径 + 工作目录相对路径 +
+   *   扩展名 + 大小 + 处理建议，由模型自行决定读取/解压/解析；
+   * - 失败/超限/非法引用同样如实注记（不静默丢文件，模型据此告知用户）；
+   * - 大小上限 MAX_ATTACHMENT_BYTES（20MB，与 server uploads 对齐）。
+   *
    * 安全：只接受 /uploads/ 相对路径（按 serverBaseUrl 拼接）或与 serverBaseUrl
    * 同源的 http(s) URL；file:// 等本地路径、异源 URL 一律拒绝并记 warn。
    */
@@ -2554,48 +2581,78 @@ export class ExecServer {
     if (list.length === 0) return { fileParts, notes };
     const directory = payload.directory?.trim();
     if (!directory) {
-      notes.push('（附件图片未能送达：缺少执行目录，请如实告知用户重新发送）');
+      notes.push('（附件未能送达：缺少执行目录，请如实告知用户重新发送）');
       return { fileParts, notes };
     }
-    const baseOrigin = this.serverBaseUrl ? this.originOf(this.serverBaseUrl) : null;
+    const baseOrigin = this.serverBaseUrl
+      ? this.originOf(this.serverBaseUrl)
+      : null;
+    const destDir = path.join(directory, 'attachments');
+    let dirReady = false;
+    // 同请求内同名附件不互相覆盖（追加 -2/-3 且保留扩展名）
+    const usedNames = new Set<string>();
     let index = 0;
     for (const att of list) {
       index += 1;
-      const label = att?.filename?.trim() || `图片${index}`;
+      const label = att?.filename?.trim() || `附件${index}`;
       const target = this.resolveAttachmentUrl(att?.url);
       if (!target) {
         this.logger.warn(`[exec] 附件跳过（非法引用）: ${att?.url ?? '-'}`);
-        notes.push(`（附件图片 ${label} 未能送达：引用非法，请如实告知用户重新发送）`);
+        notes.push(`（附件 ${label} 未能送达：引用非法，请如实告知用户重新发送）`);
         continue;
       }
       if (baseOrigin && this.originOf(target) !== baseOrigin) {
         this.logger.warn(`[exec] 附件跳过（异源 URL）: ${target}`);
-        notes.push(`（附件图片 ${label} 未能送达：来源不可信，请如实告知用户重新发送）`);
+        notes.push(
+          `（附件 ${label} 未能送达：来源不可信，请如实告知用户重新发送）`,
+        );
         continue;
       }
-      const mime = this.inferImageMime(att?.mime, target);
-      if (!mime) {
-        this.logger.warn(`[exec] 附件跳过（非图片类型）: ${target}`);
-        continue;
-      }
+      const mime = this.inferAttachmentMime(att?.mime, target);
+      const ext = this.attachmentExtOf(att?.filename, mime, target);
       try {
+        if (!dirReady) {
+          await fsp.mkdir(destDir, { recursive: true });
+          dirReady = true;
+        }
         const buf = await this.downloadAttachment(target);
         if (buf === null) {
-          notes.push(`（附件图片 ${label} 未能送达：超过 ${MAX_IMAGE_ATTACHMENT_BYTES} bytes 上限，请如实告知用户压缩后重发）`);
+          notes.push(
+            `（附件 ${label} 未能送达：超过 ${MAX_ATTACHMENT_BYTES} bytes 上限，请如实告知用户压缩后重发）`,
+          );
           continue;
         }
-        const safeName = this.sanitizeAttachmentName(att?.filename, mime, index);
-        const destDir = path.join(directory, 'attachments');
-        await fsp.mkdir(destDir, { recursive: true });
+        const safeName = this.uniqueAttachmentName(
+          this.sanitizeAttachmentName(att?.filename, ext, index),
+          usedNames,
+        );
         const dest = path.join(destDir, safeName);
         await fsp.writeFile(dest, buf);
-        fileParts.push({ type: 'file', mime, filename: safeName, url: `file://${dest}` });
-        this.logger.info(`[exec] 附件落盘 ${dest} (${buf.length} bytes)`);
+        if (mime.startsWith('image/')) {
+          // 图片：保留 file part（opencode 视觉链路），与引入前行为一致
+          fileParts.push({
+            type: 'file',
+            mime,
+            filename: safeName,
+            url: `file://${dest}`,
+          });
+          this.logger.info(`[exec] 图片附件落盘 ${dest} (${buf.length} bytes)`);
+        } else {
+          // 非图片：落盘 + notes 指引（绝对/相对路径、扩展名、大小、建议），由模型自行处理
+          notes.push(
+            `（附件文件 ${label} 已下载到执行目录：绝对路径 ${dest}；` +
+              `相对工作目录路径 attachments/${safeName}；` +
+              `扩展名 ${ext ? `.${ext}` : '(无)'}；大小 ${buf.length} bytes。` +
+              `请用可用工具读取/解压/解析（如 zip 用 unzip 解压、pdf 用可用文本提取工具），` +
+              `自行决定处理方式；无法处理时如实告知用户）`,
+          );
+          this.logger.info(`[exec] 文件附件落盘 ${dest} (${buf.length} bytes)`);
+        }
       } catch (err) {
         this.logger.warn(
           `[exec] 附件下载失败 ${target}: ${err instanceof Error ? err.message : String(err)}`,
         );
-        notes.push(`（附件图片 ${label} 未能送达：下载失败，请如实告知用户重新发送）`);
+        notes.push(`（附件 ${label} 未能送达：下载失败，请如实告知用户重新发送）`);
       }
     }
     return { fileParts, notes };
@@ -2622,30 +2679,99 @@ export class ExecServer {
     }
   }
 
-  private inferImageMime(mime: unknown, url: string): string | null {
-    if (typeof mime === 'string' && mime.toLowerCase().startsWith('image/')) {
-      return mime.toLowerCase();
+  /**
+   * 附件 MIME：显式 `image/*` 或图片扩展名 → image/*（进视觉链路）；
+   * 其余一律 application/octet-stream（控制面不预设类型白名单，能否解析交给模型）。
+   */
+  private inferAttachmentMime(mime: unknown, url: string): string {
+    if (typeof mime === 'string') {
+      const normalized = mime.trim().toLowerCase();
+      if (normalized.startsWith('image/')) return normalized;
     }
-    const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
-    if (ext === 'png') return 'image/png';
-    if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
-    if (ext === 'gif') return 'image/gif';
-    return null;
+    const imageMime = IMAGE_MIME_BY_EXT[this.extOfUrl(url)];
+    if (imageMime) return imageMime;
+    return 'application/octet-stream';
   }
 
-  private sanitizeAttachmentName(name: unknown, mime: string, index: number): string {
-    const fallbackExt = mime === 'image/png' ? 'png' : mime === 'image/gif' ? 'gif' : 'jpg';
-    const raw = typeof name === 'string' && name.trim() ? path.basename(name.trim()) : `image-${index}.${fallbackExt}`;
-    const safe = raw.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || `image-${index}.${fallbackExt}`;
+  /** 取附件扩展名：原始文件名优先，其次 URL 路径；图片按 MIME 兜底，其余 `bin`。 */
+  private attachmentExtOf(name: unknown, mime: string, url: string): string {
+    const fromName = typeof name === 'string' ? path.basename(name.trim()) : '';
+    for (const candidate of [fromName, this.extOfUrl(url)]) {
+      const ext = candidate.split('.').pop()?.toLowerCase() ?? '';
+      if (candidate.includes('.') && /^[a-z0-9]{1,10}$/.test(ext)) return ext;
+    }
+    if (mime === 'image/png') return 'png';
+    if (mime === 'image/gif') return 'gif';
+    if (mime === 'image/webp') return 'webp';
+    if (mime.startsWith('image/')) return 'jpg';
+    return 'bin';
+  }
+
+  /** URL 路径的小写扩展名（忽略 query/hash；无扩展名 → 空串）。 */
+  private extOfUrl(url: string): string {
+    const base = url.split('?')[0].split('#')[0].split('/').pop() ?? '';
+    const dot = base.lastIndexOf('.');
+    if (dot <= 0 || dot === base.length - 1) return '';
+    return base.slice(dot + 1).toLowerCase();
+  }
+
+  /**
+   * 落盘文件名清洗：`basename` 防路径穿越 + **保留中文等 Unicode 可读字符** + 保留扩展名
+   * （无扩展名补 fallbackExt）。全点文件名（`..`/`.`）会指向目录，一律挡回兜底名。
+   *
+   * 为什么不只留 `[a-zA-Z0-9._-]`：用户上传的文件名多为中文，全替换成下划线后
+   * prompt 里的「相对路径 attachments/____.docx」对模型和人都不可读；改成只剔除
+   * 路径分隔符/控制字符/文件系统保留字符（`\0`、`/`、`:`、`*`、`?`、`"`、`<`、`>`、`|`），
+   * 其余（中文/空格/括号等）原样保留。`path.basename` 已先做目录剥离 + 防穿越。
+   */
+  private sanitizeAttachmentName(
+    name: unknown,
+    fallbackExt: string,
+    index: number,
+  ): string {
+    const fallback = `attachment-${index}.${fallbackExt}`;
+    const raw =
+      typeof name === 'string' && name.trim()
+        ? path.basename(name.trim())
+        : fallback;
+    const safe = raw
+      // 控制字符（含 \0 / 换行）直接剔除
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      // 文件系统/路径保留字符替换为下划线
+      .replace(/[\\/:*?"<>|]/g, '_')
+      // 连续空白压缩为单空格，首尾空白去掉
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 100);
+    if (!safe || /^\.+$/.test(safe)) return fallback;
     return safe.includes('.') ? safe : `${safe}.${fallbackExt}`;
   }
 
-  /** 下载附件（上限 MAX_IMAGE_ATTACHMENT_BYTES，超限返回 null；60s 超时抛错）。 */
+  /** 同请求内同名附件去重：`a.zip` → `a-2.zip`（保留扩展名，避免互相覆盖）。 */
+  private uniqueAttachmentName(name: string, used: Set<string>): string {
+    if (!used.has(name)) {
+      used.add(name);
+      return name;
+    }
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    let seq = 2;
+    let candidate = `${stem}-${seq}${ext}`;
+    while (used.has(candidate)) {
+      seq += 1;
+      candidate = `${stem}-${seq}${ext}`;
+    }
+    used.add(candidate);
+    return candidate;
+  }
+
+  /** 下载附件（上限 MAX_ATTACHMENT_BYTES，超限返回 null；60s 超时抛错）。 */
   private async downloadAttachment(url: string): Promise<Buffer | null> {
     const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > MAX_IMAGE_ATTACHMENT_BYTES) return null;
+    if (buf.length > MAX_ATTACHMENT_BYTES) return null;
     return buf;
   }
 
@@ -2661,7 +2787,8 @@ export class ExecServer {
     // 每次任务独立 pending 检测器（去重集 + 防重入按任务隔离，任务结束即释放——
     // 实例级标志会跨任务残留 true，导致后续任务检测全部跳过）。
     const detector = new PendingQuestionDetector(this.driver, this.sender, this.logger);
-    // 问题二：附件图片先落盘再以 file part 并入（失败注记同样进 prompt，模型如实告知）。
+    // 多附件：全部附件先落盘——图片以 file part 并入视觉链路，非图片只进 notes
+    // （失败/超限/非法同样注记进 prompt，模型如实告知用户）。
     const { fileParts, notes } = await this.prepareAttachmentParts(payload);
     const parts: unknown[] = [
       ...normalizeParts(payload.prompt),

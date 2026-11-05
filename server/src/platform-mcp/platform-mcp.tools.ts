@@ -1294,7 +1294,7 @@ function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
     {
       name: 'chat_history',
       description:
-        '查询任务群聊的历史消息（按需拉取，替代自动注入的群聊历史）。分页返回 {items, truncated, total}：默认取最近 20 条，beforeId 倒序翻页；响应超 64KB 自动截断并标记 truncated。',
+        '查询任务群聊的历史消息（按需拉取，替代自动注入的群聊历史）。分页返回 {items, truncated, total}：默认取最近 20 条，beforeId 倒序翻页；响应超 64KB 自动截断并标记 truncated。每条消息含 attachments 数组（全部附件 {url,name,size?,ext}，无附件为 []；旧三字段 attachmentUrl/attachmentName/attachmentType 保留为首个附件投影）。',
       inputSchema: chatHistorySchema,
       handler: (ctx, args) => service.chatHistory(ctx, args as ChatHistoryArgs),
     },
