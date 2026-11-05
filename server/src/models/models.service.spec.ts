@@ -778,7 +778,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.model.updateMany).toHaveBeenCalledWith({
         where: { providerID: 'vllm' },
         // headers：dto 未传 → 保持原值（此处原行为空）→ null
-        data: { providerType: 'local', baseUrl: 'http://new:8000/v1', headers: null },
+        data: {
+          providerType: 'local',
+          baseUrl: 'http://new:8000/v1',
+          headers: null,
+        },
       });
       expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
         [{ providerID: 'vllm', key: 'sk-raw-token' }],
@@ -820,7 +824,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     it('headers 随 provider 配置下发（opencode-go 网关要求 x-opencode-session）', async () => {
       routeFindMany({
         providerRows: [
-          { providerType: 'custom', baseUrl: 'https://gw.example/v1', headers: null },
+          {
+            providerType: 'custom',
+            baseUrl: 'https://gw.example/v1',
+            headers: null,
+          },
         ],
         configRows: [
           {
@@ -883,7 +891,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         ],
         configRows: [],
         metaRows: [
-          { providerID: 'gw', providerType: 'custom', baseUrl: 'https://gw.example/v1' },
+          {
+            providerID: 'gw',
+            providerType: 'custom',
+            baseUrl: 'https://gw.example/v1',
+          },
         ],
       });
       prisma.model.updateMany.mockResolvedValue({ count: 1 });
@@ -954,7 +966,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(prisma.model.updateMany).toHaveBeenCalledWith({
         where: { providerID: 'p' },
-        data: { providerType: 'cloud', baseUrl: 'http://y:8000/v1', headers: null },
+        data: {
+          providerType: 'cloud',
+          baseUrl: 'http://y:8000/v1',
+          headers: null,
+        },
       });
       expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
     });

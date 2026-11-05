@@ -3510,7 +3510,9 @@ describe('WorkerEventIngress', () => {
 
       it('主 Agent 自身 permission 的实时帧 managedMode 恒 false（与 GET /questions 的 toDtos 同口径 → 刷新前也弹窗）', async () => {
         const workerClient = {
-          permissionReply: jest.fn().mockRejectedValue(new Error('worker down')),
+          permissionReply: jest
+            .fn()
+            .mockRejectedValue(new Error('worker down')),
         };
         const ingressWithClient = new WorkerEventIngress(
           prisma as unknown as PrismaService,
@@ -3557,7 +3559,8 @@ describe('WorkerEventIngress', () => {
       prisma.agentQuestion.findUnique.mockResolvedValueOnce({
         id: 'aq_1',
         status: 'pending',
-      });      const e = event('w_1', 'evw_q2', 'session.question', {
+      });
+      const e = event('w_1', 'evw_q2', 'session.question', {
         sessionId: 's_1',
         requestId: 'que_1',
         taskId: 't_1',

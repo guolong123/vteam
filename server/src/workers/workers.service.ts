@@ -77,7 +77,8 @@ const TOKEN_CHECK_TTL_MS = 30_000;
  * 缺省 `opencode`：兼容全部存量 worker（它们的 capabilities 里没有 engine 键）。
  */
 export function readWorkerEngine(capabilities: unknown): 'opencode' | 'dsh' {
-  if (capabilities === null || typeof capabilities !== 'object') return 'opencode';
+  if (capabilities === null || typeof capabilities !== 'object')
+    return 'opencode';
   const engine = (capabilities as { engine?: unknown }).engine;
   return engine === 'dsh' ? 'dsh' : 'opencode';
 }
@@ -1024,7 +1025,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         // P6：引擎维度只在**需求显式指定**时生效（默认不指定 = 接受任意引擎，
         // 与今日行为逐字节一致——分派侧当前只传 modelId/preferredWorkerId）。
         const workerEngine = readWorkerEngine(x.worker.capabilities);
-        if (req.engine !== undefined && workerEngine !== req.engine) return false;
+        if (req.engine !== undefined && workerEngine !== req.engine)
+          return false;
         // dsh worker 不参与 opencode 版本比对：它的 opencodeVersion 是占位串
         // （`dsh-<ver>`），拿去比必然不等 ⇒ dsh worker 永远不可调度（静默停摆）。
         if (workerEngine !== 'opencode') return true;
@@ -1032,7 +1034,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         // 两侧都归一后再比（双写自 worker 的 normalizeOpencodeVersion）：
         // worker 上报 `2.0.28`，需求可能写成 `opencode v2.0.28`——精确串相等会
         // 匹配不上 ⇒ worker 变不可调度 ⇒ **静默的总停摆**（什么都不派发、无报错）。
-        return isSameOpencodeVersion(x.worker.opencodeVersion, req.opencodeVersion);
+        return isSameOpencodeVersion(
+          x.worker.opencodeVersion,
+          req.opencodeVersion,
+        );
       })
       .filter((x) => this.matchesModelRequirement(x.worker, req.modelId))
       .sort((a, b) => {
@@ -1201,7 +1206,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
             tools: this.jsonArrayToStrings(row.tools),
             // P6：引擎与能力位（前端/调度按此降级；缺省 = 旧 worker = opencode 全支持）
             engine: this.jsonStringToEngine(row.engine),
-            engineCapabilities: this.jsonToObject(row.engineCapabilities) ?? undefined,
+            engineCapabilities:
+              this.jsonToObject(row.engineCapabilities) ?? undefined,
             models: this.jsonArrayToStrings(row.capModels),
           },
         }),

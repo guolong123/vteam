@@ -731,7 +731,11 @@ export class ChatService {
       where.agentId = target.agentId;
     }
     // 兜底：若两者都无（异常频道），按 agentId 收敛，避免全表扫描
-    if (where.teamId === undefined && where.teamMemberId === undefined && where.agentId === undefined) {
+    if (
+      where.teamId === undefined &&
+      where.teamMemberId === undefined &&
+      where.agentId === undefined
+    ) {
       return { aborted: false, sessions: [] };
     }
 
@@ -753,7 +757,10 @@ export class ChatService {
       if (worker === null) continue;
       try {
         await this.workerClient.abort(
-          { id: worker.id, capabilities: worker.capabilities as Record<string, unknown> },
+          {
+            id: worker.id,
+            capabilities: worker.capabilities as Record<string, unknown>,
+          },
           row.instanceRef,
         );
         stopped.push(row.id);

@@ -86,9 +86,7 @@ describe('normalizeMessageAttachments', () => {
         attachmentName: '旧图.png',
         attachmentType: 'png',
       }),
-    ).toEqual([
-      { url: '/uploads/legacy.png', name: '旧图.png', ext: 'png' },
-    ]);
+    ).toEqual([{ url: '/uploads/legacy.png', name: '旧图.png', ext: 'png' }]);
     expect(
       normalizeMessageAttachments({
         attachments: [],

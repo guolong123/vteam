@@ -303,7 +303,10 @@ describe('WorkersController', () => {
     service.findOne.mockResolvedValue({ id: 'w_1', capabilities: {} });
     workerClientMock.fetchFile.mockRejectedValue(new Error('404'));
     const res = fakeRes();
-    await controller.getWorkerImage('/data/w/tasks/t_1/missing.png', res as never);
+    await controller.getWorkerImage(
+      '/data/w/tasks/t_1/missing.png',
+      res as never,
+    );
     expect(res.statusCode).toBe(404);
     expect((res.jsonBody as { code: string }).code).toBe('FILE_NOT_FOUND');
   });

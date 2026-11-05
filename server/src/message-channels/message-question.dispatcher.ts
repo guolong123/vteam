@@ -278,7 +278,9 @@ export class MessageQuestionDispatcher
           type: MESSAGE_CHANNEL_TYPES.wecom_aibot,
         },
       });
-    } catch {
+    } catch (err) {
+      // 渠道表读取失败 → 按"无可用渠道"降级（不给提问链路抛错）
+      void err;
       return [];
     }
     return channels ?? [];
@@ -292,7 +294,9 @@ export class MessageQuestionDispatcher
         where: { taskId },
         select: { messageChannelId: true },
       });
-    } catch {
+    } catch (err) {
+      // 任务域渠道关联读失败 → 按"未绑定"降级，不阻断提问
+      void err;
       return [];
     }
     if (!links || links.length === 0) return [];
@@ -307,7 +311,9 @@ export class MessageQuestionDispatcher
         where: { teamId },
         select: { messageChannelId: true },
       });
-    } catch {
+    } catch (err) {
+      // 团队域渠道关联读失败 → 按"未绑定"降级，不阻断提问
+      void err;
       return [];
     }
     if (!links || links.length === 0) return [];

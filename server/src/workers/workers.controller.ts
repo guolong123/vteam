@@ -60,10 +60,16 @@ function parseCapabilities(raw: unknown): Record<string, unknown> | undefined {
   if (typeof raw === 'string' && raw.trim().length > 0) {
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed)
+      ) {
         return parsed as Record<string, unknown>;
       }
-    } catch {
+    } catch (err) {
+      // 非法 JSON（脏数据）→ 按"无该字段"降级，不抛错
+      void err;
       return undefined;
     }
   }
@@ -160,7 +166,9 @@ export class WorkersController {
   ): Promise<void> {
     const target = (path ?? '').trim();
     if (!target.startsWith('/') || target.includes('\0')) {
-      res.status(400).json({ code: 'BAD_PATH', message: 'path 必须是绝对路径' });
+      res
+        .status(400)
+        .json({ code: 'BAD_PATH', message: 'path 必须是绝对路径' });
       return;
     }
     const ext = target.slice(target.lastIndexOf('.') + 1).toLowerCase();
@@ -185,7 +193,10 @@ export class WorkersController {
         // findOne 返回完整 capabilities（只剥 models），才有 baseUrl/execPort。
         const detail = await this.workers.findOne(worker.id);
         const buffer = await this.workerClient.fetchFile(
-          { id: worker.id, capabilities: parseCapabilities(detail.capabilities) },
+          {
+            id: worker.id,
+            capabilities: parseCapabilities(detail.capabilities),
+          },
           target,
         );
         if (buffer.length === 0) continue;
@@ -205,8 +216,9 @@ export class WorkersController {
         res.setHeader('Cache-Control', 'private, max-age=300');
         res.send(buffer);
         return;
-      } catch {
-        // 该节点没有这个文件 / 节点不可用 → 试下一个
+      } catch (err) {
+        // 该节点没有这个文件 / 节点不可用 → 试下一个；失败原因不改变语义
+        void err;
         continue;
       }
     }

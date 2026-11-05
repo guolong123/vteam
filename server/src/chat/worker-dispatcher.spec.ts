@@ -591,6 +591,9 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         { id: 'w_0000000001', capabilities: { maxInstances: 1 } },
         { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        // P6 起建会话还下发 agentPreset + 角色提示词（内容由 preset 专项用例覆盖）
+        expect.anything(),
+        expect.anything(),
       );
       // 下发执行（方案 A：POST /execute，fire-and-forget，202 即成功；不再自持轮询）
       expect(workerClient.execute).toHaveBeenCalledWith(
@@ -3414,29 +3417,39 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_0000000001' }),
         { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        expect.anything(),
+        expect.anything(),
       );
     });
 
     it('Agent 未配 → 沿 baseAgentId 链（多层 clone）取最近非空模板默认模型', async () => {
-      prisma.agent.findUnique
-        .mockResolvedValueOnce({
+      // ⚠️ 按 id 返回而非 mockResolvedValueOnce 队列：P6 起 createSession 前还会
+      // 查一次 agent.agentKey（preset 身份），队列式 mock 会被这次额外查询吃掉一格，
+      // 导致模型链拿到错位的返回值（测试变脆而非实现有 bug）。
+      const agentRows: Record<string, unknown> = {
+        a_clone2: {
           id: 'a_clone2',
           defaultModelId: null,
           baseAgentId: 'a_clone1',
           type: 'clone',
-        })
-        .mockResolvedValueOnce({
+        },
+        a_clone1: {
           id: 'a_clone1',
           defaultModelId: null,
           baseAgentId: 'a_product',
           type: 'clone',
-        })
-        .mockResolvedValueOnce({
+        },
+        a_product: {
           id: 'a_product',
           defaultModelId: 'opencode/glm-5.1',
           baseAgentId: null,
           type: 'template',
-        });
+        },
+      };
+      prisma.agent.findUnique.mockImplementation(
+        async (args: { where?: { id?: string } }) =>
+          agentRows[args?.where?.id ?? ''] ?? null,
+      );
       const d = createDispatcher();
 
       await d.dispatch(request);
@@ -3447,6 +3460,8 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_0000000001' }),
         { providerID: 'opencode', modelID: 'glm-5.1' },
+        expect.anything(),
+        expect.anything(),
       );
     });
 
@@ -3472,6 +3487,8 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_0000000001' }),
         { providerID: 'opencode', modelID: 'deepseek-v4-pro' },
+        expect.anything(),
+        expect.anything(),
       );
     });
 
@@ -3494,6 +3511,8 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_0000000001' }),
         null,
+        expect.anything(),
+        expect.anything(),
       );
     });
 
@@ -3535,6 +3554,8 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_online' }),
         { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        expect.anything(),
+        expect.anything(),
       );
     });
 
@@ -3810,6 +3831,9 @@ describe('WorkerDispatcher', () => {
         instanceRef,
         teamId: 'tm_0000000001',
         teamMemberId: 'tmm_0000000001',
+        // 在飞守卫会用 status 交叉校验「登记是否泄漏」：只有 running 才走注入轻路径。
+        // 缺这个字段会被判成 stale → 清理登记走常规派发（用例断言注入，故必须给）。
+        status: 'running',
       });
     };
 
@@ -3849,6 +3873,8 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_new' }),
         expect.anything(),
+        expect.anything(),
+        expect.anything(),
       );
       // 执行也下发到新节点
       expect(workerClient.execute).toHaveBeenCalledWith(
@@ -3877,6 +3903,8 @@ describe('WorkerDispatcher', () => {
       // 分派照常在原节点进行
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_old' }),
+        expect.anything(),
+        expect.anything(),
         expect.anything(),
       );
       // 可观测：warn 必须同时点名首选节点与保留节点
@@ -3980,11 +4008,15 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_new' }),
         { providerID: 'opencode', modelID: 'new-model' },
+        expect.anything(),
+        expect.anything(),
       );
-      // 旧节点的模型不得复用
+      // 旧节点的模型不得复用（同样按 4 参口径断言，否则 4 参调用永不匹配 → 假绿）
       expect(workerClient.createSession).not.toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_new' }),
         { providerID: 'opencode', modelID: 'old-model' },
+        expect.anything(),
+        expect.anything(),
       );
     });
   });
@@ -11097,6 +11129,8 @@ describe('WorkerDispatcher', () => {
           instanceRef: 'ses_team_1',
           teamId: 'tm_0000000001',
           teamMemberId: 'tmm_0000000001',
+          // 在飞守卫的 status 交叉校验：非 running 会被判泄漏 → 回退常规派发
+          status: 'running',
         } as any);
       };
 

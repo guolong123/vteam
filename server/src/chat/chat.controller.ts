@@ -224,14 +224,18 @@ export class ChatController {
   @HttpCode(200)
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.create')
-  @ApiOperation({ summary: '中止频道中正在运行的 agent 回合（只停本轮，不丢会话）' })
+  @ApiOperation({
+    summary: '中止频道中正在运行的 agent 回合（只停本轮，不丢会话）',
+  })
   abortChannel(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() dto: { teamMemberId?: string; agentId?: string },
   ) {
     return this.chatService.abortRunningSession(id, user.id, {
-      ...(dto?.teamMemberId === undefined ? {} : { teamMemberId: dto.teamMemberId }),
+      ...(dto?.teamMemberId === undefined
+        ? {}
+        : { teamMemberId: dto.teamMemberId }),
       ...(dto?.agentId === undefined ? {} : { agentId: dto.agentId }),
     });
   }

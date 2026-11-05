@@ -2519,7 +2519,9 @@ export class WorkerDispatcher
       // 5 个 vteam 会话对应 9 个 DSH 会话文件）。
       // 故对 dsh 引擎只换 worker，保留会话引用；opencode 引擎维持既有行为
       // （其会话在 serve 进程内存里，重启确实失效）。
-      const engine = (workerRow?.capabilities as { engine?: string } | undefined)?.engine;
+      const engine = (
+        workerRow?.capabilities as { engine?: string } | undefined
+      )?.engine;
       if (engine !== 'dsh') {
         await this.sessionLifecycle.unbindSession(sessionId);
       } else {
@@ -2651,8 +2653,9 @@ export class WorkerDispatcher
           select: { status: true },
         });
         staleInFlight = row?.status !== 'running';
-      } catch {
-        // 查询失败按"有在飞"处理（保守：不改变既有时序）
+      } catch (err) {
+        // 查询失败按"有在飞"处理（保守：不改变既有时序）；错误原因不改变语义
+        void err;
         staleInFlight = false;
       }
       if (staleInFlight) {
@@ -2808,7 +2811,6 @@ export class WorkerDispatcher
       sessionId,
       phase: 'thinking',
     });
-
 
     // 6. 工作目录（任务隔离保留：taskContext.taskId → tasks/<taskId>；
     // 无任务 → teams/<teamId>）+ 身份/名册/主判定（task 查询全部跳过；空名册 = 空列表）
@@ -3966,9 +3968,10 @@ export class WorkerDispatcher
       // 的原话是「模型思考和之前的消息都不见了」，其实是失败落库把它们清空了。
       // 失败不该毁掉已经产出的内容：保留原 parts + 文本，追加 {type:'error'} 让前端
       // 在内容之后渲染红色错误块（MsgError kind=failed）。
-      const prevContent = (processingRow?.content ?? null) as
-        | { text?: unknown; parts?: unknown }
-        | null;
+      const prevContent = (processingRow?.content ?? null) as {
+        text?: unknown;
+        parts?: unknown;
+      } | null;
       const prevText =
         typeof prevContent?.text === 'string' ? prevContent.text : '';
       const prevParts = Array.isArray(prevContent?.parts)
@@ -5678,7 +5681,10 @@ export class WorkerDispatcher
    * @param agentId - vteam Agent id（诊断用）。
    * @param agentKey - DB 的 agent_key 列（可能是 null）。
    */
-  private resolveAgentPresetId(agentId: string, agentKey: string | null | undefined): string {
+  private resolveAgentPresetId(
+    agentId: string,
+    agentKey: string | null | undefined,
+  ): string {
     if (typeof agentKey === 'string' && agentKey.trim() !== '') {
       const preset = agentKey.trim();
       // 内置命名空间直接用；自定义 Agent 的名字也作为 preset id 传给 worker

@@ -202,7 +202,9 @@ export class ModelsController {
   @Public()
   @UseGuards(WorkerOrJwtGuard)
   @Get('worker-catalog')
-  @ApiOperation({ summary: 'worker 视角的启用模型清单（X-Worker-Token 或用户 JWT）' })
+  @ApiOperation({
+    summary: 'worker 视角的启用模型清单（X-Worker-Token 或用户 JWT）',
+  })
   workerCatalog() {
     return this.modelsService.workerCatalog();
   }

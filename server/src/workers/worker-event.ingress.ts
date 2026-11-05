@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import {
@@ -1589,11 +1594,11 @@ export class WorkerEventIngress {
       const opencodeSessionId = input.sessionId.startsWith('ses_')
         ? input.sessionId
         : ((
-            await this.prisma.session.findUnique({
+            (await this.prisma.session.findUnique({
               where: { id: input.sessionId },
               select: { instanceRef: true },
-            })
-          ) as { instanceRef?: string | null } | null)?.instanceRef ?? null;
+            })) as { instanceRef?: string | null } | null
+          )?.instanceRef ?? null);
       if (!opencodeSessionId) return false;
       const workerRow = (await this.prisma.worker.findUnique({
         where: { id: input.workerId },
@@ -1674,7 +1679,7 @@ export class WorkerEventIngress {
     }
   }
 
-   /**
+  /**
    * 自动放行的审计留痕：团队群聊落一条 system 消息（谁被自动放行了什么）。
    * 复用 postStallNoticeToTeamGroup 同款落库 + broadcast 形状；任何失败只 warn。
    */
@@ -1702,7 +1707,8 @@ export class WorkerEventIngress {
         pattern?: unknown;
         title?: unknown;
       };
-      const action = typeof detail.type === 'string' ? detail.type : 'permission';
+      const action =
+        typeof detail.type === 'string' ? detail.type : 'permission';
       const pattern = Array.isArray(detail.pattern)
         ? detail.pattern.join('、')
         : typeof detail.pattern === 'string'
@@ -1718,7 +1724,10 @@ export class WorkerEventIngress {
         data: {
           id,
           channelId,
-          taskId: input.taskId && !input.taskId.startsWith('team:') ? input.taskId : null,
+          taskId:
+            input.taskId && !input.taskId.startsWith('team:')
+              ? input.taskId
+              : null,
           senderType: SENDER_TYPE.system,
           senderId: null,
           content: { text, parts: [] },

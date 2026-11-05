@@ -1455,7 +1455,9 @@ export class ModelsService implements OnModuleInit {
    * 安全边界：这里**不做**任何密钥校验（密钥应走凭据通道），但会丢弃非字符串值，
    * 避免把 JSON 里的数组/对象原样写进 opencode 配置导致 serve 启动报错。
    */
-  private normalizeProviderHeaders(raw: unknown): Record<string, string> | undefined {
+  private normalizeProviderHeaders(
+    raw: unknown,
+  ): Record<string, string> | undefined {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
       return undefined;
     }

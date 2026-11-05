@@ -792,7 +792,10 @@ export class QuestionsService {
     reason: string,
   ): Promise<void> {
     try {
-      if (this.isPlatformQuestion(row) || row.kind === AGENT_QUESTION_KINDS.SECRET_INPUT) {
+      if (
+        this.isPlatformQuestion(row) ||
+        row.kind === AGENT_QUESTION_KINDS.SECRET_INPUT
+      ) {
         return;
       }
       const target = await this.resolveServeTarget(row);
@@ -861,7 +864,9 @@ export class QuestionsService {
         opencodeSessionId,
         worker: { id: worker.id, capabilities: worker.capabilities },
       };
-    } catch {
+    } catch (err) {
+      // 会话/worker 上下文解析失败 → 返回 null（调用方按"无绑定"降级）
+      void err;
       return null;
     }
   }

@@ -425,8 +425,12 @@ export class WorkerClient {
     // ⇒ 模型 system 段，不污染用户消息、不多角色共享运行时。
     const body: CreateSessionRequestPayload = {
       ...(model ? { model: { ...model } } : {}),
-      ...(agentPreset !== undefined && agentPreset !== '' ? { agent: agentPreset } : {}),
-      ...(agentSystem !== undefined && agentSystem !== '' ? { system: agentSystem } : {}),
+      ...(agentPreset !== undefined && agentPreset !== ''
+        ? { agent: agentPreset }
+        : {}),
+      ...(agentSystem !== undefined && agentSystem !== ''
+        ? { system: agentSystem }
+        : {}),
     };
     const res = await this.requestExec(worker, '/sessions', {
       method: 'POST',
