@@ -26,9 +26,12 @@ RUN npm run build && npm prune --omit=dev
 
 # ---- 阶段 2：runner ----
 FROM ${NODE_IMAGE}
+# 与 opencode 版 worker 的运行时能力对齐（多附件放宽格式后，用户可能发压缩包）：
+# - unzip/zip/xz-utils：zip/tar.xz 由模型自行解压（原来只有 tar/gzip，zip 解不了）
+# - python3：二进制/文档类兜底解析（zipfile、json、csv…），也是 opencode 版已有能力
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git openssh-client curl jq bash procps \
-      bubblewrap \
+      bubblewrap unzip zip xz-utils python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # dsh CLI（锁版本；升级需同步跑 P7 的 conformance 断言）
@@ -53,6 +56,12 @@ ENV DSH_HOME_DIR=/data/dsh-home
 ENV WORKER_ENGINE=dsh
 ENV WORK_DIR=/data/vteam-worker
 RUN mkdir -p /data/vteam-worker /data/dsh-home
+
+# 代码版本注入（与 worker/Dockerfile 对齐）：发布流程传 CODE_VERSION=v1.4.0，
+# worker 心跳据此上报 CODE_VERSION，控制面能看出"这个节点跑的是哪个发布版本"。
+# 优先级见 worker/src/code-version.ts：env WORKER_CODE_VERSION > dist/version.js > 'dev'。
+ARG CODE_VERSION=container-unstamped
+ENV WORKER_CODE_VERSION=${CODE_VERSION}
 
 EXPOSE 4198
 CMD ["node", "dist/index.js"]
