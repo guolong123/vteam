@@ -23,7 +23,9 @@
  *   `PrototypePanel teamId + tasks`（团队级：`GET /teams/:id/prototypes`
  *   主端点 + 逐任务聚合回退，条目自带 taskId/taskName，沙箱取选中条目 taskId；
  *   真正为空时面板内 `docs-proto-empty` 空态）。布局：PageWindow fluid 全宽；
- *   树 440px 两行（标题弹性行 + 任务名次行，分类/版本徽标保留）；
+ *   树**宽度可拖拽**（useResizableWidth，默认 300 / 200~520，持久化）且**可收起**
+ *   （小屏 <1100px 默认收起，收起后正文占满，左侧留一条「文档列表」展开竖条）；
+ *   树行两行（标题弹性行 + 任务名次行，分类/版本徽标保留）；
  *   树/查看器 `calc(100vh - 280px)` 视口填充 + 内部滚动，查看器头尾 pinned。
  * - data-testid：docs-shell / docs-team-picker / docs-team-option / docs-filter-bar /
  *   team-filter-select / task-filter-select / category-filter-option /
@@ -48,6 +50,8 @@ import { useDeleteArtifact } from "@/src/features/docs-site/hooks";
 import { FilePreview } from "@/src/features/docs-site/file-preview";
 import { DocExportButtons } from "@/src/features/docs-site/doc-export-buttons";
 import { EmptyState, PageWindow } from "@/src/components/ui";
+import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
+import { useResizableWidth } from "@/src/hooks/use-resizable";
 import {
   roleText,
   neutral,
@@ -646,10 +650,55 @@ function FilterPills({
 }
 
 /* ------------------------------ 页面（AppShell 内容区；T10 薄别名直接 import 本默认导出） ------------------------------ */
+/** 小屏阈值：低于此宽度时文档树默认收起（否则 440px 固定树会把正文挤到不可读）。 */
+const DOCS_COMPACT_BREAKPOINT = 1100;
+
 export default function DocsUnifiedPage() {
   const user = useAuthStore((s) => s.user);
   const userId = user?.id;
   const router = useRouter();
+
+  /**
+   * 文档树宽度（可拖拽 + localStorage 持久化）：
+   * 原实现固定 `width: 440`，在小屏上比正文还宽。改为：
+   * - 默认 300px（比 440 明显收窄），可拖到 200~520；
+   * - 拖拽方向 inverse：树在左侧，拖它的**右缘**，右移=变宽，与 team session 页一致；
+   * - 收起状态单独持久化（collapsed 只记开关，不记宽度，展开即复用上次宽度）。
+   */
+  const docsTree = useResizableWidth({
+    storageKey: "docs-tree-width",
+    defaultWidth: 300,
+    min: 200,
+    max: 520,
+    direction: "normal",
+  });
+  /**
+   * 树收起开关（默认：宽屏展开、小屏收起）。
+   * 首次进入按当前视口宽度判定；用户手动切过后以用户选择为准（localStorage 持久化）。
+   */
+  const [treeCollapsed, setTreeCollapsed] = useState<boolean>(false);
+  const treePrefLoadedRef = useRef(false);
+  useEffect(() => {
+    if (treePrefLoadedRef.current) return;
+    treePrefLoadedRef.current = true;
+    const saved = window.localStorage.getItem("docs-tree-collapsed");
+    if (saved === "1" || saved === "0") {
+      setTreeCollapsed(saved === "1");
+      return;
+    }
+    setTreeCollapsed(window.innerWidth < DOCS_COMPACT_BREAKPOINT);
+  }, []);
+  const toggleTreeCollapsed = () => {
+    setTreeCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("docs-tree-collapsed", next ? "1" : "0");
+      } catch {
+        // localStorage 不可用（隐私模式）→ 仅本次会话生效
+      }
+      return next;
+    });
+  };
 
   // URL 状态：?teamId=&taskId=&doc=（effect 内读 window，避免 SSR 水合不一致；artifacts 页同模式）
   const [teamId, setTeamId] = useState<string | null>(null);
@@ -1040,26 +1089,105 @@ export default function DocsUnifiedPage() {
           <div
             style={{
               display: "flex",
-              gap: space.lg,
+              gap: treeCollapsed ? space.md : 0,
               alignItems: "stretch",
               flex: 1,
               minHeight: 0,
             }}
           >
-            {/* 文档树：聚合端点无层级字段 → 平铺 */}
-            <div
-              data-testid="docs-tree"
-              style={{
-                width: 440,
-                flexShrink: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: space.sm,
-                minHeight: 400,
-                height: "calc(100vh - 280px)",
-                overflow: "auto",
-              }}
-            >
+            {/* 文档树收起后的「展开」竖条：始终可见，保证能从收起态恢复 */}
+            {treeCollapsed && (
+              <div style={{ display: "flex", flexDirection: "column", gap: space.xs, flexShrink: 0, width: 36 }}>
+                <button
+                  type="button"
+                  data-testid="docs-tree-toggle"
+                  data-collapsed="true"
+                  onClick={toggleTreeCollapsed}
+                  title="展开文档列表"
+                  aria-label="展开文档列表"
+                  aria-expanded={false}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: space.xs,
+                    padding: `${space.md}px 0`,
+                    borderRadius: radius.md,
+                    border: `1px solid ${neutral[200]}`,
+                    backgroundColor: "var(--color-surface)",
+                    color: neutral[600],
+                    fontSize: fontSize.sm,
+                    cursor: "pointer",
+                    fontFamily: fontFamily.body,
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▸</span>
+                  <span style={{ writingMode: "vertical-rl", fontSize: fontSize.xs, letterSpacing: 1 }}>文档列表</span>
+                </button>
+              </div>
+            )}
+
+            {/* 文档树：聚合端点无层级字段 → 平铺（宽度可拖拽 / 可收起） */}
+            {!treeCollapsed && (
+              <div
+                data-testid="docs-tree"
+                style={{
+                  width: docsTree.width,
+                  flexShrink: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: space.sm,
+                  minHeight: 400,
+                  height: "calc(100vh - 280px)",
+                  overflow: "auto",
+                  paddingRight: space.xs,
+                  borderRight: `1px solid ${neutral[200]}`,
+                }}
+              >
+                {/* 工具条：文档数 + 收起按钮（sticky 保证滚动时仍可收起） */}
+                <div
+                  style={{
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 2,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: space.sm,
+                    paddingBottom: space.xs,
+                    backgroundColor: neutral[100],
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+                    {isPending ? "加载中…" : `${items.length} 篇文档`}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="docs-tree-toggle"
+                    data-collapsed="false"
+                    onClick={toggleTreeCollapsed}
+                    title="收起文档列表，给正文更多空间"
+                    aria-label="收起文档列表"
+                    aria-expanded={true}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: space.xs,
+                      padding: `2px ${space.sm}px`,
+                      borderRadius: radius.sm,
+                      border: `1px solid ${neutral[200]}`,
+                      backgroundColor: "var(--color-surface)",
+                      color: neutral[600],
+                      fontSize: fontSize.xs,
+                      cursor: "pointer",
+                      fontFamily: fontFamily.body,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span aria-hidden style={{ lineHeight: 1 }}>◂</span>收起
+                  </button>
+                </div>
               {isPending ? (
                 <div data-testid="docs-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xl}px 0` }}>
                   加载中…
@@ -1126,7 +1254,16 @@ export default function DocsUnifiedPage() {
                   );
                 })
               )}
-            </div>
+              </div>
+            )}
+
+            {/* 拖拽分隔条：调文档树宽度（收起态不渲染，避免误拖） */}
+            {!treeCollapsed && (
+              <ResizeHandle
+                label="调整文档列表宽度"
+                onResizeStart={docsTree.onResizeStart}
+              />
+            )}
 
             {/* 内容查看：选中文档 → 版本查看器；未选 → 空态；未知 doc → 空态（不抛错） */}
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 400, height: "calc(100vh - 280px)" }}>

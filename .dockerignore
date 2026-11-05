@@ -15,3 +15,21 @@ docs/
 chart/
 prototype-viewer/
 config.json
+# 构建上下文体积治理（web 镜像 context=仓库根）：
+# `offline-package/`（4.6G）、`.omo/`（3.1G）、`vteam-offline-*.tar.gz`（1.9G）等产物/证据
+# 与 web 构建无关，但在仓库根 context 里会被整包 tar 进 Docker daemon——
+# 2026-11-05 实测两个并发构建时直接把 OrbStack VM 拖垮（daemon 崩溃、构建 broken pipe）。
+# web/Dockerfile 只依赖 web/、worker/、scripts/pack-worker.sh，以下排除不影响产物。
+.omo/
+offline-package/
+md-docs/
+e2e-evidence/
+vteam-offline-*.tar.gz
+.learnings/
+.plan/
+.poc/
+.commandcode/
+.docker-buildx/
+learnings.md
+cos.log
+
