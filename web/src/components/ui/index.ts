@@ -19,6 +19,7 @@ export type { MessageIdentityProps } from "./message-identity";
 export { MessageInput } from "./message-input";
 export type {
   MessageInputProps,
+  MessageInputHandle,
   MentionableAgent,
   MessageMention,
   SendMessagePayload,

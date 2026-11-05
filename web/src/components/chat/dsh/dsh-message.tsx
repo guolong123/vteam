@@ -11,7 +11,7 @@
  *       tool      → DshToolCard （折叠的工具卡）
  *       text      → DshMarkdown（完整 Markdown 正文，流式时增量解析）
  *       error     → MsgError    （消息级错误，复用既有组件保证文案一致）
- *   └ 附件（有则出 ChatBubble 的附件形态）
+ *   └ 附件（有则出 ChatBubble 的附件形态；多附件纵向逐张渲染）
  * ```
  *
  * ## 与群聊（bubble）的排版差异（刻意）
@@ -66,7 +66,8 @@ export interface DshMessageProps {
   messageStatus?: string;
   /** 该会话存在待填写的 secret_input → 敏感命令卡升级为 awaiting-input。 */
   secretAwaiting?: boolean;
-  attachment?: ChatBubbleAttachment;
+  /** 多附件（≤10）：有则走 ChatBubble 附件形态，纵向渲染多张附件卡。 */
+  attachments?: ChatBubbleAttachment[];
   isMentionMe?: boolean;
   /** 与上一条为同发送者连续消息时省略身份栏。 */
   grouped?: boolean;
@@ -90,7 +91,7 @@ export function DshMessage({
   streaming = false,
   messageStatus,
   secretAwaiting = false,
-  attachment,
+  attachments,
   isMentionMe,
   grouped = false,
   initials,
@@ -98,6 +99,8 @@ export function DshMessage({
   className,
 }: DshMessageProps) {
   const labels = useMarkdownLabels();
+  /** 多附件存在性：缺省 / 空数组即无附件（与 MsgParts 同口径，避免渲染空附件区）。 */
+  const hasAttachments = (attachments?.length ?? 0) > 0;
 
   /** 中断独占：与 MsgParts 同口径，先判 aborted 再谈块映射。 */
   const aborted = useMemo(() => {
@@ -136,7 +139,7 @@ export function DshMessage({
     );
   }
 
-  if (blocks.length === 0 && !attachment) return null;
+  if (blocks.length === 0 && !hasAttachments) return null;
 
   return (
     <div
@@ -148,7 +151,7 @@ export function DshMessage({
       {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
       <div style={secondaryRows}>
         {renderRuns(blocks, streaming, labels)}
-        {attachment ? (
+        {hasAttachments ? (
           <ChatBubble
             showIdentity={false}
             text=""
@@ -156,7 +159,7 @@ export function DshMessage({
             author={author}
             role={role}
             time={time}
-            attachment={attachment}
+            attachments={attachments}
             isMentionMe={isMentionMe}
           />
         ) : null}

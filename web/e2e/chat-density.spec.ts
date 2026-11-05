@@ -231,7 +231,7 @@ function Fixture({ kind, payload }: { kind: Kind; payload: string }) {
       <MsgParts
         {...meta}
         parts={[]}
-        attachment={{ url: "/uploads/attachment.pdf", name: payload, size: 123456, ext: "pdf" }}
+        attachments={[{ url: "/uploads/attachment.pdf", name: payload, size: 123456, ext: "pdf" }]}
       />
     );
   }

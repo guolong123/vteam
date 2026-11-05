@@ -140,7 +140,8 @@ export interface MsgPartsProps {
   role: RoleKey;
   time?: string;
   streaming?: boolean;
-  attachment?: ChatBubbleAttachment;
+  /** 多附件（≤10）：透传给 ChatBubble / DshMessage，渲染为正文下方纵向多张附件卡。 */
+  attachments?: ChatBubbleAttachment[];
   isMentionMe?: boolean;
   style?: CSSProperties;
   className?: string;
@@ -171,7 +172,9 @@ export interface MsgPartsProps {
   variant?: "bubble" | "line" | "dsh";
 }
 
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachments, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
+  /** 多附件存在性（缺省 undefined / 空数组一律视为无附件，不渲染附件区、不参与有内容判定）。 */
+  const hasAttachments = (attachments?.length ?? 0) > 0;
   // DSH 变体整条委托：本组件不认识它，避免把两套 part 语义混在一处。
   // 放在最前面（先于 aborted 判断）—— DshMessage 内部自己处理中断独占分支，
   // 保证 dsh 路径只有一个渲染入口。
@@ -186,7 +189,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
         streaming={streaming}
         messageStatus={messageStatus}
         secretAwaiting={secretAwaiting}
-        attachment={attachment}
+        attachments={attachments}
         isMentionMe={isMentionMe}
         grouped={grouped}
         initials={initials}
@@ -340,11 +343,11 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
   const lineBodyFallback = !hasRenderableText && cleanBody.length > 0 ? cleanBody : "";
   const hasContent =
     variant === "line"
-      ? Boolean(attachment) ||
+      ? hasAttachments ||
         linePartsDeduped.some(lineRenderable) ||
         lineBodyFallback.length > 0
       : cleanBody.length > 0 ||
-        Boolean(attachment) ||
+        hasAttachments ||
         procPartsDeduped.some(procRenderable);
 
   if (!hasContent) {
@@ -391,8 +394,8 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
             {lineBodyFallback ? (
               <MsgLineBox key="line-body-fallback" tone="body" text={lineBodyFallback} />
             ) : null}
-            {attachment ? (
-              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
+            {hasAttachments ? (
+              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
             ) : null}
           </>
         ) : (
@@ -467,10 +470,10 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
               ) : messageStatus === "failed" ? (
                 <MsgError kind="failed" detail={cleanBody} />
               ) : (
-                <ChatBubble showIdentity={false} text={cleanBody} type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
+                <ChatBubble showIdentity={false} text={cleanBody} type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
               )
-            ) : attachment ? (
-              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
+            ) : hasAttachments ? (
+              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
             ) : null}
           </>
         )}

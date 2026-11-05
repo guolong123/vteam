@@ -11,6 +11,9 @@
  * 11px 元信息级）的轻量状态标记；它是正文之外的兄弟节点，不覆盖、不挤压正文。
  * B8（复选框 10）：可选 initials 由调用方用 lib/message-initials 从已解析人名生成，
  * 未传时 AgentAvatar 回落角色字母——组件自身不接触 senderId/instanceId。
+ * 多附件：attachments 数组（≤10）在气泡正文下方纵向渲染多张 AttachmentCard，外包一层
+ * data-testid="message-attachment" 容器；单条的 AttachmentCard testid / 折叠行为与改造前一致，
+ * 未传或空数组时不渲染附件区。带附件的气泡最大宽度收窄到 520px（与单附件时期一致）。
  */
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
@@ -42,7 +45,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 export type ChatMessageType = "user" | "agent" | "system";
 
-/** UX-10 附件元数据（后端 toMessageDto 附件三字段 + POST /uploads 响应 size）。 */
+/** 附件元数据（多附件契约 `attachments[]` 元素；与 POST /uploads 响应同形，size 可选）。 */
 export interface ChatBubbleAttachment {
   url: string;
   name: string;
@@ -56,7 +59,8 @@ export interface ChatBubbleProps {
   author?: string;
   role?: RoleKey;
   time?: string;
-  attachment?: ChatBubbleAttachment;
+  /** 多附件（≤10）：按顺序在气泡内纵向渲染多张 AttachmentCard；缺省/空数组不渲染。 */
+  attachments?: ChatBubbleAttachment[];
   isMentionMe?: boolean;
   /** 外部渠道消息：senderType==='external' 时展示“外部渠道”徽章 */
   senderType?: string;
@@ -102,7 +106,7 @@ export function ChatBubble({
   author,
   role,
   time,
-  attachment,
+  attachments,
   isMentionMe,
   senderType,
   showIdentity = true,
@@ -125,6 +129,9 @@ export function ChatBubble({
   const display = authorRoleDisplay(author, roleTheme ? roleTheme.label : "");
   /** B7：仅 user + sending/sent/failed 三个白名单取值出标记 */
   const statusMarker = isUser ? userMessageStatus(status) : null;
+  /** 多附件：调用方可能传 undefined，统一收敛成数组；空数组 = 无附件，整块不渲染。 */
+  const attachmentList = attachments ?? [];
+  const hasAttachments = attachmentList.length > 0;
   const [expanded, setExpanded] = useState(false);
 
   const bubbleBase: CSSProperties = {
@@ -327,7 +334,7 @@ export function ChatBubble({
             ★ @你
           </span>
         )}
-        {(hasText || attachment) && (
+        {(hasText || hasAttachments) && (
           <div
             style={
               isUser
@@ -338,7 +345,7 @@ export function ChatBubble({
                     borderTopRightRadius: radius.sm,
                     boxShadow: shadow.sm,
                     overflow: "hidden",
-                    maxWidth: attachment ? 520 : "100%",
+                    maxWidth: hasAttachments ? 520 : "100%",
                   }
                 : {
                     ...bubbleBase,
@@ -349,7 +356,7 @@ export function ChatBubble({
                     borderTopLeftRadius: radius.sm,
                     boxShadow: isMentionMe ? `0 0 0 1px rgba(13,148,136,0.15)` : shadow.sm,
                     overflow: "hidden",
-                    maxWidth: attachment ? 520 : "100%",
+                    maxWidth: hasAttachments ? 520 : "100%",
                   }
             }
           >
@@ -399,9 +406,21 @@ export function ChatBubble({
                 )}
               </>
             )}
-            {attachment && (
-              <div style={{ marginTop: hasText ? space.md : 0 }}>
-                <AttachmentCard attachment={attachment} isUser={isUser} embedded />
+            {hasAttachments && (
+              <div
+                data-testid="message-attachment"
+                style={{
+                  marginTop: hasText ? space.md : 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: space.sm,
+                  minWidth: 0,
+                }}
+              >
+                {/* 多附件：纵向逐条渲染，单条仍走 AttachmentCard 原渲染链路（testid/折叠语义不变） */}
+                {attachmentList.map((item, i) => (
+                  <AttachmentCard key={`${item.url}-${i}`} attachment={item} isUser={isUser} embedded />
+                ))}
               </div>
             )}
           </div>
@@ -429,8 +448,9 @@ export function ChatBubble({
   );
 }
 
-/** 附件卡片：图片内嵌预览（attachment-image）/ 文件下载链接（attachment-file），包 message-attachment。
- *  导出供 MsgParts（agent 过程片段消息）复用同一渲染链路。
+/** 附件卡片：图片内嵌预览（attachment-image）/ 文件下载链接（attachment-file）。
+ *  embedded=true（气泡内/过程片段内）不带外层卡片；embedded=false 时自带 message-attachment 容器。
+ *  多附件由调用方逐条渲染本组件并自行提供外层容器（ChatBubble 即如此）。
  *  B11：非图片且文件名超过 ATTACHMENT_DETAIL_COLLAPSE_CHARS 时附件详情默认收起——
  *  收起态只渲染 attachment-summary（徽标 + 名字头部 + 大小）与 attachment-detail-toggle，
  *  完整 attachment-file 链接只有展开后才进 DOM；图片与短文件名走原路径，零开关。 */

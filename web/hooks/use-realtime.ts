@@ -63,10 +63,13 @@ export interface RealtimeChatMessage {
   senderInstanceId?: string | null;
   content: RealtimeMessageContent;
   mentions: unknown[];
-  /** UX-10 附件（客户端先 POST /uploads 拿 url 随消息提交；无附件为 null） */
+  /** UX-10 附件（客户端先 POST /uploads 拿 url 随消息提交；无附件为 null）。
+   *  多附件上线后为**首个附件的兼容投影**；新代码请读 attachments 数组。 */
   attachmentUrl?: string | null;
   attachmentName?: string | null;
   attachmentType?: string | null;
+  /** 多附件（后端 toMessageDto.attachments = [{url,name,size?,ext}]，≤10；无附件为 null/缺省）。 */
+  attachments?: Array<{ url: string; name: string; size?: number; ext: string }> | null;
   status: string;
   createdAt: string;
 }

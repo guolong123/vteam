@@ -25,7 +25,9 @@ import { useAuthStore } from "@/lib/stores/authStore";
 import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
 import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
-import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
+import type { MessageInputHandle } from "@/src/components/ui/message-input";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import type { ChatBubbleAttachment, MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { LoadingIndicator, MsgError, QuestionModal, MsgParts, SystemMarker, SYSTEM_MARKER_COLLAPSE_THRESHOLD } from "@/src/components/chat";
 import type { QuestionModalData, QuestionModalSubmitPayload } from "@/src/components/chat";
@@ -44,7 +46,7 @@ import type {
   ArtifactsResponse,
 } from "@/src/components/tasks/task-detail-types";
 import { docIdFor } from "@/src/components/tasks/task-detail-types";
-import { type RoleKey, ROLE_KEYS, neutral, space, radius, fontSize, fontFamily, messageFontSize } from "@/src/theme/tokens";
+import { type RoleKey, ROLE_KEYS, neutral, space, radius, fontSize, fontFamily, messageFontSize, shadow } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -118,6 +120,49 @@ function formatTime(iso: string): string {
   return `${hh}:${mm}`;
 }
 
+/** 消息 DTO attachments 数组元素的宽松读取形状（服务端已校验，前端仍防御脏数据/历史广播）。 */
+type RawMessageAttachment = { url: string; name?: unknown; size?: unknown; ext?: unknown };
+
+/**
+ * 消息附件归一化（多附件契约）：
+ * - 优先读消息 DTO 新增的 `attachments` 数组（服务端 ≤10，元素 {url,name,size?,ext}）；
+ * - 历史消息无该字段（或空数组）时回退 legacy 三字段 attachmentUrl/Name/Type 合成单元素，
+ *   保证旧数据、旧广播仍按单附件展示；
+ * - 两者都没有 → 空数组，调用方按「无附件」处理（不渲染附件区）。
+ * 非对象 / url 非字符串的元素直接丢弃（脏数据不让整条消息渲染崩掉）。
+ */
+function resolveMessageAttachments(msg: RealtimeChatMessage): ChatBubbleAttachment[] {
+  const raw = (msg as unknown as { attachments?: unknown }).attachments;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .filter(
+        (item): item is RawMessageAttachment =>
+          typeof item === "object" && item !== null && typeof (item as RawMessageAttachment).url === "string",
+      )
+      .map((item) => {
+        const attachment: ChatBubbleAttachment = {
+          url: item.url,
+          // name 缺失时回落 url（与后端历史兜底口径一致）
+          name: typeof item.name === "string" && item.name.length > 0 ? item.name : item.url,
+          ext: typeof item.ext === "string" ? item.ext : "",
+        };
+        if (typeof item.size === "number") attachment.size = item.size;
+        return attachment;
+      });
+  }
+  // legacy 兼容：旧三字段合成单元素（老消息 / 老广播）
+  if (msg.attachmentUrl) {
+    return [
+      {
+        url: msg.attachmentUrl,
+        name: msg.attachmentName ?? msg.attachmentUrl,
+        ext: msg.attachmentType ?? "",
+      },
+    ];
+  }
+  return [];
+}
+
 /**
  * questionQueue 条目（QuestionModalData + sessionId）：
  * server AgentQuestionDto / agent.question 事件都带 sessionId，QuestionModalData 未声明，
@@ -182,6 +227,8 @@ export default function TeamSessionPage() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement | null>(null);
+  /** 消息输入框命令式句柄：窗口级「拖入文件」转交给输入框，复用其校验/上传/附件 chip 全链路。 */
+  const messageInputRef = useRef<MessageInputHandle | null>(null);
 
   const [input, setInput] = useState("");
   const [loadingByAgent, setLoadingByAgent] = useState<Record<string, string>>({});
@@ -1122,11 +1169,16 @@ export default function TeamSessionPage() {
           : privateMentionTarget
             ? [{ type: "agent" as const, agentId: privateMentionTarget.id }]
             : [],
-        ...(payload.attachment
+        // 多附件契约：请求体提交 attachments 数组（≤10），不再提交 legacy 单附件三字段；
+        // 无附件时不带该字段（服务端按缺省处理）。
+        ...(payload.attachments.length > 0
           ? {
-              attachmentUrl: payload.attachment.url,
-              attachmentName: payload.attachment.name,
-              attachmentType: payload.attachment.ext,
+              attachments: payload.attachments.map((a) => ({
+                url: a.url,
+                name: a.name,
+                size: a.size,
+                ext: a.ext,
+              })),
             }
           : {}),
         ...(isGroupTab && panelTaskActive ? { taskId: panelTask!.id } : {}),
@@ -1142,7 +1194,14 @@ export default function TeamSessionPage() {
       setSendError(isApiError(err) ? err.message : "发送失败，请稍后重试");
     },
   });
-  const handleSend = (payload: SendMessagePayload) => {
+  /**
+   * 发送入口：必须把 mutation 的 Promise 交还给 MessageInput。
+   * MessageInput 用 `await onSend(...)` 判定成败——**reject 时保留待发送附件**、成功才清空；
+   * 这里返回 mutateAsync 的 Promise（失败向上抛），错误文案仍由 sendMutation.onError 展示，
+   * MessageInput 内部已 catch，不会产生 unhandled rejection。
+   * 早退分支（无目标频道 / 成员被禁用）返回 undefined：视为「未发送」，不算失败。
+   */
+  const handleSend = (payload: SendMessagePayload): void | Promise<void> => {
     if (!targetChannelId) return;
     setSendError(null);
     const inst = privateMentionTarget;
@@ -1151,8 +1210,19 @@ export default function TeamSessionPage() {
       const inst = teamAgentMembers.find((a) => a.id === m.id && (m.instanceId ? a.instanceId === m.instanceId : true));
       if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
     }
-    sendMutation.mutate(payload);
+    return sendMutation.mutateAsync(payload).then(() => undefined);
   };
+
+  /* ---------- 窗口级拖入上传（从 Finder/桌面等外部拖文件进会话窗口） ---------- */
+  /**
+   * 拖入的文件一律转交 MessageInput 的命令式 addFiles：
+   * 客户端校验（≤10 个、≤20MB）、并发 POST /uploads、待发送 chip、失败提示全部复用同一套
+   * 管线，因此拖拽与点击选择/粘贴的行为完全一致（不另开旁路、不重复实现）。
+   */
+  const handleDroppedFiles = useCallback((files: File[]) => {
+    messageInputRef.current?.addFiles(files);
+  }, []);
+  const { dragActive: fileDragActive, handlers: fileDropHandlers } = useFileDrop(handleDroppedFiles);
 
   /* ---------- 加载更多（群聊/私聊各自独立游标） ---------- */
   const handleLoadMore = useCallback(async () => {
@@ -1407,14 +1477,16 @@ export default function TeamSessionPage() {
     const isMentionMe = Array.isArray((msg as unknown as { mentions?: unknown }).mentions) &&
       (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) ||
         (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")));
-    const attachment = msg.attachmentUrl
-      ? { url: msg.attachmentUrl, name: msg.attachmentName ?? msg.attachmentUrl, ext: msg.attachmentType ?? "" }
-      : undefined;
-    return { isExternal, role, author, initials, parts, isMentionMe, attachment, senderInstanceId };
+    const attachments = resolveMessageAttachments(msg);
+    return { isExternal, role, author, initials, parts, isMentionMe, attachments, senderInstanceId };
   };
 
   return (
-    <div data-testid="team-session-root" style={{ flex: 1, minHeight: 0, height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", ...baseFont }}>
+    <div
+      data-testid="team-session-root"
+      {...fileDropHandlers}
+      style={{ position: "relative", flex: 1, minHeight: 0, height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", ...baseFont }}
+    >
       {/* 顶栏：团队名 + 活跃任务胶囊组 + 活跃/待开始计数 + 刷新 + 头像组 */}
       <header style={{ height: 64, flexShrink: 0, display: "flex", alignItems: "center", gap: space.md, padding: `0 ${space.xl}px`, backgroundColor: "var(--color-surface)", borderBottom: `1px solid ${neutral[200]}` }}>
         <style>{`@keyframes team-task-breathe { 0%,100%{opacity:.25} 50%{opacity:1} }`}</style>
@@ -1693,7 +1765,7 @@ export default function TeamSessionPage() {
                   </React.Fragment>
                 );
               };
-              const { isExternal, role, author, initials, parts, isMentionMe, attachment, senderInstanceId } = resolveMessage(msg);
+              const { isExternal, role, author, initials, parts, isMentionMe, attachments, senderInstanceId } = resolveMessage(msg);
               if (isExternal) {
                 return withSeparator(
                   <ChatBubble
@@ -1704,7 +1776,7 @@ export default function TeamSessionPage() {
                     role={undefined}
                     time={formatTime(msg.createdAt)}
                     senderType="external"
-                    attachment={attachment}
+                    attachments={attachments}
                     initials={initials}
                   />,
                 );
@@ -1728,7 +1800,7 @@ export default function TeamSessionPage() {
                     time={formatTime(msg.createdAt)}
                     streaming={msg.status === "processing"}
                     isMentionMe={isMentionMe}
-                    attachment={attachment}
+                    attachments={attachments}
                     grouped={grouped}
                     initials={initials}
                   />,
@@ -1748,7 +1820,7 @@ export default function TeamSessionPage() {
                 );
               }
               return withSeparator(
-                <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachment={attachment} initials={initials} status={msg.status} />,
+                <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} initials={initials} status={msg.status} />,
               );
             })}
             {loadingLabel && (
@@ -1789,6 +1861,7 @@ export default function TeamSessionPage() {
               </div>
             )}
             <MessageInput
+              ref={messageInputRef}
               value={input}
               onChange={setInput}
               onSend={handleSend}
@@ -1899,6 +1972,48 @@ export default function TeamSessionPage() {
           }}
           onSubmit={handleQuestionSubmit}
         />
+
+        {/* 拖入文件提示层：仅文件拖拽时出现，pointerEvents=none 不挡住 drop 命中测试 */}
+        {fileDragActive && (
+          <div
+            data-testid="team-session-drop-overlay"
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 40,
+              pointerEvents: "none",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "rgba(13,148,136,0.10)",
+              backdropFilter: "blur(1px)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: space.sm,
+                padding: `${space.xl}px ${space.xxl}px`,
+                borderRadius: radius.lg,
+                border: "2px dashed #0D9488",
+                backgroundColor: "var(--color-surface)",
+                boxShadow: shadow.md,
+                ...baseFont,
+              }}
+            >
+              <span style={{ fontSize: 28, lineHeight: 1 }} aria-hidden>
+                📎
+              </span>
+              <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>松开即可上传</span>
+              <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>
+                支持一次拖入多个文件 · 单个文件不超过 20MB · 最多 10 个
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
