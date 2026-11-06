@@ -128,7 +128,28 @@ async function compilePrototype(source: string): Promise<{ bundleCode: string; b
   return { bundleCode, bundleCss };
 }
 
-export function PrototypeSandbox({ taskId, file, name, device }: { taskId: string; file: string; name: string; device?: DeviceType }) {
+/**
+ * 原型沙箱。
+ *
+ * 两种入参：
+ * - `taskId + file`：从控制面取原型源码（原型 tab 的常规路径）；
+ * - `source`：直接给源码文本（文档站里「.tsx 产出物」就地预览用——它不是原型记录，
+ *   拿不到 (taskId, file) 这层标识，但源码本身就在 uploads 里）。
+ * 两条路径共用同一套 esbuild 编译 + srcdoc 渲染管线，**观感与原型 tab 完全一致**。
+ */
+export function PrototypeSandbox({
+  taskId,
+  file,
+  name,
+  device,
+  source,
+}: {
+  taskId?: string;
+  file?: string;
+  name: string;
+  device?: DeviceType;
+  source?: string;
+}) {
   const [state, setState] = useState<{ status: "loading" } | { status: "error"; message: string } | { status: "ready"; srcdoc: string }>({ status: "loading" });
   const [height, setHeight] = useState(480);
   const isFramed = !!device;
@@ -137,9 +158,14 @@ export function PrototypeSandbox({ taskId, file, name, device }: { taskId: strin
     setState({ status: "loading" });
     (async () => {
       try {
-        const [source, runtimeJs] = await Promise.all([fetchPrototypeSource(taskId, file), fetchRuntimeJs()]);
+        const [sourceText, runtimeJs] = await Promise.all([
+          source !== undefined
+            ? Promise.resolve(source)
+            : fetchPrototypeSource(taskId ?? "", file ?? ""),
+          fetchRuntimeJs(),
+        ]);
         if (cancelled) return;
-        const { bundleCode, bundleCss } = await compilePrototype(source);
+        const { bundleCode, bundleCss } = await compilePrototype(sourceText);
         if (cancelled) return;
         const parentCss = collectCss();
         if (cancelled) return;
@@ -152,7 +178,7 @@ export function PrototypeSandbox({ taskId, file, name, device }: { taskId: strin
       }
     })();
     return () => { cancelled = true; };
-  }, [taskId, file]);
+  }, [taskId, file, source]);
   useEffect(() => {
     if (isFramed) return;
     const onMessage = (e: MessageEvent) => {

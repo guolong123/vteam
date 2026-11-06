@@ -23,6 +23,10 @@ import {
   languageForPath,
 } from "@deepseek-ai/dsh-util-code-language";
 import { getEffectiveTheme, useThemeStore } from "@/src/theme/theme-store";
+import { PrototypeSandbox } from "./prototype-sandbox";
+import { DeviceFrame } from "./device-frame";
+import { DeviceSwitcher } from "./device-switcher";
+import type { DeviceType } from "./types";
 import { DocsMarkdown } from "./docs-markdown";
 import {
   neutral,
@@ -111,6 +115,11 @@ const CODE_SHIKI_LANGS = [
 ];
 /** tsx/jsx 用 JSX 语法（通用的 languageForPath 把它们归到 typescript/javascript，尖括号会掉色）。 */
 const CODE_LANG_OVERRIDE: Record<string, string> = { tsx: "tsx", jsx: "jsx" };
+/**
+ * 可以「渲染成原型」的源码类型：这类产出物通常是单个自包含的 React 组件，
+ * 与原型 tab 用同一条 esbuild + srcdoc 管线渲染（观感一致）。
+ */
+const PROTOTYPE_RENDERABLE_EXTS = new Set(["tsx", "jsx"]);
 
 type ShikiHighlighter = import("shiki").Highlighter;
 let highlighterPromise: Promise<ShikiHighlighter> | null = null;
@@ -828,6 +837,10 @@ function CodeFilePreview({
   const [tokenLines, setTokenLines] = useState<CodeToken[][] | null>(null);
   const themePreference = useThemeStore((state) => state.theme);
   const [systemDark, setSystemDark] = useState(false);
+  /** .tsx/.jsx 默认进「预览」模式（用户要的是看原型效果，不是看源码）。 */
+  const renderable = PROTOTYPE_RENDERABLE_EXTS.has(ext);
+  const [mode, setMode] = useState<"preview" | "source">(renderable ? "preview" : "source");
+  const [device, setDevice] = useState<DeviceType>("desktop");
 
   const language = useMemo(
     () => CODE_LANG_OVERRIDE[ext] ?? languageForPath(displayName || fileUrl) ?? "text",
@@ -933,6 +946,50 @@ function CodeFilePreview({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+        {renderable && (
+          <div
+            role="tablist"
+            aria-label="源码 / 原型预览"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 2,
+              borderRadius: radius.md,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: neutral[100],
+              padding: 2,
+            }}
+          >
+            {([
+              { key: "preview" as const, label: "预览" },
+              { key: "source" as const, label: "源码" },
+            ]).map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="tab"
+                aria-selected={mode === item.key}
+                data-testid={`docs-code-mode-${item.key}`}
+                data-active={mode === item.key ? "true" : "false"}
+                onClick={() => setMode(item.key)}
+                style={{
+                  borderRadius: radius.sm,
+                  border: "none",
+                  padding: "3px 12px",
+                  fontSize: fontSize.sm,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                  ...(mode === item.key
+                    ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" }
+                    : { backgroundColor: "transparent", color: neutral[500] }),
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
         <a
           data-testid="docs-code-download"
           href={fileUrl}
@@ -969,12 +1026,46 @@ function CodeFilePreview({
         >
           {(ext || language).toUpperCase()}
         </span>
-        <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono }}>
-          {shownLines.length} 行
-          {text !== null && ` · ${formatBytes(new Blob([text]).size)}`}
-        </span>
+        {mode === "preview" ? (
+          <DeviceSwitcher device={device} onChange={setDevice} />
+        ) : (
+          <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono }}>
+            {shownLines.length} 行
+            {text !== null && ` · ${formatBytes(new Blob([text]).size)}`}
+          </span>
+        )}
       </div>
 
+      {renderable && mode === "preview" ? (
+        <div
+          data-testid="docs-code-preview"
+          style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}
+        >
+          {text === null ? (
+            <div
+              style={{
+                display: "flex",
+                minHeight: 240,
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: fontSize.sm,
+                color: neutral[400],
+                ...baseFont,
+              }}
+            >
+              正在编译原型「{displayName || title}」…
+            </div>
+          ) : (
+            <DeviceFrame device={device} label={displayName || fileUrl}>
+              <PrototypeSandbox
+                source={text}
+                name={displayName || title}
+                device={device}
+              />
+            </DeviceFrame>
+          )}
+        </div>
+      ) : (
       <div
         data-testid="docs-code-body"
         style={{
@@ -1025,7 +1116,7 @@ function CodeFilePreview({
           ))}
         </pre>
       </div>
-
+      )}
       {truncated && (
         <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
           仅预览前 {CODE_PREVIEW_MAX_LINES} 行，完整内容请下载查看。
