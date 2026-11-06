@@ -29,6 +29,16 @@ function createService() {
       findUnique: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
     },
+    notificationChannel: { findMany: jest.fn().mockResolvedValue([]) },
+    memberNotificationChannel: {
+      findMany: jest.fn().mockResolvedValue([]),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    teamNotificationChannel: {
+      findMany: jest.fn().mockResolvedValue([]),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     $transaction: jest.fn(),
   };
   const idGen = {
@@ -36,7 +46,11 @@ function createService() {
     seed: jest.fn(),
   };
   const sessionLifecycle = { resetMemberSession: jest.fn() };
-  const service = new MembersService(prisma, idGen as any, sessionLifecycle as any);
+  const service = new MembersService(
+    prisma,
+    idGen as any,
+    sessionLifecycle as any,
+  );
   return { service, prisma, idGen, sessionLifecycle };
 }
 
@@ -205,5 +219,72 @@ describe('MembersService', () => {
     await expect(
       service.update('mbr_1', { agentId: 'a_missing' }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('resetSession：成员不存在 → 404；存在则委托生命周期重置', async () => {
+    const { service, prisma, sessionLifecycle } = createService();
+    prisma.member.findUnique.mockResolvedValueOnce(null);
+    await expect(service.resetSession('mbr_x')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    prisma.member.findUnique.mockResolvedValueOnce({ id: 'mbr_1' });
+    sessionLifecycle.resetMemberSession.mockResolvedValue({
+      reset: 1,
+      sessionId: 's_new',
+    });
+    await expect(service.resetSession('mbr_1')).resolves.toEqual({
+      reset: 1,
+      sessionId: 's_new',
+    });
+    expect(sessionLifecycle.resetMemberSession).toHaveBeenCalledWith('mbr_1', {
+      reason: 'member_manual_reset',
+    });
+  });
+
+  it('bindNotificationChannels：无冲突 → replace-all 绑定', async () => {
+    const { service, prisma } = createService();
+    prisma.member.findUnique.mockResolvedValue({ id: 'mbr_1' });
+    prisma.notificationChannel.findMany.mockResolvedValue([
+      { id: 'nc_1' },
+      { id: 'nc_2' },
+    ]);
+    prisma.$transaction.mockImplementation(async (cb: any) => cb(prisma));
+
+    const result: any = await service.bindNotificationChannels('mbr_1', [
+      'nc_1',
+      'nc_2',
+    ]);
+    expect(result).toEqual({
+      memberId: 'mbr_1',
+      notificationChannelIds: ['nc_1', 'nc_2'],
+    });
+    expect(prisma.memberNotificationChannel.createMany).toHaveBeenCalledWith({
+      data: [
+        { memberId: 'mbr_1', notificationChannelId: 'nc_1' },
+        { memberId: 'mbr_1', notificationChannelId: 'nc_2' },
+      ],
+      skipDuplicates: true,
+    });
+  });
+
+  it('bindNotificationChannels：渠道被团队占用 → 409；replaceExisting 转移归属', async () => {
+    const { service, prisma } = createService();
+    prisma.member.findUnique.mockResolvedValue({ id: 'mbr_1' });
+    prisma.notificationChannel.findMany.mockResolvedValue([{ id: 'nc_1' }]);
+    prisma.teamNotificationChannel.findMany.mockResolvedValue([
+      { teamId: 'tm_1', notificationChannelId: 'nc_1' },
+    ]);
+
+    await expect(
+      service.bindNotificationChannels('mbr_1', ['nc_1']),
+    ).rejects.toMatchObject({
+      response: { code: 'CHANNEL_ALREADY_BOUND' },
+    });
+
+    prisma.$transaction.mockImplementation(async (cb: any) => cb(prisma));
+    await service.bindNotificationChannels('mbr_1', ['nc_1'], true);
+    expect(prisma.teamNotificationChannel.deleteMany).toHaveBeenCalledWith({
+      where: { notificationChannelId: { in: ['nc_1'] } },
+    });
   });
 });

@@ -139,6 +139,22 @@ export const membersApi = {
   clone(id: string): Promise<MemberDetailDto> {
     return api.post<MemberDetailDto>(`/members/${id}/clone`);
   },
+  /** P5：成员已绑定通知渠道（脱敏）。 */
+  listNotificationChannels(id: string): Promise<MemberNotificationChannelRef[]> {
+    return api.get<MemberNotificationChannelRef[]>(
+      `/members/${id}/notification-channels`,
+    );
+  },
+  /** P5：绑定成员通知渠道（replace-all；默认独占校验，冲突 409）。 */
+  bindNotificationChannels(
+    id: string,
+    payload: { notificationChannelIds: string[]; replaceExisting?: boolean },
+  ): Promise<{ memberId: string; notificationChannelIds: string[] }> {
+    return api.put<{ memberId: string; notificationChannelIds: string[] }>(
+      `/members/${id}/notification-channels`,
+      payload,
+    );
+  },
   /** P3：重置成员全局会话（不动消息/记忆；任务完成不再自动重置）。 */
   resetSession(id: string): Promise<{ reset: number; sessionId: string | null }> {
     return api.post<{ reset: number; sessionId: string | null }>(

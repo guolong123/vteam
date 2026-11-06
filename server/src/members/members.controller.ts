@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -16,6 +17,7 @@ import {
 } from '../common/decorators/current-user.decorator';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { BindMemberNotificationChannelsDto } from './dto/bind-member-notification-channels.dto';
 import { CreateMemberDto } from './dto/create-member.dto';
 import { QueryMembersDto } from './dto/query-members.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
@@ -87,6 +89,29 @@ export class MembersController {
   @ApiOperation({ summary: '重置成员全局会话（不动消息/记忆）' })
   resetSession(@Param('id') id: string) {
     return this.membersService.resetSession(id);
+  }
+
+  @Get(':id/notification-channels')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('channels.manage')
+  @ApiOperation({ summary: '成员已绑定的通知渠道（脱敏）' })
+  listNotificationChannels(@Param('id') id: string) {
+    return this.membersService.listNotificationChannels(id);
+  }
+
+  @Put(':id/notification-channels')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('channels.manage')
+  @ApiOperation({ summary: '绑定成员通知渠道（replace-all；默认独占校验）' })
+  bindNotificationChannels(
+    @Param('id') id: string,
+    @Body() dto: BindMemberNotificationChannelsDto,
+  ) {
+    return this.membersService.bindNotificationChannels(
+      id,
+      dto.notificationChannelIds ?? [],
+      dto.replaceExisting ?? false,
+    );
   }
 
   @Post(':id/clone')

@@ -16,6 +16,7 @@ import {
   MEMBER_ID_PREFIX,
   MEMBER_STATUS,
   MEMBERS_ERRORS,
+  NOTIFICATION_CHANNEL_ERRORS,
 } from './members.constants';
 
 /** 成员列表/详情统一 include（角色/Agent/默认模型/默认 worker + 计数）。 */
@@ -177,6 +178,134 @@ export class MembersService implements OnModuleInit {
           }
         : null,
     };
+  }
+
+  /** GET /members/:id/notification-channels：成员已绑定通知渠道（脱敏）。 */
+  async listNotificationChannels(memberId: string) {
+    const member = await this.prisma.member.findUnique({
+      where: { id: memberId },
+      select: { id: true },
+    });
+    if (!member) this.throwNotFound(memberId);
+    const links = await this.prisma.memberNotificationChannel.findMany({
+      where: { memberId },
+      select: { notificationChannelId: true },
+    });
+    const ids = links.map((l) => l.notificationChannelId);
+    if (ids.length === 0) return [];
+    const channels = await this.prisma.notificationChannel.findMany({
+      where: { id: { in: ids } },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        enabled: true,
+        lastStatus: true,
+        lastError: true,
+        createdAt: true,
+      },
+    });
+    return channels;
+  }
+
+  /**
+   * PUT /members/:id/notification-channels：replace-all 绑定成员通知渠道（P5）。
+   *
+   * 归属唯一（D16）：一个渠道最多属于一个团队或一个成员。已被其他团队/成员占用时：
+   *  - 默认 409 CHANNEL_ALREADY_BOUND（附冲突清单，前端提示是否转移）；
+   *  - replaceExisting=true → 转移归属（删除冲突的 team/member 绑定）。
+   */
+  async bindNotificationChannels(
+    memberId: string,
+    notificationChannelIds: string[],
+    replaceExisting = false,
+  ) {
+    const member = await this.prisma.member.findUnique({
+      where: { id: memberId },
+      select: { id: true },
+    });
+    if (!member) this.throwNotFound(memberId);
+    const ids = [...new Set((notificationChannelIds ?? []).filter(Boolean))];
+    if (ids.length !== (notificationChannelIds ?? []).length) {
+      throw new BadRequestException({
+        code: 'BAD_REQUEST',
+        message: '渠道 id 重复',
+      });
+    }
+    if (ids.length > 0) {
+      const found = await this.prisma.notificationChannel.findMany({
+        where: { id: { in: ids } },
+        select: { id: true },
+      });
+      const foundSet = new Set(found.map((r) => r.id));
+      const missing = ids.filter((i) => !foundSet.has(i));
+      if (missing.length > 0) {
+        throw new NotFoundException({
+          code: NOTIFICATION_CHANNEL_ERRORS.CHANNEL_NOT_FOUND,
+          message: `通知渠道不存在: ${missing.join(', ')}`,
+        });
+      }
+    }
+
+    const [memberConflicts, teamConflicts] = await Promise.all([
+      this.prisma.memberNotificationChannel.findMany({
+        where: {
+          notificationChannelId: { in: ids },
+          NOT: { memberId },
+        },
+        select: { memberId: true, notificationChannelId: true },
+      }),
+      this.prisma.teamNotificationChannel.findMany({
+        where: { notificationChannelId: { in: ids } },
+        select: { teamId: true, notificationChannelId: true },
+      }),
+    ]);
+    if (
+      (memberConflicts.length > 0 || teamConflicts.length > 0) &&
+      !replaceExisting
+    ) {
+      throw new ConflictException({
+        code: NOTIFICATION_CHANNEL_ERRORS.CHANNEL_ALREADY_BOUND,
+        message: '部分通知渠道已绑定到其他团队或成员',
+        conflicts: {
+          members: memberConflicts,
+          teams: teamConflicts,
+        },
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (memberConflicts.length > 0) {
+        await tx.memberNotificationChannel.deleteMany({
+          where: {
+            notificationChannelId: {
+              in: memberConflicts.map((c) => c.notificationChannelId),
+            },
+          },
+        });
+      }
+      if (teamConflicts.length > 0) {
+        await tx.teamNotificationChannel.deleteMany({
+          where: {
+            notificationChannelId: {
+              in: teamConflicts.map((c) => c.notificationChannelId),
+            },
+          },
+        });
+      }
+      await tx.memberNotificationChannel.deleteMany({ where: { memberId } });
+      if (ids.length > 0) {
+        await tx.memberNotificationChannel.createMany({
+          data: ids.map((notificationChannelId) => ({
+            memberId,
+            notificationChannelId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+    });
+    return { memberId, notificationChannelIds: ids };
   }
 
   /**

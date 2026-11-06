@@ -7872,14 +7872,17 @@ export class PlatformMcpService implements OnModuleInit {
     }
     let taskId: string | null = null;
     let teamId: string | null = null;
+    let memberId: string | null = null;
     try {
       const session = await (this.prisma as any).session.findFirst({
         where: { workerId: ctx.workerId },
         orderBy: { createdAt: 'desc' },
-        select: { taskId: true, teamId: true },
+        select: { taskId: true, teamId: true, memberId: true },
       });
       taskId = session?.taskId ?? null;
       teamId = session?.teamId ?? null;
+      // P5：成员全局会话优先按成员绑定解析通知渠道（D16/Q26）。
+      memberId = session?.memberId ?? null;
     } catch {}
     if (!taskId && !teamId) {
       return {
@@ -7913,7 +7916,7 @@ export class PlatformMcpService implements OnModuleInit {
         taskId,
         target,
         text,
-        { teamId },
+        { teamId, ...(memberId ? { memberId } : {}) },
       );
       const preview = text.slice(0, 100);
       return {

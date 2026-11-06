@@ -550,6 +550,29 @@ export class NotificationDispatcherService
     return events.includes(event);
   }
 
+  /**
+   * P5：成员维度的通知解析（Q26：仅 channel_send / question/reply 走成员渠道，
+   * 不接任务状态类事件）。停用成员 → 空集（绑定保留但过滤）。
+   */
+  private async resolveChannelsForMember(
+    memberId: string,
+    eventType: string,
+  ): Promise<any[]> {
+    try {
+      const member = await (this.prisma as any).member.findUnique({
+        where: { id: memberId },
+        select: { status: true },
+      });
+      if (!member || member.status !== 'active') return [];
+      const channels = await this.boundChannelsOfMember(memberId);
+      return channels.filter(
+        (ch) => ch.enabled && this.hasEvent(ch.config, eventType),
+      );
+    } catch {
+      return [];
+    }
+  }
+
   private async resolveTaskTitle(taskId: string): Promise<string | null> {
     try {
       const task = await (this.prisma as any).task.findUnique({
@@ -576,8 +599,43 @@ export class NotificationDispatcherService
     taskId: string | null,
     target: string,
     text: string,
-    opts?: { teamId?: string | null },
+    opts?: { teamId?: string | null; memberId?: string | null },
   ): Promise<void> {
+    // P5（D16/Q26）：成员全局会话下 channel_send 优先按成员绑定解析；
+    // 成员已停用 → 直接拒绝（停用成员保留绑定但不参与解析）。
+    if (opts?.memberId) {
+      const member = await (this.prisma as any).member.findUnique({
+        where: { id: opts.memberId },
+        select: { id: true, status: true },
+      });
+      if (!member || member.status !== 'active') {
+        throw new Error(`成员 ${opts.memberId} 不存在或已停用`);
+      }
+      const memberChannels = await this.boundChannelsOfMember(opts.memberId);
+      const memberAvailable = memberChannels
+        .filter((c) => c.enabled)
+        .map((c) => `${c.id}(${c.name})`);
+      if (memberChannels.length === 0) {
+        throw new NotificationChannelNotBoundError(
+          opts.memberId,
+          memberAvailable,
+        );
+      }
+      const memberCh = memberChannels.find(
+        (c) => c.id === target || c.name === target,
+      );
+      if (!memberCh) {
+        throw new NotificationChannelNotFoundError(
+          opts.memberId,
+          target,
+          memberAvailable,
+        );
+      }
+      if (!memberCh.enabled) throw new Error(`渠道 ${target} 已停用`);
+      await this.dispatchToChannel(memberCh, { kind: 'markdown', text });
+      return;
+    }
+
     const teamId = opts?.teamId ?? (await this.teamIdOfTask(taskId));
     if (!teamId) throw new Error(`任务 ${taskId} 未关联团队`);
 
@@ -608,6 +666,23 @@ export class NotificationDispatcherService
     } catch {
       return null;
     }
+  }
+
+  /** 成员已绑定的通知渠道（含停用行；停用成员在调用方直接拒绝）。 */
+  private async boundChannelsOfMember(memberId: string): Promise<any[]> {
+    const links: Array<{ notificationChannelId: string }> = await (
+      this.prisma as any
+    ).memberNotificationChannel.findMany({
+      where: { memberId },
+      select: { notificationChannelId: true },
+    });
+    const ids = (links ?? [])
+      .map((l) => l.notificationChannelId)
+      .filter(Boolean);
+    if (ids.length === 0) return [];
+    return await (this.prisma as any).notificationChannel.findMany({
+      where: { id: { in: ids } },
+    });
   }
 
   /** 团队已绑定的通知渠道（含停用行——停用与不存在要分开报错）。 */
