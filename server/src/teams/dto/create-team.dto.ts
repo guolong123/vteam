@@ -10,6 +10,56 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+/**
+ * 内联新建成员（D17：建群/加成员时可当场建人，创建 Member + 席位在同一事务）。
+ * 与「从成员库选择」的 `memberId` 互斥；两者都不给则走旧的 roleId/agentId 兼容路径。
+ */
+export class TeamMemberNewMemberInput {
+  @ApiProperty({
+    description: '成员名（全局唯一；重名 → 409 MEMBER_NAME_CONFLICT）',
+    maxLength: 64,
+  })
+  @IsString()
+  @MaxLength(64)
+  name: string;
+
+  @ApiProperty({ description: '默认岗位 id（AgentRole）' })
+  @IsString()
+  roleId: string;
+
+  @ApiPropertyOptional({
+    description: '执行 Agent id；缺省取岗位 defaultAgentId',
+  })
+  @IsOptional()
+  @IsString()
+  agentId?: string;
+
+  @ApiPropertyOptional({ description: '默认模型 id' })
+  @IsOptional()
+  @IsString()
+  defaultModelId?: string;
+
+  @ApiPropertyOptional({ description: '默认 worker 偏好' })
+  @IsOptional()
+  @IsString()
+  preferredWorkerId?: string;
+
+  @ApiPropertyOptional({
+    description: '成员私有工作目录（会话默认 cwd）',
+    maxLength: 255,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  privateWorkDir?: string;
+
+  @ApiPropertyOptional({ description: '成员备注', maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+}
+
 export class TeamMemberInput {
   @ApiPropertyOptional({
     description:
@@ -29,7 +79,25 @@ export class TeamMemberInput {
   roleId?: string;
 
   @ApiPropertyOptional({
-    description: '实例别名（缺省 = `<角色中文名>-<seq>`）',
+    description:
+      '既有成员 id（mbr_ 前缀；与 newMember/旧 roleId|agentId 形状互斥）',
+  })
+  @IsOptional()
+  @IsString()
+  memberId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '内联新建成员（与 memberId 互斥；创建 Member + 席位在同一事务）',
+    type: () => TeamMemberNewMemberInput,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TeamMemberNewMemberInput)
+  newMember?: TeamMemberNewMemberInput;
+
+  @ApiPropertyOptional({
+    description: '实例别名（缺省 = 成员名；旧形状为 `<角色中文名>-<seq>`）',
   })
   @IsOptional()
   @IsString()

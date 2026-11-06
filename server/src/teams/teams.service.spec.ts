@@ -180,6 +180,10 @@ describe('TeamsService', () => {
             Promise.resolve({ id: where.id, ...agentMeta(where.id) }),
           ),
       },
+      chatChannel: {
+        // D11：建团队即建群聊频道（同事务）
+        create: jest.fn().mockResolvedValue({ id: 'c_0000000001' }),
+      },
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
     };
     prisma.$transaction.mockImplementation(async (fn: any) => {
@@ -268,6 +272,7 @@ describe('TeamsService', () => {
         data: {
           id: 'tmm_0000000001',
           teamId: 'tm_0000000001',
+          memberId: null,
           agentId: 'a_developer',
           roleId: 'ar_developer',
           opencodeAgentName: null,
@@ -280,6 +285,7 @@ describe('TeamsService', () => {
         data: {
           id: 'tmm_0000000002',
           teamId: 'tm_0000000001',
+          memberId: null,
           agentId: 'a_developer',
           roleId: 'ar_developer',
           opencodeAgentName: null,
@@ -2653,6 +2659,9 @@ describe('TeamsService', () => {
         .mockResolvedValueOnce('tmm_0000000001');
       const tx: any = {
         team: { create: jest.fn().mockResolvedValue(teamRow()) },
+        chatChannel: {
+          create: jest.fn().mockResolvedValue({ id: 'c_0000000001' }),
+        },
         teamMember: {
           create: jest.fn().mockResolvedValue({
             id: 'tmm_0000000001',
@@ -2737,6 +2746,9 @@ describe('TeamsService', () => {
             .mockImplementation(({ where }: any) =>
               Promise.resolve({ id: where.id, ...agentMeta(where.id) }),
             ),
+        },
+        chatChannel: {
+          create: jest.fn().mockResolvedValue({ id: 'c_0000000001' }),
         },
         $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
       };

@@ -83,8 +83,12 @@ export class TeamsController {
   @ApiOperation({
     summary: '添加团队成员（agentId 校验，seq FOR UPDATE 防并发重号）',
   })
-  addMember(@Param('id') id: string, @Body() dto: AddMemberDto) {
-    return this.teamsService.addMember(id, dto);
+  addMember(
+    @Param('id') id: string,
+    @Body() dto: AddMemberDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamsService.addMember(id, dto, user.id);
   }
 
   @Patch(':id/members/:memberId')
