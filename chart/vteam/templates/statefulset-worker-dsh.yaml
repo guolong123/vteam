@@ -54,6 +54,52 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- /*
+        **非 root 运行（沙箱能否工作由它决定）**：
+        DSH 沙箱后端链 bwrap → landlock。bubblewrap 以 root 运行时走特权路径
+        （跳过 user namespace，直接 unshare(CLONE_NEWNS)），而容器默认能力集
+        没有 CAP_SYS_ADMIN ⇒ `Creating new namespace failed: Operation not permitted`
+        ⇒ 回退 landlock，而本集群内核未启用 CONFIG_SECURITY_LANDLOCK ⇒ 两后端全挂
+        ⇒ 默认 workspace-write 模式下 bash 直接失败。
+        以非 root 运行时 bwrap 自动走 user-namespace 路径，零 cap 即可。
+      */}}
+      {{- with .Values.workerDsh.securityContext }}
+      securityContext:
+        runAsUser: {{ .runAsUser }}
+        runAsGroup: {{ .runAsGroup }}
+        fsGroup: {{ .fsGroup }}
+        {{- if hasKey . "runAsNonRoot" }}
+        runAsNonRoot: {{ .runAsNonRoot }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.workerDsh.fixPermissions }}
+      initContainers:
+        # PVC 首次挂载属主是 root:root；非 root 进程写不了 ⇒ 先用 root 改属主。
+        # 幂等（-R chown 每次滚动都跑一遍，卷大时会有秒级开销，可接受）。
+        - name: fix-permissions
+          image: {{ printf "%s:%s" .Values.workerDsh.image.repository (.Values.workerDsh.image.tag | default .Chart.AppVersion | toString) }}
+          imagePullPolicy: {{ .Values.workerDsh.image.pullPolicy | default .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              uid={{ .Values.workerDsh.securityContext.runAsUser }}
+              gid={{ .Values.workerDsh.securityContext.runAsGroup }}
+              mkdir -p "{{ .Values.workerDsh.env.home }}"
+              chown -R "$uid:$gid" {{ .Values.workerDsh.env.workDir }} {{ .Values.workerDsh.env.dshHomeDir }}
+              chmod 755 {{ .Values.workerDsh.env.workDir }} {{ .Values.workerDsh.env.dshHomeDir }}
+          securityContext:
+            # 与 pod 级 runAsNonRoot 冲突，必须显式覆盖
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: {{ ternary "worker-dsh-work" "worker-dsh-work-tmp" .Values.workerDsh.persistence.workerWork.enabled }}
+              mountPath: {{ .Values.workerDsh.env.workDir | quote }}
+            - name: {{ ternary "worker-dsh-home" "worker-dsh-home-tmp" .Values.workerDsh.persistence.dshHome.enabled }}
+              mountPath: {{ .Values.workerDsh.env.dshHomeDir | quote }}
+      {{- end }}
       containers:
         - name: worker-dsh
           image: {{ printf "%s:%s" .Values.workerDsh.image.repository (.Values.workerDsh.image.tag | default .Chart.AppVersion | toString) }}
@@ -107,6 +153,10 @@ spec:
             # ---- 运行时目录 ----
             - name: DSH_HOME_DIR
               value: {{ .Values.workerDsh.env.dshHomeDir | quote }}
+            # HOME 必须可写（bwrap/DSH 会往这里写缓存与 profile）；
+            # 缺省落在 dshHome 卷上，避免污染 agent 工作目录。
+            - name: HOME
+              value: {{ .Values.workerDsh.env.home | quote }}
             - name: WORK_DIR
               value: {{ .Values.workerDsh.env.workDir | quote }}
             - name: WORKER_FIRST_TOKEN_TIMEOUT_MS
@@ -137,6 +187,15 @@ spec:
               mountPath: {{ .Values.workerDsh.env.workDir | quote }}
             - name: {{ ternary "worker-dsh-home" "worker-dsh-home-tmp" .Values.workerDsh.persistence.dshHome.enabled }}
               mountPath: {{ .Values.workerDsh.env.dshHomeDir | quote }}
+          {{- with .Values.workerDsh.securityContext }}
+          securityContext:
+            {{- if hasKey . "runAsNonRoot" }}
+            runAsNonRoot: {{ .runAsNonRoot }}
+            {{- end }}
+            {{- if hasKey . "allowPrivilegeEscalation" }}
+            allowPrivilegeEscalation: {{ .allowPrivilegeEscalation }}
+            {{- end }}
+          {{- end }}
           resources:
             {{- toYaml .Values.workerDsh.resources | nindent 12 }}
           # 无 HTTP 探针（对齐 compose：worker 无 healthcheck）；活跃判定由 server 心跳承担

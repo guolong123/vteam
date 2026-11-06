@@ -297,6 +297,32 @@ workerDsh:
     codeVersion: ""
     ## worker 唯一 id；空 = 自动按 pod 名生成（w_<pod 名>）
     workerId: ""
+    ## worker 进程的 HOME（必须可写）：bwrap/DSH 运行时会往这里写缓存/profile。
+    ## 缺省放在 dshHome 卷上（持久化、且不污染 agent 工作目录）。
+    home: /data/dsh-home/.home
+  ## 非 root 运行（沙箱关键，2026-11-06 实测）：
+  ##   DSH 的沙箱后端链是 bwrap → landlock。bubblewrap **以 root 运行时走特权路径**
+  ##   （跳过 user namespace，直接 unshare(CLONE_NEWNS)），而容器默认能力集没有
+  ##   CAP_SYS_ADMIN ⇒ 报 `Creating new namespace failed: Operation not permitted`
+  ##   ⇒ 后端链回退 landlock，而本集群内核未启用 CONFIG_SECURITY_LANDLOCK
+  ##   ⇒ 两个后端全挂 ⇒ 默认 workspace-write 模式下 bash 直接失败、只能用
+  ##   danger-full-access（等于没有沙箱）。
+  ##   以**非 root** 运行时 bwrap 自动走 user-namespace 路径，不需要任何 cap。
+  ## ⚠️ 代价：worker 自助升级（写 /app）在非 root 下不可用 —— 本项目用镜像发布，
+  ##   版本由 WORKER_CODE_VERSION 保证一致，不会触发自助升级。
+  ## ⚠️ uid/gid 必须用基础镜像里**已存在**的用户：node 官方镜像自带
+  ## `node:x:1000:1000::/home/node`。自定义 uid（如 10001）在 /etc/passwd 里没有条目，
+  ## Node 启动时会 `uv_os_get_passwd returned ENOENT` 直接崩溃（实测 2026-11-06）。
+  ## 若将来换成自定义用户，必须在 Dockerfile.dsh 里 `useradd` 同 uid。
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+  ## 进入容器后把两个 PVC 的属主改成 runAsUser（PVC 初次挂载是 root:root）。
+  ## 关掉后必须自行保证卷属主正确，否则非 root 进程写不了 work/dsh-home。
+  fixPermissions: true
   ## 额外 env（与 opencode worker 的 extraEnv 分开，避免互相污染）
   extraEnv: []
   resources:

@@ -39,6 +39,17 @@ ARG DSH_SPEC=@deepseek-ai/dsh@0.2.2-alpha.2
 RUN npm config set registry https://registry.npmmirror.com && \
     npm i -g "${DSH_SPEC}" && echo "dsh installed: $(dsh --version)" && which dsh
 
+# ── 沙箱 profile 补丁：bwrap 的 `--proc /proc` 在本集群内核上必然失败 ──────────
+# DSH 的 bwrap profile 会新建 PID namespace 并重新挂 procfs；而本集群内核
+# （4.18 RHEL8 / 6.5 elrepo）**拒绝在非初始 user namespace 里挂 procfs**
+# ⇒ `bwrap: Can't mount proc on /newroot/proc: Operation not permitted`
+# ⇒ DSH 探针判 bwrap 不可用 ⇒ 回退 landlock（内核未启用 LSM）⇒ 两后端全挂
+# ⇒ 默认 workspace-write 模式下 bash 直接失败，只能 danger-full-access。
+# 去掉这两项后：非 root 运行 + 沙箱仍然有效（/etc 只读、仅可写 workspace），
+# 是本集群的最小权限解。锚点漂移会**构建失败**（刻意，避免静默失去沙箱）。
+COPY scripts/vendor-dsh-sandbox-proc.mjs /app/scripts/vendor-dsh-sandbox-proc.mjs
+RUN node /app/scripts/vendor-dsh-sandbox-proc.mjs
+
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
@@ -49,6 +60,13 @@ COPY package.json ./
 # 本步骤在**构建期**注入两个 case（幂等；锚点漂移会构建失败而不是运行期静默丢功能）。
 COPY scripts/vendor-sdk-server.mjs /app/scripts/vendor-sdk-server.mjs
 RUN node /app/scripts/vendor-sdk-server.mjs && echo "SDK server vendored (cancel + steer)"
+
+# 非 root 运行（沙箱前置条件）：bubblewrap 以 **root** 运行时走特权路径，需要
+# CAP_SYS_ADMIN（容器默认能力集没有）⇒ `Creating new namespace failed`；
+# 以非 root 运行时自动走 user-namespace 路径。chart 侧用 workerDsh.securityContext
+# 指定 runAsUser/runAsGroup/fsGroup=1000（= node 官方镜像自带的 node 用户；
+# 用自定义 uid 会因 /etc/passwd 无条目触发 `uv_os_get_passwd returned ENOENT`）。
+# ⚠️ 这里只建目录不建用户：uid 1000 已存在于基础镜像。
 
 # dsh 运行时 home（隔离；每个 worker 一个）
 ENV DSH_HOME_DIR=/data/dsh-home
