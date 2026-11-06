@@ -1564,10 +1564,55 @@ export class ChatService {
   }
 
   async createDmChannel(userId: string, dto: CreateDmChannelDto) {
-    const teamId = (dto as any).teamId as string | undefined;
-    const teamMemberIdInput = (dto as any).teamMemberId as string | undefined;
+    let teamId = (dto as any).teamId as string | undefined;
+    const memberIdInput = (dto as any).memberId as string | undefined;
+    let teamMemberIdInput = (dto as any).teamMemberId as string | undefined;
     const agentIdInput = (dto as any).agentId as string | undefined;
     const legacyTaskId = (dto as any).taskId as string | undefined;
+
+    // 新形状（成员维度）：解析成员 → 其席位（可选指定 context teamId）→ 复用/创建私聊频道。
+    // 私聊频道仍是「团队 × 成员」一条（P4 合并前的过渡），member_id 同步落库。
+    let resolvedMemberId: string | null = null;
+    if (memberIdInput) {
+      const member = await (this.prisma as any).member.findUnique({
+        where: { id: memberIdInput },
+        select: { id: true, name: true, status: true },
+      });
+      if (!member) {
+        throw new NotFoundException({
+          code: CHAT_ERRORS.MEMBER_NOT_FOUND,
+          message: `成员 ${memberIdInput} 不存在`,
+        });
+      }
+      if (member.status !== 'active') {
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MEMBER_DISABLED,
+          message: `成员 ${member.name} 已停用`,
+        });
+      }
+      const seats: Array<{ id: string; agentId: string; teamId: string }> =
+        await (this.prisma as any).teamMember.findMany({
+          where: { memberId: member.id },
+          select: { id: true, agentId: true, teamId: true },
+          orderBy: { createdAt: 'asc' },
+        });
+      if (!seats || seats.length === 0) {
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MEMBER_NOT_IN_ANY_TEAM,
+          message: '成员尚未加入任何群聊，无法创建私聊',
+        });
+      }
+      const seat = teamId ? seats.find((s) => s.teamId === teamId) : seats[0];
+      if (!seat) {
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MEMBER_NOT_IN_TEAM,
+          message: '成员不属于指定团队',
+        });
+      }
+      teamId = seat.teamId;
+      teamMemberIdInput = seat.id;
+      resolvedMemberId = member.id;
+    }
     if (legacyTaskId && !teamId) {
       const legacyTask = await this.prisma.task.findUnique({
         where: { id: legacyTaskId },
@@ -1639,7 +1684,7 @@ export class ChatService {
     if (teamMemberIdInput) {
       teamMember = await (this.prisma as any).teamMember.findUnique({
         where: { id: teamMemberIdInput },
-        select: { id: true, agentId: true, teamId: true },
+        select: { id: true, agentId: true, teamId: true, memberId: true },
       });
       if (!teamMember) {
         throw new NotFoundException({
@@ -1667,7 +1712,7 @@ export class ChatService {
       teamMember = await (this.prisma as any).teamMember.findFirst({
         where: { teamId, agentId: agentIdInput },
         orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-        select: { id: true, agentId: true },
+        select: { id: true, agentId: true, memberId: true },
       });
       if (!teamMember) {
         throw new BadRequestException({
@@ -1681,18 +1726,24 @@ export class ChatService {
         message: 'teamMemberId 或 agentId 必填',
       });
     }
+    const memberId = resolvedMemberId ?? (teamMember as any).memberId ?? null;
     const existing = await this.prisma.chatChannel.findFirst({
       where: { teamId, teamMemberId: teamMember.id } as any,
       include: CHANNEL_TASK_SELECT,
     });
     if (existing) {
-      if ((existing as any).deletedAt) {
-        const revived = await this.prisma.chatChannel.update({
+      const needRevive = !!(existing as any).deletedAt;
+      const needMember = !!(memberId && !(existing as any).memberId);
+      if (needRevive || needMember) {
+        const updated = await this.prisma.chatChannel.update({
           where: { id: existing.id },
-          data: { deletedAt: null },
+          data: {
+            ...(needRevive ? { deletedAt: null } : {}),
+            ...(needMember ? { memberId } : {}),
+          } as any,
           include: CHANNEL_TASK_SELECT,
         });
-        return this.toChannelDto(revived);
+        return this.toChannelDto(updated);
       }
       return this.toChannelDto(existing);
     }
@@ -1701,6 +1752,7 @@ export class ChatService {
         id: await this.idGen.nextId(CHANNEL_ID_PREFIX),
         type: CHANNEL_TYPE.private,
         teamId,
+        memberId,
         teamMemberId: teamMember.id,
         agentId: teamMember.agentId,
         taskId: null,
@@ -2173,6 +2225,7 @@ export class ChatService {
       id: row.id,
       type: row.type,
       teamId: (row as any).teamId ?? null,
+      memberId: (row as any).memberId ?? null,
       teamMemberId: (row as any).teamMemberId ?? null,
       taskId: row.taskId,
       agentId: row.agentId,
