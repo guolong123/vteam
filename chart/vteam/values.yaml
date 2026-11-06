@@ -274,13 +274,20 @@ workerDsh:
     pullPolicy: IfNotPresent
   env:
     ## dsh 模型路由（DSH_PROVIDER / DSH_MODEL / DSH_BASE_URL）
-    ## provider 缺省 deepseek-official；走 opencode-go 网关时填 opencode-go + baseUrl
+    ## provider 缺省 opencode-go（模型走 opencode-go 网关）。
     provider: opencode-go
     model: deepseek-v4.1-flash
-    baseUrl: ""
-    ## provider 请求头（部分网关要求，如 opencode-go 的 x-opencode-session）
-    sessionHeader: ""
-    sessionHeaderValue: ""
+    ## ⚠️ baseUrl 在 opencode-go 下**必填**：留空时 dsh worker 会回落到
+    ## `https://<provider>/v1`（= https://opencode-go/v1，该域名不存在 → ENOTFOUND
+    ## → 模型侧 TRANSPORT 错误 → worker 首字超时 5 分钟后报「模型无任何输出」，
+    ## 表现为「消息已发出但永远没有回复」，且日志里只有一句超时、很难定位）。
+    ## 实测 2026-11-06：k8s 首版 dsh 部署漏配这两项，用户消息全部 5 分钟后超时。
+    baseUrl: "https://opencode.ai/inference/go/v1"
+    ## ⚠️ provider 请求头：opencode-go 网关要求 x-opencode-session（缺了返回
+    ## 400 MissingSessionID「cannot be routed efficiently」）。值只需稳定（同一
+    ## worker 固定），用于网关侧路由/缓存亲和；多副本时可各自不同。
+    sessionHeader: "x-opencode-session"
+    sessionHeaderValue: "vteam-worker-dsh"
     ## dsh 运行时 home（隔离；每个 worker 一个，挂 PVC）
     dshHomeDir: /data/dsh-home
     workDir: /data/vteam-worker
