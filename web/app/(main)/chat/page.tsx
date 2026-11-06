@@ -11,9 +11,10 @@
  *   留到下一步接入，当前 5s 轮询兜底。
  * - 路由：/chat?c=group:<teamId> | dm:<memberId>；URL 驱动选中态，可刷新/分享。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRealtimeEvents } from "@/hooks/use-realtime";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
@@ -23,8 +24,9 @@ import {
   conversationsApi,
   type ConversationItemDto,
 } from "@/src/api/conversations";
-import { membersApi, type MemberDetailDto } from "@/src/api/members";
+import { membersApi, type MemberDetailDto, type MemberDto } from "@/src/api/members";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
+import { agentRolesApi } from "@/src/api/agent-roles";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -33,6 +35,7 @@ import {
   radius,
   fontSize,
   fontFamily,
+  shadow,
 } from "@/src/theme/tokens";
 
 interface ChatMessage {
@@ -66,6 +69,9 @@ export default function ChatPage() {
   const queryClient = useQueryClient();
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
+  const [showDmPicker, setShowDmPicker] = useState(false);
+  const [dmSearch, setDmSearch] = useState("");
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const conversationsQuery = useQuery({
     queryKey: ["conversations"],
@@ -114,6 +120,46 @@ export default function ChatPage() {
   });
   const messages = messagesQuery.data?.items ?? [];
 
+  const teamTasksQuery = useQuery({
+    queryKey: ["team-tasks", teamId, "chat-right"],
+    queryFn: () =>
+      api.get<{
+        items: Array<{ id: string; title: string; status: string }>;
+      }>("/tasks", { query: { teamId, page: 1, pageSize: 20 } }),
+    enabled: !!user?.id && isGroup && !!teamId,
+  });
+  const teamTasks = teamTasksQuery.data?.items ?? [];
+
+  const rolesQuery = useQuery({
+    queryKey: ["agent-roles", "chat"],
+    queryFn: () => agentRolesApi.list({ page: 1, pageSize: 100 }),
+    enabled: !!user?.id && isGroup,
+  });
+  const roleKeyById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const role of rolesQuery.data?.items ?? []) map.set(role.id, role.key);
+    return map;
+  }, [rolesQuery.data]);
+
+  const pickerMembersQuery = useQuery({
+    queryKey: ["members", "dm-picker"],
+    queryFn: () => membersApi.list({ page: 1, pageSize: 100, status: "active" }),
+    enabled: !!user?.id && showDmPicker,
+  });
+  const pickerMembers = useMemo<MemberDto[]>(
+    () => pickerMembersQuery.data?.items ?? [],
+    [pickerMembersQuery.data],
+  );
+  const filteredPickerMembers = useMemo(() => {
+    const kw = dmSearch.trim().toLowerCase();
+    if (!kw) return pickerMembers;
+    return pickerMembers.filter(
+      (m) =>
+        m.name.toLowerCase().includes(kw) ||
+        (m.agent?.name ?? "").toLowerCase().includes(kw),
+    );
+  }, [pickerMembers, dmSearch]);
+
   const sendMutation = useMutation({
     mutationFn: (text: string) =>
       api.post(`/channels/${channelId}/messages`, { text }),
@@ -127,6 +173,59 @@ export default function ChatPage() {
     },
     onError: (err) => setSendError(errorText(err)),
   });
+
+  const markReadMutation = useMutation({
+    mutationFn: (id: string) => api.patch(`/channels/${id}/read`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+
+  const startDmMutation = useMutation({
+    mutationFn: (memberId: string) =>
+      api.post<{ id: string; memberId?: string | null }>("/dm-channels", {
+        memberId,
+      }),
+    onSuccess: (_channel, memberId) => {
+      setShowDmPicker(false);
+      setDmSearch("");
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      router.replace(`/chat?c=${encodeURIComponent(`dm:${memberId}`)}`);
+    },
+    onError: (err) => setSendError(errorText(err)),
+  });
+
+  // 打开会话时清零未读（channel 级已读；重复点开幂等）。
+  useEffect(() => {
+    if (!active || !channelId) return;
+    if (active.unreadCount > 0) {
+      markReadMutation.mutate(channelId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.unreadCount, channelId]);
+
+  // SSE：新消息自动 upsert 到 ["channel", channelId, "messages"]（hook 内建），
+  // 这里额外刷新左列表并滚动到底；agent.loading 事件只用来更新占位（下一步细化）。
+  useRealtimeEvents({
+    scope: channelId ? `channel:${channelId},global` : "global",
+    enabled: !!user?.id && !!channelId,
+    onMessage: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      if (active && active.unreadCount >= 0) {
+        // 当前会话可见 → 新消息到达即视为已读，避免自己开着还累积未读
+        markReadMutation.mutate(channelId as string);
+      }
+      requestAnimationFrame(() => {
+        const el = listRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+  });
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, active?.id]);
 
   const roleBySender = useMemo(() => {
     const map = new Map<string, { name: string; role: RoleKey }>();
@@ -168,7 +267,10 @@ export default function ChatPage() {
       {/* 左侧会话列表 */}
       <aside style={{ width: 300, flexShrink: 0, borderRight: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", flexDirection: "column", minHeight: 0 }}>
         <div style={{ padding: `${space.lg}px ${space.lg}px ${space.sm}px` }}>
-          <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>会话</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>会话</div>
+            <button type="button" data-testid="new-dm-button" onClick={() => setShowDmPicker(true)} title="发起新私聊" style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 新私聊</button>
+          </div>
           <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>
             {items.filter((i) => i.type === "group").length} 个群聊 · {items.filter((i) => i.type === "dm").length} 位成员
           </div>
@@ -216,14 +318,14 @@ export default function ChatPage() {
               <MemberChip
                 key={seat.id}
                 name={seat.member?.name ?? seat.alias}
-                role={toRoleKey(seat.member?.defaultRoleId ? null : null)}
+                role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)}
                 active={false}
               />
             ))}
           </div>
         )}
 
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `${space.lg}px ${space.xl}px`, display: "flex", flexDirection: "column", gap: space.md }}>
+        <div ref={listRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `${space.lg}px ${space.xl}px`, display: "flex", flexDirection: "column", gap: space.md }}>
           {messagesQuery.isPending ? (
             <div style={{ color: neutral[400], fontSize: fontSize.sm }}>加载消息中…</div>
           ) : messages.length === 0 ? (
@@ -306,11 +408,46 @@ export default function ChatPage() {
       {/* 右侧栏 */}
       <aside style={{ width: 280, flexShrink: 0, borderLeft: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", minHeight: 0, overflow: "auto", padding: space.lg }}>
         {isGroup ? (
-          <GroupSidePanel team={team} active={active} />
+          <GroupSidePanel team={team} active={active} tasks={teamTasks} tasksLoading={teamTasksQuery.isPending} roleKeyById={roleKeyById} />
         ) : (
           <MemberSidePanel member={member} fallbackTitle={title} />
         )}
       </aside>
+
+      {showDmPicker && (
+        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
+          <div style={{ width: 480, maxHeight: "80%", display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", borderRadius: radius.lg, boxShadow: shadow.lg, overflow: "hidden" }}>
+            <div style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[100]}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>发起新私聊</div>
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>从成员库选择一位成员；已有私聊会直接打开</div>
+              </div>
+              <button type="button" onClick={() => { setShowDmPicker(false); setDmSearch(""); }} style={{ border: "none", background: "none", fontSize: fontSize.lg, color: neutral[400], cursor: "pointer" }}>×</button>
+            </div>
+            <div style={{ padding: space.md }}>
+              <input data-testid="dm-picker-search" value={dmSearch} onChange={(e) => setDmSearch(e.target.value)} placeholder="搜索成员名 / Agent" style={{ width: "100%", boxSizing: "border-box", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, fontFamily: fontFamily.body, outline: "none" }} />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `0 ${space.md}px ${space.md}px`, display: "flex", flexDirection: "column", gap: 6 }}>
+              {pickerMembersQuery.isPending ? (
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</span>
+              ) : filteredPickerMembers.length === 0 ? (
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>没有匹配的成员</span>
+              ) : (
+                filteredPickerMembers.map((member) => (
+                  <button key={member.id} type="button" data-testid="dm-picker-member" disabled={startDmMutation.isPending} onClick={() => startDmMutation.mutate(member.id)} style={{ textAlign: "left", display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>
+                    <AgentAvatar role={toRoleKey(member.role?.key ?? null)} size="sm" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{member.name}</div>
+                      <div style={{ fontSize: 10, color: neutral[400] }}>{member.role?.name ?? "成员"} · 已在 {member.groupCount} 个群</div>
+                    </div>
+                    <span style={{ fontSize: 10, color: "#0F766E" }}>发起私聊 →</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -358,20 +495,60 @@ function MemberChip({ name, role, active }: { name: string; role: RoleKey; activ
   );
 }
 
-function GroupSidePanel({ team, active }: { team?: TeamDto; active: ConversationItemDto | null }) {
+function GroupSidePanel({
+  team,
+  active,
+  tasks,
+  tasksLoading,
+  roleKeyById,
+}: {
+  team?: TeamDto;
+  active: ConversationItemDto | null;
+  tasks: Array<{ id: string; title: string; status: string }>;
+  tasksLoading: boolean;
+  roleKeyById: Map<string, string>;
+}) {
+  const [tab, setTab] = useState<"tasks" | "members" | "outputs">("tasks");
+  const tabs: Array<{ key: typeof tab; label: string }> = [
+    { key: "tasks", label: "任务" },
+    { key: "members", label: "成员" },
+    { key: "outputs", label: "产出" },
+  ];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
       <div>
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>群聊信息</div>
         <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900], marginTop: 2 }}>{team?.name ?? active?.title}</div>
-        <div style={{ fontSize: fontSize.xs, color: neutral[500], marginTop: 2 }}>{team?.members.length ?? active?.memberCount ?? 0} 位成员 · {team?.activeTaskCount ?? 0} 个活跃任务</div>
+        <div style={{ fontSize: fontSize.xs, color: neutral[500], marginTop: 2 }}>{team?.members.length ?? active?.memberCount ?? 0} 位成员</div>
       </div>
-      <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.md }}>
-        <div style={{ fontSize: fontSize.xs, color: neutral[400], marginBottom: 6 }}>成员</div>
+      <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
+        {tabs.map((t) => (
+          <button key={t.key} type="button" data-testid={`chat-right-tab-${t.key}`} onClick={() => setTab(t.key)} style={{ flex: 1, padding: `${space.xs + 1}px 0`, border: "none", borderRadius: radius.sm, cursor: "pointer", backgroundColor: tab === t.key ? "var(--color-surface)" : "transparent", color: tab === t.key ? "#0F766E" : neutral[500], fontSize: fontSize.xs, fontWeight: 600, fontFamily: fontFamily.body, boxShadow: tab === t.key ? shadow.sm : undefined }}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === "tasks" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {tasksLoading ? (
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</span>
+          ) : tasks.length === 0 ? (
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无任务</span>
+          ) : (
+            tasks.map((task) => (
+              <a key={task.id} href={`/teams/${team?.id ?? active?.contextTeamId ?? ""}/tasks`} style={{ textDecoration: "none", display: "flex", flexDirection: "column", gap: 2, padding: `${space.xs + 1}px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}` }}>
+                <span style={{ fontSize: fontSize.xs, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.title}</span>
+                <span style={{ fontSize: 10, color: statusColor(task.status) }}>{statusLabel(task.status)}</span>
+              </a>
+            ))
+          )}
+        </div>
+      )}
+
+      {tab === "members" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {(team?.members ?? []).map((seat) => (
             <div key={seat.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <AgentAvatar role="developer" size="sm" />
+              <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: fontSize.xs, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</div>
                 <div style={{ fontSize: 10, color: neutral[400] }}>{seat.member ? "平台成员" : "旧席位"} · #{seat.seq}</div>
@@ -379,12 +556,41 @@ function GroupSidePanel({ team, active }: { team?: TeamDto; active: Conversation
             </div>
           ))}
         </div>
-      </div>
+      )}
+
+      {tab === "outputs" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>产出物按任务归档。打开任务文档站查看版本与预览。</span>
+          <a href={`/docs?teamId=${team?.id ?? active?.contextTeamId ?? ""}`} style={{ textDecoration: "none", textAlign: "center", padding: `${space.xs + 2}px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600 }}>打开团队文档站 →</a>
+        </div>
+      )}
+
       <div style={{ fontSize: 10, color: neutral[400], borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm }}>
-        任务/产出面板与实时流式输出将在下一步接入（当前 5s 轮询）。
+        实时消息已接入（SSE）；任务/产出深度操作仍在旧会话页，后续迁移。
       </div>
     </div>
   );
+}
+
+function statusLabel(status: string): string {
+  const map: Record<string, string> = {
+    pending: "待开始",
+    queued: "排队中",
+    in_progress: "进行中",
+    blocked: "阻塞",
+    pending_review: "待验收",
+    completed: "已完成",
+    archived: "已归档",
+  };
+  return map[status] ?? status;
+}
+
+function statusColor(status: string): string {
+  if (status === "in_progress") return "#0F766E";
+  if (status === "blocked") return "#B91C1C";
+  if (status === "pending_review") return "#B45309";
+  if (status === "completed") return neutral[400];
+  return neutral[500];
 }
 
 function MemberSidePanel({ member, fallbackTitle }: { member?: MemberDetailDto; fallbackTitle: string }) {
