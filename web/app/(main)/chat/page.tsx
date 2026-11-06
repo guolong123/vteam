@@ -81,6 +81,7 @@ function ChatPageContent() {
   const [groupName, setGroupName] = useState("");
   const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
   const [groupError, setGroupError] = useState<string | null>(null);
+  const [showMembersDrawer, setShowMembersDrawer] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const conversationsQuery = useQuery({
@@ -263,6 +264,16 @@ function ChatPageContent() {
           ? "已重置该成员的全局会话，下一轮将开新引擎会话（消息/记忆保留）"
           : "该成员尚未建立会话",
       );
+    },
+    onError: (err) => setDmNotice(errorText(err)),
+  });
+
+  const resetMemberSessionMutation = useMutation({
+    mutationFn: (memberId: string) => membersApi.resetSession(memberId),
+    onSuccess: (_r, memberId) => {
+      setDmNotice(null);
+      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: ["member", memberId] });
     },
     onError: (err) => setDmNotice(errorText(err)),
   });
@@ -498,7 +509,7 @@ function ChatPageContent() {
                 ))}
               </div>
               <button type="button" onClick={() => setRightPanelMode((v) => (v === "full" ? "compact" : "full"))} style={{ fontSize: fontSize.xs, color: neutral[600], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>{rightPanelMode === "full" ? "精简面板" : "完整面板"}</button>
-              <a href={`/teams/${teamId}`} style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px" }}>群设置</a>
+              <button type="button" data-testid="group-settings-button" onClick={() => setShowMembersDrawer(true)} style={{ fontSize: fontSize.xs, color: "#0F766E", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>群设置</button>
             </header>
 
             <div data-testid="group-member-switcher" style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.lg}px`, borderBottom: `1px solid ${neutral[100]}`, backgroundColor: "var(--color-surface)", overflowX: "auto" }}>
@@ -703,6 +714,45 @@ function ChatPageContent() {
       </aside>
 
       </>
+      )}
+
+      {showMembersDrawer && isGroup && (
+        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.28)", display: "flex", justifyContent: "flex-end", zIndex: 45 }} onClick={() => setShowMembersDrawer(false)}>
+          <div data-testid="group-members-drawer" onClick={(e) => e.stopPropagation()} style={{ width: 380, height: "100%", display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", boxShadow: shadow.lg }}>
+            <div style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[100]}`, display: "flex", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>成员管理</div>
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>{team?.name} · {team?.members.length ?? 0} 位成员</div>
+              </div>
+              <span style={{ flex: 1 }} />
+              <button type="button" onClick={() => setShowMembersDrawer(false)} style={{ border: "none", background: "none", fontSize: fontSize.lg, color: neutral[400], cursor: "pointer" }}>×</button>
+            </div>
+            <div style={{ padding: space.md, borderBottom: `1px solid ${neutral[100]}` }}>
+              <a href={`/teams/${teamId}`} style={{ display: "block", textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>＋ 添加成员 / 完整管理 →</a>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: space.md, display: "flex", flexDirection: "column", gap: 6 }}>
+              {(team?.members ?? []).map((seat) => {
+                const m = memberById.get(seat.memberId ?? "");
+                const busy = m?.session?.busyState === "running";
+                const groupName = busyTeamName(seat.memberId ?? "");
+                return (
+                  <div key={seat.id} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>
+                    <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m?.name ?? seat.member?.name ?? seat.alias}</div>
+                      <div style={{ fontSize: 10, color: busy ? "#B45309" : neutral[400] }}>
+                        {m?.role?.name ?? "成员"} · {busy ? (groupName ? `正在「${groupName}」处理` : "其他群处理中") : "空闲"}
+                      </div>
+                    </div>
+                    {seat.memberId && (
+                      <button type="button" disabled={resetMemberSessionMutation.isPending} onClick={() => { if (window.confirm(`确认重置成员「${m?.name ?? seat.alias}」的全局会话？消息/记忆保留。`)) resetMemberSessionMutation.mutate(seat.memberId as string); }} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#B45309", borderRadius: radius.sm, padding: "2px 8px", fontSize: 10, cursor: "pointer", fontFamily: fontFamily.body }}>重置会话</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
 
       {showNewGroup && (
