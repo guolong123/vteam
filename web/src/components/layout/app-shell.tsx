@@ -127,6 +127,7 @@ const KEY_LOOKUP: Record<string, string> = {
   ),
   /** Dock 无独立 board/tasks/docs 图标：任务看板/创建/文档站均归属团队上下文
    * （/board?teamId=、/tasks/new?teamId=、/docs?teamId=；旧 /artifacts?teamId= 已重定向至 /docs）→ 高亮「团队管理」入口 */
+  members: "teams",
   board: "teams",
   tasks: "teams",
   artifacts: "teams",
@@ -144,9 +145,8 @@ const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
  * 标签即 Dock 标签）；此处缺键会让对应命令项无法跳转，故随导航增删同步维护。
  */
 const CMDK_NAV_PATH: Record<string, string> = {
-  团队管理: "/teams",
+  团队与成员: "/teams",
   会话: "/chat",
-  成员库: "/members",
   "Issue 管理": "/issues",
   "Agent 管理": "/agents",
   "Worker 节点": "/workers",
@@ -209,9 +209,9 @@ interface WorkerSummaryRow {
 
 /** 页面标题（顶栏左侧，无面包屑时展示；对齐各页原型 NavTopBar） */
 const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
-  teams: { title: "团队管理", subtitle: "全局团队 · 成员多实例 · 队列与会话复用" },
+  teams: { title: "团队与成员", subtitle: "团队列表与平台成员库 · 一个入口" },
   chat: { title: "会话", subtitle: "群聊与成员私聊 · 微信式会话列表" },
-  members: { title: "成员库", subtitle: "平台级成员：先建人、再建群；一个成员可加入多个群聊" },
+  members: { title: "团队与成员", subtitle: "团队列表与平台成员库 · 一个入口" },
   board: { title: "任务看板", subtitle: "" },
   issues: { title: "Issue 管理", subtitle: "任务内 issue 协作与状态流转" },
   agents: { title: "Agent 管理", subtitle: "配置角色、技能与权限" },

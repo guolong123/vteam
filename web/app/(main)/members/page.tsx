@@ -9,6 +9,7 @@
  * - 布局与 token 对齐 agents/skills 等资源页；无 fixed / 100vh / 100vw。
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -79,6 +80,7 @@ const EMPTY_FORM: MemberFormState = {
 };
 
 export default function MembersPage() {
+  const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const perms = user?.permissions;
   const canCreate = hasPermission(perms, "members", "create");
@@ -378,6 +380,12 @@ export default function MembersPage() {
 
   return (
     <PageWindow maxWidth={1200} gap={space.md} style={{ position: "relative" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+        <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
+          <button type="button" data-testid="unified-tab-teams" onClick={() => router.push("/teams")} style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "transparent", color: neutral[500], fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>团队</button>
+          <button type="button" data-testid="unified-tab-members" style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "var(--color-surface)", color: "#0F766E", fontSize: fontSize.sm, fontWeight: 700, cursor: "pointer", fontFamily: fontFamily.body, boxShadow: shadow.sm }}>成员</button>
+        </div>
+      </div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: space.md }}>
         <div>
           <div style={{ fontSize: fontSize.xl, fontWeight: 700, color: neutral[900] }}>成员库</div>
