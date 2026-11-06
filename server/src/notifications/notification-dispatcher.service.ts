@@ -295,12 +295,33 @@ export class NotificationDispatcherService
       (question as any).taskId ??
       (payload as any).taskId ??
       null;
-    if (!taskId) return;
+    // P5：成员全局会话的 question 可无任务 —— 按成员渠道通知（Q26）。
+    let memberId: string | null =
+      ((question as any).memberId as string | undefined) ??
+      ((payload as any).memberId as string | undefined) ??
+      null;
+    if (!memberId && (question as any).sessionId) {
+      try {
+        const session = await (this.prisma as any).session.findUnique({
+          where: { id: (question as any).sessionId },
+          select: { memberId: true },
+        });
+        memberId = session?.memberId ?? null;
+      } catch {
+        memberId = null;
+      }
+    }
+    if (!taskId && !memberId) return;
 
-    const channels = await this.resolveChannelsForTask(
-      taskId,
-      NOTIFICATION_EVENTS.AGENT_QUESTION,
-    );
+    const channels = memberId
+      ? await this.resolveChannelsForMember(
+          memberId,
+          NOTIFICATION_EVENTS.AGENT_QUESTION,
+        )
+      : await this.resolveChannelsForTask(
+          taskId as string,
+          NOTIFICATION_EVENTS.AGENT_QUESTION,
+        );
     if (channels.length === 0) return;
 
     const text = formatQuestionText(question as Record<string, unknown>);
@@ -406,18 +427,21 @@ export class NotificationDispatcherService
       (event.scopeType === 'channel' && typeof event.scopeId === 'string'
         ? event.scopeId
         : null);
+    // P5：成员私聊（channel.memberId 非空）→ 走成员通知渠道，而不是整条跳过。
+    let replyMemberId: string | null = null;
     if (channelIdCandidate) {
       try {
         const ch = await (this.prisma as any).chatChannel.findUnique({
           where: { id: channelIdCandidate },
-          select: { type: true },
+          select: { type: true, memberId: true },
         });
         if (
           ch?.type === CHANNEL_TYPE.private ||
           ch?.type === 'private' ||
           ch?.type === 'single'
         ) {
-          return;
+          if (!ch?.memberId) return;
+          replyMemberId = ch.memberId as string;
         }
       } catch {}
     }
@@ -470,12 +494,17 @@ export class NotificationDispatcherService
     if (!taskId && event.scopeType === 'task' && event.scopeId) {
       taskId = event.scopeId;
     }
-    if (!taskId) return;
+    if (!taskId && !replyMemberId) return;
 
-    const channels = await this.resolveChannelsForTask(
-      taskId,
-      NOTIFICATION_EVENTS.AGENT_REPLY,
-    );
+    const channels = replyMemberId
+      ? await this.resolveChannelsForMember(
+          replyMemberId,
+          NOTIFICATION_EVENTS.AGENT_REPLY,
+        )
+      : await this.resolveChannelsForTask(
+          taskId as string,
+          NOTIFICATION_EVENTS.AGENT_REPLY,
+        );
     if (channels.length === 0) return;
 
     const msg: OutboundMessage = { kind: 'markdown', text };

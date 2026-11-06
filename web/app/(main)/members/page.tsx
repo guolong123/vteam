@@ -40,6 +40,13 @@ interface AgentOption {
   agentKey: string | null;
 }
 
+interface NotificationChannelOption {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+}
+
 const STATUS_LABEL: Record<string, string> = {
   active: "启用中",
   disabled: "已停用",
@@ -83,6 +90,7 @@ export default function MembersPage() {
   const [editing, setEditing] = useState<MemberDto | "new" | null>(null);
   const [form, setForm] = useState<MemberFormState>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+  const [channelIds, setChannelIds] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<MemberDto | null>(null);
   const [resetTarget, setResetTarget] = useState<MemberDto | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -107,6 +115,35 @@ export default function MembersPage() {
     queryFn: () => agentRolesApi.list({ page: 1, pageSize: 100 }),
     enabled: !!user?.id,
   });
+
+  const notificationChannelsQuery = useQuery({
+    queryKey: ["notification-channels", "members-page"],
+    queryFn: () =>
+      api.get<NotificationChannelOption[] | { items: NotificationChannelOption[] }>(
+        "/notification-channels",
+      ),
+    enabled: !!user?.id && !!editing && editing !== "new",
+  });
+
+  const editingMemberId = editing && editing !== "new" ? editing.id : "";
+  const memberDetailQuery = useQuery({
+    queryKey: ["member", editingMemberId],
+    queryFn: () => membersApi.get(editingMemberId),
+    enabled: !!user?.id && !!editingMemberId,
+  });
+
+  useEffect(() => {
+    const detail = memberDetailQuery.data;
+    if (detail) {
+      setChannelIds(
+        (detail.notificationChannels ?? []).map((channel) => channel.id),
+      );
+    }
+  }, [memberDetailQuery.data]);
+
+  const notificationChannels = (Array.isArray(notificationChannelsQuery.data)
+    ? notificationChannelsQuery.data
+    : notificationChannelsQuery.data?.items) ?? [];
 
   const agentsQuery = useQuery({
     queryKey: ["agents", "members-page"],
@@ -176,6 +213,7 @@ export default function MembersPage() {
   const closeForm = () => {
     setEditing(null);
     setFormError(null);
+    setChannelIds([]);
   };
 
   const createMutation = useMutation({
@@ -191,10 +229,8 @@ export default function MembersPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: UpdateMemberPayload }) =>
       membersApi.update(id, payload),
-    onSuccess: (member) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["members"] });
-      setNotice(`已保存成员「${member.name}」`);
-      closeForm();
     },
     onError: (err) => setFormError(errorText(err)),
   });
@@ -239,7 +275,7 @@ export default function MembersPage() {
     },
   });
 
-  const submitForm = (event: FormEvent) => {
+  const submitForm = async (event: FormEvent) => {
     event.preventDefault();
     setFormError(null);
     const name = form.name.trim();
@@ -262,16 +298,43 @@ export default function MembersPage() {
       return;
     }
     if (editing) {
-      updateMutation.mutate({
-        id: editing.id,
-        payload: {
-          name,
-          roleId: form.roleId,
-          agentId: form.agentId || undefined,
-          privateWorkDir: form.privateWorkDir.trim() || undefined,
-          description: form.description.trim() || undefined,
-        },
-      });
+      try {
+        await updateMutation.mutateAsync({
+          id: editing.id,
+          payload: {
+            name,
+            roleId: form.roleId,
+            agentId: form.agentId || undefined,
+            privateWorkDir: form.privateWorkDir.trim() || undefined,
+            description: form.description.trim() || undefined,
+          },
+        });
+        try {
+          await membersApi.bindNotificationChannels(editing.id, {
+            notificationChannelIds: channelIds,
+          });
+        } catch (err) {
+          // 渠道已被其他团队/成员占用 → 询问是否转移归属
+          if (isApiError(err) && err.code === "CHANNEL_ALREADY_BOUND") {
+            const transfer = window.confirm(
+              "部分通知渠道已被其他团队或成员占用，是否转移归属到该成员？",
+            );
+            if (transfer) {
+              await membersApi.bindNotificationChannels(editing.id, {
+                notificationChannelIds: channelIds,
+                replaceExisting: true,
+              });
+            }
+          } else {
+            throw err;
+          }
+        }
+        queryClient.invalidateQueries({ queryKey: ["members"] });
+        setNotice(`已保存成员「${name}」`);
+        closeForm();
+      } catch (err) {
+        setFormError(errorText(err));
+      }
     }
   };
 
@@ -475,6 +538,37 @@ export default function MembersPage() {
               <Field label="备注（可选）">
                 <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical" }} />
               </Field>
+              {editing !== "new" && (
+                <Field label="通知渠道（可选）" hint="一个渠道只能归属一个团队或成员；保存时若被占用会询问是否转移">
+                  {notificationChannelsQuery.isPending ? (
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>渠道加载中…</span>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflow: "auto", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: space.sm }}>
+                      {notificationChannels.length === 0 && (
+                        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无通知渠道</span>
+                      )}
+                      {notificationChannels.map((channel) => (
+                        <label key={channel.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: fontSize.xs, color: channel.enabled ? neutral[700] : neutral[400] }}>
+                          <input
+                            type="checkbox"
+                            checked={channelIds.includes(channel.id)}
+                            onChange={(e) =>
+                              setChannelIds((prev) =>
+                                e.target.checked
+                                  ? [...prev, channel.id]
+                                  : prev.filter((id) => id !== channel.id),
+                              )
+                            }
+                          />
+                          {channel.name}
+                          <span style={{ color: neutral[400] }}>({channel.type})</span>
+                          {!channel.enabled && <span style={{ color: "#B45309" }}>已停用</span>}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </Field>
+              )}
               {formError && <div style={{ fontSize: fontSize.xs, color: "#B91C1C" }}>{formError}</div>}
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.lg }}>
