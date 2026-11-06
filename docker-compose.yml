@@ -62,6 +62,8 @@ services:
       <<: *server-env
       NODE_ENV: production
       PORT: "3000"
+      # 成员全局会话灰度（37 篇 D4/P3）：默认 seat（旧行为）；SESSION_SCOPE=member 开启一成员一会话。
+      SESSION_SCOPE: ${SESSION_SCOPE:-seat}
       JWT_SECRET: ${JWT_SECRET:-compose-dev-jwt-secret}
       JWT_ACCESS_EXPIRES_IN: "2h"
       JWT_REFRESH_EXPIRES_IN: "7d"
