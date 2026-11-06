@@ -59,6 +59,8 @@ export interface MemberGroupRef {
   alias: string | null;
   seq: number;
   roleId: string | null;
+  /** 该群聊席位的工作目录（团队工作目录）。 */
+  workDir?: string | null;
 }
 
 export interface MemberNotificationChannelRef {

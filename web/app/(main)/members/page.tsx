@@ -62,6 +62,8 @@ interface MemberFormState {
   name: string;
   roleId: string;
   agentId: string;
+  defaultModelId: string;
+  preferredWorkerId: string;
   privateWorkDir: string;
   description: string;
 }
@@ -70,6 +72,8 @@ const EMPTY_FORM: MemberFormState = {
   name: "",
   roleId: "",
   agentId: "",
+  defaultModelId: "",
+  preferredWorkerId: "",
   privateWorkDir: "",
   description: "",
 };
@@ -159,6 +163,25 @@ export default function MembersPage() {
     [rolesQuery.data],
   );
   const agents: AgentOption[] = agentsQuery.data?.items ?? [];
+  const modelsQuery = useQuery({
+    queryKey: ["models", "members-page"],
+    queryFn: () =>
+      api.get<{ items: Array<{ id: string; name: string; modelID?: string }> }>(
+        "/models",
+        { query: { page: 1, pageSize: 100 } },
+      ),
+    enabled: !!user?.id,
+  });
+  const workersQuery = useQuery({
+    queryKey: ["workers", "members-page"],
+    queryFn: () =>
+      api.get<Array<{ id: string; name: string | null; status: string }>>(
+        "/workers",
+      ),
+    enabled: !!user?.id,
+  });
+  const modelOptions = modelsQuery.data?.items ?? [];
+  const workerOptions = workersQuery.data ?? [];
 
   useEffect(() => {
     if (notice) {
@@ -203,6 +226,8 @@ export default function MembersPage() {
       name: member.name,
       roleId: member.defaultRoleId,
       agentId: member.agentId,
+      defaultModelId: member.defaultModelId ?? "",
+      preferredWorkerId: member.preferredWorkerId ?? "",
       privateWorkDir: member.privateWorkDir ?? "",
       description: member.description ?? "",
     });
@@ -292,6 +317,8 @@ export default function MembersPage() {
         name,
         roleId: form.roleId,
         agentId: form.agentId || undefined,
+        defaultModelId: form.defaultModelId || undefined,
+        preferredWorkerId: form.preferredWorkerId || undefined,
         privateWorkDir: form.privateWorkDir.trim() || undefined,
         description: form.description.trim() || undefined,
       });
@@ -305,6 +332,8 @@ export default function MembersPage() {
             name,
             roleId: form.roleId,
             agentId: form.agentId || undefined,
+            defaultModelId: form.defaultModelId || undefined,
+            preferredWorkerId: form.preferredWorkerId || undefined,
             privateWorkDir: form.privateWorkDir.trim() || undefined,
             description: form.description.trim() || undefined,
           },
@@ -512,70 +541,167 @@ export default function MembersPage() {
       )}
 
       {editing && (
-        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }}>
-          <form onSubmit={submitForm} style={{ width: 520, maxHeight: "86%", overflow: "auto", backgroundColor: "var(--color-surface)", borderRadius: radius.lg, boxShadow: shadow.lg, padding: space.xl }}>
-            <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>{editing === "new" ? "新建成员" : `编辑成员 ${editing.name}`}</div>
-            <div style={{ fontSize: fontSize.xs, color: neutral[500], marginTop: 4 }}>成员是平台级资产：保存后可在任意群聊中被勾选；修改配置对所有群生效。</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: space.md, marginTop: space.lg }}>
-              <Field label="成员名">
+        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.32)", display: "flex", justifyContent: "flex-end", zIndex: 40 }}>
+          <form onSubmit={submitForm} style={{ width: 560, height: "100%", display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", boxShadow: shadow.lg }}>
+            <div style={{ flexShrink: 0, padding: `${space.lg}px ${space.xl}px ${space.md}px`, borderBottom: `1px solid ${neutral[100]}` }}>
+              <div style={{ display: "flex", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>{editing === "new" ? "新建成员" : "编辑成员"}</div>
+                  <div style={{ fontSize: fontSize.xs, color: neutral[500], marginTop: 4, lineHeight: 1.6 }}>成员属于平台，创建后可在任意群聊中被勾选；一个成员可加入多个群聊。</div>
+                </div>
+                <span style={{ flex: 1 }} />
+                <button type="button" onClick={closeForm} style={{ border: "none", background: "none", fontSize: 20, lineHeight: 1, color: neutral[400], cursor: "pointer" }}>×</button>
+              </div>
+            </div>
+
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: space.xl, display: "flex", flexDirection: "column", gap: space.lg }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>成员名称 <span style={{ color: "#DC2626" }}>必填</span></span>
                 <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：架构师-老周" style={inputStyle} />
-              </Field>
-              <Field label="默认岗位">
-                <select value={form.roleId} onChange={(e) => setForm({ ...form, roleId: e.target.value })} style={inputStyle}>
-                  <option value="">请选择岗位</option>
-                  {roleOptions.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-                </select>
-              </Field>
-              <Field label="绑定 Agent（可选）" hint="缺省取岗位默认 Agent">
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>角色 / 岗位</span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: -4 }}>决定头像色与默认 Agent 策略</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {roleOptions.filter((role) => role.type === "builtin").map((role) => {
+                    const active = form.roleId === role.id;
+                    return (
+                      <button
+                        key={role.id}
+                        type="button"
+                        data-testid="member-role-chip"
+                        onClick={() => setForm({ ...form, roleId: role.id })}
+                        style={{ padding: "5px 12px", borderRadius: radius.pill, border: `1px solid ${active ? "#0D9488" : neutral[200]}`, backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)", color: active ? "#0F766E" : neutral[600], fontSize: fontSize.xs, fontWeight: active ? 700 : 500, cursor: "pointer", fontFamily: fontFamily.body }}
+                      >
+                        {role.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {editing !== "new" && (
+                <div style={{ padding: space.md, borderRadius: radius.lg, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: fontSize.sm, fontWeight: 700, color: neutral[800] }}>全局会话</span>
+                    <span style={{ fontSize: 10, color: neutral[400] }}>成员唯一 · 跨群共享上下文</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 72px 1fr", gap: "6px 8px", fontSize: fontSize.xs }}>
+                    <span style={{ color: neutral[400] }}>会话 ID</span>
+                    <span style={{ color: neutral[700], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memberDetailQuery.data?.session?.id ?? "—"}</span>
+                    <span style={{ color: neutral[400] }}>状态</span>
+                    <span style={{ color: memberDetailQuery.data?.session?.busyState === "running" ? "#B45309" : "#0F766E" }}>
+                      {memberDetailQuery.data?.session ? (memberDetailQuery.data.session.busyState === "running" ? "处理中" : "空闲") : "未建立"}
+                    </span>
+                    <span style={{ color: neutral[400] }}>上下文</span>
+                    <span style={{ color: neutral[700] }}>{memberDetailQuery.data?.session ? `${memberDetailQuery.data.session.turnSeq} 轮` : "—"}</span>
+                    <span style={{ color: neutral[400] }}>最近活跃</span>
+                    <span style={{ color: neutral[700] }}>
+                      {memberDetailQuery.data?.groups?.find(
+                        (g) => g.teamId === memberDetailQuery.data?.session?.currentTeamId,
+                      )?.teamName ?? memberDetailQuery.data?.groups?.[0]?.teamName ?? "—"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>会话全局唯一：不随群聊变化，重置会清空该成员所有群聊的上下文。</div>
+                  <button
+                    type="button"
+                    disabled={resetSessionMutation.isPending}
+                    onClick={() => {
+                      if (window.confirm(`确认重置成员「${editing.name}」的全局会话？消息/记忆不受影响。`)) resetSessionMutation.mutate(editing);
+                    }}
+                    style={{ alignSelf: "flex-start", padding: "4px 12px", borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.45)", backgroundColor: "var(--color-surface)", color: "#DC2626", fontSize: fontSize.xs, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}
+                  >
+                    {resetSessionMutation.isPending ? "重置中…" : "重置全局会话"}
+                  </button>
+                </div>
+              )}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>执行 Agent</span>
                 <select value={form.agentId} onChange={(e) => setForm({ ...form, agentId: e.target.value })} style={inputStyle}>
                   <option value="">跟随岗位默认 Agent</option>
-                  {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}{agent.agentKey ? ` (${agent.agentKey})` : ""}</option>)}
+                  {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}{agent.agentKey ? ` · ${agent.agentKey}` : ""}</option>)}
                 </select>
-              </Field>
-              <Field label="私有工作目录（可选）" hint="会话默认 cwd；团队目录按轮授权切换">
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>默认模型</span>
+                  <select value={form.defaultModelId} onChange={(e) => setForm({ ...form, defaultModelId: e.target.value })} style={inputStyle}>
+                    <option value="">跟随 Agent / Worker</option>
+                    {modelOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>首选 Worker</span>
+                  <select value={form.preferredWorkerId} onChange={(e) => setForm({ ...form, preferredWorkerId: e.target.value })} style={inputStyle}>
+                    <option value="">自动调度</option>
+                    {workerOptions.map((w) => <option key={w.id} value={w.id}>{w.name ?? w.id}{w.status !== "online" ? "（离线）" : ""}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>私有工作目录</span>
                 <input value={form.privateWorkDir} onChange={(e) => setForm({ ...form, privateWorkDir: e.target.value })} placeholder="~/work/<成员名>" style={{ ...inputStyle, fontFamily: fontFamily.mono }} />
-              </Field>
-              <Field label="备注（可选）">
+                <span style={{ fontSize: 10, color: neutral[400] }}>默认工作目录（会话默认 cwd）：个人工作台。</span>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>团队工作目录 <span style={{ fontSize: 10, color: neutral[400], fontWeight: 400 }}>可选 / 可切换（需授权）</span></span>
+                <input
+                  value={
+                    memberDetailQuery.data?.groups?.find(
+                      (g) => g.teamId === memberDetailQuery.data?.session?.currentTeamId,
+                    )?.workDir ??
+                    memberDetailQuery.data?.groups?.[0]?.workDir ??
+                    ""
+                  }
+                  readOnly
+                  disabled
+                  placeholder="由群聊席位决定"
+                  style={{ ...inputStyle, fontFamily: fontFamily.mono, backgroundColor: neutral[50], color: neutral[500] }}
+                />
+                <span style={{ fontSize: 10, color: neutral[400] }}>仅可切换目标；模型按需切换，服务端按本轮席位授权后生效。</span>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>备注 <span style={{ fontSize: 10, color: neutral[400], fontWeight: 400 }}>可选</span></span>
                 <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical" }} />
-              </Field>
+              </div>
+
               {editing !== "new" && (
-                <Field label="通知渠道（可选）" hint="一个渠道只能归属一个团队或成员；保存时若被占用会询问是否转移">
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>通知渠道 <span style={{ fontSize: 10, color: neutral[400], fontWeight: 400 }}>可选</span></span>
                   {notificationChannelsQuery.isPending ? (
                     <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>渠道加载中…</span>
                   ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflow: "auto", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: space.sm }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 150, overflow: "auto", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: space.sm }}>
                       {notificationChannels.length === 0 && (
                         <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无通知渠道</span>
                       )}
                       {notificationChannels.map((channel) => (
                         <label key={channel.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: fontSize.xs, color: channel.enabled ? neutral[700] : neutral[400] }}>
-                          <input
-                            type="checkbox"
-                            checked={channelIds.includes(channel.id)}
-                            onChange={(e) =>
-                              setChannelIds((prev) =>
-                                e.target.checked
-                                  ? [...prev, channel.id]
-                                  : prev.filter((id) => id !== channel.id),
-                              )
-                            }
-                          />
+                          <input type="checkbox" checked={channelIds.includes(channel.id)} onChange={(e) => setChannelIds((prev) => e.target.checked ? [...prev, channel.id] : prev.filter((id) => id !== channel.id))} />
                           {channel.name}
                           <span style={{ color: neutral[400] }}>({channel.type})</span>
-                          {!channel.enabled && <span style={{ color: "#B45309" }}>已停用</span>}
                         </label>
                       ))}
                     </div>
                   )}
-                </Field>
+                  <span style={{ fontSize: 10, color: neutral[400] }}>一个渠道只能归属一个团队或成员。</span>
+                </div>
               )}
+
               {formError && <div style={{ fontSize: fontSize.xs, color: "#B91C1C" }}>{formError}</div>}
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.lg }}>
+
+            <div style={{ flexShrink: 0, padding: `${space.md}px ${space.xl}px`, borderTop: `1px solid ${neutral[100]}`, display: "flex", alignItems: "center", gap: space.sm }}>
+              <span style={{ fontSize: 10, color: neutral[400] }}>{editing === "new" ? "创建后不会自动加入任何群聊，需在群聊中勾选" : "修改配置对所有已加入的群聊生效"}</span>
+              <span style={{ flex: 1 }} />
               <button type="button" onClick={closeForm} style={secondaryButtonStyle}>取消</button>
-              <button type="submit" disabled={createMutation.isPending || updateMutation.isPending} style={primaryButtonStyle}>
-                {createMutation.isPending || updateMutation.isPending ? "保存中…" : "保存"}
-              </button>
+              <button type="submit" disabled={createMutation.isPending || updateMutation.isPending} style={primaryButtonStyle}>{createMutation.isPending || updateMutation.isPending ? "保存中…" : "保存修改"}</button>
             </div>
           </form>
         </div>
@@ -676,15 +802,6 @@ function StatCard({ label, value, hint }: { label: string; value: number; hint: 
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <span style={{ fontSize: fontSize.xs, color: neutral[600], fontWeight: 600 }}>{label}</span>
-      {children}
-      {hint && <span style={{ fontSize: 10, color: neutral[400] }}>{hint}</span>}
-    </label>
-  );
-}
 
 function errorText(err: unknown): string {
   if (isApiError(err)) return err.message;

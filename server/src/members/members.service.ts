@@ -38,6 +38,7 @@ const MEMBER_DETAIL_INCLUDE = {
       alias: true,
       seq: true,
       roleId: true,
+      workDir: true,
       team: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: 'asc' as const },
@@ -163,6 +164,7 @@ export class MembersService implements OnModuleInit {
         alias: seat.alias,
         seq: seat.seq,
         roleId: seat.roleId,
+        workDir: seat.workDir,
       })),
       notificationChannels: (row.notificationLinks ?? []).map((link) => ({
         id: link.notificationChannel.id,
