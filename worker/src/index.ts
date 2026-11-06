@@ -2012,13 +2012,55 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         // dsh 的真实语义：key 走 `apiKeyEnv`（进程级）⇒ 登记后**下次运行时 spawn 生效**。
         if (config.engine === 'dsh') {
           const dshPayload = command.payload as ModelCredentialsPayload | undefined;
+          const providerConfigs = dshPayload?.providerConfigs ?? {};
           const creds = (dshPayload?.providerKeys ?? []).map((entry) => ({
             providerID: entry.providerID,
             apiKey: entry.key,
-            ...(dshPayload?.providerConfigs?.[entry.providerID]?.baseUrl === undefined
+            ...(providerConfigs[entry.providerID]?.baseUrl === undefined
               ? {}
-              : { baseUrl: dshPayload.providerConfigs[entry.providerID].baseUrl }),
+              : { baseUrl: providerConfigs[entry.providerID].baseUrl }),
           }));
+
+          /**
+           * **目录里有、但没有凭据的 provider 也要声明路由**。
+           *
+           * 场景（线上实测）：用户在「模型管理」配了一个**自建/本地 provider**（如 ehsy，
+           * 本地网关不鉴权），它只有 baseUrl + models、**没有 API key** ⇒ 不出现在
+           * providerKeys 里 ⇒ patch 里没有该 provider ⇒ 派发到它的模型时 DSH 直接抛
+           * `no adapter registered for provider "ehsy"`，整轮失败。
+           * opencode 引擎没这问题（它按 providerConfigs 全量重建 provider 段）。
+           *
+           * 处理：按 providerConfigs 补一条路由，凭据用占位串 `local`（本地网关通常忽略
+           * 鉴权；DSH 的 apiKeyEnv 必须有值，否则调用时抛 MISSING_CREDENTIAL）。
+           */
+          const withCredential = new Set(creds.map((c) => c.providerID));
+          for (const [providerID, cfg] of Object.entries(providerConfigs)) {
+            if (withCredential.has(providerID)) continue;
+            const rawModels = cfg.models;
+            const modelIDs = Array.isArray(rawModels)
+              ? rawModels
+              : Object.keys(rawModels ?? {});
+            const modelNames = Array.isArray(rawModels) ? undefined : rawModels;
+            creds.push({
+              providerID,
+              apiKey: 'local',
+              ...(cfg.baseUrl === undefined ? {} : { baseUrl: cfg.baseUrl }),
+              ...(modelIDs.length === 0
+                ? {}
+                : {
+                    models: modelIDs.map((id) => ({
+                      id,
+                      name: modelNames?.[id]?.name ?? id,
+                    })),
+                  }),
+            });
+          }
+          if (creds.length > withCredential.size) {
+            console.log(
+              `[worker/dsh] 目录中无凭据的 provider 已按占位 key（local）声明路由：` +
+                `[${creds.filter((c) => !withCredential.has(c.providerID)).map((c) => c.providerID).join(', ')}]`,
+            );
+          }
           try {
             await (driver as unknown as {
               applyModelCredentials?: (c: typeof creds) => Promise<void>;
