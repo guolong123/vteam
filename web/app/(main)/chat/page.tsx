@@ -110,12 +110,19 @@ function ChatPageContent() {
 
   const channelId = active?.channelId ?? null;
   const messagesQuery = useQuery({
-    queryKey: ["channel", channelId, "messages"],
+    // 群聊按频道；私聊按成员跨群聚合（P4：一个成员一个 DM，历史消息不搬家）。
+    queryKey: isGroup
+      ? ["channel", channelId, "messages"]
+      : ["member-messages", memberId],
     queryFn: () =>
-      api.get<{ items: ChatMessage[] }>(`/channels/${channelId}/messages`, {
-        query: { limit: 50 },
-      }),
-    enabled: !!user?.id && !!channelId,
+      isGroup
+        ? api.get<{ items: ChatMessage[] }>(`/channels/${channelId}/messages`, {
+            query: { limit: 50 },
+          })
+        : api.get<{ items: ChatMessage[] }>(`/members/${memberId}/messages`, {
+            query: { limit: 50 },
+          }),
+    enabled: !!user?.id && (isGroup ? !!channelId : !!memberId),
     refetchInterval: 5000,
   });
   const messages = messagesQuery.data?.items ?? [];
@@ -166,16 +173,22 @@ function ChatPageContent() {
     onSuccess: () => {
       setInput("");
       setSendError(null);
-      queryClient.invalidateQueries({
-        queryKey: ["channel", channelId, "messages"],
-      });
+      queryClient.invalidateQueries(
+        isGroup
+          ? { queryKey: ["channel", channelId, "messages"] }
+          : { queryKey: ["member-messages", memberId] },
+      );
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
     onError: (err) => setSendError(errorText(err)),
   });
 
   const markReadMutation = useMutation({
-    mutationFn: (id: string) => api.patch(`/channels/${id}/read`),
+    // 群聊：频道级已读；私聊：成员私聊一次全部已读（跨群聚合）。
+    mutationFn: () =>
+      isGroup
+        ? api.patch(`/channels/${channelId}/read`)
+        : api.patch(`/members/${memberId}/read`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
@@ -199,7 +212,7 @@ function ChatPageContent() {
   useEffect(() => {
     if (!active || !channelId) return;
     if (active.unreadCount > 0) {
-      markReadMutation.mutate(channelId);
+      markReadMutation.mutate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id, active?.unreadCount, channelId]);
@@ -213,7 +226,12 @@ function ChatPageContent() {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       if (active && active.unreadCount >= 0) {
         // 当前会话可见 → 新消息到达即视为已读，避免自己开着还累积未读
-        markReadMutation.mutate(channelId as string);
+        markReadMutation.mutate();
+      }
+      if (!isGroup && memberId) {
+        queryClient.invalidateQueries({
+          queryKey: ["member-messages", memberId],
+        });
       }
       requestAnimationFrame(() => {
         const el = listRef.current;

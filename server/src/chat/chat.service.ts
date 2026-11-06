@@ -1735,10 +1735,21 @@ export class ChatService {
       });
     }
     const memberId = resolvedMemberId ?? (teamMember as any).memberId ?? null;
-    const existing = await this.prisma.chatChannel.findFirst({
-      where: { teamId, teamMemberId: teamMember.id } as any,
-      include: CHANNEL_TASK_SELECT,
-    });
+    // P4：成员维度优先复用「该成员已有的 private 频道」（全局一个 DM），
+    // 不再要求 (teamId, teamMemberId) 完全一致；旧席位频道继续按旧键兼容。
+    const existing = resolvedMemberId
+      ? await this.prisma.chatChannel.findFirst({
+          where: {
+            memberId: resolvedMemberId,
+            type: CHANNEL_TYPE.private,
+          } as any,
+          orderBy: { createdAt: 'asc' },
+          include: CHANNEL_TASK_SELECT,
+        })
+      : await this.prisma.chatChannel.findFirst({
+          where: { teamId, teamMemberId: teamMember.id } as any,
+          include: CHANNEL_TASK_SELECT,
+        });
     if (existing) {
       const needRevive = !!(existing as any).deletedAt;
       const needMember = !!(memberId && !(existing as any).memberId);
@@ -1820,6 +1831,86 @@ export class ChatService {
       id: updated.id,
       lastReadAt: updated.lastReadAt.toISOString(),
     };
+  }
+
+  /**
+   * P4：成员跨群私聊消息聚合读（不移动历史消息）。
+   * 成员的 private 频道可能来自多个群（历史数据），这里按 memberId 聚合后统一分页；
+   * 可见性沿用会话聚合口径（调用者与成员至少共享一个团队）。
+   */
+  async findMemberMessages(
+    memberId: string,
+    userId: string,
+    query: QueryMessagesDto,
+  ) {
+    await this.assertMemberChatVisible(memberId, userId);
+    const channels = await this.prisma.chatChannel.findMany({
+      where: { memberId, type: CHANNEL_TYPE.private } as any,
+      select: { id: true },
+    });
+    if (channels.length === 0) {
+      return { items: [], nextCursor: null as string | null };
+    }
+    const limit = this.normalizeLimit(query.limit);
+    const idRows = await this.prisma.message.findMany({
+      where: {
+        channelId: { in: channels.map((c) => c.id) },
+        ...(query.cursor ? { id: { lt: query.cursor } } : {}),
+      },
+      orderBy: { id: 'desc' },
+      take: limit + 1,
+      select: { id: true },
+    });
+    const hasMore = idRows.length > limit;
+    const ids = idRows.slice(0, limit).map((r) => r.id);
+    const rows = await this.loadMessageRowsInIdOrder(ids);
+    return {
+      items: [...rows].reverse().map((row) => this.toMessageDto(row)),
+      nextCursor: hasMore ? ids[ids.length - 1] : null,
+    };
+  }
+
+  /** P4：成员私聊已读 —— 一次把该成员所有 private 频道置为已读。 */
+  async markMemberRead(memberId: string, userId: string) {
+    await this.assertMemberChatVisible(memberId, userId);
+    const now = new Date();
+    const updated = await this.prisma.chatChannel.updateMany({
+      where: { memberId, type: CHANNEL_TYPE.private } as any,
+      data: { lastReadAt: now },
+    });
+    return { memberId, updated: updated.count, lastReadAt: now.toISOString() };
+  }
+
+  /** 成员私聊可见性：成员存在 + 调用者与其至少共享一个团队（对齐 conversations 口径）。 */
+  private async assertMemberChatVisible(memberId: string, userId: string) {
+    const member = await this.prisma.member.findUnique({
+      where: { id: memberId },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new NotFoundException({
+        code: CHAT_ERRORS.MEMBER_NOT_FOUND,
+        message: `成员 ${memberId} 不存在`,
+      });
+    }
+    const seats = await this.prisma.teamMember.findMany({
+      where: { memberId },
+      select: { teamId: true },
+    });
+    const teamIds = [...new Set(seats.map((s) => s.teamId))];
+    const visible =
+      teamIds.length > 0
+        ? await this.prisma.teamUserMember.findFirst({
+            where: { userId, teamId: { in: teamIds } },
+            select: { id: true },
+          })
+        : null;
+    if (!visible) {
+      throw new ForbiddenException({
+        code: CHAT_ERRORS.TEAM_FORBIDDEN,
+        message: '无权访问该成员的私聊',
+      });
+    }
   }
 
   /**
