@@ -27,6 +27,7 @@ import {
 import { membersApi, type MemberDetailDto, type MemberDto } from "@/src/api/members";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
+import { stripInjectedContext } from "@/lib/strip-injected-context";
 import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
 import {
   type RoleKey,
@@ -482,7 +483,7 @@ function ChatPageContent() {
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <header style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", alignItems: "center", gap: space.sm }}>
-              <AgentAvatar role="product" size="sm" />
+              <AgentAvatar role="product" size="md" shape="square" dot={false} initials={title.slice(0, 1)} style={groupAvatarPalette(title)} />
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
@@ -526,7 +527,7 @@ function ChatPageContent() {
                 return (
                   <button key={seat.id} type="button" data-testid="group-member-chip" onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
                     <span style={{ position: "relative" }}>
-                      <AgentAvatar role={roleKey} size="md" />
+                      <AgentAvatar role={roleKey} size="sm" />
                       {busy && <span title="在其他群处理中（消息照常送达）" style={{ position: "absolute", right: -1, top: -1, width: 8, height: 8, borderRadius: "50%", backgroundColor: "#F59E0B", border: "1.5px solid #FFF" }} />}
                     </span>
                     <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 56, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</span>
@@ -857,6 +858,20 @@ function conversationRole(
   return toRoleKey(memberById.get(memberId)?.role?.key ?? null);
 }
 
+/** 群头像配色（按群名哈希从固定色板取，稳定且区分度足够）。 */
+function groupAvatarPalette(title: string): { bg: string; color: string; border: string } {
+  const palettes = [
+    { bg: "#6366F1", color: "#FFFFFF", border: "#6366F1" },
+    { bg: "#0D9488", color: "#FFFFFF", border: "#0D9488" },
+    { bg: "#3B82F6", color: "#FFFFFF", border: "#3B82F6" },
+    { bg: "#F59E0B", color: "#FFFFFF", border: "#F59E0B" },
+    { bg: "#8B5CF6", color: "#FFFFFF", border: "#8B5CF6" },
+  ];
+  let hash = 0;
+  for (let i = 0; i < title.length; i += 1) hash = (hash * 31 + title.charCodeAt(i)) >>> 0;
+  return palettes[hash % palettes.length];
+}
+
 function ConversationRow({
   item,
   active,
@@ -876,7 +891,11 @@ function ConversationRow({
       data-conv-id={item.id}
       style={{ width: "100%", textAlign: "left", border: "none", cursor: "pointer", display: "flex", gap: space.sm, alignItems: "center", padding: `${space.sm}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: active ? "rgba(13,148,136,0.10)" : "transparent", fontFamily: fontFamily.body }}
     >
-      <AgentAvatar role={roleKey} size="sm" />
+      {item.type === "group" ? (
+        <AgentAvatar role="product" size="md" shape="square" dot={false} initials={item.title.slice(0, 1)} style={groupAvatarPalette(item.title)} />
+      ) : (
+        <AgentAvatar role={roleKey} size="md" />
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
@@ -888,7 +907,7 @@ function ConversationRow({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.xs, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {item.lastMessage?.text ?? "暂无消息"}
+            {stripInjectedContext(item.lastMessage?.text ?? "暂无消息")}
           </span>
           {item.unreadCount > 0 && (
             <span style={{ marginLeft: "auto", minWidth: 18, height: 18, borderRadius: 9, backgroundColor: "#DC2626", color: "#FFF", fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
