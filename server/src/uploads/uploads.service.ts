@@ -123,7 +123,30 @@ export class FileStorageService {
    * - `filename*=`：RFC 5987 UTF-8 百分号编码（中文/空格/引号都正确）；
    * - 额外转义 `'()`（RFC 5987 的 attr-char 之外，个别浏览器实现有坑）。
    */
-  static buildDownloadDisposition(storedName: string): string {
+  /**
+   * 允许**内联渲染**（`Content-Disposition: inline`）的扩展名白名单。
+   *
+   * 为什么需要：`/uploads/*` 此前对**所有**文件强制 `attachment`（安全补偿：上传不限
+   * 扩展名，若把 .html/.svg 当同源文档内联渲染即可执行脚本）。但这条规则同时把 PDF
+   * 也变成"下载"，导致文档站的 PDF iframe 永远空白（2026-11-06 用户实测）。
+   * PDF 的安全性由浏览器内置阅读器（独立进程 + 无页面脚本权限）承担，加上
+   * `X-Content-Type-Options: nosniff`（MIME 不可嗅探）+ 由扩展名决定的固定
+   * `application/pdf`，不会退化成 HTML 执行 ⇒ 只有 PDF 进白名单。
+   */
+  private static readonly INLINE_DISPOSITION_EXTS = new Set(['pdf']);
+
+  /** 该文件是否应当内联渲染（而非强制下载）。 */
+  static prefersInlineDisposition(storedName: string): boolean {
+    const ext = FileStorageService.extractExtension(
+      FileStorageService.displayNameFromStored(storedName),
+    );
+    return ext !== null && FileStorageService.INLINE_DISPOSITION_EXTS.has(ext);
+  }
+
+  static buildDownloadDisposition(
+    storedName: string,
+    disposition: 'attachment' | 'inline' = 'attachment',
+  ): string {
     const display = FileStorageService.displayNameFromStored(storedName);
     const fallback =
       display.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') ||
@@ -132,7 +155,7 @@ export class FileStorageService {
       /['()*]/g,
       (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
     );
-    return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+    return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
   }
 
   /** 磁盘文件名里 `<uuid>__` 前缀的剥离正则（36 字符 UUID + 双下划线）。 */

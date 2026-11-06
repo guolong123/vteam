@@ -54,12 +54,22 @@ async function bootstrap() {
       } catch {
         stored = rawPath.split('/').pop() ?? '';
       }
+      // PDF 需要**内联**才能被文档站的 iframe 渲染（attachment 会让它变下载 ⇒ 空白）；
+      // 其余类型仍然强制下载（上传不限扩展名，内联 .html/.svg 等于同源 XSS）。
+      const inlinePdf = FileStorageService.prefersInlineDisposition(stored);
       res.setHeader(
         'Content-Disposition',
-        FileStorageService.buildDownloadDisposition(stored),
+        FileStorageService.buildDownloadDisposition(
+          stored,
+          inlinePdf ? 'inline' : 'attachment',
+        ),
       );
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      // 内联 PDF 不能带 `sandbox` 指令：Chrome 内置阅读器在 sandbox 文档里不渲染。
+      res.setHeader(
+        'Content-Security-Policy',
+        inlinePdf ? "default-src 'none'" : "default-src 'none'; sandbox",
+      );
     },
   });
 

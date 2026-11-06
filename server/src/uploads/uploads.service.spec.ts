@@ -82,6 +82,43 @@ describe('FileStorageService（文件存储基础：文件名生成 / 不限类�
       expect(encoded).not.toContain('(');
     });
 
+    it('prefersInlineDisposition：只有 PDF 内联，其余仍强制下载', () => {
+      const uuid = 'f8a2173c-3924-461d-b927-c4151f71756b';
+      expect(FileStorageService.prefersInlineDisposition(`${uuid}.pdf`)).toBe(
+        true,
+      );
+      expect(
+        FileStorageService.prefersInlineDisposition(
+          `${uuid}__Invoice-0001.PDF`,
+        ),
+      ).toBe(true);
+      // 危险类型必须仍走 attachment（内联 .html/.svg = 同源 XSS）
+      for (const name of ['a.html', 'b.svg', 'c.xml', 'd.zip', 'e.docx']) {
+        expect(
+          FileStorageService.prefersInlineDisposition(`${uuid}__${name}`),
+        ).toBe(false);
+      }
+    });
+
+    it('buildDownloadDisposition 支持 inline（PDF 预览）+ attachment（默认下载）', () => {
+      const uuid = 'f8a2173c-3924-461d-b927-c4151f71756b';
+      const stored = `${uuid}__Invoice-ZJ5LSSCO-0001.pdf`;
+      const inline = FileStorageService.buildDownloadDisposition(
+        stored,
+        'inline',
+      );
+      expect(inline.startsWith('inline; filename="')).toBe(true);
+      expect(decodeURIComponent(inline.split("filename*=UTF-8''")[1])).toBe(
+        'Invoice-ZJ5LSSCO-0001.pdf',
+      );
+      // 缺省仍是 attachment（不能因为加了 inline 支持就把默认改成内联）
+      expect(
+        FileStorageService.buildDownloadDisposition(stored).startsWith(
+          'attachment; ',
+        ),
+      ).toBe(true);
+    });
+
     it('displayNameFromStored 兼容老文件（纯 UUID 名原样返回）', () => {
       expect(
         FileStorageService.displayNameFromStored(

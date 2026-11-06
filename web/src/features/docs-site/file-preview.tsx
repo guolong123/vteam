@@ -400,7 +400,13 @@ function PdfPreview({
     <div data-testid="docs-content-view" data-render="pdf" style={{ display: "flex", flexDirection: "column", gap: space.sm, height: "100%", minHeight: 0, ...baseFont }}>
       <iframe
         data-testid="docs-pdf-frame"
-        sandbox="allow-same-origin"
+        /**
+         * ⚠️ 这里**不能加** `sandbox`：Chrome 内置 PDF 阅读器在 sandboxed iframe 里
+         * 拒绝渲染（实测：`sandbox="allow-same-origin"` → 空白/无法加载图标）。
+         * 安全性由服务端保证：/uploads 只对 PDF 发 `Content-Disposition: inline` +
+         * 固定 `application/pdf` + `X-Content-Type-Options: nosniff`
+         * （其余类型仍强制 attachment，不会以同源文档身份执行脚本）。
+         */
         src={fileUrl}
         title={title}
         onError={() => setFailed(true)}
