@@ -39,8 +39,10 @@
 #   dsh               需 Node >= 24.9 + dsh CLI + bubblewrap；本脚本自动装齐，
 #                     并给全局 dsh 打上「bwrap 不挂 /proc」补丁（本集群内核拒绝在非初始
 #                     user namespace 里挂 procfs，不打补丁沙箱不可用）。
-#                     ⚠️ **请用普通用户运行**（不要 root）：bwrap 以 root 走特权路径，
+#                     ⚠️ 请用普通用户运行（不要 root）：bwrap 以 root 走特权路径，
 #                     受限内核上没有 CAP_SYS_ADMIN 会直接失败。
+#                     ⚠️ 需要 glibc >= 2.28（Node >= 18 官方二进制的要求）：CentOS/RHEL 7
+#                     （glibc 2.17）跑不了裸机安装，脚本会直接报错并建议改用 docker 安装。
 #
 # 参数：
 #   --server <url>      控制面地址（缺省 http://localhost:3000）
@@ -204,6 +206,17 @@ fi
 # 目标：git/curl/node/opencode 无需用户预装。node 缺失时下载官方二进制到 $HOME/.local/node；
 # opencode 缺失时按 --opencode 指定版本（缺省 latest）经 npm 全局安装。
 
+# ------------------------------ curl 能力探测 ------------------------------
+# 下载统一走 `curl "${CURL_FETCH_OPTS[@]}"`：
+# - `--http1.1` 需 curl >= 7.33；**CentOS/RHEL 7 自带 7.29 不认该选项**，
+#   直接报 `curl: option --http1.1: is unknown` ⇒ 所有下载源全失败（用户实测踩到）。
+#   故先探测再决定加不加，绝不硬编码。
+# - `--retry*` 自 curl 7.12 起可用（老系统也有）。
+CURL_FETCH_OPTS=(-fsSL --retry 3 --retry-delay 2 --connect-timeout 20)
+if curl --help 2>/dev/null | grep -q -- '--http1.1'; then
+  CURL_FETCH_OPTS+=(--http1.1)
+fi
+
 # 干净机器（新容器/新系统）上 apt 索引通常是空的：直接 `apt-get install` 会
 # "Unable to locate package"，故先 update 一次（全程只做一次，失败仅告警不阻断）。
 APT_INDEX_READY=""
@@ -242,8 +255,25 @@ ensure_git_curl() {
         exit 1
       fi
     else
-      echo "[install-worker] ERROR: 未找到 apt-get，请手动安装 ${missing[*]} 后重试" >&2
-      exit 1
+      # RHEL/CentOS/Fedora：dnf/yum（包名与命令同名，xz 在 xz 包里）
+      local sudo_prefix=""
+      if [ "$(id -u)" != "0" ]; then
+        command -v sudo >/dev/null 2>&1 && sudo_prefix="sudo"
+      fi
+      if command -v dnf >/dev/null 2>&1; then
+        if ! ${sudo_prefix} dnf install -y "${missing[@]}" >&2; then
+          echo "[install-worker] ERROR: 自动安装 ${missing[*]} 失败，请手动安装后重试" >&2
+          exit 1
+        fi
+      elif command -v yum >/dev/null 2>&1; then
+        if ! ${sudo_prefix} yum install -y "${missing[@]}" >&2; then
+          echo "[install-worker] ERROR: 自动安装 ${missing[*]} 失败，请手动安装后重试" >&2
+          exit 1
+        fi
+      else
+        echo "[install-worker] ERROR: 未找到 apt-get/dnf/yum，请手动安装 ${missing[*]} 后重试" >&2
+        exit 1
+      fi
     fi
   fi
 }
@@ -263,6 +293,20 @@ ensure_node() {
     aarch64|arm64) arch="arm64" ;;
     *) echo "[install-worker] ERROR: 不支持的架构 $(uname -m)" >&2; exit 1 ;;
   esac
+  # Node 官方 linux 二进制要求 **glibc >= 2.28**（CentOS/RHEL 7 是 2.17）。
+  # 不先判就会下载完在运行时炸 `GLIBC_2.28 not found`，排障成本高得多。
+  local glibc_ver
+  glibc_ver="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$' || true)"
+  if [ -n "${glibc_ver}" ]; then
+    local g_major="${glibc_ver%%.*}"
+    local g_minor="${glibc_ver#*.}"
+    if [ "${g_major}" -lt 2 ] || { [ "${g_major}" -eq 2 ] && [ "${g_minor}" -lt 28 ]; }; then
+      echo "[install-worker] ERROR: 当前 glibc ${glibc_ver} 过低：Node ${node_ver} 官方二进制要求 glibc >= 2.28。" >&2
+      echo "  CentOS/RHEL 7（glibc 2.17）无法直接跑 Node >= 18 —— 请改用 docker 容器安装（安装页第 2 步切换），" >&2
+      echo "  或升级到 CentOS/RHEL 8+ / Debian 11+ 后重跑。" >&2
+      exit 1
+    fi
+  fi
   local base="${HOME}/.local/node"
   mkdir -p "$base"
   # 没有 xz 就下 .tar.gz（node 官方两种都有）；有 xz 用 .tar.xz（体积小一半）。
@@ -287,7 +331,7 @@ ensure_node() {
   local downloaded=""
   for url in "${mirrors[@]}"; do
     echo "[install-worker] 下载 ${url}"
-    if curl -fsSL --http1.1 --retry 3 --retry-delay 2 --connect-timeout 20 "${url}" -o "$tarball"; then
+    if curl "${CURL_FETCH_OPTS[@]}" "${url}" -o "$tarball"; then
       downloaded="$url"
       break
     fi
@@ -577,7 +621,7 @@ if [ -d "${INSTALL_DIR}/worker/dist" ] && [ -f "${INSTALL_DIR}/worker/package.js
 else
   echo "[install-worker] 下载 worker 发布包：${WORKER_SRC_URL} → ${INSTALL_DIR}/worker"
   local_tarball="${TMPDIR:-/tmp}/worker-src.tar.gz"
-  curl -fsSL --http1.1 --retry 3 --retry-delay 2 "$WORKER_SRC_URL" -o "$local_tarball"
+  curl "${CURL_FETCH_OPTS[@]}" "$WORKER_SRC_URL" -o "$local_tarball"
   mkdir -p "${INSTALL_DIR}/worker"
   tar -xzf "$local_tarball" -C "${INSTALL_DIR}/worker"
   rm -f "$local_tarball"
