@@ -1854,7 +1854,7 @@ export function TeamSessionView({
                     // 群聊保持 bubble（字节不变）；私聊走 dsh 变体 = 对齐 DSH Web 的
                     // 渲染层（真 Markdown + 代码块 + 流式增量解析）。旧的 line 变体
                     // 仍保留在 MsgParts 里，回退只需把这里改回 "line"。
-                    variant={isGroupTab ? "bubble" : "dsh"}
+                    variant="bubble"
                     messageStatus={msg.status}
                     secretAwaiting={secretAwaiting}
                     bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)}

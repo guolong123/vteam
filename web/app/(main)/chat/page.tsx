@@ -526,7 +526,7 @@ function ChatPageContent() {
                 return (
                   <button key={seat.id} type="button" data-testid="group-member-chip" onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
                     <span style={{ position: "relative" }}>
-                      <AgentAvatar role={roleKey} size="sm" />
+                      <AgentAvatar role={roleKey} size="md" />
                       {busy && <span title="在其他群处理中（消息照常送达）" style={{ position: "absolute", right: -1, top: -1, width: 8, height: 8, borderRadius: "50%", backgroundColor: "#F59E0B", border: "1.5px solid #FFF" }} />}
                     </span>
                     <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 56, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</span>
@@ -1064,7 +1064,7 @@ function MemberContextPanel({
 }) {
   return (
     <aside data-testid="member-context-panel" style={{ width: 300, flexShrink: 0, minHeight: 0, overflow: "auto", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}`, padding: space.lg, display: "flex", flexDirection: "column", gap: space.md }}>
-      <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
         <AgentAvatar role={toRoleKey(member?.role?.key ?? null)} size="md" />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>{member?.name ?? "成员"}</div>
@@ -1119,6 +1119,7 @@ function MemberContextPanel({
       )}
 
       <div style={{ marginTop: "auto", borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 6 }}>
+        <a href={`/tasks/new?teamId=${member?.groups?.[0]?.teamId ?? ""}`} style={{ textAlign: "center", padding: "6px 10px", borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFF", fontSize: fontSize.xs, fontWeight: 700, textDecoration: "none" }}>发任务</a>
         <button type="button" data-testid="reset-global-session" disabled={resetting} onClick={onReset} style={{ padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#B45309", fontSize: fontSize.xs, fontWeight: 600, cursor: resetting ? "default" : "pointer", fontFamily: fontFamily.body }}>{resetting ? "重置中…" : "重置全局会话"}</button>
         <a href="/members" style={{ textAlign: "center", padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开成员库 →</a>
       </div>
