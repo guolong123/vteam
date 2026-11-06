@@ -388,9 +388,10 @@ export function TeamMembersPanel({
               ? `运行中：${workerLabel(runningWorkerId)} · 待切换到 ${workerLabel(pendingWorkerId)}`
               : `运行中：${workerLabel(runningWorkerId)}`
             : null;
-          const workerChipTitle = a.preferredWorkerId
-            ? `Worker 节点：${workerLabel(a.preferredWorkerId)}（点击更换）`
-            : "跟随团队（点击设置 Worker 节点）";
+          // chip 展示的节点：成员首选 → 团队默认 → 会话实际运行节点（都没有才显示"自动选择"）。
+          // 用户反馈「跟随团队」是无意义的值：这里尽量落到**真实节点名**。
+          const workerDisplayId =
+            effectivePreferredWorkerId ?? runningWorkerId ?? null;
           const resetPending = resetPendingInstanceId === (a.instanceId ?? a.id);
           const togglePending = togglePendingInstanceId === (a.instanceId ?? a.id);
           return (
@@ -506,17 +507,17 @@ export function TeamMembersPanel({
                   )}
                   {statusText}
                 </span>
-                <button
-                  type="button"
+                {/* 只读展示**实际生效模型**（成员覆盖 → 模板默认 → 默认模型），
+                    配置入口在「⋯ → 模型设置…」（用户反馈：虚线「跟随模板」是无意义的值） */}
+                <span
                   data-testid={`agent-model-chip-${a.instanceId ?? a.id}`}
-                  aria-label="设置模型"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setModelPicker(modelPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
-                    setOpenMenu(null);
-                  }}
+                  aria-label="当前模型"
                   title={
-                    effectiveModel ? modelLabel(effectiveModel) : "跟随模板（点击设置模型）"
+                    effectiveModel
+                      ? a.overrideModelId
+                        ? `成员指定模型：${modelLabel(effectiveModel)}`
+                        : `模板默认模型：${modelLabel(effectiveModel)}`
+                      : "未指定模型（沿用 worker 默认）"
                   }
                   style={{
                     marginTop: 4,
@@ -525,7 +526,7 @@ export function TeamMembersPanel({
                     gap: 4,
                     padding: "1px 6px",
                     borderRadius: radius.pill,
-                    border: a.overrideModelId ? `1px solid rgba(13,148,136,0.35)` : `1px dashed ${neutral[300]}`,
+                    border: a.overrideModelId ? `1px solid rgba(13,148,136,0.35)` : `1px solid ${neutral[200]}`,
                     backgroundColor: a.overrideModelId ? "rgba(13,148,136,0.12)" : "transparent",
                     color: a.overrideModelId ? "#0D9488" : neutral[500],
                     fontSize: 10,
@@ -533,28 +534,25 @@ export function TeamMembersPanel({
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
-                    cursor: "pointer",
                   }}
                 >
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {effectiveModel ? modelLabel(effectiveModel) : "跟随模板"}
+                    {effectiveModel ? modelLabel(effectiveModel) : "默认模型"}
                   </span>
-                  <span style={{ fontSize: 8 }}>▼</span>
-                </button>
-                <button
-                  type="button"
+                </span>
+                {/* 只读展示**实际生效 worker**（成员首选 → 团队首选 → 自动选择），
+                    配置入口在「⋯ → Worker 节点…」 */}
+                <span
                   data-testid={`agent-worker-chip-${a.instanceId ?? a.id}`}
-                  aria-label="设置 Worker 节点"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setWorkerPicker(workerPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
-                    setModelPicker(null);
-                    setOpenMenu(null);
-                  }}
+                  aria-label="当前 Worker 节点"
                   title={
-                    runningWorkerId
-                      ? `${workerChipTitle} · 运行中：${workerLabel(runningWorkerId)}`
-                      : workerChipTitle
+                    effectivePreferredWorkerId
+                      ? a.preferredWorkerId
+                        ? `成员指定节点：${workerLabel(a.preferredWorkerId)}`
+                        : `团队默认节点：${workerLabel(effectivePreferredWorkerId)}`
+                      : runningWorkerId
+                        ? `当前实际运行节点：${workerLabel(runningWorkerId)}（未指定偏好，由控制面自动选择）`
+                        : "未指定节点（由控制面按容量自动选择）"
                   }
                   style={{
                     marginTop: 4,
@@ -563,7 +561,7 @@ export function TeamMembersPanel({
                     gap: 4,
                     padding: "1px 6px",
                     borderRadius: radius.pill,
-                    border: a.preferredWorkerId ? `1px solid rgba(13,148,136,0.35)` : `1px dashed ${neutral[300]}`,
+                    border: a.preferredWorkerId ? `1px solid rgba(13,148,136,0.35)` : `1px solid ${neutral[200]}`,
                     backgroundColor: a.preferredWorkerId ? "rgba(13,148,136,0.12)" : "transparent",
                     color: a.preferredWorkerId ? "#0D9488" : neutral[500],
                     fontSize: 10,
@@ -571,15 +569,13 @@ export function TeamMembersPanel({
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
-                    cursor: "pointer",
                   }}
                 >
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {a.preferredWorkerId ? workerLabel(a.preferredWorkerId) : "跟随团队"}
+                    {workerDisplayId ? workerLabel(workerDisplayId) : "自动选择"}
                   </span>
-                  <span style={{ fontSize: 8 }}>▼</span>
-                </button>
-                {runningWorkerText && (
+                </span>
+                {runningWorkerText && (effectivePreferredWorkerId || pendingWorkerId) && (
                   <span
                     data-testid={`agent-worker-running-${a.instanceId ?? a.id}`}
                     style={{
@@ -653,6 +649,7 @@ export function TeamMembersPanel({
                         setOpenMenu(null);
                       }}
                       style={{
+                        // 与菜单其它项同款：之前加了 ★ + 加粗，视觉上过重（用户反馈）
                         textAlign: "left",
                         padding: `6px 8px`,
                         borderRadius: radius.sm,
@@ -661,10 +658,9 @@ export function TeamMembersPanel({
                         cursor: "pointer",
                         fontSize: fontSize.sm,
                         color: neutral[700],
-                        fontWeight: 600,
                       }}
                     >
-                      ★ 设为主 Agent
+                      设为主 Agent
                     </button>
                     )}
                     <button
@@ -718,6 +714,7 @@ export function TeamMembersPanel({
                       onClick={(e) => {
                         e.stopPropagation();
                         setModelPicker(a.instanceId ?? a.id);
+                        setWorkerPicker(null);
                         setOpenMenu(null);
                       }}
                       style={{
@@ -732,6 +729,28 @@ export function TeamMembersPanel({
                       }}
                     >
                       模型设置…
+                    </button>
+                    <button
+                      type="button"
+                      data-testid={`agent-worker-config-${a.instanceId ?? a.id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setWorkerPicker(a.instanceId ?? a.id);
+                        setModelPicker(null);
+                        setOpenMenu(null);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        padding: `6px 8px`,
+                        borderRadius: radius.sm,
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        fontSize: fontSize.sm,
+                        color: "#0D9488",
+                      }}
+                    >
+                      Worker 节点…
                     </button>
                   </div>
                 )}
