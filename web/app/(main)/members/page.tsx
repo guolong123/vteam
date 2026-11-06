@@ -84,6 +84,7 @@ export default function MembersPage() {
   const [form, setForm] = useState<MemberFormState>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MemberDto | null>(null);
+  const [resetTarget, setResetTarget] = useState<MemberDto | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -206,6 +207,23 @@ export default function MembersPage() {
       setNotice(`已${member.status === "disabled" ? "停用" : "恢复"}成员「${member.name}」`);
     },
     onError: (err) => setNotice(errorText(err)),
+  });
+
+  const resetSessionMutation = useMutation({
+    mutationFn: (member: MemberDto) => membersApi.resetSession(member.id),
+    onSuccess: (result, member) => {
+      queryClient.invalidateQueries({ queryKey: ["members"] });
+      setNotice(
+        result.reset > 0
+          ? `已重置成员「${member.name}」的全局会话`
+          : `成员「${member.name}」尚未建立会话`,
+      );
+      setResetTarget(null);
+    },
+    onError: (err) => {
+      setNotice(errorText(err));
+      setResetTarget(null);
+    },
   });
 
   const deleteMutation = useMutation({
@@ -386,6 +404,9 @@ export default function MembersPage() {
                       {member.status === "active" ? "停用" : "恢复"}
                     </button>
                   )}
+                  {canEdit && (
+                    <button type="button" onClick={() => setResetTarget(member)} style={linkButtonStyle}>重置会话</button>
+                  )}
                   {canDelete && member.groupCount === 0 && (
                     <button type="button" onClick={() => setDeleteTarget(member)} style={{ ...linkButtonStyle, color: "#B91C1C" }}>删除</button>
                   )}
@@ -441,6 +462,17 @@ export default function MembersPage() {
             </div>
           </form>
         </div>
+      )}
+
+      {resetTarget && (
+        <ConfirmDialog
+          open
+          onClose={() => setResetTarget(null)}
+          onConfirm={() => resetSessionMutation.mutate(resetTarget)}
+          title="重置全局会话"
+          description={`确认重置成员「${resetTarget.name}」的全局会话？下一轮会开新引擎会话；聊天消息与记忆不受影响。`}
+          confirmLabel="重置"
+        />
       )}
 
       {deleteTarget && (

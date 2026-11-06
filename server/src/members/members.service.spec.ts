@@ -25,14 +25,16 @@ function createService() {
     model: { findUnique: jest.fn() },
     worker: { findUnique: jest.fn() },
     teamMember: { count: jest.fn(), findMany: jest.fn() },
+    session: { findUnique: jest.fn().mockResolvedValue(null) },
     $transaction: jest.fn(),
   };
   const idGen = {
     nextId: jest.fn().mockResolvedValue('mbr_0000000001'),
     seed: jest.fn(),
   };
-  const service = new MembersService(prisma, idGen as any);
-  return { service, prisma, idGen };
+  const sessionLifecycle = { resetMemberSession: jest.fn() };
+  const service = new MembersService(prisma, idGen as any, sessionLifecycle as any);
+  return { service, prisma, idGen, sessionLifecycle };
 }
 
 const detailRow = {

@@ -66,9 +66,22 @@ export interface MemberNotificationChannelRef {
   enabled: boolean;
 }
 
+export interface MemberSessionSummary {
+  id: string;
+  status: string;
+  workerId: string | null;
+  instanceRef: string | null;
+  busyState: string;
+  busySince: string | null;
+  turnSeq: number;
+  lastTurnOutcome: string | null;
+}
+
 export interface MemberDetailDto extends MemberDto {
   groups: MemberGroupRef[];
   notificationChannels: MemberNotificationChannelRef[];
+  /** P3 全局会话摘要（null = 尚未建立会话）。 */
+  session?: MemberSessionSummary | null;
 }
 
 export interface MembersPage {
@@ -123,5 +136,11 @@ export const membersApi = {
   },
   clone(id: string): Promise<MemberDetailDto> {
     return api.post<MemberDetailDto>(`/members/${id}/clone`);
+  },
+  /** P3：重置成员全局会话（不动消息/记忆；任务完成不再自动重置）。 */
+  resetSession(id: string): Promise<{ reset: number; sessionId: string | null }> {
+    return api.post<{ reset: number; sessionId: string | null }>(
+      `/members/${id}/reset-session`,
+    );
   },
 };

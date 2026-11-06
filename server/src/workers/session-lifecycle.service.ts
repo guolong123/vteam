@@ -10,7 +10,10 @@ import { SESSION_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
-import { GLOBAL_SESSION_ERRORS } from './global-session.constants';
+import {
+  GLOBAL_SESSION_ERRORS,
+  SESSION_TURN_STATUS,
+} from './global-session.constants';
 
 /** TaskGroupInstance 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const TASK_GROUP_INSTANCE_ID_PREFIX = 'ti';
@@ -480,6 +483,105 @@ export class SessionLifecycleService implements OnModuleInit {
       });
     }
     return sessions.length;
+  }
+
+  /**
+   * 成员级全局会话重置（37 篇 §3.6.6 / P3）。
+   *
+   * 语义：丢弃该成员当前引擎会话（跨群共享的记忆上下文），下一轮重新开引擎会话；
+   * **不删除消息/记忆**，也不影响其他成员。任务完成不再自动重置，重置只由用户
+   * 显式触发（成员卡/成员库）或运维操作。
+   *
+   * 步骤（单事务）：
+   *  1) 找 member_key=memberId 的全局会话；无则 reset=0；
+   *  2) 软移除该成员所有席位的 TaskGroupInstance（引擎实例可能来自多个群）；
+   *  3) 未完成轮次置 cancelled（保留审计，不用删除）；
+   *  4) 删旧会话行 → 以同一 member_key/member_id 建新 team-mode 会话（回收序号靠 idGen）。
+   */
+  async resetMemberSession(
+    memberId: string,
+    opts: { reason?: string } = {},
+  ) {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const session = await tx.session.findUnique({
+        where: { memberKey: memberId },
+        select: {
+          id: true,
+          memberId: true,
+          agentId: true,
+          seatId: true,
+          currentTeamId: true,
+          currentTaskId: true,
+          currentChannelId: true,
+        },
+      });
+      if (!session) {
+        return { reset: 0, sessionId: null as string | null };
+      }
+      const member = await tx.member.findUnique({
+        where: { id: memberId },
+        select: { id: true, name: true, status: true, agentId: true },
+      });
+      if (!member) {
+        throw new NotFoundException({
+          code: GLOBAL_SESSION_ERRORS.MEMBER_NOT_FOUND,
+          message: `成员 ${memberId} 不存在`,
+        });
+      }
+
+      const seats = await tx.teamMember.findMany({
+        where: { memberId },
+        select: { id: true, teamId: true },
+      });
+      for (const seat of seats) {
+        await (tx as any).taskGroupInstance.updateMany({
+          where: {
+            teamId: seat.teamId,
+            teamMemberId: seat.id,
+            removedAt: null,
+          },
+          data: { removedAt: new Date() },
+        });
+      }
+
+      await (tx as any).sessionTurn.updateMany({
+        where: {
+          sessionId: session.id,
+          status: {
+            in: [SESSION_TURN_STATUS.pending, SESSION_TURN_STATUS.running],
+          },
+        },
+        data: {
+          status: SESSION_TURN_STATUS.cancelled,
+          runningKey: null,
+          endedAt: new Date(),
+          error: opts.reason ?? 'member_session_reset',
+        },
+      });
+
+      await tx.session.delete({ where: { id: session.id } });
+      const created = await tx.session.create({
+        data: {
+          id: await this.idGen.nextId(SESSION_ID_PREFIX),
+          memberId,
+          memberKey: memberId,
+          seatId: session.seatId,
+          currentTeamId: session.currentTeamId,
+          currentTaskId: session.currentTaskId,
+          currentChannelId: session.currentChannelId,
+          teamId: session.currentTeamId,
+          teamMemberId: session.seatId,
+          taskId: null,
+          agentId: member.agentId,
+          status: SESSION_STATUS.created,
+        },
+        select: { id: true },
+      });
+      this.logger.log(
+        `成员全局会话已重置 member=${memberId} 旧会话=${session.id} 新会话=${created.id}`,
+      );
+      return { reset: 1, sessionId: created.id };
+    });
   }
 
   /** 兼容：单团队批量重置（事务外入口，供 TeamsService 手动调用事务包装前置）。 */

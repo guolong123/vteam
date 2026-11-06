@@ -26,6 +26,7 @@ import { CreateTeamDto } from './dto/create-team.dto';
 import { QueryTeamsDto } from './dto/query-teams.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto, UpdateMemberDto } from './dto/add-member.dto';
+import { isMemberSessionScope } from '../workers/session-scope';
 
 const ID_PREFIX = {
   team: 'tm',
@@ -1283,6 +1284,13 @@ export class TeamsService implements OnModuleInit {
    * 同事务写入系统消息“已为下一任务开新会话”并广播 chat.message.new + team.changed。
    */
   async resetSessions(teamId: string) {
+    if (isMemberSessionScope()) {
+      throw new BadRequestException({
+        code: 'TEAM_RESET_DISABLED',
+        message:
+          '已启用成员全局会话（SESSION_SCOPE=member）：请到成员库重置该成员的全局会话，团队重置不再可用',
+      });
+    }
     const team = await this.prisma.team.findUnique({ where: { id: teamId } });
     if (!team) {
       throw new NotFoundException({

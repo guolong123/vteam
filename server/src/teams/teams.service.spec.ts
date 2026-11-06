@@ -1750,6 +1750,19 @@ describe('TeamsService', () => {
   });
 
   describe('resetSessions（Todo7 记忆开关）', () => {
+    it('SESSION_SCOPE=member：团队重置被禁用，提示改成员级重置', async () => {
+      const original = process.env.SESSION_SCOPE;
+      process.env.SESSION_SCOPE = 'member';
+      try {
+        await expect(service.resetSessions('tm_0000000001')).rejects.toMatchObject({
+          response: { code: 'TEAM_RESET_DISABLED' },
+        });
+      } finally {
+        if (original === undefined) delete process.env.SESSION_SCOPE;
+        else process.env.SESSION_SCOPE = original;
+      }
+    });
+
     it('手动重置：批量 delete+create 新 s_ 行，soft-remove 先于 delete，广播 team.changed + chat.message.new', async () => {
       prisma.team.findUnique.mockResolvedValue(teamRow());
       prisma.teamMember.findMany = jest

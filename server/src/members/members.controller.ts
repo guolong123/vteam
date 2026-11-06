@@ -81,6 +81,14 @@ export class MembersController {
     return this.membersService.listTeams(id);
   }
 
+  @Post(':id/reset-session')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('members.edit')
+  @ApiOperation({ summary: '重置成员全局会话（不动消息/记忆）' })
+  resetSession(@Param('id') id: string) {
+    return this.membersService.resetSession(id);
+  }
+
   @Post(':id/clone')
   @UseGuards(PermissionGuard)
   @RequirePermission('members.create')

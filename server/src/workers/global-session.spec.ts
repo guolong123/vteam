@@ -15,7 +15,11 @@ describe('全局会话（P3）', () => {
         findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
+        delete: jest.fn(),
+        findMany: jest.fn(),
       },
+      teamMember: { findMany: jest.fn() },
+      taskGroupInstance: { updateMany: jest.fn() },
       sessionTurn: {
         findFirst: jest.fn(),
         findMany: jest.fn(),
@@ -136,6 +140,91 @@ describe('全局会话（P3）', () => {
       await expect(
         service().ensureMemberSession('mbr_1'),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('SessionLifecycleService.resetMemberSession', () => {
+    const service = () => new SessionLifecycleService(prisma, idGen);
+
+    it('无全局会话 → reset=0（幂等）', async () => {
+      tx.session.findUnique.mockResolvedValue(null);
+      const r = await service().resetMemberSession('mbr_1');
+      expect(r).toEqual({ reset: 0, sessionId: null });
+    });
+
+    it('有会话：软移除实例、取消未完成轮次、删旧建新（member_key 保持）', async () => {
+      tx.session.findUnique.mockResolvedValue({
+        id: 's_old',
+        memberId: 'mbr_1',
+        agentId: 'a_arch',
+        seatId: 'tmm_1',
+        currentTeamId: 'tm_1',
+        currentTaskId: null,
+        currentChannelId: 'c_1',
+      });
+      tx.member.findUnique.mockResolvedValue({
+        id: 'mbr_1',
+        name: 'x',
+        status: 'active',
+        agentId: 'a_arch',
+      });
+      tx.teamMember.findMany.mockResolvedValue([{ id: 'tmm_1', teamId: 'tm_1' }]);
+      tx.taskGroupInstance.updateMany.mockResolvedValue({ count: 1 });
+      tx.sessionTurn.updateMany.mockResolvedValue({ count: 1 });
+      tx.session.delete.mockResolvedValue({});
+      tx.session.create.mockImplementation(({ data }: any) => ({
+        id: data.id,
+        ...data,
+      }));
+      idGen.nextId.mockResolvedValue('s_new');
+
+      const r = await service().resetMemberSession('mbr_1', {
+        reason: 'member_manual_reset',
+      });
+
+      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_1', teamMemberId: 'tmm_1', removedAt: null },
+        data: { removedAt: expect.any(Date) },
+      });
+      expect(tx.sessionTurn.updateMany).toHaveBeenCalledWith({
+        where: {
+          sessionId: 's_old',
+          status: { in: ['pending', 'running'] },
+        },
+        data: expect.objectContaining({
+          status: 'cancelled',
+          runningKey: null,
+          error: 'member_manual_reset',
+        }),
+      });
+      expect(tx.session.delete).toHaveBeenCalledWith({ where: { id: 's_old' } });
+      expect(tx.session.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          memberId: 'mbr_1',
+          memberKey: 'mbr_1',
+          teamId: 'tm_1',
+          teamMemberId: 'tmm_1',
+          status: 'created',
+        }),
+        select: { id: true },
+      });
+      expect(r).toEqual({ reset: 1, sessionId: 's_new' });
+    });
+
+    it('成员不存在 → 404', async () => {
+      tx.session.findUnique.mockResolvedValue({
+        id: 's_old',
+        memberId: 'mbr_x',
+        agentId: 'a',
+        seatId: null,
+        currentTeamId: null,
+        currentTaskId: null,
+        currentChannelId: null,
+      });
+      tx.member.findUnique.mockResolvedValue(null);
+      await expect(service().resetMemberSession('mbr_x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 

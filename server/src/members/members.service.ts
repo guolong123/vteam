@@ -8,6 +8,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
+import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { CreateMemberDto } from './dto/create-member.dto';
 import { QueryMembersDto } from './dto/query-members.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
@@ -62,6 +63,7 @@ export class MembersService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
+    private readonly sessionLifecycle: SessionLifecycleService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -109,6 +111,19 @@ export class MembersService implements OnModuleInit {
       include: MEMBER_DETAIL_INCLUDE,
     });
     if (!row) this.throwNotFound(id);
+    const session = await this.prisma.session.findUnique({
+      where: { memberKey: id },
+      select: {
+        id: true,
+        status: true,
+        workerId: true,
+        instanceRef: true,
+        busyState: true,
+        busySince: true,
+        turnSeq: true,
+        lastTurnOutcome: true,
+      },
+    });
     return {
       ...this.toMemberDto(row),
       groups: (row.teamMembers ?? []).map((seat) => ({
@@ -125,7 +140,31 @@ export class MembersService implements OnModuleInit {
         type: link.notificationChannel.type,
         enabled: link.notificationChannel.enabled,
       })),
+      /** P3 全局会话摘要（null = 还没建立过会话）。 */
+      session: session
+        ? {
+            ...session,
+            busySince: session.busySince
+              ? session.busySince.toISOString()
+              : null,
+          }
+        : null,
     };
+  }
+
+  /**
+   * POST /members/:id/reset-session：成员级全局会话重置（P3）。
+   * 只重置该成员的引擎会话，不动消息/记忆；任务完成不再自动重置。
+   */
+  async resetSession(id: string) {
+    const member = await this.prisma.member.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!member) this.throwNotFound(id);
+    return this.sessionLifecycle.resetMemberSession(id, {
+      reason: 'member_manual_reset',
+    });
   }
 
   /**
