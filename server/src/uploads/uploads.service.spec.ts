@@ -17,17 +17,77 @@ describe('FileStorageService（文件存储基础：文件名生成 / 不限类�
   });
 
   describe('generateFilename', () => {
-    it('生成 UUID + 保留扩展名（杜绝重名/路径穿越）', () => {
+    it('UUID 前缀 + 嵌入原始名（下载不再是一串编号）', () => {
       const name = FileStorageService.generateFilename('报告.PDF');
       expect(name).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.pdf$/,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}__报告\.pdf$/,
       );
-      expect(name).not.toContain('报告');
+      // 还原 → 人类可读名
+      expect(FileStorageService.displayNameFromStored(name)).toBe('报告.pdf');
     });
 
-    it('无扩展名 → 纯 UUID', () => {
+    it('无扩展名 → UUID + 原始名', () => {
       const name = FileStorageService.generateFilename('README');
-      expect(name).toMatch(/^[0-9a-f-]{36}$/);
+      expect(name).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}__README$/,
+      );
+    });
+
+    it('路径穿越 / 隐藏文件 / 控制字符被清洗（只留 basename）', () => {
+      const name = FileStorageService.generateFilename(
+        '../../etc/pa\u0000sswd.docx',
+      );
+      expect(name).not.toContain('/');
+      expect(name).not.toContain('..');
+      expect(FileStorageService.displayNameFromStored(name)).toBe(
+        'passwd.docx',
+      );
+      // 纯点开头被剥掉
+      const hidden = FileStorageService.generateFilename('.env');
+      expect(FileStorageService.displayNameFromStored(hidden)).toBe('env');
+    });
+
+    it('超长名按字节封顶（不会 ENAMETOOLONG）', () => {
+      const long = `${'长'.repeat(200)}.docx`;
+      const name = FileStorageService.generateFilename(long);
+      expect(Buffer.byteLength(name, 'utf8')).toBeLessThan(200);
+      expect(name.endsWith('.docx')).toBe(true);
+    });
+
+    it('buildDownloadDisposition：中文原名进 filename*（RFC 5987），ASCII 兜底不留乱码', () => {
+      const uuid = 'f8a2173c-3924-461d-b927-c4151f71756b';
+      const header = FileStorageService.buildDownloadDisposition(
+        `${uuid}__PR3359 回归测试报告 v8.1.docx`,
+      );
+      expect(header.startsWith('attachment; filename="')).toBe(true);
+      // filename* 是 UTF-8 百分号编码 → 解码回来就是原始名
+      const encoded = header.split("filename*=UTF-8''")[1];
+      expect(decodeURIComponent(encoded)).toBe('PR3359 回归测试报告 v8.1.docx');
+      // 兜底名必须是纯 ASCII（不能把中文直接塞进 filename=）
+      const fallback = header.match(/filename="([^"]*)"/)?.[1] ?? '';
+      // eslint-disable-next-line no-control-regex
+      expect(fallback).toMatch(/^[\x20-\x7e]*$/);
+    });
+
+    it('buildDownloadDisposition：引号/括号等特殊字符不破坏头部', () => {
+      const uuid = 'f8a2173c-3924-461d-b927-c4151f71756b';
+      const header = FileStorageService.buildDownloadDisposition(
+        `${uuid}__a"b(c).txt`,
+      );
+      // filename= 里不能出现裸引号
+      expect(header).toContain('attachment; filename=');
+      expect(header.match(/filename="([^"]*)"/)?.[1]).not.toContain('"');
+      const encoded = header.split("filename*=UTF-8''")[1];
+      expect(decodeURIComponent(encoded)).toBe('a"b(c).txt');
+      expect(encoded).not.toContain('(');
+    });
+
+    it('displayNameFromStored 兼容老文件（纯 UUID 名原样返回）', () => {
+      expect(
+        FileStorageService.displayNameFromStored(
+          'f8a2173c-3924-461d-b927-c4151f71756b.docx',
+        ),
+      ).toBe('f8a2173c-3924-461d-b927-c4151f71756b.docx');
     });
   });
 
@@ -132,11 +192,12 @@ describe('FileStorageService（文件存储基础：文件名生成 / 不限类�
       expect(meta.ext).toBe('pdf');
     });
 
-    it('generateFilename 取 latin1 错位文件名的扩展名仍正确、磁盘名只有 UUID+ext', () => {
+    it('generateFilename 取 latin1 错位文件名的扩展名仍正确、原始名修复后嵌入磁盘名', () => {
       const garbled = Buffer.from('压缩包.zip', 'utf8').toString('latin1');
       const filename = FileStorageService.generateFilename(garbled);
-      expect(filename).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.zip$/,
+      // 修复 latin1 错位后，原始名（含中文）嵌在 `<uuid>__` 之后
+      expect(FileStorageService.displayNameFromStored(filename)).toBe(
+        '压缩包.zip',
       );
     });
   });

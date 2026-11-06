@@ -393,6 +393,32 @@ function PdfPreview({
 
 /* ------------------------------ 主组件：渲染矩阵 ------------------------------ */
 
+/**
+ * 下载/展示文件名：优先原始名，**老数据**回退到「标题 + 扩展名」。
+ *
+ * 背景（2026-11-06 缺陷）：产出物落盘时用的是 `<uuid>.<ext>`，原始名没持久化，
+ * 于是下载下来是一串编号。新数据已把原始名嵌进磁盘名（`<uuid>__<原名>`），
+ * 服务端 describeFileRef 会还原；但**历史文件**磁盘名仍是裸 UUID，事后无法还原，
+ * 这里用产出物标题（就是用户看到的那个名字）+ 扩展名兜底。
+ */
+const BARE_UUID_NAME =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.[a-z0-9]+)?$/i;
+
+function humanFileName(
+  fileName: string | undefined,
+  title: string,
+  fileUrl: string,
+  ext: string,
+): string {
+  const raw = fileName || fileUrl.split(/[\\/]/).pop() || "";
+  if (BARE_UUID_NAME.test(raw)) {
+    const e = ext || raw.split(".").pop() || "";
+    const base = (title || "").trim();
+    if (base) return e ? `${base}.${e}` : base;
+  }
+  return raw || title || "";
+}
+
 export function FilePreview({
   version,
   type,
@@ -411,9 +437,9 @@ export function FilePreview({
     );
   }
 
-  const fileUrl = version.fileUrl ?? version.contentRef;
+    const fileUrl = version.fileUrl ?? version.contentRef;
   const ext = (version.fileExt || extractExtFromUrl(fileUrl)).toLowerCase();
-  const displayName = version.fileName || title || fileUrl.split(/[\\/]/).pop() || "";
+  const displayName = humanFileName(version.fileName, title, fileUrl, ext);
   // P2 判定（与合站页/孪生 artifacts 页同语义）：/uploads/ 前缀 + fileSize==null → 不可访问降级。
   const fileMissing = fileUrl.startsWith("/uploads/") && version.fileSize == null;
   const accessible = isAccessibleFileRef(fileUrl) && !fileMissing;

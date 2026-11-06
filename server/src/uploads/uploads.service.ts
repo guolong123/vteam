@@ -87,14 +87,90 @@ export class FileStorageService {
     return originalname.slice(dot + 1).toLowerCase();
   }
 
-  /** 生成磁盘文件名：`UUID.<ext>`（保留扩展名，杜绝重名/路径穿越）。
-   *  扩展名同样取自**修复编码后**的原始名（busboy 以 latin1 解码中文文件名，
-   *  见 filename-encoding.ts；扩展名 ASCII 通常不受影响，但保持单一可信来源）。 */
+  /** 生成磁盘文件名：`<UUID>__<原始名>`（保留原始名，杜绝重名/路径穿越）。
+   *
+   *  为什么要把原始名嵌进磁盘名（2026-11-06 实测缺陷）：
+   *  此前磁盘名只有 `UUID.ext`，而「下载」用的是静态 URL + `download` 属性；
+   *  `describeFileRef` 只能从 URL 尾段取名字 ⇒ 前端拿到的 `fileName` 是 UUID ⇒
+   *  用户下载下来的文件叫 `f8a2173c-...-c4151f71756b.docx`（截图缺陷）。
+   *  原始名在**落盘时**是已知的（上传链路 file.originalname / 产出物归档 fileName），
+   *  但此前只用于响应 DTO，没有持久化 ⇒ 事后无从还原。
+   *  把清洗后的原始名嵌进文件名后：静态下载、直接开新标签、describeFileRef
+   *  三条路径都能拿到人类可读名；老文件（纯 UUID）保持原行为（降级）。
+   *
+   *  命名规则 `<uuid>__<safe>`：uuid 固定 36 字符 + `__` 分隔，
+   *  `describeFileRef` 用锚定正则剥离，绝不会误伤原始名里自带的 `__`。
+   *
+   *  安全性：原始名只用 basename 且清洗路径分隔符/控制字符/首尾点，
+   *  杜绝路径穿越与隐藏文件；长度按**字节**封顶（中文 3 字节/字，避免 ENAMETOOLONG）。 */
   static generateFilename(originalname: string): string {
-    const ext = FileStorageService.extractExtension(
-      repairMultipartText(originalname),
+    const repaired = repairMultipartText(originalname);
+    const ext = FileStorageService.extractExtension(repaired);
+    const uuid = randomUUID();
+    const safeBase = FileStorageService.sanitizeStoredNameBase(repaired);
+    if (!safeBase) {
+      return ext ? `${uuid}.${ext}` : uuid;
+    }
+    return `${uuid}__${safeBase}`;
+  }
+
+  /**
+   * 由磁盘文件名生成 `Content-Disposition` 值（静态下载用）。
+   *
+   * 只写 `attachment` 不带 filename 时，浏览器只能用 URL 尾段（= UUID）当文件名，
+   * 用户下载下来就是一串编号（2026-11-06 缺陷）。这里：
+   * - `filename=`：ASCII 兜底（非 ASCII 替换成 `_`，兼容老客户端）；
+   * - `filename*=`：RFC 5987 UTF-8 百分号编码（中文/空格/引号都正确）；
+   * - 额外转义 `'()`（RFC 5987 的 attr-char 之外，个别浏览器实现有坑）。
+   */
+  static buildDownloadDisposition(storedName: string): string {
+    const display = FileStorageService.displayNameFromStored(storedName);
+    const fallback =
+      display.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') ||
+      'download';
+    const encoded = encodeURIComponent(display).replace(
+      /['()*]/g,
+      (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
     );
-    return ext ? `${randomUUID()}.${ext}` : randomUUID();
+    return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+  }
+
+  /** 磁盘文件名里 `<uuid>__` 前缀的剥离正则（36 字符 UUID + 双下划线）。 */
+  private static readonly STORED_NAME_PREFIX =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}__/i;
+
+  /** 从磁盘文件名还原人类可读名（无 `<uuid>__` 前缀 → 原样返回，兼容老文件）。 */
+  static displayNameFromStored(stored: string): string {
+    const stripped = stored.replace(FileStorageService.STORED_NAME_PREFIX, '');
+    return stripped.length > 0 ? stripped : stored;
+  }
+
+  /**
+   * 清洗原始名作为磁盘名后缀：仅保留 basename、去掉路径分隔符/控制字符、
+   * 折叠空白、去首尾点，并按 UTF-8 字节数封顶（保扩展名）。
+   * 返回空串表示「不值得嵌」（调用方回落纯 UUID 命名）。
+   */
+  private static sanitizeStoredNameBase(originalname: string): string {
+    const base = (originalname.split(/[\\/]/).pop() ?? '')
+      // 控制字符 + Windows 保留字符（路径分隔符已按 basename 处理）
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^\.+/, '');
+    if (!base) return '';
+    const ext = FileStorageService.extractExtension(base);
+    const stem = ext ? base.slice(0, base.length - ext.length - 1) : base;
+    // 字节封顶：uuid(36) + '__'(2) + stem + '.' + ext 需 < 255 字节，留足余量
+    const MAX_STEM_BYTES = 140;
+    let kept = '';
+    for (const ch of stem) {
+      if (Buffer.byteLength(kept + ch, 'utf8') > MAX_STEM_BYTES) break;
+      kept += ch;
+    }
+    kept = kept.trim();
+    if (!kept) return '';
+    return ext ? `${kept}.${ext}` : kept;
   }
 
   /** 上传成功响应元数据：`{url: '/uploads/<filename>', name, size, ext}`。
@@ -262,9 +338,11 @@ export class FileStorageService {
         size = null;
       }
     }
+    // 磁盘名是 `<uuid>__<原始名>`：对外还原人类可读名（老文件纯 UUID → 原样）
+    const name = FileStorageService.displayNameFromStored(base);
     return {
-      name: base,
-      ext: FileStorageService.extractExtension(base) ?? '',
+      name,
+      ext: FileStorageService.extractExtension(name) ?? '',
       size,
     };
   }

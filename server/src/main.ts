@@ -10,6 +10,7 @@ import {
   SwaggerDocsProvider,
 } from './swagger-mcp/swagger-docs.provider';
 import { resolveUploadDir } from './uploads/uploads.constants';
+import { FileStorageService } from './uploads/uploads.service';
 
 async function bootstrap() {
   // bufferLogs：缓冲 Nest 启动期框架日志，useLogger 后 flush 输出为 pino JSON
@@ -43,7 +44,20 @@ async function bootstrap() {
   app.useStaticAssets(resolveUploadDir(), {
     prefix: '/uploads/',
     setHeaders: (res) => {
-      res.setHeader('Content-Disposition', 'attachment');
+      // 下载文件名：磁盘名是 `<uuid>__<原始名>`（见 uploads.service generateFilename）。
+      // 只写 `attachment` 不带 filename 时，浏览器只能用 URL 尾段当文件名 ⇒ 用户拿到的是
+      // 一串编号（2026-11-06 缺陷）。这里从磁盘名还原原始名并写 RFC 5987 的 filename*。
+      const rawPath = (res.req?.url ?? '').split('?')[0] ?? '';
+      let stored = '';
+      try {
+        stored = decodeURIComponent(rawPath.split('/').pop() ?? '');
+      } catch {
+        stored = rawPath.split('/').pop() ?? '';
+      }
+      res.setHeader(
+        'Content-Disposition',
+        FileStorageService.buildDownloadDisposition(stored),
+      );
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     },

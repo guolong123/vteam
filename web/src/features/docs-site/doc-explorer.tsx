@@ -32,7 +32,7 @@ function FileContentCard({ fileUrl, fileExt, fileName }: { fileUrl: string; file
           <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName}</div>
           <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>{fileExt.toUpperCase()} 文件</div>
         </div>
-        <a href={fileUrl} download style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.sm, border: "none", backgroundColor: ACCENT, color: "#FFF", fontSize: fontSize.sm, fontWeight: 500, textDecoration: "none", cursor: "pointer", fontFamily: fontFamily.body }}>
+        <a href={fileUrl} download={fileName || true} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.sm, border: "none", backgroundColor: ACCENT, color: "#FFF", fontSize: fontSize.sm, fontWeight: 500, textDecoration: "none", cursor: "pointer", fontFamily: fontFamily.body }}>
           <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>↓</span>
           下载
         </a>
