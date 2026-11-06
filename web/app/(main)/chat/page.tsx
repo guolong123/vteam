@@ -75,6 +75,8 @@ function ChatPageContent() {
   const [search, setSearch] = useState("");
   const [convFilter, setConvFilter] = useState<"all" | "group" | "dm">("all");
   const [filterMemberId, setFilterMemberId] = useState<string | null>(null);
+  /** 右栏视图：full = 旧完整任务面板（默认，保留全部既有功能）；compact = 原型三 Tab。 */
+  const [rightPanelMode, setRightPanelMode] = useState<"full" | "compact">("full");
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
@@ -495,6 +497,7 @@ function ChatPageContent() {
                   </span>
                 ))}
               </div>
+              <button type="button" onClick={() => setRightPanelMode((v) => (v === "full" ? "compact" : "full"))} style={{ fontSize: fontSize.xs, color: neutral[600], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>{rightPanelMode === "full" ? "精简面板" : "完整面板"}</button>
               <a href={`/teams/${teamId}`} style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px" }}>群设置</a>
             </header>
 
@@ -537,11 +540,11 @@ function ChatPageContent() {
             )}
 
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <TeamSessionView teamId={teamId} embedded hideRightPanel filterMemberId={filterMemberId} />
+              <TeamSessionView teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} />
             </div>
           </div>
 
-          <GroupContextPanel
+          {rightPanelMode === "compact" && <GroupContextPanel
             team={team}
             active={active}
             tasks={teamTasks}
@@ -550,7 +553,7 @@ function ChatPageContent() {
             memberById={memberById}
             filterMemberId={filterMemberId}
             onFilterMember={(seatId: string | null) => setFilterMemberId(seatId)}
-          />
+          />}
         </div>
       ) : memberId && dmTeamId ? (
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
