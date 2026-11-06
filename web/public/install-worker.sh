@@ -204,16 +204,41 @@ fi
 # 目标：git/curl/node/opencode 无需用户预装。node 缺失时下载官方二进制到 $HOME/.local/node；
 # opencode 缺失时按 --opencode 指定版本（缺省 latest）经 npm 全局安装。
 
+# 干净机器（新容器/新系统）上 apt 索引通常是空的：直接 `apt-get install` 会
+# "Unable to locate package"，故先 update 一次（全程只做一次，失败仅告警不阻断）。
+APT_INDEX_READY=""
+ensure_apt_index() {
+  if [ -n "${APT_INDEX_READY}" ]; then
+    return 0
+  fi
+  APT_INDEX_READY="1"
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "[install-worker] 刷新 apt 索引（apt-get update）..."
+    apt-get update -qq >&2 || echo "[install-worker] ⚠️  apt-get update 失败，继续尝试安装（可能命中本地缓存）" >&2
+  fi
+}
+
 ensure_git_curl() {
   local missing=()
-  for cmd in git curl tar; do
+  # ⚠️ xz 必须一起装：Node 的发行包是 .tar.xz，`tar -xJf` 依赖 xz-utils；
+  # 干净 Debian/Ubuntu 常缺它 ⇒ 报 "xz: Cannot exec: No such file or directory"。
+  for cmd in git curl tar xz; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "[install-worker] 缺少系统工具 ${missing[*]}，尝试 apt 安装..."
     if command -v apt-get >/dev/null 2>&1; then
-      if ! apt-get install -y "${missing[@]}" >&2; then
-        echo "[install-worker] ERROR: 自动安装 ${missing[*]} 失败，请手动安装后重试" >&2
+      ensure_apt_index
+      # 命令名 ≠ 包名：Debian 的 xz 在 xz-utils 包里（其余同名）
+      local -a pkgs=()
+      for cmd in "${missing[@]}"; do
+        case "$cmd" in
+          xz) pkgs+=("xz-utils") ;;
+          *) pkgs+=("$cmd") ;;
+        esac
+      done
+      if ! apt-get install -y "${pkgs[@]}" >&2; then
+        echo "[install-worker] ERROR: 自动安装 ${missing[*]}（包：${pkgs[*]}）失败，请手动安装后重试" >&2
         exit 1
       fi
     else
@@ -240,9 +265,39 @@ ensure_node() {
   esac
   local base="${HOME}/.local/node"
   mkdir -p "$base"
-  local tarball="${TMPDIR:-/tmp}/node-${node_ver}-linux-${arch}.tar.xz"
-  curl -fsSL "https://nodejs.org/dist/${node_ver}/node-${node_ver}-linux-${arch}.tar.xz" -o "$tarball"
-  tar -xJf "$tarball" -C "$base" --strip-components=1
+  # 没有 xz 就下 .tar.gz（node 官方两种都有）；有 xz 用 .tar.xz（体积小一半）。
+  # ⚠️ 必须先判定再拼文件名（踩过：变量在后面才赋值 → unbound variable）。
+  local node_ext="tar.xz"
+  local tar_flag="-xJf"
+  if ! command -v xz >/dev/null 2>&1; then
+    node_ext="tar.gz"
+    tar_flag="-xzf"
+    echo "[install-worker] 未检测到 xz，改用 .tar.gz 发行包"
+  fi
+  local tarball="${TMPDIR:-/tmp}/node-${node_ver}-linux-${arch}.${node_ext}"
+  # 下载健壮性（实测踩坑）：nodejs.org 走 HTTP/2 偶发
+  # `curl: (18) HTTP/2 stream ... not closed cleanly`（大文件必现于部分网络），
+  # 故强制 HTTP/1.1 + 重试；再失败回退国内镜像（npmmirror 的 node dist 同步）。
+  local node_file="node-${node_ver}-linux-${arch}.${node_ext}"
+  local -a mirrors=(
+    "https://nodejs.org/dist/${node_ver}/${node_file}"
+    "https://registry.npmmirror.com/-/binary/node/${node_ver}/${node_file}"
+    "https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/${node_ver}/${node_file}"
+  )
+  local downloaded=""
+  for url in "${mirrors[@]}"; do
+    echo "[install-worker] 下载 ${url}"
+    if curl -fsSL --http1.1 --retry 3 --retry-delay 2 --connect-timeout 20 "${url}" -o "$tarball"; then
+      downloaded="$url"
+      break
+    fi
+    echo "[install-worker] ⚠️  该源下载失败，尝试下一个 ..." >&2
+  done
+  if [ -z "${downloaded}" ]; then
+    echo "[install-worker] ERROR: Node.js 下载失败（已尝试 ${#mirrors[@]} 个源）。请手动安装 Node >= ${min_major} 后重跑。" >&2
+    exit 1
+  fi
+  tar ${tar_flag} "$tarball" -C "$base" --strip-components=1
   rm -f "$tarball"
   export PATH="$base/bin:$PATH"
   echo "[install-worker] Node.js 已安装：$(node --version)（npm $(npm --version)）"
@@ -443,6 +498,7 @@ ensure_dsh() {
       command -v sudo >/dev/null 2>&1 && sudo_prefix="sudo"
     fi
     if command -v apt-get >/dev/null 2>&1; then
+      ensure_apt_index
       ${sudo_prefix} apt-get install -y bubblewrap >&2 || true
     elif command -v dnf >/dev/null 2>&1; then
       ${sudo_prefix} dnf install -y bubblewrap >&2 || true
@@ -521,7 +577,7 @@ if [ -d "${INSTALL_DIR}/worker/dist" ] && [ -f "${INSTALL_DIR}/worker/package.js
 else
   echo "[install-worker] 下载 worker 发布包：${WORKER_SRC_URL} → ${INSTALL_DIR}/worker"
   local_tarball="${TMPDIR:-/tmp}/worker-src.tar.gz"
-  curl -fsSL "$WORKER_SRC_URL" -o "$local_tarball"
+  curl -fsSL --http1.1 --retry 3 --retry-delay 2 "$WORKER_SRC_URL" -o "$local_tarball"
   mkdir -p "${INSTALL_DIR}/worker"
   tar -xzf "$local_tarball" -C "${INSTALL_DIR}/worker"
   rm -f "$local_tarball"
@@ -594,15 +650,6 @@ if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
   esac
   update_env WORKER_ADVERTISE_HOST "${WORKER_ADVERTISE_HOST}"
 fi
-# opencode serve 相关（仅 opencode 引擎需要；dsh 无 serve 子进程）
-if [ "${ENGINE}" = "opencode" ]; then
-if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
-  # 缺省即 0.0.0.0（保持既有安装不变）；显式传 127.0.0.1 可退回仅本机（v2 下同样可用）。
-  update_env OPENCODE_SERVE_HOSTNAME "${WORKER_SERVE_HOSTNAME}"
-  if [ "${WORKER_SERVE_HOSTNAME}" != "127.0.0.1" ]; then
-    echo "[install-worker] serve 监听 ${WORKER_SERVE_HOSTNAME}（所有网卡；v2 下控制面不连 serve——它只调执行端点 <advertise-host>:4198；serve 带 Basic Auth，仍建议限制来源 IP）"
-  fi
-fi
 if [ -n "${WORK_DIR}" ]; then
   update_env WORK_DIR "${WORK_DIR}"
 fi
@@ -629,6 +676,16 @@ if [ "${ENGINE}" = "dsh" ]; then
   # 上面这些 --dsh-* 只是给离线/特殊网关场景的可选覆盖，不填也能正常注册与接活。
   echo "[install-worker] dsh 模型由控制面下发（「模型管理 → Providers」需配好 baseUrl/请求头与该 provider 的 API key）；--dsh-* 仅为可选覆盖"
 fi
+# opencode serve 相关（仅 opencode 引擎需要；dsh 无 serve 子进程）
+if [ "${ENGINE}" = "opencode" ]; then
+if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
+  # 缺省即 0.0.0.0（保持既有安装不变）；显式传 127.0.0.1 可退回仅本机（v2 下同样可用）。
+  update_env OPENCODE_SERVE_HOSTNAME "${WORKER_SERVE_HOSTNAME}"
+  if [ "${WORKER_SERVE_HOSTNAME}" != "127.0.0.1" ]; then
+    echo "[install-worker] serve 监听 ${WORKER_SERVE_HOSTNAME}（所有网卡；v2 下控制面不连 serve——它只调执行端点 <advertise-host>:4198；serve 带 Basic Auth，仍建议限制来源 IP）"
+  fi
+fi
+
 # 固定 opencode serve 端口（安装时选定一次，重启不再漂移）：
 # - 显式 --serve-port 总是覆盖（--serve-port 0 = 明确改回随机，后续重装也保留 0）；
 # - .env 已有 OPENCODE_SERVE_PORT（含 0）则保留（重复安装不换端口）；
