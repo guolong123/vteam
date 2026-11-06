@@ -296,7 +296,6 @@ export default function WorkerInstallPage() {
      ⚠️ v1 的 npm 包 opencode-ai 冻结在 1.19.3（永不到 v2），worker 启动期版本闸门要求主版本 ≥ 2
      → 选 v1 会让 worker 启动即判死；≥3 会被 install-worker.sh 硬失败拦下（worker 驱动只验证过 v2）。
      ℹ️ docker 路径不受本选择影响：镜像内 opencode 由构建期 OPENCODE_CLI_SPEC 锁死为 2.0.32。 */
-  const [opencodeVersion, setOpencodeVersion] = useState("latest");
 
   /* worker 镜像（docker 路径专用）：完整镜像引用（仓库 + tag），可编辑。
      缺省 = Docker Hub 上发布流水线推送的 guojongg/vteam-worker:latest
@@ -312,7 +311,6 @@ export default function WorkerInstallPage() {
 
   /* 网络可达性（可选）：外部/跨机 worker 专用，空值不拼接命令——集群内/本机无需配置 */
   const [advertiseHost, setAdvertiseHost] = useState("");
-  const [serveHostname, setServeHostname] = useState("");
   /**
    * 执行引擎：opencode（缺省）/ dsh。dsh 需要 Node 24 + dsh CLI + bubblewrap（脚本自动装）。
    * ⚠️ **模型路由与凭据不在安装时填**：provider 的 baseUrl / 请求头 / API key 都由控制面
@@ -320,7 +318,6 @@ export default function WorkerInstallPage() {
    */
   const [engine, setEngine] = useState<"opencode" | "dsh">("opencode");
   const [mcpUrl, setMcpUrl] = useState("");
-  const [workDir, setWorkDir] = useState("");
 
   /* serverUrl 初始值：页面 origin 但端口 13001(web)→13000(server)修正——worker 须直连 server，
      跟随 web origin 会连错（compose 反代架构）；用户可手动修改 */
@@ -380,8 +377,8 @@ export default function WorkerInstallPage() {
   const dshDockerEnv = "-e WORKER_ENGINE=dsh";
 
   const curlCommand = isDsh
-    ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh --worker-id ${workerId} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`
-    : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`;
+    ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh --worker-id ${workerId} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`
+    : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
   const dockerCommand = isDsh
     ? `docker run -d --name dsh-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
     : `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
@@ -389,35 +386,29 @@ export default function WorkerInstallPage() {
   const command = method === "curl" ? curlCommand : dockerCommand;
 
   const curlSteps = [
-    "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
-    "脚本自动安装前置（node / opencode CLI v2（@opencode/cli，缺省按 npm latest 装最新已发布的 v2）缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / v2 serve 恒开鉴权的 OPENCODE_SERVER_PASSWORD 由脚本随机生成 / --advertise-host 传入的 IP 由脚本自动补全为 http://<ip> 作为 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
-    "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度；控制面随后只拨 worker 的执行端点 <上报主机>:4198（opencode serve 不再对外）",
+    "在目标机器执行右侧 curl 命令（无需控制面反向可达）",
+    "脚本自动装 Node / opencode CLI v2，下载 worker 发布包并写 .env（含随机 serve 密码），随后注册入池",
+    "控制面只拨 worker 的执行端点 <上报主机>:4198；外部机器请填写「上报 IP」",
   ];
 
   const curlDshSteps = [
-    "在目标机器执行命令：脚本会自动装 Node ≥ 24.9（dsh 要求）、dsh CLI（@deepseek-ai/dsh@0.2.2-alpha.2）与 bubblewrap，并给全局 dsh 打上「bwrap 不挂 /proc」沙箱补丁",
-    "⚠️ 请用**普通用户**运行（不要 root/sudo）：bubblewrap 以 root 运行会走特权路径，受限内核上没有 CAP_SYS_ADMIN 会直接失败（沙箱不可用）",
-    "模型与凭据不需要在安装时填：脚本只写 WORKER_ENGINE=dsh，worker 启动后从控制面拉取 provider 凭据（apiKeyEnv 机制）、模型由控制面按任务派发。前提是「模型管理 → Providers」里该 provider 已配好 baseUrl 与请求头",
-    "脚本以 systemd 用户级服务守护（无 systemd 环境回退前台）；注册使用 X_WORKER_TOKEN，外部/跨机 worker 需填写「上报 IP」",
-    "等待首次心跳：控制面按注册上报的 <上报主机>:4198 直连执行端点；dsh 没有 opencode serve",
+    "在目标机器用普通用户执行命令（不要 root：bwrap 走特权路径会失败）",
+    "脚本自动装 Node ≥ 24.9、dsh CLI、bubblewrap，并给全局 dsh 打「bwrap 不挂 /proc」补丁",
+    "模型与凭据由控制面下发，无需填写；注册后控制面直连 <上报主机>:4198",
   ];
 
   const dockerSteps = [
-    "在目标机器执行 docker run 命令，拉取「worker 镜像」字段指定的镜像（缺省 guojongg/vteam-worker:latest；内网机器改填 docker-hosted.ketaops.cc/ketaops/vteam-worker、docker-release.ketaops.cc/ketaops/vteam-worker 等内网仓库；镜像内 opencode 版本由构建期 OPENCODE_CLI_SPEC 锁定为 @opencode/cli@2.0.32，运行期改不了）",
-    "⚠️ 镜像必须含 opencode v2 适配：latest 自 v1.1.0 起已带 v2 适配（v1.1.0 是首个带 v2 适配的发布）；v1.0.x 各 tag 仍是 v1 worker（v1 worker + v1 opencode CLI），与 v2 控制面不兼容（控制面调 worker 执行端点返回 404，消息不跑但界面显示在线）⇒ 勿钉 v1.0.x tag，请钉 ≥ v1.1.0",
-    "容器启动后读取环境变量注入的 SERVER_URL / WORKER_ID / 能力声明（WORKER_MAX_INSTANCES → 上报 capabilities.maxInstances）并注册（X_WORKER_TOKEN 注册鉴权必填；OPENCODE_SERVER_PASSWORD 为 v2 serve 恒开鉴权必填项，命令中已用 openssl rand 现场生成；外部/跨机 worker 需在上方填写「上报 IP」）",
-    "SERVER_URL 必须是目标机器能访问到的控制面地址：跨机 worker 填控制面的集群可达地址（如 http://<控制面可达 IP>:13000），别留 127.0.0.1——那指向 worker 机器自身，页面缺省值正是本机 origin",
-    "等待首次心跳：宿主机端口 4198 是 worker 的执行端点（控制面按注册上报的 <上报主机>:4198 拨，X-Worker-Token 鉴权）；opencode serve 只在容器内使用，无需映射到宿主机",
+    "在目标机器执行 docker run 命令（镜像需含 opencode v2 适配，≥ v1.1.0）",
+    "容器读取 SERVER_URL / WORKER_ID / WORKER_MAX_INSTANCES 后注册入池",
+    "控制面只拨执行端点 4198；跨机请填写「上报 IP」，SERVER_URL 不要留 127.0.0.1",
   ];
 
-  /** dsh 引擎的 docker 步骤（与 opencode 的差异：无 serve 密码、必须给 DSH_* 凭据、非 root 沙箱）。 */
   const dockerDshSteps = [
-    "在目标机器执行 docker run 命令，拉取「worker 镜像」字段指定的镜像（缺省 guojongg/vteam-worker-dsh:latest：node 24 + dsh CLI + bubblewrap，已内置「bwrap 不挂 /proc」沙箱补丁）",
-    "模型与凭据不需要在安装时填：容器只带 WORKER_ENGINE=dsh，启动后从控制面拉取 provider 凭据（apiKeyEnv 机制），模型由控制面按任务派发。前提是「模型管理 → Providers」里该 provider 已配好 baseUrl 与请求头",
-    "容器注册使用 X_WORKER_TOKEN（注册鉴权必填）；外部/跨机 worker 需在上方填写「上报 IP」，否则控制面拨不到 <上报主机>:4198 执行端点",
-    "SERVER_URL 必须是目标机器能访问到的控制面地址（跨机别留 127.0.0.1——那指向 worker 机器自身）",
-    "等待首次心跳：宿主机端口 4198 是执行端点（控制面按注册上报的 <上报主机>:4198 直连，X-Worker-Token 鉴权）；dsh 没有 opencode serve，无需映射 4000",
+    "在目标机器执行 docker run 命令（镜像缺省 vteam-worker-dsh，已内置沙箱补丁）",
+    "只带 WORKER_ENGINE=dsh 即可：模型与凭据由控制面下发、按任务派发",
+    "控制面直连 <上报主机>:4198；跨机请填写「上报 IP」",
   ];
+
   const steps = method === "curl" ? (isDsh ? curlDshSteps : curlSteps) : isDsh ? dockerDshSteps : dockerSteps;
 
   /* Tab 配置 */
@@ -463,8 +454,8 @@ export default function WorkerInstallPage() {
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: space.xl,
-              padding: `${space.xxl}px`,
+              gap: space.lg,
+              padding: `${space.xl}px`,
               borderRadius: radius.lg,
               backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
@@ -479,7 +470,7 @@ export default function WorkerInstallPage() {
                 <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>
                   基础配置
                 </span>
-                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>对齐 11.2 Worker 注册配置</span>
+
               </div>
 
               <FieldRow
@@ -524,7 +515,7 @@ export default function WorkerInstallPage() {
                 </div>
               </FieldRow>
 
-              <FieldRow label="控制面地址（serverUrl）" hint="worker 直连 server（非 web 端口）；默认已由页面地址自动修正，可手动改">
+              <FieldRow label="控制面地址" hint="worker 直连 server 的地址（已自动填本机 origin）">
                 <input
                   data-testid="server-url-input"
                   value={serverUrl}
@@ -534,7 +525,7 @@ export default function WorkerInstallPage() {
                 />
               </FieldRow>
 
-              <FieldRow label="Worker 标识（workerId）" hint="全局唯一 · 自动生成可修改">
+              <FieldRow label="Worker 标识" hint="全局唯一，可改">
                 <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
                   <input
                     data-testid="worker-id-input"
@@ -565,7 +556,7 @@ export default function WorkerInstallPage() {
                 </div>
               </FieldRow>
 
-              <FieldRow label="注册 token（workerToken）" hint="自动拉取 server WORKER_TOKEN · 可手动修改">
+              <FieldRow label="注册 token" hint="已自动填 server WORKER_TOKEN">
                 <input
                   type="password"
                   data-testid="worker-token-input"
@@ -578,67 +569,35 @@ export default function WorkerInstallPage() {
               </FieldRow>
 
               {/* 能力声明：并发上限 + opencode 版本 */}
-              <div data-testid="capability-config" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
-                <FieldRow label="并发上限" hint="能力声明 · 调度依据（写入 WORKER_MAX_INSTANCES）">
-                  <select
-                    value={concurrency}
-                    onChange={(e) => setConcurrency(Number(e.target.value))}
-                    style={{ ...inputStyle, cursor: "pointer" }}
-                  >
-                    {[2, 4, 6, 8, 12, 16].map((n) => (
-                      <option key={n} value={n}>
-                        {n} 并发
-                      </option>
-                    ))}
-                  </select>
-                </FieldRow>
-                {!isDsh && (
-                <FieldRow label="opencode 版本" hint="v2（主版本 ≥ 2）· 缺省 latest（最新 v2）· 仅 curl 脚本路径可选">
-                  <select
-                    value={opencodeVersion}
-                    onChange={(e) => setOpencodeVersion(e.target.value)}
-                    title="缺省按 npm 的 latest 标签安装 @opencode/cli（最新已发布的 v2）。需要可复现的版本时，把鼠标移到本下拉上选一个具体版本（如 2.0.32），生成的命令会带上 --opencode <版本>。"
-                    style={{ ...inputStyle, cursor: "pointer" }}
-                  >
-                    <option value="latest">latest（@opencode/cli 最新 v2 · 默认）</option>
-                    <option value="2.0.32">2.0.32（@opencode/cli · 镜像锁版 · 可复现）</option>
-                    <option value="2.0.28">2.0.28（@opencode/cli · 实测版本）</option>
-                  </select>
-                  <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>
-                    curl 脚本路径缺省装 npm 的 latest（v2 包最新已发布版本），把鼠标移到版本上可选具体版本钉版；
-                    docker 路径用的是镜像内置的锁定版 opencode（2.0.32）——两条路径可能落在不同 opencode
-                    版本上，但都满足 worker 的「主版本 ≥ 2」闸门。
-                  </span>
-                </FieldRow>
-                )}
-              </div>
+              <FieldRow label="并发上限" hint="写入 WORKER_MAX_INSTANCES · 控制面按此调度">
+                <select
+                  data-testid="concurrency-select"
+                  value={concurrency}
+                  onChange={(e) => setConcurrency(Number(e.target.value))}
+                  style={{ ...inputStyle, cursor: "pointer" }}
+                >
+                  {[2, 4, 6, 8, 12, 16].map((n) => (
+                    <option key={n} value={n}>
+                      {n} 并发
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
 
               {isDsh && (
                 <div
                   data-testid="dsh-config"
                   style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: space.xs,
-                    padding: `${space.md}px`,
+                    padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
                     border: `1px solid ${neutral[200]}`,
                     backgroundColor: neutral[50],
+                    fontSize: fontSize.xs,
+                    lineHeight: 1.6,
+                    color: neutral[500],
                   }}
                 >
-                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>
-                    dsh 引擎：模型与凭据由「模型管理」下发
-                  </span>
-                  <span style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.7 }}>
-                    安装时不需要填写 provider / 模型 / API key / 网关地址：worker 启动后从控制面拉取
-                    provider 凭据（dsh 的 <code style={{ fontFamily: fontFamily.mono }}>apiKeyEnv</code> 机制），
-                    模型由控制面按任务派发指定。
-                    <br />
-                    唯一前提：该 provider 在「模型管理 → Providers」里已配好 <b>baseUrl</b> 与<b>请求头</b>
-                    （如 opencode-go 需要 <code style={{ fontFamily: fontFamily.mono }}>x-opencode-session</code> 与
-                    <code style={{ fontFamily: fontFamily.mono }}> https://opencode.ai/inference/go/v1</code>）；
-                    没配 baseUrl 时 dsh 会回落到 <code style={{ fontFamily: fontFamily.mono }}>https://&lt;provider&gt;/v1</code>（通常不存在）。
-                  </span>
+                  dsh 的模型与凭据由「模型管理」下发，安装时无需填写；前提是该 provider 已配好 baseUrl 与请求头。
                 </div>
               )}
 
@@ -649,7 +608,7 @@ export default function WorkerInstallPage() {
                   <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>外部/跨机 worker 必填 · 集群内留空</span>
                 </div>
 
-                <FieldRow label="上报 IP（advertise-host）" hint="只填 IP 如 192.168.1.100，http:// 与端口自动处理；控制面按 <上报主机>:4198 拨执行端点">
+                <FieldRow label="上报 IP（advertise-host）" hint="只填 IP，如 192.168.1.100">
                   <input
                     data-testid="advertise-host-input"
                     value={advertiseHost}
@@ -660,36 +619,12 @@ export default function WorkerInstallPage() {
                   />
                 </FieldRow>
 
-                {!isDsh && (
-                <FieldRow label="监听地址（serve-hostname）" hint="opencode serve 监听地址 · v2 下控制面不连 serve（只拨执行端点 4198），跨机 worker 也可留空">
-                  <input
-                    data-testid="serve-hostname-input"
-                    value={serveHostname}
-                    onChange={(e) => setServeHostname(e.target.value)}
-                    placeholder="0.0.0.0"
-                    spellCheck={false}
-                    style={inputStyle}
-                  />
-                </FieldRow>
-                )}
-
-                <FieldRow label="MCP 地址（mcp-url）" hint="默认已填当前控制面内置 MCP 入口 · 外部/集群外场景可改">
+                <FieldRow label="MCP 地址（mcp-url）" hint="缺省已填当前控制面内置 MCP 入口">
                   <input
                     data-testid="mcp-url-input"
                     value={mcpUrl}
                     onChange={(e) => setMcpUrl(e.target.value)}
                     placeholder="http://<控制面外部地址>/api/v1/platform-mcp"
-                    spellCheck={false}
-                    style={inputStyle}
-                  />
-                </FieldRow>
-
-                <FieldRow label="工作目录（work-dir）" hint="缺省 /data/vteam-worker · 注入落点（opencode.json/技能/工具）；需持久化/固定目录时可设">
-                  <input
-                    data-testid="work-dir-input"
-                    value={workDir}
-                    onChange={(e) => setWorkDir(e.target.value)}
-                    placeholder="/data/vteam-worker"
                     spellCheck={false}
                     style={inputStyle}
                   />

@@ -219,6 +219,10 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
 /** 动态段路由优先判定：/workers/:id → Worker 详情 */
 function resolvePageTitle(pathname: string): { title: string; subtitle: string } {
   const parts = pathname.split("/").filter(Boolean);
+  // /workers/install 是安装向导，不是节点详情 —— 先命中这一条（否则会落到"Worker 详情"）
+  if (parts[0] === "workers" && parts[1] === "install") {
+    return { title: "安装 Worker 节点", subtitle: "选择引擎 · 一键命令 · 注册入池" };
+  }
   if (parts[0] === "workers" && parts.length === 2) {
     return EXTRA_PAGE_TITLE["/workers/[id]"];
   }
