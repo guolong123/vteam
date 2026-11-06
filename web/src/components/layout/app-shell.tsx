@@ -101,6 +101,7 @@ const CONTENT_LEFT_PAD = RAIL_W + 24;
 /** 导航 key → 路由路径（与 NAV_ITEMS 对齐，团队为登录后默认工作台） */
 const KEY_TO_PATH: Record<string, string> = {
   teams: "/teams",
+  members: "/members",
   issues: "/issues",
   agents: "/agents",
   workers: "/workers",
@@ -143,6 +144,7 @@ const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
  */
 const CMDK_NAV_PATH: Record<string, string> = {
   团队管理: "/teams",
+  成员库: "/members",
   "Issue 管理": "/issues",
   "Agent 管理": "/agents",
   "Worker 节点": "/workers",
@@ -163,6 +165,7 @@ const CMDK_NAV_PATH: Record<string, string> = {
  */
 const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
   teams: (p) => hasPermission(p, "teams"),
+  members: (p) => hasPermission(p, "members"),
   agents: (p) => hasPermission(p, "agents"),
   workers: (p) => hasPermission(p, "workers"),
   skills: (p) => hasPermission(p, "skills"),
@@ -204,6 +207,7 @@ interface WorkerSummaryRow {
 /** 页面标题（顶栏左侧，无面包屑时展示；对齐各页原型 NavTopBar） */
 const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   teams: { title: "团队管理", subtitle: "全局团队 · 成员多实例 · 队列与会话复用" },
+  members: { title: "成员库", subtitle: "平台级成员：先建人、再建群；一个成员可加入多个群聊" },
   board: { title: "任务看板", subtitle: "" },
   issues: { title: "Issue 管理", subtitle: "任务内 issue 协作与状态流转" },
   agents: { title: "Agent 管理", subtitle: "配置角色、技能与权限" },
