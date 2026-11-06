@@ -428,7 +428,20 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         ) : versionQuery.isPending ? (
           <span style={{ color: neutral[400] }}>加载中…</span>
         ) : versionQuery.data ? (
-          <div ref={captureRef} data-testid="docs-pdf-capture" style={{ background: "transparent" }}>
+          <div
+            ref={captureRef}
+            data-testid="docs-pdf-capture"
+            style={{
+              background: "transparent",
+              // 让富预览（office / PDF）能撑满内容区：内容区是 flex:1 的定高容器，
+              // 这里给到 100% 高度 + flex 列，子级才能用 flex/height:100% 铺满。
+              // 文本/markdown/图片仍是内容自适应（不会被拉伸）。
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
             <FilePreview version={versionQuery.data} type={type} title={title} />
           </div>
         ) : null}

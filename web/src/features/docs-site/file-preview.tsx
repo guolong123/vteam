@@ -396,7 +396,7 @@ function PdfPreview({
     return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
   }
   return (
-    <div data-testid="docs-content-view" data-render="pdf" style={{ display: "flex", flexDirection: "column", gap: space.sm, ...baseFont }}>
+    <div data-testid="docs-content-view" data-render="pdf" style={{ display: "flex", flexDirection: "column", gap: space.sm, height: "100%", minHeight: 0, ...baseFont }}>
       <iframe
         data-testid="docs-pdf-frame"
         sandbox="allow-same-origin"
@@ -404,7 +404,16 @@ function PdfPreview({
         title={title}
         onError={() => setFailed(true)}
         onLoad={() => setLoaded(true)}
-        style={{ display: "block", width: "100%", height: 480, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: neutral[50] }}
+        style={{
+          display: "block",
+          width: "100%",
+          // 与 office 预览一致：铺满内容区高度（滚动交给 PDF 阅读器自身）
+          flex: "1 1 auto",
+          minHeight: 320,
+          border: `1px solid ${neutral[200]}`,
+          borderRadius: radius.md,
+          backgroundColor: neutral[50],
+        }}
       />
     </div>
   );
@@ -426,7 +435,17 @@ function OfficeShell({
     <div
       data-testid="docs-content-view"
       data-render="office"
-      style={{ display: "flex", flexDirection: "column", gap: space.sm, ...baseFont }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: space.sm,
+        // 撑满内容区（父链：docs 内容区 flex:1 → capture 包裹层 height:100% →
+        // 这里的 height:100%）。office 预览是"看整页"的场景，下面留一大片空白
+        // 是纯浪费（2026-11-06 用户反馈：下面还有很多空间，要铺满）。
+        height: "100%",
+        minHeight: 0,
+        ...baseFont,
+      }}
     >
       {status === "loading" && (
         <div data-testid="docs-office-loading" style={{ fontSize: fontSize.sm, color: neutral[500] }}>
@@ -502,8 +521,10 @@ function DocxFilePreview({
           borderRadius: radius.md,
           padding: space.md,
           backgroundColor: neutral[50],
+          // 填满剩余高度，滚动发生在预览内部（头部的标题/页签保持可见）
+          flex: "1 1 auto",
+          minHeight: 0,
           overflow: "auto",
-          maxHeight: 640,
         }}
       />
     </OfficeShell>
@@ -622,7 +643,7 @@ function SheetFilePreview({
           ))}
         </div>
       )}
-      <div data-testid="docs-sheet-body" style={{ overflow: "auto", maxHeight: 640, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
+      <div data-testid="docs-sheet-body" style={{ overflow: "auto", flex: "1 1 auto", minHeight: 0, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
         <table style={{ borderCollapse: "collapse", fontSize: fontSize.xs, fontFamily: fontFamily.mono, width: "100%" }}>
           <tbody>
             {sheet.rows.map((row, rowIndex) => (
