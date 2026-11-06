@@ -25,6 +25,8 @@ replicaCount:
   ## worker 的 GET /integrations，收缩到 0 会让 Provider 下拉直接降级为空
   ## （外部旧版 worker 不支持该端点）。helm upgrade 会按此值收敛 StatefulSet。
   worker: 1
+  ## dsh 引擎 worker 副本数（仅 workerDsh.enabled=true 时生效）
+  workerDsh: 1
 
 ## ---------------------------------------------------------------------------
 ## 敏感配置
@@ -49,6 +51,11 @@ secret:
   workerToken: ""          # 空 → 自动生成（32 字符随机）
   modelCredentialKey: ""   # 空 → 自动生成（32 字节 utf8，满足 AES-256-GCM 约束）
   dbPassword: ""           # 空 → 自动生成（16 字符随机）
+  ## dsh 引擎的模型 API key（workerDsh.enabled=true 时必需）。
+  ## 与其它 key 不同：**显式提供时优先于已有 Secret**（API key 需要能轮换），
+  ## 未提供则复用 Secret 里已有的 DSH_API_KEY；两者都没有 → 不渲染该 key
+  ## （dsh worker 会因缺凭据在首次模型调用时失败，故启用 dsh 时必须提供）。
+  dshApiKey: ""
   existingSecret: ""       # 外部 Secret 名（data 含 JWT_SECRET 等同名 key，含 OPENCODE_SERVER_PASSWORD）
 
 ## ---------------------------------------------------------------------------
@@ -238,6 +245,72 @@ worker:
   ## 设置数字时仅更新 ordinal >= partition 的副本（如升级场景先升 worker-1 保留 worker-0）。
   updateStrategy:
     partition: ""            # 空 → 不渲染 rollingUpdate（默认全量）
+
+## ---------------------------------------------------------------------------
+## dsh 引擎 worker（可选，与上面的 opencode worker **并存**）
+## ---------------------------------------------------------------------------
+## 为什么单独一套 StatefulSet 而不是给 worker 加个开关：
+##   dsh 与 opencode 是**两个不同镜像**（node 24 + dsh CLI + bubblewrap vs node 22 +
+##   opencode CLI + Chrome/OmO），运行时依赖、镜像体积、缓存层完全不同；且两者可以
+##   **同时在线**——控制面按 worker 上报的 capabilities.engine 分派，同一团队可以既有
+##   opencode 节点又有 dsh 节点（灰度/对比验证的常规做法）。
+##   ⇒ 独立 StatefulSet + 独立 headless Service + 独立 PVC，互不影响。
+## 启用方式：
+##   --set workerDsh.enabled=true --set secret.dshApiKey=<key>
+##   （deploy-k8s.sh 用 --with-dsh 自动带上镜像/版本/凭据）
+## 与 opencode worker 的差异：
+##   - 无 opencode serve（:4000）⇒ 无 serve Service / 无 opencode ingress；
+##     只有执行端点 :4198（控制面按 capabilities.execPort 直连）
+##   - 模型凭据**只经 env 下发**（DSH_API_KEY）：dsh 引擎没有控制面下发凭据的通道
+##     （worker/src/engine/dsh/runtime.ts 明确「凭据下发尚未实现」），故必须显式给
+##   - 运行时 home 是 DSH_HOME_DIR（不是 $HOME/.opencode）
+## ---------------------------------------------------------------------------
+workerDsh:
+  enabled: false
+  image:
+    ## Dockerfile: ./worker/Dockerfile.dsh（node 24 + dsh CLI + bubblewrap）
+    repository: docker.ketaops.cc/guojongg/vteam-worker-dsh
+    tag: latest
+    pullPolicy: IfNotPresent
+  env:
+    ## dsh 模型路由（DSH_PROVIDER / DSH_MODEL / DSH_BASE_URL）
+    ## provider 缺省 deepseek-official；走 opencode-go 网关时填 opencode-go + baseUrl
+    provider: opencode-go
+    model: deepseek-v4.1-flash
+    baseUrl: ""
+    ## provider 请求头（部分网关要求，如 opencode-go 的 x-opencode-session）
+    sessionHeader: ""
+    sessionHeaderValue: ""
+    ## dsh 运行时 home（隔离；每个 worker 一个，挂 PVC）
+    dshHomeDir: /data/dsh-home
+    workDir: /data/vteam-worker
+    ## 首字超时 ms（dsh 是 committed 粒度，首字延迟比 opencode 高，对齐 compose 300000）
+    firstTokenTimeoutMs: "300000"
+    ## 代码版本（WORKER_CODE_VERSION）：与镜像 tag 同源，deploy 时注入
+    codeVersion: ""
+    ## worker 唯一 id；空 = 自动按 pod 名生成（w_<pod 名>）
+    workerId: ""
+  ## 额外 env（与 opencode worker 的 extraEnv 分开，避免互相污染）
+  extraEnv: []
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  ## 每副本独立 PVC（dsh home 存会话/profile；work 存任务文件与注入产物）
+  persistence:
+    dshHome:
+      enabled: true
+      size: 5Gi
+      storageClass: ""
+    workerWork:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+  updateStrategy:
+    partition: ""            # 空 → 全量滚动
 
 ## ---------------------------------------------------------------------------
 ## init Job（一次性：prisma migrate deploy && node dist/prisma/seed.js）

@@ -1,0 +1,181 @@
+{{- if .Values.workerDsh.enabled }}
+# dsh 引擎 worker（可选，与 opencode worker 并存）— 对齐 compose 的 worker(dsh) 服务
+#
+# 为什么是独立 StatefulSet（而不是给 worker 加开关）：
+#   dsh 与 opencode 是**两个不同镜像**（node 24 + dsh CLI + bubblewrap vs node 22 +
+#   opencode CLI + Chrome/OmO），依赖/体积/缓存层完全不同；且两者可**同时在线**——
+#   控制面按 worker 上报的 capabilities.engine 分派，同一团队可同时有 opencode 节点
+#   与 dsh 节点（灰度/对比验证的常规做法）。⇒ 独立 STS + 独立 headless Service +
+#   独立 PVC，互不影响。
+#
+# 与 opencode worker 的关键差异：
+#   - 无 opencode serve（:4000）⇒ 无 serve Service / 无 opencode ingress；
+#     只有执行端点 :4198（控制面按 capabilities.execPort 直连）
+#   - 模型凭据**只经 env 下发**（DSH_API_KEY）：dsh 引擎没有控制面下发凭据的通道
+#     （worker/src/engine/dsh/runtime.ts 明确「凭据下发尚未实现」）
+#   - 运行时 home 是 DSH_HOME_DIR（不是 $HOME/.opencode），单独挂 PVC
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vteam.workerDsh.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "worker-dsh") | nindent 4 }}
+spec:
+  serviceName: {{ include "vteam.workerDsh.name" . }}-headless
+  replicas: {{ .Values.replicaCount.workerDsh }}
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+    {{- if .Values.workerDsh.updateStrategy.partition }}
+    rollingUpdate:
+      partition: {{ .Values.workerDsh.updateStrategy.partition }}
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vteam.matchLabels" (dict "context" . "component" "worker-dsh") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vteam.matchLabels" (dict "context" . "component" "worker-dsh") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker-dsh
+          image: {{ printf "%s:%s" .Values.workerDsh.image.repository (.Values.workerDsh.image.tag | default .Chart.AppVersion | toString) }}
+          imagePullPolicy: {{ .Values.workerDsh.image.pullPolicy | default .Values.image.pullPolicy }}
+          ports:
+            # 执行端点（控制面按 capabilities.execPort 直连；dsh 无 serve 端口）
+            - name: exec
+              containerPort: 4198
+              protocol: TCP
+          # 共享非敏感 env（SERVER_URL / 首字超时 / WORK_DIR / CODE_VERSION 等）。
+          # 其中 OPENCODE_* 对 dsh 无意义但无害；WORKER_ENGINE / DSH_* / WORKER_ID /
+          # WORKER_ADVERTISE_HOST 一律在下面显式覆盖（显式 env 优先于 envFrom）。
+          envFrom:
+            - configMapRef:
+                name: {{ include "vteam.config.name" . }}
+          env:
+            # ---- 引擎选择（本 STS 的唯一职责：跑 dsh）----
+            - name: WORKER_ENGINE
+              value: dsh
+            - name: X_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: WORKER_TOKEN
+            # dsh 模型凭据：**只能经 env 下发**（dsh 引擎无控制面凭据通道）。
+            # optional: true —— 外部 Secret 漏该 key 时不阻断 pod 启动，
+            # 由 worker 在首次模型调用时给出可操作报错（而不是 pod 起不来）。
+            - name: DSH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: DSH_API_KEY
+                  optional: true
+            # ---- dsh 模型路由 ----
+            - name: DSH_PROVIDER
+              value: {{ .Values.workerDsh.env.provider | quote }}
+            - name: DSH_MODEL
+              value: {{ .Values.workerDsh.env.model | quote }}
+            {{- with .Values.workerDsh.env.baseUrl }}
+            - name: DSH_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.workerDsh.env.sessionHeader }}
+            - name: DSH_SESSION_HEADER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.workerDsh.env.sessionHeaderValue }}
+            - name: DSH_SESSION_HEADER_VALUE
+              value: {{ . | quote }}
+            {{- end }}
+            # ---- 运行时目录 ----
+            - name: DSH_HOME_DIR
+              value: {{ .Values.workerDsh.env.dshHomeDir | quote }}
+            - name: WORK_DIR
+              value: {{ .Values.workerDsh.env.workDir | quote }}
+            - name: WORKER_FIRST_TOKEN_TIMEOUT_MS
+              value: {{ .Values.workerDsh.env.firstTokenTimeoutMs | quote }}
+            - name: WORKER_CODE_VERSION
+              value: {{ .Values.workerDsh.env.codeVersion | default "" | quote }}
+            # ---- 身份与可达地址（与 opencode worker 同款：按 pod 名唯一化）----
+            {{- if .Values.workerDsh.env.workerId }}
+            - name: WORKER_ID
+              value: {{ .Values.workerDsh.env.workerId | quote }}
+            {{- else }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: WORKER_ID
+              value: "w_$(POD_NAME)"
+            {{- end }}
+            # 每副本上报专属 headless DNS（<pod>.<sts>-headless.<ns>.svc），
+            # 控制面只取主机部分 + execPort 直连该副本（无共享 ClusterIP）。
+            - name: WORKER_ADVERTISE_HOST
+              value: "http://$(POD_NAME).{{ include "vteam.workerDsh.name" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local"
+            {{- with .Values.workerDsh.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: {{ ternary "worker-dsh-work" "worker-dsh-work-tmp" .Values.workerDsh.persistence.workerWork.enabled }}
+              mountPath: {{ .Values.workerDsh.env.workDir | quote }}
+            - name: {{ ternary "worker-dsh-home" "worker-dsh-home-tmp" .Values.workerDsh.persistence.dshHome.enabled }}
+              mountPath: {{ .Values.workerDsh.env.dshHomeDir | quote }}
+          resources:
+            {{- toYaml .Values.workerDsh.resources | nindent 12 }}
+          # 无 HTTP 探针（对齐 compose：worker 无 healthcheck）；活跃判定由 server 心跳承担
+  {{- if or .Values.workerDsh.persistence.dshHome.enabled .Values.workerDsh.persistence.workerWork.enabled }}
+  volumeClaimTemplates:
+    {{- if .Values.workerDsh.persistence.dshHome.enabled }}
+    - metadata:
+        name: worker-dsh-home
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.workerDsh.persistence.dshHome.storageClass }}
+        storageClassName: {{ .Values.workerDsh.persistence.dshHome.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.workerDsh.persistence.dshHome.size | quote }}
+    {{- end }}
+    {{- if .Values.workerDsh.persistence.workerWork.enabled }}
+    - metadata:
+        name: worker-dsh-work
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.workerDsh.persistence.workerWork.storageClass }}
+        storageClassName: {{ .Values.workerDsh.persistence.workerWork.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.workerDsh.persistence.workerWork.size | quote }}
+    {{- end }}
+  {{- end }}
+  {{- if or (not .Values.workerDsh.persistence.dshHome.enabled) (not .Values.workerDsh.persistence.workerWork.enabled) }}
+  volumes:
+    {{- if not .Values.workerDsh.persistence.dshHome.enabled }}
+    - name: worker-dsh-home-tmp
+      emptyDir: {}
+    {{- end }}
+    {{- if not .Values.workerDsh.persistence.workerWork.enabled }}
+    - name: worker-dsh-work-tmp
+      emptyDir: {}
+    {{- end }}
+  {{- end }}
+{{- end }}

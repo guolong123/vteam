@@ -5,6 +5,7 @@ vteam（虚拟团队 AI 协作平台）Kubernetes 部署 Chart。对齐 `docker-
 - **server**（NestJS API）— Deployment + ClusterIP Service :3000
 - **web**（Next.js 控制台）— Deployment + ClusterIP Service :3000
 - **worker**（opencode 执行节点）— StatefulSet（每副本独立 PVC）+ Headless Service（serve :4000，无共享 ClusterIP 入口）
+- **worker-dsh**（dsh 执行节点，**可选**，与 opencode worker 并存）— StatefulSet（每副本独立 PVC）+ Headless Service（执行端点 :4198，无 serve 端口）。`workerDsh.enabled=true` 时创建
 - **db**（MySQL 8，可选内置）— StatefulSet + PVC，默认启用，可切换外部数据库
 - **init**（一次性 Job）— `prisma migrate deploy && node dist/prisma/seed.js`
 
@@ -12,6 +13,7 @@ vteam（虚拟团队 AI 协作平台）Kubernetes 部署 Chart。对齐 `docker-
 
 - Kubernetes >= 1.22，Helm >= 3.12
 - server / web / worker 镜像已构建并推送到镜像仓库（见「构建并推送镜像」）
+- 启用 dsh worker 时另需 `vteam-worker-dsh` 镜像 + 模型 API key（`secret.dshApiKey`）
 
 ## Chart 结构
 
@@ -28,10 +30,12 @@ chart/vteam/
     ├── deployment-server.yaml
     ├── deployment-web.yaml
     ├── statefulset-worker.yaml     # StatefulSet + volumeClaimTemplates（每副本独立 PVC）
+    ├── statefulset-worker-dsh.yaml # dsh 引擎 worker（workerDsh.enabled=true 时；独立 PVC/headless）
     ├── statefulset-mysql.yaml   # db.enabled=true 时（mysql:8 + volumeClaimTemplates + healthcheck）
     ├── job-init.yaml            # 一次性迁移/种子（initContainer 等待 DB 就绪）
     ├── service-server.yaml / service-web.yaml / service-mysql.yaml
     ├── service-worker-headless.yaml  # worker Headless Service（StatefulSet serviceName 必填；无共享 ClusterIP）
+    ├── service-worker-dsh-headless.yaml # dsh worker Headless Service（执行端点 :4198）
     ├── pvc.yaml                 # uploads（worker 卷由 StatefulSet VCT 按副本创建）
     ├── ingress.yaml             # 默认关闭
     └── NOTES.txt                # 部署后使用说明
@@ -53,6 +57,10 @@ docker build -t <registry>/vteam-web:latest ./web && docker push <registry>/vtea
 
 # worker（opencode 执行节点）
 docker build -t <registry>/vteam-worker:latest ./worker && docker push <registry>/vteam-worker:latest
+
+# worker-dsh（dsh 执行节点，可选）——注意是 Dockerfile.dsh（node 24 + dsh CLI + bubblewrap）
+docker build -f ./worker/Dockerfile.dsh -t <registry>/vteam-worker-dsh:latest ./worker \
+  && docker push <registry>/vteam-worker-dsh:latest
 ```
 
 若 release 名非 `vteam`，`values.web.image.proxyTarget` 自动按 `http://<release>-server:3000` 兜底（`deployment-web.yaml` 运行时注入 `API_PROXY_TARGET` env），无需改镜像。
@@ -121,6 +129,15 @@ helm install vteam chart/vteam \
 | `worker.resources` | requests 500m/1Gi，limits cpu 4 / memory 8Gi | worker 资源配额。默认副本数 1（`replicaCount.worker`）；opencode 执行引擎内存占用高，limit 8Gi 为推荐值（开发环境可用 values-dev 的小配额覆盖） |
 | `worker.persistence.{workerHome,workerWork}.{enabled,size,storageClass}` | 全部启用 | worker 每副本独立卷（StatefulSet volumeClaimTemplates，PVC 名 `worker-home-<sts>-<ordinal>`；`replicaCount.worker` 扩容自动建独立 PVC）。`enabled=false` 回退 emptyDir（临时，生产不建议关闭 workerHome） |
 | `worker.updateStrategy.partition` | 空 | StatefulSet 滚动更新 partition：空 = 全量滚动（默认）；数字 = 仅更新 ordinal ≥ partition 的副本 |
+| `workerDsh.enabled` | `false` | 是否部署 dsh 引擎 worker（与 opencode worker **并存**，独立 StatefulSet/headless Service/PVC） |
+| `workerDsh.image` | `.../vteam-worker-dsh:latest` | dsh worker 镜像（`worker/Dockerfile.dsh`，node 24 + dsh CLI + bubblewrap） |
+| `workerDsh.env.{provider,model,baseUrl}` | `opencode-go` / `deepseek-v4.1-flash` / 空 | dsh 模型路由（`DSH_PROVIDER` / `DSH_MODEL` / `DSH_BASE_URL`） |
+| `workerDsh.env.{sessionHeader,sessionHeaderValue}` | 空 | provider 请求头（部分网关要求，如 opencode-go 的 `x-opencode-session`） |
+| `workerDsh.env.{dshHomeDir,workDir,firstTokenTimeoutMs,codeVersion,workerId}` | `/data/dsh-home` / `/data/vteam-worker` / `300000` / 空 / 空 | 运行时目录、首字超时、版本戳、worker id（空 = 按 pod 名生成） |
+| `workerDsh.resources` | requests 500m/1Gi，limits cpu 4 / memory 8Gi | dsh worker 资源配额 |
+| `workerDsh.persistence.{dshHome,workerWork}.{enabled,size,storageClass}` | 全部启用 | 每副本独立卷（PVC 名 `worker-dsh-home-<sts>-<ordinal>`） |
+| `workerDsh.updateStrategy.partition` | 空 | 同 `worker.updateStrategy.partition` |
+| `secret.dshApiKey` | 空 | dsh 模型 API key（**启用 dsh 时必需**；dsh 只能经 env 拿凭据）。显式提供时优先于已有 Secret（可轮换），未提供则复用 Secret 里已有的 `DSH_API_KEY` |
 | `initJob.platformMcpUrl` | 空（自动） | 内置 `vteam` MCP 的 URL（seed 写入 mcp_servers 表）。空 = 按 server Service 名拼 `http://<fullname>-server:3000/api/v1/platform-mcp`（K8s 下 server 服务名，seed 的 compose 默认 `http://server:3000` 不通）；显式设置时用该值 |
 | `persistence.{uploads,mysql}.{enabled,size,storageClass}` | 全部启用 | uploads / mysql 卷（worker 卷见上） |
 | `secret.*` / `secret.existingSecret` | 自动生成 | 敏感配置（`OPENCODE_SERVER_PASSWORD` 无明文入口，见「Secret 管理」） |

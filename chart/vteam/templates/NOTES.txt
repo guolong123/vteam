@@ -50,6 +50,15 @@ vteam（虚拟团队 AI 协作平台）已部署。
    再以 --set server.image.repository=<registry>/vteam-server 等覆盖 values。
 
 7. worker 默认模型：通过 --set worker.env.defaultModel=<model-id> 指定（空 = 不指定）。
+{{- if .Values.workerDsh.enabled }}
+
+   dsh 引擎 worker（与 opencode worker 并存）：
+   - StatefulSet: {{ include "vteam.workerDsh.name" . }}（执行端点 :4198，无 opencode serve）
+   - 模型路由: provider={{ .Values.workerDsh.env.provider }} model={{ .Values.workerDsh.env.model }}
+   - 凭据: Secret 的 DSH_API_KEY（dsh 只能经 env 拿凭据，无控制面下发通道）
+   - 查看日志: kubectl logs -n {{ .Release.Namespace }} sts/{{ include "vteam.workerDsh.name" . }} -f
+   - 控制面按 worker 上报的 capabilities.engine 分派：两个 worker 会同时出现在「Worker 节点」页
+{{- end }}
 
 8. ⚠️ 从 OpenCode v1 线切到 v2 线（换协议 / 换 CLI 版本 / 换数据存储形态）：
    完整的灰度顺序、闸门、观察项与**回滚步骤**见 docs/deployment.md 的

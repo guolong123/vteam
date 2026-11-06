@@ -54,6 +54,7 @@ app.kubernetes.io/managed-by: {{ $c.Release.Service }}
 {{- define "vteam.server.name" -}}{{ include "vteam.fullname" . }}-server{{- end }}
 {{- define "vteam.web.name" -}}{{ include "vteam.fullname" . }}-web{{- end }}
 {{- define "vteam.worker.name" -}}{{ include "vteam.fullname" . }}-worker{{- end }}
+{{- define "vteam.workerDsh.name" -}}{{ include "vteam.fullname" . }}-worker-dsh{{- end }}
 {{- define "vteam.mysql.name" -}}{{ include "vteam.fullname" . }}-mysql{{- end }}
 {{- define "vteam.init.name" -}}{{ include "vteam.fullname" . }}-init{{- end }}
 {{- define "vteam.config.name" -}}{{ include "vteam.fullname" . }}-config{{- end }}

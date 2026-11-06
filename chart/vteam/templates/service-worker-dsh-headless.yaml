@@ -1,0 +1,22 @@
+{{- if .Values.workerDsh.enabled }}
+# dsh worker Headless Service（clusterIP: None）— StatefulSet spec.serviceName 必填。
+# 提供稳定 DNS（<pod>.<headless>.<ns>.svc），每副本独立解析：
+# 控制面取 worker 上报的 capabilities.baseUrl 主机部分 + capabilities.execPort（4198）
+# 直连执行端点。dsh **没有 opencode serve**，故本 Service 只暴露 exec 端口，
+# 也不存在 serve Service / opencode ingress。
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vteam.workerDsh.name" . }}-headless
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "worker-dsh") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "vteam.matchLabels" (dict "context" . "component" "worker-dsh") | nindent 4 }}
+  ports:
+    - name: exec
+      port: 4198
+      targetPort: 4198
+      protocol: TCP
+{{- end }}

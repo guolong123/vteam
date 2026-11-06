@@ -22,6 +22,10 @@
 #   scripts/deploy-k8s.sh --dry-run                 # 仅渲染 helm，不执行 build/push/upgrade
 #   scripts/deploy-k8s.sh --reset-secrets           # 重新生成 4 个 secret（旧 release 会失配）
 #   scripts/deploy-k8s.sh --skip-health             # 不等待 rollout / health（CI 阶段用）
+#   scripts/deploy-k8s.sh --skip-image-check        # 不校验本地镜像（配合 --no-build 部署**线上已发布镜像**）
+#   scripts/deploy-k8s.sh --with-dsh                # 额外部署 dsh 引擎 worker（与 opencode worker 并存）
+#                                                    # 需 DSH_API_KEY（env 或 .deploy-secrets.env）；
+#                                                    # 镜像 = $REGISTRY/vteam-worker-dsh:$TAG
 #
 # 环境变量（覆盖默认值）：
 #   DOCKER_REGISTRY     默认 docker-hosted.ketaops.cc/ketaops
@@ -102,6 +106,15 @@ NO_PUSH=0
 DRY_RUN=0
 RESET_SECRETS=0
 SKIP_HEALTH=0
+## dsh 引擎 worker（可选，与 opencode worker 并存）
+WITH_DSH=0
+SKIP_IMAGE_CHECK=0
+DSH_API_KEY="${DSH_API_KEY:-}"
+DSH_PROVIDER="${DSH_PROVIDER:-opencode-go}"
+DSH_MODEL="${DSH_MODEL:-deepseek-v4.1-flash}"
+DSH_BASE_URL="${DSH_BASE_URL:-}"
+DSH_SESSION_HEADER="${DSH_SESSION_HEADER:-}"
+DSH_SESSION_HEADER_VALUE="${DSH_SESSION_HEADER_VALUE:-}"
 
 EFFECTIVE_SECRETS_FILE="$SECRETS_FILE"
 DRY_TMP_SECRETS=""
@@ -123,6 +136,12 @@ while [[ $# -gt 0 ]]; do
     --dry-run)        DRY_RUN=1; shift;;
     --reset-secrets)  RESET_SECRETS=1; shift;;
     --skip-health)    SKIP_HEALTH=1; shift;;
+    --skip-image-check) SKIP_IMAGE_CHECK=1; shift;;
+    --with-dsh)       WITH_DSH=1; shift;;
+    --dsh-api-key)    DSH_API_KEY="$2"; shift 2;;
+    --dsh-provider)   DSH_PROVIDER="$2"; shift 2;;
+    --dsh-model)      DSH_MODEL="$2"; shift 2;;
+    --dsh-base-url)   DSH_BASE_URL="$2"; shift 2;;
     -h|--help)        usage;;
     *) die "unknown arg: $1 (try --help)";;
   esac
@@ -271,6 +290,21 @@ source "$EFFECTIVE_SECRETS_FILE"
 : "${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY missing}"
 log "DB_PASSWORD=${DB_PASSWORD:0:8}...  JWT_SECRET=${JWT_SECRET:0:8}...  WORKER_TOKEN=${WORKER_TOKEN:0:8}..."
 
+# dsh 引擎凭据（仅 --with-dsh 需要）：dsh 没有控制面下发凭据的通道，只能经 env 注入。
+# 优先级：命令行/env > .deploy-secrets.env；首次提供后写回文件，后续升级复用。
+if [[ $WITH_DSH -eq 1 ]]; then
+  if [[ -z "$DSH_API_KEY" ]]; then
+    DSH_API_KEY="$(grep -E '^DSH_API_KEY=' "$EFFECTIVE_SECRETS_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  fi
+  [[ -n "$DSH_API_KEY" ]] || die "--with-dsh 需要 dsh 模型 API key：用 --dsh-api-key <key> 或环境变量 DSH_API_KEY 提供（dsh 引擎只能经 env 拿凭据）"
+  if ! grep -qE '^DSH_API_KEY=' "$EFFECTIVE_SECRETS_FILE" 2>/dev/null; then
+    printf 'DSH_API_KEY=%s\n' "$DSH_API_KEY" >> "$EFFECTIVE_SECRETS_FILE"
+    chmod 600 "$EFFECTIVE_SECRETS_FILE"
+    log "DSH_API_KEY 已写入 $EFFECTIVE_SECRETS_FILE（后续升级复用）"
+  fi
+  log "dsh worker: provider=$DSH_PROVIDER model=$DSH_MODEL baseUrl=${DSH_BASE_URL:-<默认>}"
+fi
+
 if [[ -n "$DRY_TMP_SECRETS" && $DRY_RUN -eq 1 ]]; then
   trap 'rm -f "$DRY_TMP_SECRETS" 2>/dev/null || true' EXIT
 fi
@@ -283,6 +317,7 @@ hdr "3/6 构建镜像 (tag=$TAG)"
 IMAGE_SERVER="$REGISTRY/vteam-server:$TAG"
 IMAGE_WEB="$REGISTRY/vteam-web:$TAG"
 IMAGE_WORKER="$REGISTRY/vteam-worker:$TAG"
+IMAGE_WORKER_DSH="$REGISTRY/vteam-worker-dsh:$TAG"
 
 build_one() {
   local dockerfile="$1" context="$2" image="$3" name="$4" code_version="${5:-}"
@@ -310,15 +345,26 @@ build_one() {
 }
 
 if [[ $NO_BUILD -eq 1 ]]; then
-  log "--no-build set, verifying images exist locally..."
-  for img in "$IMAGE_SERVER" "$IMAGE_WEB" "$IMAGE_WORKER"; do
-    docker image inspect "$img" >/dev/null 2>&1 || die "image missing locally: $img"
-  done
-  ok "all 3 images present locally"
+  local_imgs=("$IMAGE_SERVER" "$IMAGE_WEB" "$IMAGE_WORKER")
+  [[ $WITH_DSH -eq 1 ]] && local_imgs+=("$IMAGE_WORKER_DSH")
+  if [[ $SKIP_IMAGE_CHECK -eq 1 ]]; then
+    # 部署**线上已发布镜像**（集群自己拉）时本地没有这些 tag，跳过校验
+    log "--skip-image-check set, 跳过本地镜像校验（集群将自行拉取）"
+    for img in "${local_imgs[@]}"; do log "  will pull: $img"; done
+  else
+    log "--no-build set, verifying images exist locally..."
+    for img in "${local_imgs[@]}"; do
+      docker image inspect "$img" >/dev/null 2>&1 || die "image missing locally: $img (部署线上镜像请加 --skip-image-check)"
+    done
+    ok "all ${#local_imgs[@]} images present locally"
+  fi
 else
   build_one "$REPO_ROOT/server/Dockerfile" "$REPO_ROOT/server" "$IMAGE_SERVER" server
   build_one "$REPO_ROOT/worker/Dockerfile" "$REPO_ROOT/worker" "$IMAGE_WORKER" worker "$TAG"
   build_one "$REPO_ROOT/web/Dockerfile"    "$REPO_ROOT"          "$IMAGE_WEB"    web    "$TAG"
+  if [[ $WITH_DSH -eq 1 ]]; then
+    build_one "$REPO_ROOT/worker/Dockerfile.dsh" "$REPO_ROOT/worker" "$IMAGE_WORKER_DSH" worker-dsh "$TAG"
+  fi
 fi
 
 # ============================================================
@@ -344,6 +390,7 @@ else
   push_one "$IMAGE_SERVER" server
   push_one "$IMAGE_WEB"    web
   push_one "$IMAGE_WORKER" worker
+  [[ $WITH_DSH -eq 1 ]] && push_one "$IMAGE_WORKER_DSH" worker-dsh
 fi
 
 # ============================================================
@@ -387,6 +434,25 @@ HELM_ARGS=(
   --set "opencodeIngress.enabled=$OPENCODE_INGRESS_ENABLED"
 )
 
+# dsh 引擎 worker（可选）：与 opencode worker 并存，独立 StatefulSet + headless Service。
+# 凭据只经 Secret 下发（DSH_API_KEY），模型路由经 values 下发。
+if [[ $WITH_DSH -eq 1 ]]; then
+  HELM_ARGS+=(
+    --set "workerDsh.enabled=true"
+    --set "workerDsh.image.repository=$(repo_of "$IMAGE_WORKER_DSH")"
+    --set "workerDsh.image.tag=$TAG"
+    --set "workerDsh.env.codeVersion=$TAG"
+    --set "workerDsh.env.provider=$DSH_PROVIDER"
+    --set "workerDsh.env.model=$DSH_MODEL"
+    --set "secret.dshApiKey=$DSH_API_KEY"
+  )
+  [[ -n "$DSH_BASE_URL" ]] && HELM_ARGS+=(--set "workerDsh.env.baseUrl=$DSH_BASE_URL")
+  [[ -n "$DSH_SESSION_HEADER" ]] && HELM_ARGS+=(--set "workerDsh.env.sessionHeader=$DSH_SESSION_HEADER")
+  [[ -n "$DSH_SESSION_HEADER_VALUE" ]] && HELM_ARGS+=(--set "workerDsh.env.sessionHeaderValue=$DSH_SESSION_HEADER_VALUE")
+else
+  HELM_ARGS+=(--set "workerDsh.enabled=false")
+fi
+
 if [[ $DRY_RUN -eq 1 ]]; then
   HELM_ARGS+=(--dry-run)
   warn "--dry-run: rendering only, no cluster changes"
@@ -412,6 +478,7 @@ finish() {
   printf '\n  release    : %s  (ns=%s)\n' "$RELEASE" "$NAMESPACE"
   printf '  images     :\n    %s\n    %s\n    %s\n' \
     "$IMAGE_SERVER" "$IMAGE_WEB" "$IMAGE_WORKER"
+  [[ $WITH_DSH -eq 1 ]] && printf '    %s\n' "$IMAGE_WORKER_DSH"
   printf '  secrets    : %s\n' "$SECRETS_FILE"
   printf '  helm log   : %s\n' "$LOG_DIR/helm-upgrade.log"
   printf '  deploy log : %s\n\n' "$LOG_FILE"
