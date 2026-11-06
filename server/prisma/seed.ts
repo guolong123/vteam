@@ -921,6 +921,7 @@ async function main() {
   const memberPermissions = {
     all: false,
     agents: { view: true, create: true, edit: true, delete: false },
+    members: { view: true, create: true, edit: true, delete: false },
     artifacts: { view: true, create: true },
     chats: { view: true, create: true, edit: true, delete: false },
     skills: { view: true, create: false, edit: false },
