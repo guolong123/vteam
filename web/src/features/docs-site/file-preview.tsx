@@ -17,7 +17,12 @@
  * - `/uploads` 引用 + `fileSize==null` → 不可访问降级（artifacts 页 P2 判定）。
  * 约束：零预览依赖、不做 HTML 注入渲染、不加 markdown HTML 插件、无 innerHTML/object/embed。
  */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  CODE_HIGHLIGHT_EXTENSIONS,
+  languageForPath,
+} from "@deepseek-ai/dsh-util-code-language";
+import { getEffectiveTheme, useThemeStore } from "@/src/theme/theme-store";
 import { DocsMarkdown } from "./docs-markdown";
 import {
   neutral,
@@ -71,6 +76,56 @@ const OFFICE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
 /** 表格预览封顶：最多 200 行 × 40 列（超出提示"仅预览前 N 行"）。 */
 const SHEET_MAX_ROWS = 200;
 const SHEET_MAX_COLS = 40;
+
+/**
+ * 代码/源码文件预览（原型 .tsx、脚本、配置等）：
+ * 这类产出物此前落到下载卡 —— 用户要看的是**源码本身**，下载下来再打开很别扭。
+ * 用 shiki 做语法高亮（**动态 import**，不打进首屏），按扩展名选语言。
+ */
+const CODE_EXT_SET = new Set<string>(CODE_HIGHLIGHT_EXTENSIONS);
+/** 代码预览的体积/行数上限（再大就没必要在浏览器里排版了）。 */
+const CODE_PREVIEW_MAX_CHARS = 400 * 1024;
+const CODE_PREVIEW_MAX_LINES = 4000;
+/** shiki 预加载语言集（curated：覆盖常见产出物类型；不在集合内 → 纯文本降级）。 */
+const CODE_SHIKI_LANGS = [
+  "typescript",
+  "tsx",
+  "javascript",
+  "jsx",
+  "json",
+  "css",
+  "html",
+  "markdown",
+  "python",
+  "go",
+  "rust",
+  "java",
+  "shellscript",
+  "yaml",
+  "sql",
+  "xml",
+  "diff",
+  "toml",
+  "docker",
+  "vue",
+];
+/** tsx/jsx 用 JSX 语法（通用的 languageForPath 把它们归到 typescript/javascript，尖括号会掉色）。 */
+const CODE_LANG_OVERRIDE: Record<string, string> = { tsx: "tsx", jsx: "jsx" };
+
+type ShikiHighlighter = import("shiki").Highlighter;
+let highlighterPromise: Promise<ShikiHighlighter> | null = null;
+/** 单例高亮器（懒加载；第一次打开代码文件才付这份下载成本）。 */
+function ensureCodeHighlighter(): Promise<ShikiHighlighter> {
+  if (!highlighterPromise) {
+    highlighterPromise = import("shiki").then((m) =>
+      m.createHighlighter({
+        themes: ["github-light", "github-dark"],
+        langs: CODE_SHIKI_LANGS,
+      }),
+    );
+  }
+  return highlighterPromise;
+}
 
 /**
  * 显式 urlTransform 白名单：仅 http/https/mailto 放行，其余（含 javascript:、
@@ -741,6 +796,245 @@ function SheetFilePreview({
   );
 }
 
+/* ------------------------------ 代码 / 源码（shiki 高亮） ------------------------------ */
+
+interface CodeToken {
+  content: string;
+  color?: string;
+}
+
+/**
+ * 源码预览：`.tsx/.ts/.js/.css/.py/.go/.yml/...` 直接显示带行号的高亮代码。
+ *
+ * 为什么做：原型类产出物常常就是「TSX 组件源码」，此前只给一张下载卡 ——
+ * 用户点开看不到任何内容，还得下载再找编辑器打开。
+ * 高亮用 shiki（动态 import + 单例），语言按扩展名选；两种主题各自一套配色。
+ */
+function CodeFilePreview({
+  version,
+  fileUrl,
+  ext,
+  displayName,
+  title,
+}: {
+  version: FilePreviewVersion;
+  fileUrl: string;
+  ext: string;
+  displayName: string;
+  title: string;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [tokenLines, setTokenLines] = useState<CodeToken[][] | null>(null);
+  const themePreference = useThemeStore((state) => state.theme);
+  const [systemDark, setSystemDark] = useState(false);
+
+  const language = useMemo(
+    () => CODE_LANG_OVERRIDE[ext] ?? languageForPath(displayName || fileUrl) ?? "text",
+    [ext, displayName, fileUrl],
+  );
+  const shikiTheme =
+    getEffectiveTheme(themePreference, systemDark) === "dark"
+      ? "github-dark"
+      : "github-light";
+
+  // 跟随系统主题（用户选择"跟随系统"时要能实时变色）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const sync = () => setSystemDark(mql.matches);
+    sync();
+    mql.addEventListener("change", sync);
+    return () => mql.removeEventListener("change", sync);
+  }, []);
+
+  // 取源码文本
+  useEffect(() => {
+    let cancelled = false;
+    setText(null);
+    setFailed(false);
+    setTokenLines(null);
+    (async () => {
+      try {
+        if ((version.fileSize ?? 0) > CODE_PREVIEW_MAX_CHARS) {
+          throw new Error("文件过大");
+        }
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.text();
+        if (!cancelled) setText(body);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileUrl, version.fileSize]);
+
+  // 高亮（shiki 懒加载；语言不在预加载集合 → 纯文本）
+  useEffect(() => {
+    if (text === null) return;
+    let cancelled = false;
+    (async () => {
+      const capped = text.split("\n", CODE_PREVIEW_MAX_LINES).join("\n");
+      try {
+        const highlighter = await ensureCodeHighlighter();
+        const loaded = highlighter.getLoadedLanguages();
+        if (!loaded.includes(language)) {
+          if (!cancelled) setTokenLines(null);
+          return;
+        }
+        const rows = highlighter.codeToTokensBase(capped, {
+          // language 来自扩展名映射，运行时已用 getLoadedLanguages 过滤过
+          lang: language as Parameters<ShikiHighlighter["codeToTokensBase"]>[1]["lang"],
+          theme: shikiTheme,
+        });
+        const simplified: CodeToken[][] = rows.map((row) =>
+          row.map((token) => ({ content: token.content, color: token.color })),
+        );
+        if (!cancelled) setTokenLines(simplified);
+      } catch {
+        if (!cancelled) setTokenLines(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [text, language, shikiTheme]);
+
+  if (failed) {
+    return (
+      <DownloadCard
+        version={version}
+        fileUrl={fileUrl}
+        ext={ext}
+        displayName={displayName}
+        title={title}
+      />
+    );
+  }
+
+  const plainLines = (text ?? "").split("\n");
+  const shownLines = plainLines.slice(0, CODE_PREVIEW_MAX_LINES);
+  const truncated = plainLines.length > CODE_PREVIEW_MAX_LINES;
+
+  return (
+    <div
+      data-testid="docs-content-view"
+      data-render="code"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: space.sm,
+        height: "100%",
+        minHeight: 0,
+        ...baseFont,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+        <a
+          data-testid="docs-code-download"
+          href={fileUrl}
+          {...(fileUrl.startsWith("/uploads/") ? { download: displayName || true } : {})}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `2px ${space.md}px`,
+            borderRadius: radius.sm,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: surface,
+            color: "#0D9488",
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            textDecoration: "none",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>↓</span>
+          下载原文件
+        </a>
+        <span
+          style={{
+            padding: `1px ${space.sm}px`,
+            borderRadius: radius.sm,
+            backgroundColor: "rgba(13,148,136,0.10)",
+            border: "1px solid rgba(13,148,136,0.22)",
+            color: "#0D9488",
+            fontSize: fontSize.xs,
+            fontWeight: 500,
+            fontFamily: fontFamily.mono,
+          }}
+        >
+          {(ext || language).toUpperCase()}
+        </span>
+        <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono }}>
+          {shownLines.length} 行
+          {text !== null && ` · ${formatBytes(new Blob([text]).size)}`}
+        </span>
+      </div>
+
+      <div
+        data-testid="docs-code-body"
+        style={{
+          flex: "1 1 auto",
+          minHeight: 0,
+          overflow: "auto",
+          border: `1px solid ${neutral[200]}`,
+          borderRadius: radius.md,
+          backgroundColor: neutral[50],
+          padding: `${space.sm}px 0`,
+        }}
+      >
+        <pre
+          style={{
+            margin: 0,
+            fontFamily: fontFamily.mono,
+            fontSize: fontSize.xs,
+            lineHeight: "18px",
+            color: neutral[800],
+          }}
+        >
+          {shownLines.map((line, index) => (
+            <div
+              key={index}
+              data-line={index + 1}
+              style={{ display: "flex", gap: space.sm, paddingRight: space.md }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  flexShrink: 0,
+                  width: 40,
+                  textAlign: "right",
+                  color: neutral[300],
+                  userSelect: "none",
+                }}
+              >
+                {index + 1}
+              </span>
+              <span style={{ whiteSpace: "pre", flex: 1, minWidth: 0 }}>
+                {(tokenLines?.[index] ?? [{ content: line }]).map((token, tokenIndex) => (
+                  <span key={tokenIndex} style={token.color ? { color: token.color } : undefined}>
+                    {token.content}
+                  </span>
+                ))}
+              </span>
+            </div>
+          ))}
+        </pre>
+      </div>
+
+      {truncated && (
+        <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+          仅预览前 {CODE_PREVIEW_MAX_LINES} 行，完整内容请下载查看。
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------ 主组件：渲染矩阵 ------------------------------ */
 
 /**
@@ -835,6 +1129,19 @@ export function FilePreview({
   if (SHEET_PREVIEW_EXTS.has(ext)) {
     return (
       <SheetFilePreview
+        version={version}
+        fileUrl={fileUrl}
+        ext={ext}
+        displayName={displayName}
+        title={title}
+      />
+    );
+  }
+
+  // 源码/配置类（tsx/ts/js/css/py/go/yml/...）→ 语法高亮预览
+  if (CODE_EXT_SET.has(ext)) {
+    return (
+      <CodeFilePreview
         version={version}
         fileUrl={fileUrl}
         ext={ext}
