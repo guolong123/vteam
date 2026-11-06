@@ -77,6 +77,8 @@ export interface MemberSessionSummary {
   busySince: string | null;
   turnSeq: number;
   lastTurnOutcome: string | null;
+  /** 最近活跃/处理中的团队（P3 全局会话上下文）。 */
+  currentTeamId?: string | null;
 }
 
 export interface MemberDetailDto extends MemberDto {

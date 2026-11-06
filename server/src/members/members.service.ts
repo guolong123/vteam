@@ -113,6 +113,7 @@ export class MembersService implements OnModuleInit {
               busySince: true,
               turnSeq: true,
               lastTurnOutcome: true,
+              currentTeamId: true,
             },
           })
         : [];
@@ -150,6 +151,7 @@ export class MembersService implements OnModuleInit {
         busySince: true,
         turnSeq: true,
         lastTurnOutcome: true,
+        currentTeamId: true,
       },
     });
     return {

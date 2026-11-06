@@ -75,6 +75,10 @@ function ChatPageContent() {
   const [search, setSearch] = useState("");
   const [convFilter, setConvFilter] = useState<"all" | "group" | "dm">("all");
   const [filterMemberId, setFilterMemberId] = useState<string | null>(null);
+  const [showNewGroup, setShowNewGroup] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
+  const [groupError, setGroupError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const conversationsQuery = useQuery({
@@ -155,6 +159,16 @@ function ChatPageContent() {
     () => new Map(directory.map((m) => [m.id, m])),
     [directory],
   );
+  const allTeamsQuery = useQuery({
+    queryKey: ["teams", "chat-directory"],
+    queryFn: () => teamsApi.list({ page: 1, pageSize: 100 }),
+    enabled: !!user?.id,
+  });
+  const teamNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const t of allTeamsQuery.data?.items ?? []) map.set(t.id, t.name);
+    return map;
+  }, [allTeamsQuery.data]);
 
   const rolesQuery = useQuery({
     queryKey: ["agent-roles", "chat"],
@@ -225,6 +239,48 @@ function ChatPageContent() {
       router.replace(`/chat?c=${encodeURIComponent(`dm:${memberId}`)}`);
     },
     onError: (err) => setSendError(errorText(err)),
+  });
+
+  const dmTeamId = !isGroup
+    ? (active?.contextTeamId ?? memberQuery.data?.groups?.[0]?.teamId ?? "")
+    : "";
+  const dmTeamQuery = useQuery({
+    queryKey: ["team", dmTeamId],
+    queryFn: () => teamsApi.get(dmTeamId),
+    enabled: !!user?.id && !!dmTeamId,
+  });
+  const dmTeamName = dmTeamQuery.data?.name ?? null;
+  const [dmNotice, setDmNotice] = useState<string | null>(null);
+  const resetSessionMutation = useMutation({
+    mutationFn: () => membersApi.resetSession(memberId),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["member", memberId] });
+      queryClient.invalidateQueries({ queryKey: ["members"] });
+      setDmNotice(
+        result.reset > 0
+          ? "已重置该成员的全局会话，下一轮将开新引擎会话（消息/记忆保留）"
+          : "该成员尚未建立会话",
+      );
+    },
+    onError: (err) => setDmNotice(errorText(err)),
+  });
+
+  const createGroupMutation = useMutation({
+    mutationFn: () =>
+      teamsApi.create({
+        name: groupName.trim(),
+        members: groupMemberIds.map((id) => ({ memberId: id })),
+      }),
+    onSuccess: (team) => {
+      setShowNewGroup(false);
+      setGroupName("");
+      setGroupMemberIds([]);
+      setGroupError(null);
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["teams"] });
+      router.replace(`/chat?c=${encodeURIComponent(`group:${team.id}`)}`);
+    },
+    onError: (err) => setGroupError(errorText(err)),
   });
 
   // 打开会话时清零未读（channel 级已读；重复点开幂等）。
@@ -326,6 +382,10 @@ function ChatPageContent() {
     (seat) =>
       memberById.get(seat.memberId ?? "")?.session?.busyState === "running",
   );
+  const busyTeamName = (memberId: string): string | null => {
+    const currentTeamId = memberById.get(memberId)?.session?.currentTeamId ?? null;
+    return currentTeamId ? (teamNameById.get(currentTeamId) ?? null) : null;
+  };
 
   return (
     <main style={{ flex: 1, minHeight: 0, display: "flex", position: "relative", backgroundColor: "var(--color-bg, #F8FAFC)" }}>
@@ -335,7 +395,7 @@ function ChatPageContent() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>会话</div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button type="button" data-testid="new-group-chat" title="新建群聊" onClick={() => router.push("/teams/new")} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 群聊</button>
+              <button type="button" data-testid="new-group-chat" title="新建群聊" onClick={() => setShowNewGroup(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 群聊</button>
               <button type="button" data-testid="new-dm-button" title="发起新私聊" onClick={() => setShowDmPicker(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 私聊</button>
             </div>
           </div>
@@ -465,7 +525,13 @@ function ChatPageContent() {
             {busySeats.length > 0 && (
               <div data-testid="group-busy-banner" style={{ display: "flex", alignItems: "center", gap: 8, padding: `${space.xs + 2}px ${space.lg}px`, backgroundColor: "#FFFBEB", borderBottom: "1px solid #FDE68A", fontSize: fontSize.xs, color: "#92400E" }}>
                 <span>⏳</span>
-                <span style={{ fontWeight: 600 }}>{busySeats.map((s) => memberById.get(s.memberId ?? "")?.name ?? s.alias).join("、")} 正在其他群处理消息</span>
+                <span style={{ fontWeight: 600 }}>
+                  {busySeats.map((s) => {
+                    const name = memberById.get(s.memberId ?? "")?.name ?? s.alias;
+                    const group = busyTeamName(s.memberId ?? "");
+                    return group ? `${name} 正在「${group}」处理消息` : `${name} 正在其他群处理消息`;
+                  }).join("；")}
+                </span>
                 <span style={{ color: "#B45309" }}>消息照常送达，不拦截，成员自行安排先后</span>
               </div>
             )}
@@ -484,6 +550,39 @@ function ChatPageContent() {
             memberById={memberById}
             filterMemberId={filterMemberId}
             onFilterMember={(seatId: string | null) => setFilterMemberId(seatId)}
+          />
+        </div>
+      ) : memberId && dmTeamId ? (
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <header style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", alignItems: "center", gap: space.sm }}>
+              <AgentAvatar role={memberRole} size="sm" />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>{member?.name ?? title}</span>
+                  <span style={{ fontSize: 10, color: member?.status === "active" ? "#0F766E" : neutral[400], backgroundColor: member?.status === "active" ? "rgba(13,148,136,0.10)" : neutral[100], borderRadius: radius.pill, padding: "1px 8px" }}>
+                    {member?.status === "active" ? "启用中" : "已停用"}
+                  </span>
+                </div>
+                <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+                  私聊 · 全局会话：{member?.session ? (member.session.busyState === "running" ? "处理中" : "空闲") : "未建立"}
+                  {dmTeamName ? ` · 最近活跃群：${dmTeamName}` : ""}
+                </div>
+              </div>
+              <span style={{ flex: 1 }} />
+              {dmNotice && <span style={{ fontSize: 10, color: "#0F766E", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dmNotice}</span>}
+              <button type="button" disabled={resetSessionMutation.isPending} onClick={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[600], borderRadius: radius.md, padding: "3px 10px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>{resetSessionMutation.isPending ? "重置中…" : "重置会话"}</button>
+            </header>
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              <TeamSessionView teamId={dmTeamId} embedded hideRightPanel privateMemberId={memberId} />
+            </div>
+          </div>
+          <MemberContextPanel
+            member={member}
+            session={member?.session ?? null}
+            teamName={dmTeamName}
+            onReset={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }}
+            resetting={resetSessionMutation.isPending}
           />
         </div>
       ) : (
@@ -601,6 +700,46 @@ function ChatPageContent() {
       </aside>
 
       </>
+      )}
+
+      {showNewGroup && (
+        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
+          <div style={{ width: 520, maxHeight: "82%", display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", borderRadius: radius.lg, boxShadow: shadow.lg, overflow: "hidden" }}>
+            <div style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[100]}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>新建群聊</div>
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>选择成员库里的成员，创建后即可开始群聊</div>
+              </div>
+              <button type="button" onClick={() => { setShowNewGroup(false); setGroupError(null); }} style={{ border: "none", background: "none", fontSize: fontSize.lg, color: neutral[400], cursor: "pointer" }}>×</button>
+            </div>
+            <div style={{ padding: space.md, display: "flex", flexDirection: "column", gap: space.sm }}>
+              <input data-testid="new-group-name" value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="群聊名称（例如：通知中心迭代）" style={{ width: "100%", boxSizing: "border-box", padding: `8px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, fontFamily: fontFamily.body, outline: "none" }} />
+              <input value={dmSearch} onChange={(e) => setDmSearch(e.target.value)} placeholder="搜索成员" style={{ width: "100%", boxSizing: "border-box", padding: `6px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, fontSize: fontSize.xs, fontFamily: fontFamily.body, outline: "none", backgroundColor: neutral[50] }} />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `0 ${space.md}px ${space.md}px`, display: "flex", flexDirection: "column", gap: 6 }}>
+              {(directoryQuery.isPending ? [] : directory.filter((m) => !dmSearch.trim() || m.name.toLowerCase().includes(dmSearch.trim().toLowerCase()))).map((member) => {
+                const checked = groupMemberIds.includes(member.id);
+                return (
+                  <label key={member.id} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${checked ? "#0D9488" : neutral[200]}`, backgroundColor: checked ? "rgba(13,148,136,0.06)" : "var(--color-surface)", cursor: "pointer" }}>
+                    <input type="checkbox" checked={checked} onChange={(e) => setGroupMemberIds((prev) => e.target.checked ? [...prev, member.id] : prev.filter((id) => id !== member.id))} />
+                    <AgentAvatar role={toRoleKey(member.role?.key ?? null)} size="sm" />
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{member.name}</span>
+                      <span style={{ display: "block", fontSize: 10, color: neutral[400] }}>{member.role?.name ?? "成员"} · 已在 {member.groupCount} 个群</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {groupError && <div style={{ padding: `0 ${space.md}px`, fontSize: fontSize.xs, color: "#B91C1C" }}>{groupError}</div>}
+            <div style={{ padding: space.md, borderTop: `1px solid ${neutral[100]}`, display: "flex", alignItems: "center", gap: space.sm }}>
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已选 {groupMemberIds.length} 位成员</span>
+              <span style={{ flex: 1 }} />
+              <button type="button" onClick={() => setShowNewGroup(false)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>取消</button>
+              <button type="button" data-testid="create-group-submit" disabled={createGroupMutation.isPending} onClick={() => { if (!groupName.trim()) { setGroupError("请输入群聊名称"); return; } if (groupMemberIds.length === 0) { setGroupError("至少选择一位成员"); return; } createGroupMutation.mutate(); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: createGroupMutation.isPending ? "default" : "pointer", fontFamily: fontFamily.body }}>{createGroupMutation.isPending ? "创建中…" : "创建群聊"}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showDmPicker && (
@@ -759,6 +898,17 @@ function GroupContextPanel({
   onFilterMember: (seatId: string | null) => void;
 }) {
   const [tab, setTab] = useState<"tasks" | "members" | "outputs">("tasks");
+  const activeTask = tasks.find(
+    (t) => t.status === "in_progress" || t.status === "pending_review",
+  );
+  const outputsQuery = useQuery({
+    queryKey: ["chat-group-artifacts", team?.id, activeTask?.id],
+    queryFn: () =>
+      api.get<{ items: Array<{ id: string; title: string; type: string }> }>(
+        `/tasks/${activeTask?.id}/artifacts`,
+      ),
+    enabled: tab === "outputs" && !!activeTask?.id,
+  });
   const tabs: Array<{ key: typeof tab; label: string }> = [
     { key: "tasks", label: "任务" },
     { key: "members", label: "成员" },
@@ -817,8 +967,21 @@ function GroupContextPanel({
 
         {tab === "outputs" && (
           <>
-            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>产出物</div>
-            <div style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.7 }}>产出物按任务归档，打开团队文档站查看版本、预览与下载。</div>
+            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>产出物{activeTask ? ` · ${activeTask.title}` : ""}</div>
+            {!activeTask ? (
+              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无进行中任务</div>
+            ) : outputsQuery.isPending ? (
+              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</div>
+            ) : (outputsQuery.data?.items ?? []).length === 0 ? (
+              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>该任务暂无产出物</div>
+            ) : (
+              (outputsQuery.data?.items ?? []).slice(0, 8).map((item) => (
+                <a key={item.id} href={`/docs/${activeTask.id}`} style={{ textDecoration: "none", display: "flex", flexDirection: "column", gap: 2, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>
+                  <span style={{ fontSize: fontSize.xs, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
+                  <span style={{ fontSize: 10, color: neutral[400] }}>{item.type}</span>
+                </a>
+              ))
+            )}
             <a href={`/docs?teamId=${team?.id ?? active?.contextTeamId ?? ""}`} style={{ textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开团队文档站 →</a>
           </>
         )}
@@ -828,6 +991,83 @@ function GroupContextPanel({
         <div style={{ fontSize: fontSize.xs, fontWeight: 700, color: neutral[700] }}>查看 Agent 会话</div>
         <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>Agent 内部推理过程不广播到群聊，仅最终回复展示。</div>
         <a href={`/chat?c=${encodeURIComponent(`dm:${(team?.members ?? [])[0]?.memberId ?? ""}`)}`} style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}>打开成员会话 →</a>
+      </div>
+    </aside>
+  );
+}
+
+function MemberContextPanel({
+  member,
+  session,
+  teamName,
+  onReset,
+  resetting,
+}: {
+  member?: MemberDetailDto;
+  session?: MemberDetailDto["session"];
+  teamName: string | null;
+  onReset: () => void;
+  resetting: boolean;
+}) {
+  return (
+    <aside data-testid="member-context-panel" style={{ width: 300, flexShrink: 0, minHeight: 0, overflow: "auto", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}`, padding: space.lg, display: "flex", flexDirection: "column", gap: space.md }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+        <AgentAvatar role={toRoleKey(member?.role?.key ?? null)} size="md" />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>{member?.name ?? "成员"}</div>
+          <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>{member?.role?.name ?? "成员"} · {member?.status === "active" ? "启用中" : "已停用"}</div>
+        </div>
+      </div>
+
+      <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>全局会话（只读）</div>
+        <div style={{ display: "grid", gridTemplateColumns: "76px 1fr", gap: "4px 8px", fontSize: fontSize.xs }}>
+          <span style={{ color: neutral[400] }}>状态</span>
+          <span style={{ color: session?.busyState === "running" ? "#B45309" : "#0F766E" }}>{session ? (session.busyState === "running" ? "处理中" : "空闲") : "未建立"}</span>
+          <span style={{ color: neutral[400] }}>会话 id</span>
+          <span style={{ color: neutral[700], fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{session?.id ?? "—"}</span>
+          <span style={{ color: neutral[400] }}>最近活跃群</span>
+          <span style={{ color: neutral[700] }}>
+            {member?.groups?.find((g) => g.teamId === session?.currentTeamId)?.teamName ?? teamName ?? "—"}
+          </span>
+          <span style={{ color: neutral[400] }}>最近结果</span>
+          <span style={{ color: neutral[700] }}>{session?.lastTurnOutcome ?? "—"}</span>
+        </div>
+        <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>跨群共享同一会话；会话不随任务完成自动重置，只可手动重置。</div>
+      </div>
+
+      <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "grid", gridTemplateColumns: "76px 1fr", gap: "6px 8px", fontSize: fontSize.xs }}>
+        <span style={{ color: neutral[400] }}>绑定 Agent</span><span style={{ color: neutral[700] }}>{member?.agent?.name ?? "—"}</span>
+        <span style={{ color: neutral[400] }}>默认模型</span><span style={{ color: neutral[700] }}>{member?.defaultModel?.name ?? "—"}</span>
+        <span style={{ color: neutral[400] }}>首选 Worker</span><span style={{ color: neutral[700] }}>{member?.preferredWorker?.name ?? "自动调度"}</span>
+        <span style={{ color: neutral[400] }}>私有目录</span><span style={{ color: neutral[700], fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{member?.privateWorkDir ?? "—"}</span>
+        <span style={{ color: neutral[400] }}>所在群聊</span><span style={{ color: neutral[700] }}>{member?.groupCount ?? 0} 个</span>
+      </div>
+
+      {(member?.groups ?? []).length > 0 && (
+        <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>所在群聊</div>
+          {(member?.groups ?? []).map((g) => (
+            <a key={g.teamId} href={`/chat?c=${encodeURIComponent(`group:${g.teamId}`)}`} style={{ textDecoration: "none", display: "flex", justifyContent: "space-between", fontSize: fontSize.xs, color: "#0F766E", padding: "4px 8px", borderRadius: radius.sm, backgroundColor: "rgba(13,148,136,0.06)" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.teamName ?? g.teamId}</span>
+              <span style={{ color: neutral[400] }}>#{g.seq}</span>
+            </a>
+          ))}
+        </div>
+      )}
+
+      {(member?.notificationChannels ?? []).length > 0 && (
+        <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>通知渠道</div>
+          {(member?.notificationChannels ?? []).map((ch) => (
+            <span key={ch.id} style={{ fontSize: fontSize.xs, color: ch.enabled ? neutral[700] : neutral[400] }}>{ch.name} <span style={{ color: neutral[400] }}>({ch.type})</span></span>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: "auto", borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 6 }}>
+        <button type="button" data-testid="reset-global-session" disabled={resetting} onClick={onReset} style={{ padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#B45309", fontSize: fontSize.xs, fontWeight: 600, cursor: resetting ? "default" : "pointer", fontFamily: fontFamily.body }}>{resetting ? "重置中…" : "重置全局会话"}</button>
+        <a href="/members" style={{ textAlign: "center", padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开成员库 →</a>
       </div>
     </aside>
   );

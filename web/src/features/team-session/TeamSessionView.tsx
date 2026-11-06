@@ -229,11 +229,14 @@ export function TeamSessionView({
   hideRightPanel = false,
   /** 群聊成员切换条：只看某成员的消息（null/空 = 全部）。 */
   filterMemberId = null,
+  /** 私聊态：直接切到该平台成员的私聊 Tab（/chat 成员会话复用旧私聊实现）。 */
+  privateMemberId = null,
 }: {
   teamId?: string;
   embedded?: boolean;
   hideRightPanel?: boolean;
   filterMemberId?: string | null;
+  privateMemberId?: string | null;
 } = {}) {
   const params = useParams<{ id: string }>();
   const teamId = teamIdProp ?? params?.id ?? "";
@@ -245,6 +248,7 @@ export function TeamSessionView({
   const messageInputRef = useRef<MessageInputHandle | null>(null);
 
   const [input, setInput] = useState("");
+  const [delivered, setDelivered] = useState(false);
   const [loadingByAgent, setLoadingByAgent] = useState<Record<string, string>>({});
   // loading key 最后更新时间（与 loadingByAgent 同 key；staleness 兜底 + 正常删除都同步维护）。
   const loadingSeenRef = useRef<Record<string, number>>({});
@@ -774,6 +778,28 @@ export function TeamSessionView({
     [privateChannelMap, teamId, team, teamAgentMembers, user?.id],
   );
 
+  /** /chat 私聊态：按平台成员 id 自动切到其私聊 Tab（优先复用既有频道）。 */
+  const forcedPrivateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!privateMemberId) {
+      forcedPrivateRef.current = null;
+      return;
+    }
+    if (forcedPrivateRef.current === privateMemberId) return;
+    const seat = (team?.members ?? []).find(
+      (m) => (m as unknown as { memberId?: string | null }).memberId === privateMemberId,
+    );
+    if (!seat) return;
+    const bySeat = privateChannelMap.get(seat.id);
+    if (bySeat) {
+      forcedPrivateRef.current = privateMemberId;
+      setActiveTab(`private:${bySeat}`);
+      return;
+    }
+    forcedPrivateRef.current = privateMemberId;
+    void handlePrivateTab(seat.id);
+  }, [privateMemberId, team?.members, privateChannelMap, handlePrivateTab]);
+
   const mentionable: MentionableAgent[] = useMemo(
     () =>
       (isGroupTab ? teamAgentMembers : [])
@@ -1231,7 +1257,11 @@ export function TeamSessionView({
       const inst = teamAgentMembers.find((a) => a.id === m.id && (m.instanceId ? a.instanceId === m.instanceId : true));
       if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
     }
-    return sendMutation.mutateAsync(payload).then(() => undefined);
+    return sendMutation.mutateAsync(payload).then(() => {
+      // P2 原型：发送成功给一个轻量「已送达」反馈（2s 后自动消失）。
+      setDelivered(true);
+      window.setTimeout(() => setDelivered(false), 2000);
+    });
   };
 
   /* ---------- 窗口级拖入上传（从 Finder/桌面等外部拖文件进会话窗口） ---------- */
@@ -1778,9 +1808,6 @@ export function TeamSessionView({
                       data-testid="chat-date-separator"
                       data-date-key={separatorKey}
                       style={{
-                        position: "sticky",
-                        top: 0,
-                        zIndex: 1,
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -1894,6 +1921,25 @@ export function TeamSessionView({
             {sendError && (
               <div data-testid="team-session-send-error" role="alert" style={{ marginBottom: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "#DC2626", fontSize: fontSize.sm }}>
                 发送失败：{sendError}
+              </div>
+            )}
+            {isGroupTab && mentionable.length > 0 && (
+              <div data-testid="chat-quick-commands" style={{ display: "flex", alignItems: "center", gap: space.xs, flexWrap: "wrap", marginBottom: space.sm }}>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>快捷：</span>
+                {mentionable.slice(0, 3).map((m) => (
+                  <button
+                    key={`${m.id}-${m.instanceId ?? ""}`}
+                    type="button"
+                    onClick={() => setInput((prev) => `${prev}${prev ? " " : ""}@${m.name} `)}
+                    style={{ border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#0F766E", borderRadius: radius.pill, padding: "1px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}
+                  >
+                    @{m.name}
+                  </button>
+                ))}
+                <button type="button" onClick={() => setInput((prev) => `${prev}${prev ? " " : ""}@all `)} style={{ border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#B45309", borderRadius: radius.pill, padding: "1px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>@all 通知</button>
+                {delivered && (
+                  <span data-testid="chat-delivered-toast" style={{ marginLeft: "auto", fontSize: fontSize.xs, color: "#0F766E" }}>✓ 已送达</span>
+                )}
               </div>
             )}
             <MessageInput
