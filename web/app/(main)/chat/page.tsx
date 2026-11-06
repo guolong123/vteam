@@ -11,7 +11,7 @@
  *   留到下一步接入，当前 5s 轮询兜底。
  * - 路由：/chat?c=group:<teamId> | dm:<memberId>；URL 驱动选中态，可刷新/分享。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRealtimeEvents } from "@/hooks/use-realtime";
@@ -61,7 +61,7 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
-export default function ChatPage() {
+function ChatPageContent() {
   const user = useAuthStore((s) => s.user);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -449,6 +449,21 @@ export default function ChatPage() {
         </div>
       )}
     </main>
+  );
+}
+
+/** useSearchParams 需要 Suspense 边界（Next App Router CSR bailout）。 */
+export default function ChatPage() {
+  return (
+    <Suspense
+      fallback={
+        <main style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: neutral[400], fontSize: fontSize.sm }}>
+          加载会话…
+        </main>
+      }
+    >
+      <ChatPageContent />
+    </Suspense>
   );
 }
 

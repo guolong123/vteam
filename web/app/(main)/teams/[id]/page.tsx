@@ -48,34 +48,88 @@ function toAvatarRole(role: string | null): RoleKey {
   return role && (ROLE_KEYS as readonly string[]).includes(role as RoleKey) ? (role as RoleKey) : "developer";
 }
 
-function MemberRow({ member, isMain, onSave, onRemove, onSetMain }: { member: TeamMemberDto; isMain: boolean; onSave: (payload: { alias?: string; workDir?: string }) => void; onRemove: () => void; onSetMain: () => void }) {
-  const [alias, setAlias] = useState(member.alias);
-  const [workDir, setWorkDir] = useState(member.workDir);
-  const dirty = alias !== member.alias || workDir !== member.workDir;
+function MemberRow({
+  member,
+  roleKey,
+  isMain,
+  onSave,
+  onRemove,
+  onSetMain,
+}: {
+  member: TeamMemberDto;
+  roleKey: RoleKey;
+  isMain: boolean;
+  onSave: (payload: { alias?: string; workDir?: string }) => void;
+  onRemove: () => void;
+  onSetMain: () => void;
+}) {
+  const [alias, setAlias] = useState(member.alias ?? "");
+  const [workDir, setWorkDir] = useState(member.workDir ?? "");
+  const dirty = alias !== (member.alias ?? "") || workDir !== (member.workDir ?? "");
   useEffect(() => {
-    setAlias(member.alias);
-    setWorkDir(member.workDir);
+    setAlias(member.alias ?? "");
+    setWorkDir(member.workDir ?? "");
   }, [member.alias, member.workDir]);
-  const roleKey = toAvatarRole(member.agent?.role ?? null);
   const theme = roles[roleKey];
+  const displayName = member.member?.name ?? member.alias ?? member.agent?.name ?? member.agentId;
   return (
-    <div data-testid="member-row" data-member-id={member.id} data-main={isMain ? "true" : "false"} style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: isMain ? "rgba(245,158,11,0.10)" : "var(--color-surface)", border: `1px solid ${isMain ? "rgba(245,158,11,0.45)" : neutral[200]}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
-      <AgentAvatar role={roleKey} size="sm" />
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, width: 210, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: space.xs, minWidth: 0 }}>
-          <span style={{ fontSize: fontSize.xs, color: theme.color, backgroundColor: theme.bg, border: `1px solid ${theme.border}`, padding: "0 6px", borderRadius: radius.pill, whiteSpace: "nowrap" }}>{theme.label}</span>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400], whiteSpace: "nowrap" }}>#{member.seq}</span>
-          {isMain
-            ? <span data-testid="main-badge" style={{ fontSize: 10, color: "#FFF", backgroundColor: "#F59E0B", padding: "0 6px", borderRadius: radius.pill, fontWeight: 700, whiteSpace: "nowrap" }}>★ 主 Agent</span>
-            : <button type="button" data-testid="set-main-agent" onClick={onSetMain} title="设为主 Agent" style={{ border: "none", background: "none", color: neutral[400], cursor: "pointer", padding: 0, fontSize: 10, fontWeight: 600, whiteSpace: "nowrap", fontFamily: fontFamily.body }}>设为主</button>}
+    <div
+      data-testid="member-row"
+      data-member-id={member.id}
+      data-main={isMain ? "true" : "false"}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: space.sm,
+        padding: space.md,
+        borderRadius: radius.lg,
+        backgroundColor: isMain ? "rgba(245,158,11,0.06)" : "var(--color-surface)",
+        border: `1px solid ${isMain ? "rgba(245,158,11,0.40)" : neutral[200]}`,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+        <AgentAvatar role={roleKey} size="md" />
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: fontSize.sm, fontWeight: 700, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{displayName}</span>
+            <span style={{ fontSize: 10, color: theme.color, backgroundColor: theme.bg, border: `1px solid ${theme.border}`, padding: "0 6px", borderRadius: radius.pill }}>{theme.label}</span>
+            <span style={{ fontSize: 10, color: neutral[400] }}>#{member.seq}</span>
+            {member.member ? (
+              <span style={{ fontSize: 10, color: neutral[500], backgroundColor: neutral[100], border: `1px solid ${neutral[200]}`, padding: "0 6px", borderRadius: radius.pill }}>平台成员</span>
+            ) : (
+              <span style={{ fontSize: 10, color: "#B45309", backgroundColor: "#FEF3C7", border: "1px solid #FCD34D", padding: "0 6px", borderRadius: radius.pill }}>旧席位</span>
+            )}
+            {isMain ? (
+              <span data-testid="main-badge" style={{ fontSize: 10, color: "#FFF", backgroundColor: "#F59E0B", padding: "0 6px", borderRadius: radius.pill, fontWeight: 700 }}>★ 主 Agent</span>
+            ) : (
+              <button type="button" data-testid="set-main-agent" onClick={onSetMain} style={{ border: "none", background: "none", color: neutral[400], cursor: "pointer", padding: 0, fontSize: 10, fontWeight: 600, fontFamily: fontFamily.body }}>设为主</button>
+            )}
+          </div>
+          <span style={{ fontSize: 10, color: neutral[400], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 340 }}>
+            {member.agent?.name ?? member.agentId} · {member.id}
+          </span>
         </div>
-        <span style={{ fontSize: 10, color: neutral[400], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.agent?.name ?? member.agentId}</span>
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          data-testid="member-save"
+          disabled={!dirty}
+          onClick={() => onSave({ alias: alias.trim() || undefined, workDir: workDir.trim() || undefined })}
+          style={{ padding: `5px 12px`, borderRadius: radius.md, border: "none", backgroundColor: dirty ? "#0D9488" : neutral[100], color: dirty ? "#FFF" : neutral[400], fontSize: fontSize.xs, fontWeight: 600, cursor: dirty ? "pointer" : "default", fontFamily: fontFamily.body }}
+        >
+          {dirty ? "保存修改" : "已保存"}
+        </button>
+        <button type="button" data-testid="member-remove" onClick={onRemove} title="移除成员" style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[400], cursor: "pointer", padding: "5px 10px", fontSize: fontSize.xs, borderRadius: radius.md, fontFamily: fontFamily.body }}>移除</button>
       </div>
-      <input data-testid="member-alias-input" value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="别名" aria-label="成员别名" style={{ width: 150, flexShrink: 0, padding: `6px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[800],fontFamily: fontFamily.body }} />
-      <input data-testid="member-workdir-input" value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="/data/vteam-worker/…" aria-label="工作目录" style={{ flex: 1, minWidth: 0, padding: `6px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], fontSize: fontSize.xs, color: neutral[600],fontFamily: fontFamily.mono }} />
-      <button type="button" data-testid="member-save" disabled={!dirty} onClick={() => onSave({ alias: alias.trim() || undefined, workDir: workDir.trim() || undefined })} style={{ padding: `6px ${space.md}px`, borderRadius: radius.sm, border: "none", backgroundColor: dirty ? "#0D9488" : neutral[100], color: dirty ? "#FFF" : neutral[400], fontSize: fontSize.xs, fontWeight: 600, cursor: dirty ? "pointer" : "default", fontFamily: fontFamily.body, flexShrink: 0 }}>保存</button>
-      <button type="button" data-testid="member-remove" onClick={onRemove} title="移除成员" style={{ border: "none", background: "none", color: neutral[300], cursor: "pointer", padding: space.xs, fontSize: fontSize.sm, fontFamily: fontFamily.body, flexShrink: 0 }}>✕</button>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.6fr)", gap: space.sm, paddingLeft: 44 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{ fontSize: 10, color: neutral[400] }}>群内别名</span>
+          <input data-testid="member-alias-input" value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="例如：架构-老周" aria-label="成员别名" style={{ padding: `6px 10px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[800], fontFamily: fontFamily.body }} />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{ fontSize: 10, color: neutral[400] }}>团队工作目录</span>
+          <input data-testid="member-workdir-input" value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="/data/vteam-worker/…" aria-label="工作目录" style={{ padding: `6px 10px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], fontSize: fontSize.xs, color: neutral[600], fontFamily: fontFamily.mono }} />
+        </label>
       </div>
     </div>
   );
@@ -144,6 +198,8 @@ export default function TeamDetailPage() {
       .map((m) => m.memberId)
       .filter((id): id is string => !!id),
   );
+  /** 席位 roleId → AgentRole.key（头像配色/岗位徽章用；旧席位无匹配时兜底 developer）。 */
+  const roleKeyById = new Map(roleItems.map((r) => [r.id, r.key]));
   const currentTaskId = team?.currentTaskId ?? null;
   // 悬空软引用（节点已删除）：当前值不在清单里时仍以原始 id 渲染占位项，不得回退成空选中
   const danglingWorkerId = team?.preferredWorkerId && !workers.some((w) => w.id === team.preferredWorkerId)
@@ -486,71 +542,109 @@ export default function TeamDetailPage() {
       </div>
 
       {/* 成员管理 */}
-      <section style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[800] }}>成员 <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[400] }}>{team.members.length} 个实例</span>{team.mainAgentMemberId && <span data-testid="main-agent-indicator" style={{ marginLeft: space.sm, fontSize: 11, color: "#D97706", backgroundColor: "#FFF7ED", border: "1px solid #F59E0B", padding: "0 6px", borderRadius: radius.pill, fontWeight: 600 }}>★ {team.members.find((m) => m.id === team.mainAgentMemberId)?.alias ?? team.mainAgentMemberId}</span>}</div>
-          <button type="button" data-testid="add-member-toggle" onClick={() => setShowAddMember(!showAddMember)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>{showAddMember ? "收起" : "＋ 添加成员"}</button>
+      <section style={{ display: "flex", flexDirection: "column", gap: space.md }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+          <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>团队成员</div>
+          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{team.members.length} 位</span>
+          {team.mainAgentMemberId && (
+            <span data-testid="main-agent-indicator" style={{ fontSize: 10, color: "#B45309", backgroundColor: "#FEF3C7", border: "1px solid #FCD34D", padding: "0 8px", borderRadius: radius.pill, fontWeight: 600 }}>
+              ★ 主 Agent：{team.members.find((m) => m.id === team.mainAgentMemberId)?.member?.name ?? team.members.find((m) => m.id === team.mainAgentMemberId)?.alias ?? team.mainAgentMemberId}
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            data-testid="add-member-toggle"
+            onClick={() => { setShowAddMember((v) => !v); setActionError(null); }}
+            style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: showAddMember ? neutral[100] : "#0D9488", color: showAddMember ? neutral[600] : "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}
+          >
+            {showAddMember ? "取消添加" : "＋ 添加成员"}
+          </button>
         </div>
 
         {showAddMember && (
-          <div data-testid="add-member-panel" style={{ display: "flex", gap: space.md, alignItems: "flex-end", flexWrap: "wrap", padding: space.lg, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px dashed ${neutral[300]}` }}>
-            <div style={{ display: "flex", gap: space.xs, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}`, alignSelf: "flex-end" }}>
-              {(["members", "roles"] as const).map((m) => (
-                <button key={m} type="button" data-testid={`add-member-mode-${m}`} onClick={() => { setAddMode(m); setActionError(null); }} style={{ padding: `${space.xs + 2}px ${space.sm}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.sm, fontWeight: 600, backgroundColor: addMode === m ? "var(--color-surface)" : "transparent", color: addMode === m ? "#0F766E" : neutral[500] }}>{m === "members" ? "从成员库选择" : "按岗位新建"}</button>
-              ))}
+          <div data-testid="add-member-panel" style={{ padding: space.lg, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.md }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: space.sm }}>
+              <div>
+                <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>添加成员</div>
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>从成员库选择已有成员，或按岗位新建一个临时成员实例。</div>
+              </div>
+              <span style={{ flex: 1 }} />
+              <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
+                {(["members", "roles"] as const).map((m) => (
+                  <button key={m} type="button" data-testid={`add-member-mode-${m}`} onClick={() => { setAddMode(m); setActionError(null); }} style={{ padding: `${space.xs + 1}px ${space.md}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.xs, fontWeight: 600, backgroundColor: addMode === m ? "var(--color-surface)" : "transparent", color: addMode === m ? "#0F766E" : neutral[500], boxShadow: addMode === m ? shadow.sm : undefined }}>
+                    {m === "members" ? "从成员库选择" : "按岗位新建"}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: space.md, alignItems: "flex-end", flexWrap: "wrap" }}>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: space.md }}>
               {addMode === "members" ? (
-                <div style={{ flex: 1, minWidth: 220, display: "flex", flexDirection: "column", gap: space.xs }}>
-                  <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择成员</label>
-                  <select data-testid="add-member-select" value={selectedMemberId} onChange={(e) => setSelectedMemberId(e.target.value)} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
+                <label style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[500], fontWeight: 600 }}>选择成员</span>
+                  <select data-testid="add-member-select" value={selectedMemberId} onChange={(e) => setSelectedMemberId(e.target.value)} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[800], fontFamily: fontFamily.body }}>
                     <option value="">{addMembersQuery.isPending ? "成员加载中…" : "请选择成员"}</option>
                     {addMemberOptions.filter((m: MemberDto) => !usedMemberIds.has(m.id)).map((m: MemberDto) => (
                       <option key={m.id} value={m.id}>{m.name} · {m.role?.name ?? "成员"} · 已在 {m.groupCount} 个群</option>
                     ))}
                   </select>
-                  <a href="/members?new=1" target="_blank" rel="noreferrer" style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none" }}>＋ 成员库中没有？去新建成员</a>
-                </div>
+                  <span style={{ fontSize: 10, color: neutral[400] }}>
+                    成员已在群内的会自动过滤；<a href="/members?new=1" target="_blank" rel="noreferrer" style={{ color: "#0F766E", textDecoration: "none" }}>去成员库新建 →</a>
+                  </span>
+                </label>
               ) : (
-                <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
-                  <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择岗位</label>
-                  <select data-testid="add-member-role-select" value={selectedRoleId} onChange={(e) => { setSelectedRoleId(e.target.value); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[500], fontWeight: 600 }}>选择岗位</span>
+                  <select data-testid="add-member-role-select" value={selectedRoleId} onChange={(e) => setSelectedRoleId(e.target.value)} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[800], fontFamily: fontFamily.body }}>
                     <option value="">请选择岗位</option>
                     {roleItems.map((r) => (
                       <option key={r.id} value={r.id}>{roleLabelOf(r)}</option>
                     ))}
                   </select>
-                  {rolesQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>岗位加载中…</span>}
-                </div>
+                </label>
               )}
-              <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: space.xs }}>
-                <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>别名（可选）</label>
-                <input data-testid="add-member-alias" value={addAlias} onChange={(e) => setAddAlias(e.target.value)} placeholder="默认 <角色名>-seq" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body }} />
-              </div>
-              <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
-                <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>工作目录（可选）</label>
-                <input data-testid="add-member-workdir" value={addWorkDir} onChange={(e) => setAddWorkDir(e.target.value)} placeholder="/data/vteam-worker/…" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], fontSize: fontSize.xs, color: neutral[600],fontFamily: fontFamily.mono }} />
-              </div>
-              <button type="button" data-testid="add-member-confirm" disabled={addMutation.isPending} onClick={handleAddMember} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.md, fontWeight: 500, cursor: addMutation.isPending ? "default" : "pointer", opacity: addMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body, alignSelf: "flex-end" }}>{addMutation.isPending ? "添加中…" : "确认添加"}</button>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: fontSize.xs, color: neutral[500], fontWeight: 600 }}>群内别名（可选）</span>
+                <input data-testid="add-member-alias" value={addAlias} onChange={(e) => setAddAlias(e.target.value)} placeholder="默认使用成员名 / 岗位名-seq" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[800], fontFamily: fontFamily.body }} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, gridColumn: addMode === "roles" ? "1 / -1" : undefined }}>
+                <span style={{ fontSize: fontSize.xs, color: neutral[500], fontWeight: 600 }}>团队工作目录（可选）</span>
+                <input data-testid="add-member-workdir" value={addWorkDir} onChange={(e) => setAddWorkDir(e.target.value)} placeholder="/data/vteam-worker/…" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], fontSize: fontSize.xs, color: neutral[600], fontFamily: fontFamily.mono }} />
+              </label>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: space.sm, borderTop: `1px solid ${neutral[100]}`, paddingTop: space.md }}>
+              <span style={{ fontSize: 10, color: neutral[400] }}>
+                {addMode === "members" ? "从成员库选择：复用平台成员配置；群内别名/工作目录可单独覆盖。" : "按岗位新建：创建新的成员实例（旧兼容形状）。"}
+              </span>
+              <span style={{ flex: 1 }} />
+              <button type="button" onClick={() => { setShowAddMember(false); setActionError(null); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>取消</button>
+              <button type="button" data-testid="add-member-confirm" disabled={addMutation.isPending} onClick={handleAddMember} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: addMutation.isPending ? "default" : "pointer", opacity: addMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}>{addMutation.isPending ? "添加中…" : "确认添加"}</button>
             </div>
           </div>
         )}
 
         {team.members.length === 0 ? (
-          <div data-testid="members-empty" style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px dashed ${neutral[300]}`, textAlign: "center", fontSize: fontSize.sm, color: neutral[400] }}>暂无成员，请添加</div>
+          <div data-testid="members-empty" style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px dashed ${neutral[300]}`, textAlign: "center", fontSize: fontSize.sm, color: neutral[400] }}>暂无成员，点击右上角「＋ 添加成员」开始</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
             {team.members.map((m) => (
-              <MemberRow key={m.id} member={m} isMain={team.mainAgentMemberId === m.id} onSave={(payload) => {
-                setActionError(null);
-                updateMemberMutation.mutate({ memberId: m.id, payload }, {
-                  onSuccess: () => queryClient.invalidateQueries({ queryKey: ["team", id] }),
-                  onError: (err) => setActionError(isApiError(err) ? err.message : "更新失败"),
-                });
-              }} onRemove={() => {
-                setActionError(null);
-                setRemoveConfirm(m);
-              }} onSetMain={() => handleSetMainAgent(m.id)} />
+              <MemberRow
+                key={m.id}
+                member={m}
+                roleKey={toAvatarRole(roleKeyById.get(m.roleId ?? "") ?? m.agent?.role ?? null)}
+                isMain={team.mainAgentMemberId === m.id}
+                onSave={(payload) => {
+                  setActionError(null);
+                  updateMemberMutation.mutate({ memberId: m.id, payload }, {
+                    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["team", id] }),
+                    onError: (err) => setActionError(isApiError(err) ? err.message : "更新失败"),
+                  });
+                }}
+                onRemove={() => { setActionError(null); setRemoveConfirm(m); }}
+                onSetMain={() => handleSetMainAgent(m.id)}
+              />
             ))}
           </div>
         )}
