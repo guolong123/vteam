@@ -91,6 +91,15 @@ export interface WorkerConfig {
    *  http://127.0.0.1（仅本机可访问）——外部/跨机 worker 场景需启动告警引导（见 index.ts）。 */
   workerAdvertiseHostExplicit: boolean;
   /**
+   * 是否运行在容器里（docker / podman / k8s）。
+   *
+   * 为什么需要：`detectLocalIPv4` 按**网卡名**跳过 docker/veth 等虚拟网卡，但**容器内的网卡
+   * 就叫 `eth0`**（veth 的容器端）⇒ 探测到的是**容器 IP**（如 172.18.0.2），
+   * 控制面（另一台机器）根本不可达 ⇒ 注册成功、派发时 `fetch failed`（用户实测踩到）。
+   * 容器场景下必须显式给 WORKER_ADVERTISE_HOST=<宿主机 IP>，故启动期要能识别并强告警。
+   */
+  inContainer: boolean;
+  /**
    * opencode serve 绑定地址（D2：默认 127.0.0.1 保住本地铁律）。
    *
    * ⚠️ v2：控制面**不**直连 opencode serve（只连 worker 执行端点）⇒ 跨机/集群外 worker
@@ -301,6 +310,26 @@ export function detectLocalIPv4(): string | undefined {
   return undefined;
 }
 
+/**
+ * 是否运行在容器里：`/.dockerenv` 存在，或 `/proc/1/cgroup` 命中 docker/kubepods/containerd/libpod。
+ * 纯函数（只读文件），独立导出便于单测 mock。
+ */
+export function detectContainerized(): boolean {
+  try {
+    if (fs.existsSync('/.dockerenv')) {
+      return true;
+    }
+  } catch {
+    // 读不到就当非容器
+  }
+  try {
+    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
+    return /(docker|kubepods|containerd|libpod)/.test(cgroup);
+  } catch {
+    return false;
+  }
+}
+
 /** 解析非负整数配置项；缺省/空串回落默认值，非法值抛错。 */
 function parseNonNegativeInt(name: string, raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') {
@@ -413,6 +442,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
     workerAdvertiseHost: advertiseHostRaw || (detectedIPv4 ? `http://${detectedIPv4}` : 'http://127.0.0.1'),
+    inContainer: detectContainerized(),
     workerAdvertiseHostExplicit: advertiseHostRaw.length > 0,
     opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
     defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,

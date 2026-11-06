@@ -1161,6 +1161,21 @@ export function warnLoopbackAdvertiseHost(config: WorkerConfig): void {
     return;
   }
   const advertiseHost = config.workerAdvertiseHost.replace(/\/+$/, '');
+  /**
+   * **容器内**且未显式设置：自动探测到的是容器内网 IP（eth0），控制面（另一台机器）不可达
+   * ⇒ 注册能成功、但派发会报「worker 不可用: fetch failed」（用户实测踩到）。
+   * 必须强告警——这种情况比 127.0.0.1 更隐蔽（地址看着"像内网 IP"，其实只在 docker 网桥内）。
+   */
+  if (config.inContainer) {
+    console.warn(
+      `[worker] ⚠️  运行在容器内且未设置 WORKER_ADVERTISE_HOST：自动探测到的是**容器内网 IP**（${advertiseHost}），\n` +
+        `  控制面（另一台机器）通常无法访问它 ⇒ 注册会成功，但派发时会报 "worker 不可用: fetch failed"。\n` +
+        `  请显式设置 WORKER_ADVERTISE_HOST=<宿主机 IP>（docker：-e WORKER_ADVERTISE_HOST=http://<宿主机 IP>），\n` +
+        `  并确认容器已把执行端点端口映射到宿主机（-p ${config.workerExecPort}:${config.workerExecPort}）。\n` +
+        `  控制面据此访问 <宿主机 IP>:${config.workerExecPort}（执行端点，鉴权 X-Worker-Token）。`,
+    );
+    return;
+  }
   if (config.workerAdvertiseHost === 'http://127.0.0.1') {
     // 自动探测失败回退：保留原 127.0.0.1 可达性告警
     console.warn(

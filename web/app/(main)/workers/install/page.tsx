@@ -398,15 +398,15 @@ export default function WorkerInstallPage() {
   ];
 
   const dockerSteps = [
-    "在目标机器执行 docker run 命令（镜像需含 opencode v2 适配，≥ v1.1.0）",
+    "先填「上报 IP」（宿主机 IP）+ SERVER_URL 不要留 127.0.0.1：否则注册成功但控制面拨不到执行端点",
+    "在目标机器执行 docker run 命令（镜像需含 opencode v2 适配，≥ v1.1.0；-p 4198:4198 已含在命令里）",
     "容器读取 SERVER_URL / WORKER_ID / WORKER_MAX_INSTANCES 后注册入池",
-    "控制面只拨执行端点 4198；跨机请填写「上报 IP」，SERVER_URL 不要留 127.0.0.1",
   ];
 
   const dockerDshSteps = [
-    "在目标机器执行 docker run 命令（镜像缺省 vteam-worker-dsh，已内置沙箱补丁）",
+    "先填「上报 IP」（宿主机 IP）：容器内自动探测的是容器 IP，控制面连不上 ⇒ 会表现为注册成功但派发 fetch failed",
+    "在目标机器执行 docker run 命令（镜像缺省 vteam-worker-dsh，已内置沙箱补丁）；容器需把 4198 映射到宿主机（命令里已有 -p 4198:4198）",
     "只带 WORKER_ENGINE=dsh 即可：模型与凭据由控制面下发、按任务派发",
-    "控制面直连 <上报主机>:4198；跨机请填写「上报 IP」",
   ];
 
   const steps = method === "curl" ? (isDsh ? curlDshSteps : curlSteps) : isDsh ? dockerDshSteps : dockerSteps;
@@ -608,15 +608,32 @@ export default function WorkerInstallPage() {
                   <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>外部/跨机 worker 必填 · 集群内留空</span>
                 </div>
 
-                <FieldRow label="上报 IP（advertise-host）" hint="只填 IP，如 192.168.1.100">
+                <FieldRow
+                  label="上报 IP（advertise-host）"
+                  hint={
+                    method === "docker" && !advertiseHost
+                      ? "⚠️ docker 安装必填：容器内自动探测到的是容器 IP，控制面连不上"
+                      : "只填 IP，如 192.168.1.100（跨机 / docker 安装必填）"
+                  }
+                >
                   <input
                     data-testid="advertise-host-input"
                     value={advertiseHost}
                     onChange={(e) => setAdvertiseHost(e.target.value)}
                     placeholder="192.168.1.100"
                     spellCheck={false}
-                    style={inputStyle}
+                    style={
+                      method === "docker" && !advertiseHost
+                        ? { ...inputStyle, borderColor: "rgba(217,119,6,0.55)" }
+                        : inputStyle
+                    }
                   />
+                  {method === "docker" && !advertiseHost && (
+                    <span style={{ fontSize: fontSize.xs, color: "#B45309", lineHeight: 1.6 }}>
+                      容器内网卡是 eth0，自动探测上报的是容器 IP ⇒ 控制面拨不到，
+                      表现为「注册成功但派发报 worker 不可用: fetch failed」。请填宿主机 IP。
+                    </span>
+                  )}
                 </FieldRow>
 
                 <FieldRow label="MCP 地址（mcp-url）" hint="缺省已填当前控制面内置 MCP 入口">

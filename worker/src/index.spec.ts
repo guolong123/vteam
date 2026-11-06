@@ -79,6 +79,7 @@ const CONFIG: WorkerConfig = {
   gitSshKeyPath: '',
   workerAdvertiseHost: 'http://worker',
   workerAdvertiseHostExplicit: true,
+  inContainer: false,
   opencodeServeHostname: '127.0.0.1',
   defaultModelId: '',
   workerExecPort: 4198,
@@ -1476,6 +1477,49 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       expect(message).toContain('无需为控制面把 OPENCODE_SERVE_HOSTNAME 改成 0.0.0.0');
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  it('容器内 + 未显式设置：强告警"探测到的是容器内网 IP"（并给出 WORKER_ADVERTISE_HOST / -p 映射指引）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({
+        ...CONFIG,
+        workerAdvertiseHostExplicit: false,
+        workerAdvertiseHost: 'http://172.18.0.2',
+        inContainer: true,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = warnSpy.mock.calls[0][0] as string;
+      expect(message).toContain('容器内网 IP');
+      expect(message).toContain('172.18.0.2');
+      expect(message).toContain('WORKER_ADVERTISE_HOST=<宿主机 IP>');
+      expect(message).toContain(`-p ${CONFIG.workerExecPort}:${CONFIG.workerExecPort}`);
+      expect(message).toContain('fetch failed');
+      // 容器场景不能打印"已自动探测上报地址"这种误导性 info
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  it('容器内但**显式**设置了 WORKER_ADVERTISE_HOST：不告警（正常 docker 安装路径）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({
+        ...CONFIG,
+        workerAdvertiseHostExplicit: true,
+        workerAdvertiseHost: 'http://172.16.2.3',
+        inContainer: true,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 
