@@ -625,12 +625,9 @@ if [ "${ENGINE}" = "dsh" ]; then
   if [ -n "${DSH_API_KEY}" ]; then
     update_env_secret DSH_API_KEY "${DSH_API_KEY}"
   fi
-  if [ -z "${DSH_API_KEY}" ] && ! grep -q '^DSH_API_KEY=' .env; then
-    echo "[install-worker] ⚠️  未提供 --dsh-api-key：dsh 引擎只能经 env 拿模型凭据，缺了会在首次调用模型时报错。" >&2
-  fi
-  if [ -z "${DSH_MODEL}" ] && ! grep -q '^DSH_MODEL=' .env; then
-    echo "[install-worker] ⚠️  未提供 --dsh-model：worker 将使用自身缺省模型（DSH_MODEL 为空时由 dsh 决定）。" >&2
-  fi
+  # 模型路由/凭据默认**由控制面下发**（dsh 的 apiKeyEnv 机制 + 模型管理里的 provider 配置）：
+  # 上面这些 --dsh-* 只是给离线/特殊网关场景的可选覆盖，不填也能正常注册与接活。
+  echo "[install-worker] dsh 模型由控制面下发（「模型管理 → Providers」需配好 baseUrl/请求头与该 provider 的 API key）；--dsh-* 仅为可选覆盖"
 fi
 # 固定 opencode serve 端口（安装时选定一次，重启不再漂移）：
 # - 显式 --serve-port 总是覆盖（--serve-port 0 = 明确改回随机，后续重装也保留 0）；

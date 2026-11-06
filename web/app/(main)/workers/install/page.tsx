@@ -313,14 +313,12 @@ export default function WorkerInstallPage() {
   /* 网络可达性（可选）：外部/跨机 worker 专用，空值不拼接命令——集群内/本机无需配置 */
   const [advertiseHost, setAdvertiseHost] = useState("");
   const [serveHostname, setServeHostname] = useState("");
-  /** 执行引擎：opencode（缺省）/ dsh。dsh 需要 Node 24 + dsh CLI + bubblewrap，且**只能经 env 拿模型凭据**。 */
+  /**
+   * 执行引擎：opencode（缺省）/ dsh。dsh 需要 Node 24 + dsh CLI + bubblewrap（脚本自动装）。
+   * ⚠️ **模型路由与凭据不在安装时填**：provider 的 baseUrl / 请求头 / API key 都由控制面
+   * 「模型管理」统一维护，worker 启动后经凭据下发拿到（dsh 的 apiKeyEnv 机制）。
+   */
   const [engine, setEngine] = useState<"opencode" | "dsh">("opencode");
-  const [dshProvider, setDshProvider] = useState("opencode-go");
-  const [dshModel, setDshModel] = useState("deepseek-v4.1-flash");
-  const [dshApiKey, setDshApiKey] = useState("");
-  const [dshBaseUrl, setDshBaseUrl] = useState("https://opencode.ai/inference/go/v1");
-  const [dshSessionHeader, setDshSessionHeader] = useState("x-opencode-session");
-  const [dshSessionHeaderValue, setDshSessionHeaderValue] = useState("vteam-worker");
   const [mcpUrl, setMcpUrl] = useState("");
   const [workDir, setWorkDir] = useState("");
 
@@ -377,26 +375,9 @@ export default function WorkerInstallPage() {
      旧的 CONCURRENCY 环境变量 worker 根本不读）；镜像引用取自「worker 镜像」字段
      （缺省 guojongg/vteam-worker:latest，可改内网仓库）。 */
   const isDsh = engine === "dsh";
-  /** dsh 专属参数（curl 脚本与 docker run 共用同一组语义）。 */
-  const dshCurlArgs = [
-    dshProvider ? ` --dsh-provider ${dshProvider}` : "",
-    dshModel ? ` --dsh-model ${dshModel}` : "",
-    dshApiKey ? ` --dsh-api-key ${dshApiKey}` : "",
-    dshBaseUrl ? ` --dsh-base-url ${dshBaseUrl}` : "",
-    dshSessionHeader ? ` --dsh-session-header ${dshSessionHeader}` : "",
-    dshSessionHeaderValue ? ` --dsh-session-header-value ${dshSessionHeaderValue}` : "",
-  ].join("");
-  const dshDockerEnv = [
-    `-e WORKER_ENGINE=dsh`,
-    dshProvider ? `-e DSH_PROVIDER=${dshProvider}` : "",
-    dshModel ? `-e DSH_MODEL=${dshModel}` : "",
-    dshApiKey ? `-e DSH_API_KEY=${dshApiKey}` : "",
-    dshBaseUrl ? `-e DSH_BASE_URL=${dshBaseUrl}` : "",
-    dshSessionHeader ? `-e DSH_SESSION_HEADER=${dshSessionHeader}` : "",
-    dshSessionHeaderValue ? `-e DSH_SESSION_HEADER_VALUE=${dshSessionHeaderValue}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  /** dsh 只需要声明引擎本身；模型路由/凭据由控制面「模型管理」下发，不在这里拼。 */
+  const dshCurlArgs = "";
+  const dshDockerEnv = "-e WORKER_ENGINE=dsh";
 
   const curlCommand = isDsh
     ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh --worker-id ${workerId} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`
@@ -416,7 +397,7 @@ export default function WorkerInstallPage() {
   const curlDshSteps = [
     "在目标机器执行命令：脚本会自动装 Node ≥ 24.9（dsh 要求）、dsh CLI（@deepseek-ai/dsh@0.2.2-alpha.2）与 bubblewrap，并给全局 dsh 打上「bwrap 不挂 /proc」沙箱补丁",
     "⚠️ 请用**普通用户**运行（不要 root/sudo）：bubblewrap 以 root 运行会走特权路径，受限内核上没有 CAP_SYS_ADMIN 会直接失败（沙箱不可用）",
-    "dsh 只能经 env 拿模型凭据：脚本把 DSH_PROVIDER / DSH_MODEL / DSH_API_KEY / DSH_BASE_URL / DSH_SESSION_HEADER(_VALUE) 写进安装目录 .env（权限 600）——缺 API key 或网关地址会在首次调用模型时失败",
+    "模型与凭据不需要在安装时填：脚本只写 WORKER_ENGINE=dsh，worker 启动后从控制面拉取 provider 凭据（apiKeyEnv 机制）、模型由控制面按任务派发。前提是「模型管理 → Providers」里该 provider 已配好 baseUrl 与请求头",
     "脚本以 systemd 用户级服务守护（无 systemd 环境回退前台）；注册使用 X_WORKER_TOKEN，外部/跨机 worker 需填写「上报 IP」",
     "等待首次心跳：控制面按注册上报的 <上报主机>:4198 直连执行端点；dsh 没有 opencode serve",
   ];
@@ -432,7 +413,7 @@ export default function WorkerInstallPage() {
   /** dsh 引擎的 docker 步骤（与 opencode 的差异：无 serve 密码、必须给 DSH_* 凭据、非 root 沙箱）。 */
   const dockerDshSteps = [
     "在目标机器执行 docker run 命令，拉取「worker 镜像」字段指定的镜像（缺省 guojongg/vteam-worker-dsh:latest：node 24 + dsh CLI + bubblewrap，已内置「bwrap 不挂 /proc」沙箱补丁）",
-    "dsh 只能经 env 拿模型凭据：命令里已带上 WORKER_ENGINE=dsh 与 DSH_PROVIDER / DSH_MODEL / DSH_API_KEY / DSH_BASE_URL / DSH_SESSION_HEADER(_VALUE)——缺 DSH_API_KEY 或 DSH_BASE_URL 会在首次调用模型时失败（网关地址留空会回落 https://<provider>/v1，通常不存在）",
+    "模型与凭据不需要在安装时填：容器只带 WORKER_ENGINE=dsh，启动后从控制面拉取 provider 凭据（apiKeyEnv 机制），模型由控制面按任务派发。前提是「模型管理 → Providers」里该 provider 已配好 baseUrl 与请求头",
     "容器注册使用 X_WORKER_TOKEN（注册鉴权必填）；外部/跨机 worker 需在上方填写「上报 IP」，否则控制面拨不到 <上报主机>:4198 执行端点",
     "SERVER_URL 必须是目标机器能访问到的控制面地址（跨机别留 127.0.0.1——那指向 worker 机器自身）",
     "等待首次心跳：宿主机端口 4198 是执行端点（控制面按注册上报的 <上报主机>:4198 直连，X-Worker-Token 鉴权）；dsh 没有 opencode serve，无需映射 4000",
@@ -635,75 +616,29 @@ export default function WorkerInstallPage() {
               {isDsh && (
                 <div
                   data-testid="dsh-config"
-                  style={{ display: "flex", flexDirection: "column", gap: space.md, paddingTop: space.sm, borderTop: `1px solid ${neutral[100]}` }}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: space.xs,
+                    padding: `${space.md}px`,
+                    borderRadius: radius.md,
+                    border: `1px solid ${neutral[200]}`,
+                    backgroundColor: neutral[50],
+                  }}
                 >
-                  <div style={{ display: "flex", alignItems: "baseline", gap: space.sm }}>
-                    <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>dsh 引擎配置</span>
-                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-                      dsh 只能经 env 拿模型凭据（无控制面下发通道）· 写入安装目录 .env（权限 600）
-                    </span>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
-                    <FieldRow label="provider（dsh-provider）" hint="模型路由，如 opencode-go">
-                      <input
-                        data-testid="dsh-provider-input"
-                        value={dshProvider}
-                        onChange={(e) => setDshProvider(e.target.value)}
-                        spellCheck={false}
-                        style={inputStyle}
-                      />
-                    </FieldRow>
-                    <FieldRow label="model（dsh-model）" hint="模型 id，如 deepseek-v4.1-flash">
-                      <input
-                        data-testid="dsh-model-input"
-                        value={dshModel}
-                        onChange={(e) => setDshModel(e.target.value)}
-                        spellCheck={false}
-                        style={inputStyle}
-                      />
-                    </FieldRow>
-                  </div>
-                  <FieldRow label="模型 API key（dsh-api-key）" hint="写进 .env 的 DSH_API_KEY · 必填，否则首次调用模型即失败">
-                    <input
-                      type="password"
-                      data-testid="dsh-api-key-input"
-                      value={dshApiKey}
-                      onChange={(e) => setDshApiKey(e.target.value)}
-                      placeholder="oc_sk_..."
-                      spellCheck={false}
-                      style={inputStyle}
-                    />
-                  </FieldRow>
-                  <FieldRow label="网关基址（dsh-base-url）" hint="provider 网关地址；留空会回落到 https://<provider>/v1（通常不存在 → 连接失败）">
-                    <input
-                      data-testid="dsh-base-url-input"
-                      value={dshBaseUrl}
-                      onChange={(e) => setDshBaseUrl(e.target.value)}
-                      placeholder="https://opencode.ai/inference/go/v1"
-                      spellCheck={false}
-                      style={inputStyle}
-                    />
-                  </FieldRow>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
-                    <FieldRow label="请求头名（dsh-session-header）" hint="部分网关必填，如 opencode-go 要 x-opencode-session">
-                      <input
-                        data-testid="dsh-session-header-input"
-                        value={dshSessionHeader}
-                        onChange={(e) => setDshSessionHeader(e.target.value)}
-                        spellCheck={false}
-                        style={inputStyle}
-                      />
-                    </FieldRow>
-                    <FieldRow label="请求头值（dsh-session-header-value）" hint="稳定即可（用于网关侧路由/缓存亲和）">
-                      <input
-                        data-testid="dsh-session-header-value-input"
-                        value={dshSessionHeaderValue}
-                        onChange={(e) => setDshSessionHeaderValue(e.target.value)}
-                        spellCheck={false}
-                        style={inputStyle}
-                      />
-                    </FieldRow>
-                  </div>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>
+                    dsh 引擎：模型与凭据由「模型管理」下发
+                  </span>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.7 }}>
+                    安装时不需要填写 provider / 模型 / API key / 网关地址：worker 启动后从控制面拉取
+                    provider 凭据（dsh 的 <code style={{ fontFamily: fontFamily.mono }}>apiKeyEnv</code> 机制），
+                    模型由控制面按任务派发指定。
+                    <br />
+                    唯一前提：该 provider 在「模型管理 → Providers」里已配好 <b>baseUrl</b> 与<b>请求头</b>
+                    （如 opencode-go 需要 <code style={{ fontFamily: fontFamily.mono }}>x-opencode-session</code> 与
+                    <code style={{ fontFamily: fontFamily.mono }}> https://opencode.ai/inference/go/v1</code>）；
+                    没配 baseUrl 时 dsh 会回落到 <code style={{ fontFamily: fontFamily.mono }}>https://&lt;provider&gt;/v1</code>（通常不存在）。
+                  </span>
                 </div>
               )}
 
