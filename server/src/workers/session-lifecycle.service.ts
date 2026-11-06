@@ -82,6 +82,13 @@ export class SessionLifecycleService implements OnModuleInit {
     sessionId: string,
     workerId: string,
     instanceId: string,
+    /**
+     * P3 成员全局会话：绑定时的归属维度（本轮 turn 的 team/seat）。
+     * 不传 = 读 Session 行上的旧维度（存量行为逐字节不变）。
+     * 全局会话的 team_member_id 是「最近席位」，跨群派发必须显式传本轮维度，
+     * 否则 TaskGroupInstance 会归因到上一个群。
+     */
+    dims?: { teamId: string; teamMemberId: string },
   ) {
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const session = await tx.session.findUnique({
@@ -94,15 +101,15 @@ export class SessionLifecycleService implements OnModuleInit {
           message: `会话 ${sessionId} 不存在`,
         });
       }
-      // team-only：只认团队行，无团队维度即错
-      if (!session.teamId || !session.teamMemberId) {
+      // team-only：只认团队行，无团队维度即错（成员全局会话用本轮 dims 覆盖）
+      if (!dims && (!session.teamId || !session.teamMemberId)) {
         throw new BadRequestException({
           code: SESSION_ERRORS.TEAM_SESSION_MISSING_DIMENSION,
           message: `会话 ${sessionId} 缺少团队维度（teamId/teamMemberId），无法绑定 worker`,
         });
       }
-      const teamId = session.teamId;
-      const teamMemberId = session.teamMemberId;
+      const teamId = dims?.teamId ?? session.teamId;
+      const teamMemberId = dims?.teamMemberId ?? session.teamMemberId;
       const existing = await tx.taskGroupInstance.findFirst({
         where: { teamId, teamMemberId, workerId, instanceId },
         select: { id: true },

@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -25,6 +26,8 @@ import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerClient, WorkerEndpointRef } from '../workers/worker.client';
+import { SessionLifecycleService } from '../workers/session-lifecycle.service';
+import { isMemberSessionScope } from '../workers/session-scope';
 import { CHAT_ERRORS } from './chat.constants';
 import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
@@ -120,6 +123,8 @@ const TEAM_MEMBER_SELECT = {
   agentId: true,
   alias: true,
   seq: true,
+  /** P3：成员全局会话键（旧席位未回填时为 null → 回落席位会话）。 */
+  memberId: true,
 } as const;
 
 const CHANNEL_TASK_SELECT = {
@@ -172,6 +177,9 @@ export class ChatService {
     private readonly workerClient: WorkerClient,
     @Inject(MessageDispatcher)
     private readonly dispatcher: MessageDispatcher,
+    /** P3：SESSION_SCOPE=member 时触发解析走成员全局会话；缺省（旧/单测）走席位会话。 */
+    @Optional()
+    private readonly sessionLifecycle?: SessionLifecycleService,
   ) {
     // 接通分派回调（计划 §5.1：onLoading/onFinal/onError）——仅日志，行为不变：
     // loading 广播 / 回复落库 + 广播均由分派器内部完成，此处不重复广播（否则改变
@@ -2156,6 +2164,8 @@ export class ChatService {
       agentId: string;
       removedAt: Date | null;
       enabled?: boolean | null;
+      /** 平台成员 id（P3 成员全局会话键；null = 旧席位未回填）。 */
+      memberId?: string | null;
     },
   ): Promise<TriggerResult> {
     if (row.removedAt) {
@@ -2173,6 +2183,26 @@ export class ChatService {
         sessionId: null,
         status: 'agent_disabled',
       };
+    }
+    // P3（SESSION_SCOPE=member）：优先成员全局会话 —— 一个成员跨群只有一个 session；
+    // 平台成员不存在/未回填时回落旧席位会话，保证开关可渐进开启。
+    if (isMemberSessionScope() && row.memberId && this.sessionLifecycle) {
+      try {
+        const ensured = await this.sessionLifecycle.ensureMemberSession(
+          row.memberId,
+          { seatId: row.id, teamId },
+        );
+        return {
+          agentId: row.agentId,
+          instanceId: row.id,
+          sessionId: ensured.id,
+          status: 'dispatched',
+        };
+      } catch (err) {
+        this.logger.warn(
+          `member-session 解析失败 team=${teamId} seat=${row.id} member=${row.memberId}，回落席位会话: ${(err as Error)?.message ?? err}`,
+        );
+      }
     }
     // 团队直查：按 (teamId, teamMemberId) 定位团队会话（单成员单会话，
     // 同 agent 多实例会话独立，不再按 agentId 撞首条；任务锚定分支已删）。
@@ -2216,6 +2246,7 @@ export class ChatService {
         agentId: string;
         removedAt: Date | null;
         enabled?: boolean | null;
+        memberId?: string | null;
       },
     );
   }
