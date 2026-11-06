@@ -48,11 +48,12 @@ describe('TaskChannelBindingsController', () => {
     });
   });
 
-  it('bind notification channels validates existence', async () => {
-    prisma.notificationChannel.findMany.mockResolvedValue([{ id: 'nc_1' }]);
-    const res = await controller.bindNotificationChannels('t_1', {
-      notificationChannelIds: ['nc_1'],
-    });
-    expect(res.taskId).toBe('t_1');
+  it('任务级通知绑定已下线：GET/POST 均返回 410（M8）', () => {
+    expect(() => controller.listNotificationChannels('t_1')).toThrow(
+      /任务级通知渠道绑定已下线/,
+    );
+    expect(() => controller.bindNotificationChannels('t_1')).toThrow(
+      /任务级通知渠道绑定已下线/,
+    );
   });
 });
