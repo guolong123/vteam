@@ -15,6 +15,14 @@ export interface PageWindowProps {
   children: ReactNode;
   /** 内容最大宽度（缺省 1080，对齐既有窗口页）。 */
   maxWidth?: number;
+  /** 子区块纵向间距（缺省 space.lg；工作区页可收紧以让正文占更多高度）。 */
+  gap?: number;
+  /**
+   * 撑满可用高度（缺省 false，既有页行为不变）。
+   * 开启后 main 变成纵向 flex、内层 div `flex:1`，子级就能用 `flex:1/minHeight:0`
+   * 铺满——工作区页（文档站等）靠它摆脱 `calc(100vh - Npx)` 这类写死高度。
+   */
+  fill?: boolean;
   /** 全宽模式：内层不限宽、不居中（docs 站等工作区页用；缺省 false，既有页行为不变）。 */
   fluid?: boolean;
   /** 根节点 testid（缺省 page-window；替换旧根容器时透传原 testid，保 e2e 不变）。 */
@@ -23,16 +31,27 @@ export interface PageWindowProps {
   className?: string;
 }
 
-export function PageWindow({ children, maxWidth = 1080, fluid = false, testId = "page-window", style, className }: PageWindowProps) {
+export function PageWindow({ children, maxWidth = 1080, fluid = false, gap = space.lg, fill = false, testId = "page-window", style, className }: PageWindowProps) {
   return (
-    <main data-testid={testId} className={className} style={{ flex: 1, minHeight: 0, padding: `${space.xl}px`, ...style }}>
+    <main
+      data-testid={testId}
+      className={className}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        padding: `${space.xl}px`,
+        ...(fill ? { display: "flex", flexDirection: "column" as const } : {}),
+        ...style,
+      }}
+    >
       <div
         style={{
           ...(fluid ? { maxWidth: "none", margin: 0 } : { maxWidth, margin: "0 auto" }),
           width: "100%",
           display: "flex",
           flexDirection: "column",
-          gap: space.lg,
+          gap,
+          ...(fill ? { flex: 1, minHeight: 0 } : {}),
         }}
       >
         {children}

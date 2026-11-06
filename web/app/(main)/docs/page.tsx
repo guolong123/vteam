@@ -630,7 +630,7 @@ function FilterPills({
   onChange: (key: string) => void;
 }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap", flexShrink: 0 }}>
       {options.map((opt) => {
         const isActive = opt.key === activeKey;
         return (
@@ -642,12 +642,13 @@ function FilterPills({
             data-active={isActive ? "true" : "false"}
             onClick={() => onChange(opt.key)}
             style={{
-              padding: `${space.sm}px ${space.lg}px`,
+              padding: `3px ${space.md}px`,
               borderRadius: radius.pill,
+              fontSize: fontSize.sm,
+              flexShrink: 0,
               border: `1px solid ${isActive ? "#0D9488" : neutral[200]}`,
               backgroundColor: isActive ? "#0D9488" : "var(--color-surface)",
               color: isActive ? "#FFFFFF" : neutral[600],
-              fontSize: fontSize.md,
               fontWeight: isActive ? 600 : 400,
               cursor: "pointer",
               fontFamily: fontFamily.body,
@@ -907,9 +908,16 @@ export default function DocsUnifiedPage() {
     <PageWindow
       testId="docs-shell"
       fluid
-      style={{ backgroundColor: neutral[100], ...baseFont }}
+      // 工作区页：撑满可用高度 + 收紧内边距/区块间距（顶部精简后正文要多占空间）
+      fill
+      gap={space.sm}
+      style={{
+        backgroundColor: neutral[100],
+        padding: `${space.md}px ${space.lg}px`,
+        ...baseFont,
+      }}
     >
-      {/* 头部：团队名 + 文档站标题 + 返回 */}
+      {/* 头部：团队名/文档站标题 + 内容页签 + 返回（页签内联，省掉一整行高度） */}
       <div
         data-testid="docs-title"
         style={{
@@ -919,8 +927,35 @@ export default function DocsUnifiedPage() {
           gap: space.sm,
         }}
       >
-        <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
-          {teamId ? (teamName ? `${teamName} · 文档站` : "文档站") : "文档站"}
+        <div style={{ display: "flex", alignItems: "center", gap: space.md, minWidth: 0 }}>
+          <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], whiteSpace: "nowrap" }}>
+            {teamId ? (teamName ? `${teamName} · 文档站` : "文档站") : "文档站"}
+          </div>
+          {teamId && (
+            <div
+              data-testid="docs-tab-bar"
+              role="tablist"
+              aria-label="文档站内容"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 2,
+                borderRadius: radius.md,
+                border: `1px solid ${border}`,
+                backgroundColor: neutral[100],
+                padding: 2,
+                flexShrink: 0,
+              }}
+            >
+              <button type="button" role="tab" aria-selected={tab === "docs"} data-testid="docs-tab-docs" data-active={tab === "docs" ? "true" : "false"} onClick={handleTabDocs} style={{ display: "flex", alignItems: "center", gap: 5, borderRadius: radius.sm, padding: "3px 10px", fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "docs" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
+                <svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12M10 20v-6h4v6" /></svg>文档
+              </button>
+              <button type="button" role="tab" aria-selected={tab === "protos"} data-testid="docs-tab-protos" data-active={tab === "protos" ? "true" : "false"} onClick={handleTabProtos} style={{ display: "flex", alignItems: "center", gap: 5, borderRadius: radius.sm, padding: "3px 10px", fontSize: fontSize.sm, fontWeight: 500, border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", cursor: "pointer", ...(tab === "protos" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
+                <svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>原型
+                {typeof protoCount === "number" && protoCount > 0 && <span style={{ borderRadius: radius.pill, backgroundColor: neutral[200], padding: "0 5px", fontSize: 10, fontWeight: 600, lineHeight: "14px", color: neutral[600] }}>{protoCount}</span>}
+              </button>
+            </div>
+          )}
         </div>
         <button
           type="button"
@@ -999,17 +1034,6 @@ export default function DocsUnifiedPage() {
         </div>
       ) : (
         <>
-          <div data-testid="docs-tab-bar" style={{ display: "flex", height: 44, flexShrink: 0, alignItems: "center", gap: 4, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.md, border: `1px solid ${border}`, backgroundColor: neutral[100], padding: 2 }} role="tablist" aria-label="文档站内容">
-              <button type="button" role="tab" aria-selected={tab === "docs"} data-testid="docs-tab-docs" data-active={tab === "docs" ? "true" : "false"} onClick={handleTabDocs} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "docs" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
-                <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12M10 20v-6h4v6" /></svg>文档
-              </button>
-              <button type="button" role="tab" aria-selected={tab === "protos"} data-testid="docs-tab-protos" data-active={tab === "protos" ? "true" : "false"} onClick={handleTabProtos} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", cursor: "pointer", ...(tab === "protos" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
-                <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>原型
-                {typeof protoCount === "number" && protoCount > 0 && <span style={{ borderRadius: radius.pill, backgroundColor: neutral[200], padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "16px", color: neutral[600] }}>{protoCount}</span>}
-              </button>
-            </div>
-          </div>
           {tab === "docs" ? (
           <>
           {/* 筛选栏：团队/任务双选择 + 分类/类型/验收 chips */}
@@ -1018,8 +1042,12 @@ export default function DocsUnifiedPage() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: space.md,
-              flexWrap: "wrap",
+              gap: space.sm,
+              // 单行 + 横向滚动：此前 flexWrap 会把 20 多个 chip 折成 2~3 行，
+              // 顶部白吃 80~120px 高度（用户反馈"上面占太多、正文没了"）
+              flexWrap: "nowrap",
+              overflowX: "auto",
+              paddingBottom: 2,
             }}
           >
             {/* 团队选择 */}
@@ -1029,15 +1057,16 @@ export default function DocsUnifiedPage() {
               onChange={(e) => handleTeamChange(e.target.value)}
               disabled={teamsQuery.isPending || teams.length === 0}
               style={{
-                padding: `${space.sm}px ${space.lg}px`,
+                padding: `3px ${space.md}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
                 backgroundColor: "var(--color-surface)",
                 color: neutral[700],
-                fontSize: fontSize.md,
+                fontSize: fontSize.sm,
                 fontFamily: fontFamily.body,
+                flexShrink: 0,
                 cursor: teamsQuery.isPending || teams.length === 0 ? "default" : "pointer",
-                maxWidth: 240,
+                maxWidth: 200,
               }}
             >
               {teams.map((t) => (
@@ -1054,15 +1083,16 @@ export default function DocsUnifiedPage() {
               onChange={(e) => handleTaskChange(e.target.value)}
               disabled={tasksQuery.isPending || tasks.length === 0}
               style={{
-                padding: `${space.sm}px ${space.lg}px`,
+                padding: `3px ${space.md}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
                 backgroundColor: "var(--color-surface)",
                 color: neutral[700],
-                fontSize: fontSize.md,
+                fontSize: fontSize.sm,
                 fontFamily: fontFamily.body,
+                flexShrink: 0,
                 cursor: tasksQuery.isPending || tasks.length === 0 ? "default" : "pointer",
-                maxWidth: 240,
+                maxWidth: 200,
               }}
             >
               <option value="all">全部任务</option>
@@ -1279,7 +1309,9 @@ export default function DocsUnifiedPage() {
             )}
 
             {/* 内容查看：选中文档 → 版本查看器；未选 → 空态；未知 doc → 空态（不抛错） */}
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 400, height: "calc(100vh - 280px)" }}>
+            {/* 高度不再写死 calc(100vh - 280px)：那个常量是按旧头部高度算的，
+                头部一变矮就全剩在底部（用户反馈"下面空了很多"）。改为弹性填充。 */}
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
               {isPending || isError ? null : docMissing ? (
                 <div data-testid="docs-doc-missing">
                   <EmptyState
@@ -1309,7 +1341,7 @@ export default function DocsUnifiedPage() {
           </div>
           </>
           ) : (
-            <div style={{ display: "flex", minHeight: 400, height: "calc(100vh - 280px)", flex: 1, flexDirection: "column", overflow: "hidden", border: `1px solid ${neutral[200]}`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)" }}>
+            <div style={{ display: "flex", minHeight: 0, flex: 1, flexDirection: "column", overflow: "hidden", border: `1px solid ${neutral[200]}`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)" }}>
               {taskKey !== "all" ? (
                 <PrototypePanel key={`${taskKey}:${protoParam ?? ""}`} taskId={taskKey} initialProtoId={protoParam ?? undefined} />
               ) : (

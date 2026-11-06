@@ -232,6 +232,11 @@ function resolvePageTitle(pathname: string): { title: string; subtitle: string }
   if (parts[0] === "board") {
     return PAGE_TITLE.board;
   }
+  // /docs（团队文档站）与 /docs/[taskId] 都是独立工作区页：此前未命中任何映射，
+  // 落到兜底标题「任务看板」——顶栏写着"任务看板"而内容是文档站（用户实测错位）。
+  if (parts[0] === "docs") {
+    return { title: "文档站", subtitle: "团队产出物 · 预览与版本" };
+  }
   const key = pathToKey(pathname);
   return PAGE_TITLE[key] ?? { title: "任务看板", subtitle: "" };
 }
