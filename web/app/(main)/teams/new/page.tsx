@@ -17,6 +17,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { AgentAvatar } from "@/src/components/ui";
 import { isApiError } from "@/lib/errors";
 import { teamsApi } from "@/src/api/teams";
+import { membersApi, type MemberDto } from "@/src/api/members";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   type RoleKey,
@@ -144,6 +145,10 @@ export default function TeamNewPage() {
 
   const [instancesByRole, setInstancesByRole] = useState<InstancesByRole>({});
   const [mainAgentKey, setMainAgentKey] = useState<string | null>(null);
+  /** D17 双入口：成员库选择（推荐） / 按岗位新建（旧形状） */
+  const [mode, setMode] = useState<"members" | "roles">("members");
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const [mainMemberId, setMainMemberId] = useState<string | null>(null);
   const keySeqRef = useRef(10);
   const nextKey = () => `inst-local-${keySeqRef.current++}`;
   const allInstances = useMemo(() => allInstancesOf(instancesByRole), [instancesByRole]);
@@ -153,6 +158,16 @@ export default function TeamNewPage() {
     queryFn: () => agentRolesApi.list({ page: 1, pageSize: 100 }),
     retry: false,
   });
+  const membersQuery = useQuery({
+    queryKey: ["members", "team-create"],
+    queryFn: () => membersApi.list({ page: 1, pageSize: 100, status: "active" }),
+    enabled: mode === "members",
+    retry: false,
+  });
+  const memberOptions = useMemo<MemberDto[]>(
+    () => membersQuery.data?.items ?? [],
+    [membersQuery.data],
+  );
   const roleItems = useMemo<AgentRoleDto[]>(() => rolesQuery.data?.items ?? [], [rolesQuery.data]);
 
   const makeInstance = (role: AgentRoleDto, seq: number): InstanceDraft => ({
@@ -202,8 +217,29 @@ export default function TeamNewPage() {
     });
   };
 
+  const toggleMember = (member: MemberDto) => {
+    setSelectedMemberIds((prev) => {
+      if (prev.includes(member.id)) {
+        if (mainMemberId === member.id) setMainMemberId(null);
+        return prev.filter((id) => id !== member.id);
+      }
+      return [...prev, member.id];
+    });
+  };
+
   const createMutation = useMutation({
     mutationFn: () => {
+      if (mode === "members") {
+        const members = selectedMemberIds.map((id) => ({ memberId: id }));
+        const idx = mainMemberId ? selectedMemberIds.indexOf(mainMemberId) : -1;
+        return teamsApi.create({
+          name: name.trim(),
+          description: description.trim() || undefined,
+          reuseSession,
+          members,
+          ...(idx >= 0 ? { mainAgentMemberId: String(idx) } : {}),
+        });
+      }
       const members = allInstances.map((inst) => ({
         roleId: inst.roleId,
         ...(inst.alias !== defaultAliasOf(inst.roleName, inst.seq) ? { alias: inst.alias } : {}),
@@ -272,9 +308,43 @@ export default function TeamNewPage() {
         {/* 右栏成员选择 */}
         <section style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: space.lg }}>
           <div style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.md }}>
-            <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>选择团队成员</div>
-            <div style={{ fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.6 }}>同一角色可多实例（如 开发者-1 / 开发者-2），alias/workDir 可行内编辑。</div>
-            {rolesQuery.isPending ? (
+            <div style={{ display: "flex", gap: space.xs, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
+              {(["members", "roles"] as const).map((m) => (
+                <button key={m} type="button" data-testid={`team-member-mode-${m}`} onClick={() => setMode(m)} style={{ flex: 1, padding: `${space.xs + 2}px ${space.sm}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.sm, fontWeight: 600, backgroundColor: mode === m ? "var(--color-surface)" : "transparent", color: mode === m ? "#0F766E" : neutral[500], boxShadow: mode === m ? shadow.sm : undefined }}>{m === "members" ? "从成员库选择" : "按岗位新建"}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>{mode === "members" ? "选择团队成员" : "按岗位新建成员"}</div>
+            <div style={{ fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.6 }}>{mode === "members" ? "从成员库勾选已有成员；成员可同时存在于多个群聊。" : "同一角色可多实例（如 开发者-1 / 开发者-2），alias/workDir 可行内编辑。"}</div>
+            {mode === "members" ? (
+              <>
+                {membersQuery.isPending ? (
+                  <div data-testid="members-loading" style={{ fontSize: fontSize.sm, color: neutral[400] }}>成员加载中…</div>
+                ) : membersQuery.isError ? (
+                  <div data-testid="members-error" role="alert" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+                    <span style={{ fontSize: fontSize.sm, color: "#DC2626" }}>成员库加载失败</span>
+                    <button type="button" onClick={() => membersQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], cursor: "pointer", fontFamily: fontFamily.body }}>重试</button>
+                  </div>
+                ) : memberOptions.length === 0 ? (
+                  <div style={{ fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.6 }}>成员库还没有启用成员。可先在成员库新建，或切到「按岗位新建」。</div>
+                ) : (
+                  memberOptions.map((member) => {
+                    const selected = selectedMemberIds.includes(member.id);
+                    const roleKey = member.role?.key && (ROLE_KEYS as readonly string[]).includes(member.role.key) ? (member.role.key as RoleKey) : "developer";
+                    return (
+                      <button key={member.id} type="button" data-testid="member-option" data-member-id={member.id} aria-pressed={selected} onClick={() => toggleMember(member)} style={{ textAlign: "left", display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${selected ? "#0D9488" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.08)" : "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>
+                        <AgentAvatar role={roleKey} size="sm" />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</div>
+                          <div style={{ fontSize: 10, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.role?.name ?? "成员"} · {member.agent?.name ?? "未绑 Agent"} · 已在 {member.groupCount} 个群</div>
+                        </div>
+                        <span aria-hidden style={{ width: 18, height: 18, borderRadius: radius.sm, border: `1.5px solid ${selected ? "#0D9488" : neutral[300]}`, backgroundColor: selected ? "#0D9488" : "var(--color-surface)", color: "#FFF", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, flexShrink: 0 }}>{selected ? "✓" : ""}</span>
+                      </button>
+                    );
+                  })
+                )}
+                <a href="/members?new=1" target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1.5px dashed ${neutral[300]}`, color: "#0F766E", fontSize: fontSize.sm, fontWeight: 600, textDecoration: "none", fontFamily: fontFamily.body }}>＋ 新建成员（成员库）</a>
+              </>
+            ) : rolesQuery.isPending ? (
               <div data-testid="roles-loading" style={{ fontSize: fontSize.sm, color: neutral[400] }}>岗位加载中…</div>
             ) : rolesQuery.isError ? (
               <div data-testid="roles-error" role="alert" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
@@ -291,25 +361,49 @@ export default function TeamNewPage() {
           <div style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.md }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: fontSize.md, fontWeight: 600, color: neutral[700] }}>
               <span>已选成员</span>
-              <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 400 }}>{allInstances.length} 个</span>
+              <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 400 }}>{mode === "members" ? selectedMemberIds.length : allInstances.length} 个</span>
             </div>
-            {allInstances.length > 0 && <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>选择主 Agent（单选 ★）：</div>}
+            {(mode === "members" ? selectedMemberIds.length : allInstances.length) > 0 && <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>选择主 Agent（单选 ★）：</div>}
             <div style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}>
-              {allInstances.map((inst) => {
-                const palette = rolePaletteOf(inst.roleKey);
-                const isMain = mainAgentKey === inst.key;
-                return (
-                  <span key={inst.key} data-testid="selected-member" data-main={isMain ? "true" : "false"} onClick={() => setMainAgentKey(isMain ? null : inst.key)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs - 1}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: isMain ? "#FFF7ED" : palette.bg, border: `1px solid ${isMain ? "#F59E0B" : palette.border}`, color: isMain ? "#D97706" : palette.color, fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer" }}>
-                    <span aria-hidden style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", border: `1.5px solid ${isMain ? "#F59E0B" : neutral[300]}`, backgroundColor: isMain ? "#F59E0B" : "transparent", color: "#FFF", fontSize: 10 }}>{isMain ? "★" : ""}</span>
-                    <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: palette.color }} />
-                    {inst.alias}
-                    {isMain && <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706" }}>主 Agent</span>}
-                  </span>
-                );
-              })}
-              {allInstances.length === 0 && <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>尚未选择成员</span>}
+              {mode === "members"
+                ? selectedMemberIds.map((id) => {
+                    const member = memberOptions.find((m) => m.id === id);
+                    if (!member) return null;
+                    const isMain = mainMemberId === id;
+                    return (
+                      <span key={id} data-testid="selected-member" data-main={isMain ? "true" : "false"} onClick={() => setMainMemberId(isMain ? null : id)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs - 1}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: isMain ? "#FFF7ED" : "rgba(13,148,136,0.10)", border: `1px solid ${isMain ? "#F59E0B" : "rgba(13,148,136,0.35)"}`, color: isMain ? "#D97706" : "#0F766E", fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer" }}>
+                        <span aria-hidden style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", border: `1.5px solid ${isMain ? "#F59E0B" : neutral[300]}`, backgroundColor: isMain ? "#F59E0B" : "transparent", color: "#FFF", fontSize: 10 }}>{isMain ? "★" : ""}</span>
+                        {member.name}
+                        <span style={{ fontSize: 10, color: isMain ? "#D97706" : neutral[400] }}>{member.role?.name ?? "成员"}</span>
+                        {isMain && <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706" }}>主 Agent</span>}
+                      </span>
+                    );
+                  })
+                : allInstances.map((inst) => {
+                    const palette = rolePaletteOf(inst.roleKey);
+                    const isMain = mainAgentKey === inst.key;
+                    return (
+                      <span key={inst.key} data-testid="selected-member" data-main={isMain ? "true" : "false"} onClick={() => setMainAgentKey(isMain ? null : inst.key)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs - 1}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: isMain ? "#FFF7ED" : palette.bg, border: `1px solid ${isMain ? "#F59E0B" : palette.border}`, color: isMain ? "#D97706" : palette.color, fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer" }}>
+                        <span aria-hidden style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", border: `1.5px solid ${isMain ? "#F59E0B" : neutral[300]}`, backgroundColor: isMain ? "#F59E0B" : "transparent", color: "#FFF", fontSize: 10 }}>{isMain ? "★" : ""}</span>
+                        <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: palette.color }} />
+                        {inst.alias}
+                        {isMain && <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706" }}>主 Agent</span>}
+                      </span>
+                    );
+                  })}
+              {(mode === "members" ? selectedMemberIds.length : allInstances.length) === 0 && <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>{mode === "members" ? "尚未勾选成员" : "尚未选择成员"}</span>}
             </div>
-            {mainAgentKey && <div style={{ fontSize: fontSize.xs, color: "#D97706" }}>★ 已选主 Agent：{allInstances.find((i) => i.key === mainAgentKey)?.alias}</div>}
+            {mode === "members"
+              ? mainMemberId && (
+                  <div style={{ fontSize: fontSize.xs, color: "#D97706" }}>
+                    ★ 已选主 Agent：{memberOptions.find((m) => m.id === mainMemberId)?.name}
+                  </div>
+                )
+              : mainAgentKey && (
+                  <div style={{ fontSize: fontSize.xs, color: "#D97706" }}>
+                    ★ 已选主 Agent：{allInstances.find((i) => i.key === mainAgentKey)?.alias}
+                  </div>
+                )}
           </div>
 
           <button type="button" data-testid="create-team-submit" disabled={createMutation.isPending} onClick={handleCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.lg, fontWeight: 600, cursor: createMutation.isPending ? "default" : "pointer", opacity: createMutation.isPending ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>

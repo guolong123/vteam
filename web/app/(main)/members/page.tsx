@@ -8,7 +8,7 @@
  * - 平台级资源：不做团队门；权限走 members.view/create/edit/delete（前端仅做体验收敛，服务端为准）。
  * - 布局与 token 对齐 agents/skills 等资源页；无 fixed / 100vh / 100vw。
  */
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -116,7 +116,10 @@ export default function MembersPage() {
     enabled: !!user?.id,
   });
 
-  const roleOptions: AgentRoleDto[] = rolesQuery.data?.items ?? [];
+  const roleOptions = useMemo<AgentRoleDto[]>(
+    () => rolesQuery.data?.items ?? [],
+    [rolesQuery.data],
+  );
   const agents: AgentOption[] = agentsQuery.data?.items ?? [];
 
   useEffect(() => {
@@ -137,6 +140,25 @@ export default function MembersPage() {
     setFormError(null);
     setEditing("new");
   };
+
+  // 从建群页「＋ 新建成员」跳转而来（/members?new=1）：角色候选就绪后自动打开新建弹窗。
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get("new") !== "1") return;
+    if (roleOptions.length === 0) return;
+    autoOpenedRef.current = true;
+    const firstRole = roleOptions[0];
+    setForm({
+      ...EMPTY_FORM,
+      roleId: firstRole?.id ?? "",
+      agentId: firstRole?.defaultAgentId ?? "",
+    });
+    setFormError(null);
+    setEditing("new");
+    window.history.replaceState(null, "", "/members");
+  }, [roleOptions]);
 
   const openEdit = (member: MemberDto) => {
     setForm({
