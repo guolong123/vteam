@@ -140,10 +140,20 @@ export function createDshWorkerDriver(
   const baseUrl = config.dshBaseUrl;
 
   if (apiKey === '') {
-    console.warn(
-      '[worker/dsh] 未配置 DSH_API_KEY：dsh 子进程可能因缺少模型凭据而无法完成首轮。' +
-        '若使用自建网关请同时设置 DSH_BASE_URL / DSH_PROVIDER / DSH_MODEL。',
-    );
+    // 只有**独立模式**（无控制面、没人下发凭据）才是真问题；
+    // 注册模式下凭据由控制面 `model-credentials` 命令下发（VTEAM_PROVIDER_*_KEY），
+    // 构建期必然为空 —— 此时打 warn 会误导排障（实测：日志先报"未配置 DSH_API_KEY"，
+    // 下一行就 "已应用 1 条模型凭据"）。
+    if (config.standalone) {
+      console.warn(
+        '[worker/dsh] 独立模式（WORKER_STANDALONE=true）未配置 DSH_API_KEY：dsh 子进程可能因缺少模型凭据而无法完成首轮。' +
+          '若使用自建网关请同时设置 DSH_BASE_URL / DSH_PROVIDER / DSH_MODEL。',
+      );
+    } else {
+      console.log(
+        '[worker/dsh] 未配置 DSH_API_KEY（注册模式）：模型凭据将由控制面 model-credentials 下发，无需在安装时填写。',
+      );
+    }
   }
 
   // ① 生成 patch（provider 路由 + 平台 MCP）
