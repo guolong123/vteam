@@ -10,6 +10,16 @@ import { api } from "@/lib/api";
 export interface TeamMemberDto {
   id: string;
   teamId: string;
+  /** 平台成员 id（mbr_ 前缀；旧数据/旧形状为 null）。 */
+  memberId?: string | null;
+  /** 成员库投影（null = 旧席位未回填）。 */
+  member?: {
+    id: string;
+    name: string;
+    status: "active" | "disabled";
+    agentId: string;
+    defaultRoleId: string;
+  } | null;
   agentId: string;
   roleId?: string | null;
   alias: string;
@@ -75,7 +85,22 @@ export interface CreateTeamPayload {
   name: string;
   description?: string;
   reuseSession?: boolean;
-  members?: { agentId?: string; roleId?: string; alias?: string; workDir?: string }[];
+  members?: Array<{
+    memberId?: string;
+    newMember?: {
+      name: string;
+      roleId: string;
+      agentId?: string;
+      defaultModelId?: string;
+      preferredWorkerId?: string;
+      privateWorkDir?: string;
+      description?: string;
+    };
+    agentId?: string;
+    roleId?: string;
+    alias?: string;
+    workDir?: string;
+  }>;
   mainAgentMemberId?: string;
 }
 
@@ -91,6 +116,16 @@ export interface UpdateTeamPayload {
 }
 
 export interface AddMemberPayload {
+  memberId?: string;
+  newMember?: {
+    name: string;
+    roleId: string;
+    agentId?: string;
+    defaultModelId?: string;
+    preferredWorkerId?: string;
+    privateWorkDir?: string;
+    description?: string;
+  };
   agentId?: string;
   roleId?: string;
   alias?: string;
