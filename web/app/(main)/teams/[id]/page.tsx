@@ -20,6 +20,7 @@ import { isApiError } from "@/lib/errors";
 import { api } from "@/lib/api";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
+import { membersApi, type MemberDto } from "@/src/api/members";
 import { UserMembersSection } from "./user-members";
 import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import {
@@ -88,6 +89,9 @@ export default function TeamDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [showAddMember, setShowAddMember] = useState(false);
+  /** D17 双入口：默认从成员库选，保留按岗位新建兼容旧形状 */
+  const [addMode, setAddMode] = useState<"members" | "roles">("members");
+  const [selectedMemberId, setSelectedMemberId] = useState("");
   const [selectedRoleId, setSelectedRoleId] = useState("");
   const [addAlias, setAddAlias] = useState("");
   const [addWorkDir, setAddWorkDir] = useState("");
@@ -109,6 +113,13 @@ export default function TeamDetailPage() {
     retry: false,
   });
   const roleItems: AgentRoleDto[] = rolesQuery.data?.items ?? [];
+
+  const addMembersQuery = useQuery({
+    queryKey: ["members", "team-add"],
+    queryFn: () => membersApi.list({ page: 1, pageSize: 100, status: "active" }),
+    enabled: showAddMember && addMode === "members",
+  });
+  const addMemberOptions = addMembersQuery.data?.items ?? [];
   const roleLabelOf = (r: AgentRoleDto): string =>
     r.defaultAgentId ? `${r.name}` : r.defaultOpencodeAgentName ? `${r.name}（外部）` : r.name;
 
@@ -127,6 +138,12 @@ export default function TeamDetailPage() {
   });
 
   const team: TeamDto | undefined = teamQuery.data;
+  /** 已在群内的成员不再出现在添加下拉里（避免重复入群 409） */
+  const usedMemberIds = new Set(
+    (team?.members ?? [])
+      .map((m) => m.memberId)
+      .filter((id): id is string => !!id),
+  );
   const currentTaskId = team?.currentTaskId ?? null;
   // 悬空软引用（节点已删除）：当前值不在清单里时仍以原始 id 渲染占位项，不得回退成空选中
   const danglingWorkerId = team?.preferredWorkerId && !workers.some((w) => w.id === team.preferredWorkerId)
@@ -220,18 +237,39 @@ export default function TeamDetailPage() {
   };
 
   const addMutation = useMutation({
-    mutationFn: () => teamsApi.addMember(id, {
-      ...(selectedRoleId ? { roleId: selectedRoleId } : {}),
-      alias: addAlias.trim() || undefined,
-      workDir: addWorkDir.trim() || undefined,
-    }),
+    mutationFn: () =>
+      teamsApi.addMember(
+        id,
+        addMode === "members"
+          ? {
+              memberId: selectedMemberId,
+              alias: addAlias.trim() || undefined,
+              workDir: addWorkDir.trim() || undefined,
+            }
+          : {
+              ...(selectedRoleId ? { roleId: selectedRoleId } : {}),
+              alias: addAlias.trim() || undefined,
+              workDir: addWorkDir.trim() || undefined,
+            },
+      ),
   });
   const handleAddMember = async () => {
-    if (!selectedRoleId) { setActionError("请选择岗位"); return; }
+    if (addMode === "members" && !selectedMemberId) {
+      setActionError("请选择成员");
+      return;
+    }
+    if (addMode === "roles" && !selectedRoleId) {
+      setActionError("请选择岗位");
+      return;
+    }
     setActionError(null);
     try {
       await addMutation.mutateAsync();
-      setShowAddMember(false); setSelectedRoleId(""); setAddAlias(""); setAddWorkDir("");
+      setShowAddMember(false);
+      setSelectedMemberId("");
+      setSelectedRoleId("");
+      setAddAlias("");
+      setAddWorkDir("");
       queryClient.invalidateQueries({ queryKey: ["team", id] });
     } catch (err) { setActionError(isApiError(err) ? err.message : "添加失败"); }
   };
@@ -456,17 +494,35 @@ export default function TeamDetailPage() {
 
         {showAddMember && (
           <div data-testid="add-member-panel" style={{ display: "flex", gap: space.md, alignItems: "flex-end", flexWrap: "wrap", padding: space.lg, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px dashed ${neutral[300]}` }}>
+            <div style={{ display: "flex", gap: space.xs, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}`, alignSelf: "flex-end" }}>
+              {(["members", "roles"] as const).map((m) => (
+                <button key={m} type="button" data-testid={`add-member-mode-${m}`} onClick={() => { setAddMode(m); setActionError(null); }} style={{ padding: `${space.xs + 2}px ${space.sm}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.sm, fontWeight: 600, backgroundColor: addMode === m ? "var(--color-surface)" : "transparent", color: addMode === m ? "#0F766E" : neutral[500] }}>{m === "members" ? "从成员库选择" : "按岗位新建"}</button>
+              ))}
+            </div>
             <div style={{ display: "flex", gap: space.md, alignItems: "flex-end", flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
-                <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择岗位</label>
-                <select data-testid="add-member-role-select" value={selectedRoleId} onChange={(e) => { setSelectedRoleId(e.target.value); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
-                  <option value="">请选择岗位</option>
-                  {roleItems.map((r) => (
-                    <option key={r.id} value={r.id}>{roleLabelOf(r)}</option>
-                  ))}
-                </select>
-                {rolesQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>岗位加载中…</span>}
-              </div>
+              {addMode === "members" ? (
+                <div style={{ flex: 1, minWidth: 220, display: "flex", flexDirection: "column", gap: space.xs }}>
+                  <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择成员</label>
+                  <select data-testid="add-member-select" value={selectedMemberId} onChange={(e) => setSelectedMemberId(e.target.value)} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
+                    <option value="">{addMembersQuery.isPending ? "成员加载中…" : "请选择成员"}</option>
+                    {addMemberOptions.filter((m: MemberDto) => !usedMemberIds.has(m.id)).map((m: MemberDto) => (
+                      <option key={m.id} value={m.id}>{m.name} · {m.role?.name ?? "成员"} · 已在 {m.groupCount} 个群</option>
+                    ))}
+                  </select>
+                  <a href="/members?new=1" target="_blank" rel="noreferrer" style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none" }}>＋ 成员库中没有？去新建成员</a>
+                </div>
+              ) : (
+                <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
+                  <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择岗位</label>
+                  <select data-testid="add-member-role-select" value={selectedRoleId} onChange={(e) => { setSelectedRoleId(e.target.value); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
+                    <option value="">请选择岗位</option>
+                    {roleItems.map((r) => (
+                      <option key={r.id} value={r.id}>{roleLabelOf(r)}</option>
+                    ))}
+                  </select>
+                  {rolesQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>岗位加载中…</span>}
+                </div>
+              )}
               <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: space.xs }}>
                 <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>别名（可选）</label>
                 <input data-testid="add-member-alias" value={addAlias} onChange={(e) => setAddAlias(e.target.value)} placeholder="默认 <角色名>-seq" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body }} />
