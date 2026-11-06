@@ -539,7 +539,8 @@ export class ChatService {
           limit,
           beforeId,
         })),
-        source: sessionItems.length > 0 ? ('session' as const) : ('db' as const),
+        source:
+          sessionItems.length > 0 ? ('session' as const) : ('db' as const),
       };
     } catch (err) {
       // worker 不可达/serve 异常 → 回退平台表（历史主数据源降级，不发错误阻塞读历史）
@@ -748,8 +749,7 @@ export class ChatService {
     // 不过 convertSessionMessages），只截 session 增补项对体积毫无作用（实测仍 7.6MB/页）。
     for (const item of windowed) {
       const content = item.content as
-        | { parts?: unknown; text?: unknown }
-        | undefined;
+        { parts?: unknown; text?: unknown } | undefined;
       if (content && Array.isArray(content.parts)) {
         content.parts = ChatService.capPartPayloads(
           content.parts as Array<Record<string, unknown>>,
@@ -759,7 +759,9 @@ export class ChatService {
     // nextCursor = 本页最早的一条 **DB 行** id：前端「加载更多」走平台表分页
     // （历史真源 = messages 表）；session 增补项无平台 id，不能作为游标。
     const dbIds = new Set(rows.map((row) => row.id));
-    const oldestDbInPage = windowed.find((item) => dbIds.has(item.id as string));
+    const oldestDbInPage = windowed.find((item) =>
+      dbIds.has(item.id as string),
+    );
     // hasMore：还有**没进本页**的 DB 行（rows 按 id 降序取，本页只装下其中最新的一批）。
     // 不能用 `rows.length >= take`：DB 总行数不足 take 但仍多于 limit 时会误判末页，
     // 用户就再也点不出更早的历史了。
@@ -778,7 +780,8 @@ export class ChatService {
     // loading/streaming 指示器标识"进行中"，不需要靠列表位置来强调。
     return {
       items: windowed,
-      nextCursor: hasMore && oldestDbInPage ? (oldestDbInPage.id as string) : null,
+      nextCursor:
+        hasMore && oldestDbInPage ? (oldestDbInPage.id as string) : null,
     };
   }
 
@@ -826,9 +829,15 @@ export class ChatService {
       }
       return kept;
     }
-    if (value && typeof value === 'object' && depth < ChatService.MAX_PART_DEPTH) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      depth < ChatService.MAX_PART_DEPTH
+    ) {
       const out: Record<string, unknown> = {};
-      for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      for (const [key, item] of Object.entries(
+        value as Record<string, unknown>,
+      )) {
         out[key] = ChatService.capValue(item, depth + 1);
       }
       return out;

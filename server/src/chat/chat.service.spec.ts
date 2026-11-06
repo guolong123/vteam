@@ -2096,7 +2096,11 @@ describe('ChatService', () => {
       const huge = 'x'.repeat(50 * 1024);
       workerClient.getMessages.mockResolvedValue([
         {
-          info: { id: 'msg_asst_huge', role: 'assistant', time: { created: 2000 } },
+          info: {
+            id: 'msg_asst_huge',
+            role: 'assistant',
+            time: { created: 2000 },
+          },
           parts: [
             {
               type: 'tool',

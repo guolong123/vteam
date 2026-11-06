@@ -175,7 +175,8 @@ export class ChatController {
   @ApiQuery({
     name: 'cursor',
     required: false,
-    description: '游标 = 上页最早一条平台消息 id；缺省查第一页（最新 limit 条）',
+    description:
+      '游标 = 上页最早一条平台消息 id；缺省查第一页（最新 limit 条）',
   })
   getSessionHistory(
     @CurrentUser() user: AuthenticatedUser,
