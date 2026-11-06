@@ -21,7 +21,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:seed": "ts-node prisma/seed.ts",
     "seed": "ts-node prisma/seed.ts",
-    "backfill:members": "ts-node prisma/backfill-members.ts"
+    "backfill:members": "ts-node prisma/backfill-members.ts",
+    "backfill:member-sessions": "ts-node prisma/backfill-member-sessions.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

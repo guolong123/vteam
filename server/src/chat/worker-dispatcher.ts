@@ -4159,6 +4159,9 @@ export class WorkerDispatcher
         agentId: resolvedAgentId,
         error: payload.error ?? 'agent 处理失败',
       });
+      await this.finishTurnAndDrain(emitSessionId, SESSION_TURN_STATUS.failed, {
+        error: payload.error ?? 'agent 处理失败',
+      });
     } else {
       this.emitLoading({
         taskId: scope,
@@ -4562,6 +4565,11 @@ export class WorkerDispatcher
           errorType: 'model_error',
           message,
         });
+        await this.finishTurnAndDrain(
+          params.sessionId,
+          SESSION_TURN_STATUS.failed,
+          { error: message },
+        );
         return;
       }
       if (findFinish(fresh)) {
@@ -4579,6 +4587,11 @@ export class WorkerDispatcher
     this.failedSessions.add(params.sessionId);
     this.logger.error(
       `agent ${params.agentId} 自持轮询超时（${this.dispatchTimeoutMs / 1000}s 未出现 step-finish）`,
+    );
+    await this.finishTurnAndDrain(
+      params.sessionId,
+      SESSION_TURN_STATUS.expired,
+      { error: 'poll_timeout' },
     );
   }
 
