@@ -96,8 +96,35 @@ export class MembersService implements OnModuleInit {
       }),
     ]);
 
+    // P3：列表顺带返回全局会话摘要（避免前端为每行再查详情）。
+    const ids = rows.map((row) => row.id);
+    const sessions =
+      ids.length > 0
+        ? await this.prisma.session.findMany({
+            where: { memberKey: { in: ids } },
+            select: {
+              memberKey: true,
+              id: true,
+              status: true,
+              workerId: true,
+              instanceRef: true,
+              busyState: true,
+              busySince: true,
+              turnSeq: true,
+              lastTurnOutcome: true,
+            },
+          })
+        : [];
+    const sessionByMember = new Map(
+      sessions
+        .filter((s) => !!s.memberKey)
+        .map((s) => [s.memberKey as string, s]),
+    );
     return {
-      items: rows.map((row) => this.toMemberDto(row)),
+      items: rows.map((row) => ({
+        ...this.toMemberDto(row),
+        session: sessionByMember.get(row.id) ?? null,
+      })),
       total,
       page,
       pageSize,

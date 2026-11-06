@@ -25,7 +25,10 @@ function createService() {
     model: { findUnique: jest.fn() },
     worker: { findUnique: jest.fn() },
     teamMember: { count: jest.fn(), findMany: jest.fn() },
-    session: { findUnique: jest.fn().mockResolvedValue(null) },
+    session: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     $transaction: jest.fn(),
   };
   const idGen = {

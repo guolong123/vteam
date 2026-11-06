@@ -280,6 +280,9 @@ export default function MembersPage() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const activeCount = items.filter((m) => m.status === "active").length;
   const groupLinked = items.filter((m) => m.groupCount > 0).length;
+  const runningCount = items.filter(
+    (m) => m.session?.busyState === "running",
+  ).length;
 
   return (
     <PageWindow maxWidth={1200} gap={space.md} style={{ position: "relative" }}>
@@ -303,7 +306,7 @@ export default function MembersPage() {
         <StatCard label="成员总数" value={total} hint="平台成员库" />
         <StatCard label="当前页启用" value={activeCount} hint={`共 ${items.length} 条`} />
         <StatCard label="已加入群聊" value={groupLinked} hint="当前页统计" />
-        <StatCard label="通知渠道绑定" value={items.reduce((sum, m) => sum + m.notificationChannelCount, 0)} hint="P5 接入后生效" />
+        <StatCard label="处理中" value={runningCount} hint={`当前页 · ${activeCount} 位启用`} />
       </div>
 
       {notice && (
@@ -388,9 +391,29 @@ export default function MembersPage() {
                   <div style={{ fontSize: 10, color: neutral[400] }}>{member.defaultModel?.name ?? "默认模型未指定"}</div>
                 </div>
                 <span style={{ textAlign: "center", fontSize: fontSize.sm, color: member.groupCount > 0 ? "#0F766E" : neutral[400] }}>{member.groupCount}</span>
-                <span style={{ textAlign: "center", fontSize: fontSize.xs, color: member.status === "active" ? "#0F766E" : neutral[400] }}>
-                  {STATUS_LABEL[member.status] ?? member.status}
-                </span>
+                <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: 2, alignItems: "center" }}>
+                  <span style={{ fontSize: fontSize.xs, color: member.status === "active" ? "#0F766E" : neutral[400] }}>
+                    {STATUS_LABEL[member.status] ?? member.status}
+                  </span>
+                  <span
+                    data-testid="member-session-state"
+                    style={{
+                      fontSize: 10,
+                      color:
+                        member.session?.busyState === "running"
+                          ? "#B45309"
+                          : member.session
+                            ? neutral[400]
+                            : neutral[300],
+                    }}
+                  >
+                    {member.session
+                      ? member.session.busyState === "running"
+                        ? "● 处理中"
+                        : "○ 空闲"
+                      : "未建会话"}
+                  </span>
+                </div>
                 <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
                   {canEdit && (
                     <button type="button" onClick={() => openEdit(member)} style={linkButtonStyle}>编辑</button>

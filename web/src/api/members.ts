@@ -46,6 +46,8 @@ export interface MemberDto {
   preferredWorker: MemberWorkerRef | null;
   groupCount: number;
   notificationChannelCount: number;
+  /** P3 全局会话摘要（列表/详情均返回；null = 尚未建立会话）。 */
+  session?: MemberSessionSummary | null;
   createdAt: string;
   updatedAt: string;
 }
