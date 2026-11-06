@@ -21,6 +21,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DocsMarkdown } from "./docs-markdown";
 import {
   neutral,
+  surface,
   space,
   radius,
   fontSize,
@@ -631,7 +632,8 @@ function SheetFilePreview({
                 padding: `2px ${space.sm}px`,
                 borderRadius: radius.sm,
                 border: `1px solid ${index === active ? "#0D9488" : neutral[200]}`,
-                backgroundColor: index === active ? "rgba(13,148,136,0.10)" : "#FFF",
+                // 用主题变量而不是 "#FFF"：深色主题下白底会把文字顶掉（用户实测看不清）
+                backgroundColor: index === active ? "rgba(13,148,136,0.10)" : surface,
                 color: index === active ? "#0D9488" : neutral[600],
                 fontSize: fontSize.xs,
                 fontFamily: fontFamily.body,
@@ -647,13 +649,23 @@ function SheetFilePreview({
         <table style={{ borderCollapse: "collapse", fontSize: fontSize.xs, fontFamily: fontFamily.mono, width: "100%" }}>
           <tbody>
             {sheet.rows.map((row, rowIndex) => (
-              <tr key={rowIndex} style={{ backgroundColor: rowIndex === 0 ? neutral[50] : "#FFF" }}>
+              <tr
+                key={rowIndex}
+                style={{
+                  // 表头用 neutral[50]（深色下比 surface 更深，能分层）；
+                  // 正文用 surface —— 两者都是主题变量，light/dark 自适配。
+                  backgroundColor: rowIndex === 0 ? neutral[50] : surface,
+                }}
+              >
                 {row.map((cell, cellIndex) => (
                   <td
                     key={cellIndex}
                     style={{
                       border: `1px solid ${neutral[200]}`,
                       padding: `2px ${space.sm}px`,
+                      // 必须显式给文字色：父容器颜色在深色下是浅色，
+                      // 落到白底/浅底上就"看不见"（2026-11-06 用户截图缺陷）
+                      color: neutral[800],
                       whiteSpace: "pre-wrap",
                       maxWidth: 320,
                       verticalAlign: "top",
