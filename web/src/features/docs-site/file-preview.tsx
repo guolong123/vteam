@@ -11,11 +11,13 @@
  * - 图片（沿用 IMAGE_EXTS，含 webp；svg 只许 `<img>`）→ 内嵌 `<img loading="lazy">`。
  * - `pdf` → `<iframe sandbox="allow-same-origin">`（无 allow-scripts；
  *   onError/超时回退下载卡）。
- * - `doc/docx/xls/xlsx`/未知 → 下载卡（文件名/大小/类型徽章，无预览库）。
+ * - `docx` → docx-preview 渲染（懒加载，浏览器原生不支持 office ⇒ 前端库解析）。
+ * - `xlsx/xls/xlsm` → SheetJS 解析后按表格渲染（多 sheet 切换、行/列封顶）。
+ * - 两类失败均回退下载卡（不阻塞阅读）；`doc/xls` 老二进制格式仍走下载卡。
  * - `/uploads` 引用 + `fileSize==null` → 不可访问降级（artifacts 页 P2 判定）。
  * 约束：零预览依赖、不做 HTML 注入渲染、不加 markdown HTML 插件、无 innerHTML/object/embed。
  */
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DocsMarkdown } from "./docs-markdown";
 import {
   neutral,
@@ -51,6 +53,23 @@ const PREVIEW_CHAR_LIMIT = 256 * 1024;
 
 /** PDF iframe 加载超时（到期仍未 onLoad → 回退下载卡）。 */
 const PDF_LOAD_TIMEOUT_MS = 15000;
+
+/**
+ * Office 预览集合（浏览器**不原生支持** OOXML，必须前端库解析）：
+ * - docx → `docx-preview`（Apache-2.0）渲染成 HTML；
+ * - xlsx/xls/xlsm → `xlsx`（SheetJS，Apache-2.0）解析后由 React 渲成表格。
+ * 老二进制 `.doc`（Word 97）不在支持范围 → 回退下载卡。
+ * 两个库都**动态 import**：不打进首屏 bundle，只在真的打开 office 文件时才加载。
+ */
+const DOCX_PREVIEW_EXTS = new Set(["docx"]);
+const SHEET_PREVIEW_EXTS = new Set(["xlsx", "xls", "xlsm"]);
+
+/** office 文件预览体积上限（超过直接给下载卡，避免在浏览器里卡死）。 */
+const OFFICE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
+
+/** 表格预览封顶：最多 200 行 × 40 列（超出提示"仅预览前 N 行"）。 */
+const SHEET_MAX_ROWS = 200;
+const SHEET_MAX_COLS = 40;
 
 /**
  * 显式 urlTransform 白名单：仅 http/https/mailto 放行，其余（含 javascript:、
@@ -391,6 +410,251 @@ function PdfPreview({
   );
 }
 
+/* ------------------------------ Office：Word（docx-preview） ------------------------------ */
+
+/** office 预览的公共外壳：标题行 + 状态（加载/失败）+ 内容容器。 */
+function OfficeShell({
+  title,
+  status,
+  children,
+}: {
+  title: string;
+  status: "loading" | "ready" | "error";
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      data-testid="docs-content-view"
+      data-render="office"
+      style={{ display: "flex", flexDirection: "column", gap: space.sm, ...baseFont }}
+    >
+      {status === "loading" && (
+        <div data-testid="docs-office-loading" style={{ fontSize: fontSize.sm, color: neutral[500] }}>
+          正在解析「{title}」…
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Word 预览：`docx-preview.renderAsync` 把 docx 渲染成 DOM（分页样式近似 Word）。
+ * 失败（非 docx / 加密 / 解析异常）→ 回退下载卡，不阻塞阅读。
+ */
+function DocxFilePreview({
+  version,
+  fileUrl,
+  ext,
+  displayName,
+  title,
+}: {
+  version: FilePreviewVersion;
+  fileUrl: string;
+  ext: string;
+  displayName: string;
+  title: string;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("loading");
+    (async () => {
+      try {
+        if ((version.fileSize ?? 0) > OFFICE_PREVIEW_MAX_BYTES) {
+          throw new Error("文件过大，不做预览");
+        }
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = await res.arrayBuffer();
+        const { renderAsync } = await import("docx-preview");
+        const host = hostRef.current;
+        if (!host || cancelled) return;
+        host.replaceChildren();
+        await renderAsync(buf, host, undefined, {
+          className: "vteam-docx",
+          inWrapper: true,
+          breakPages: true,
+          ignoreLastRenderedPageBreak: true,
+        });
+        if (!cancelled) setStatus("ready");
+      } catch {
+        if (!cancelled) setStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileUrl, version.fileSize]);
+
+  if (status === "error") {
+    return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
+  }
+  return (
+    <OfficeShell title={title} status={status}>
+      <div
+        ref={hostRef}
+        data-testid="docs-docx-body"
+        style={{
+          border: `1px solid ${neutral[200]}`,
+          borderRadius: radius.md,
+          padding: space.md,
+          backgroundColor: neutral[50],
+          overflow: "auto",
+          maxHeight: 640,
+        }}
+      />
+    </OfficeShell>
+  );
+}
+
+/* ------------------------------ Office：Excel（SheetJS） ------------------------------ */
+
+interface SheetTable {
+  name: string;
+  rows: string[][];
+  totalRows: number;
+}
+
+/**
+ * Excel 预览：SheetJS 解析 → **由 React 渲染表格**（不用 `sheet_to_html` 的
+ * innerHTML 注入，单元格内容始终是文本节点，无 XSS 面）。多 sheet 可切换，
+ * 行/列封顶（防超大表卡死浏览器）。
+ */
+function SheetFilePreview({
+  version,
+  fileUrl,
+  ext,
+  displayName,
+  title,
+}: {
+  version: FilePreviewVersion;
+  fileUrl: string;
+  ext: string;
+  displayName: string;
+  title: string;
+}) {
+  const [sheets, setSheets] = useState<SheetTable[] | null>(null);
+  const [active, setActive] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSheets(null);
+    setFailed(false);
+    setActive(0);
+    (async () => {
+      try {
+        if ((version.fileSize ?? 0) > OFFICE_PREVIEW_MAX_BYTES) {
+          throw new Error("文件过大，不做预览");
+        }
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = await res.arrayBuffer();
+        const XLSX = await import("xlsx");
+        const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+        const parsed: SheetTable[] = wb.SheetNames.slice(0, 20).map((name) => {
+          const ws = wb.Sheets[name];
+          const raw = XLSX.utils.sheet_to_json<unknown[]>(ws, {
+            header: 1,
+            raw: false,
+            defval: "",
+            blankrows: false,
+          });
+          return {
+            name,
+            rows: raw
+              .slice(0, SHEET_MAX_ROWS)
+              .map((row) => (row ?? []).slice(0, SHEET_MAX_COLS).map((cell) => String(cell ?? ""))),
+            totalRows: raw.length,
+          };
+        });
+        if (!cancelled) setSheets(parsed);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileUrl, version.fileSize]);
+
+  if (failed) {
+    return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
+  }
+  if (sheets === null) {
+    return (
+      <OfficeShell title={title} status="loading">
+        <span />
+      </OfficeShell>
+    );
+  }
+  if (sheets.length === 0) {
+    return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
+  }
+
+  const sheet = sheets[Math.min(active, sheets.length - 1)];
+  return (
+    <OfficeShell title={title} status="ready">
+      {sheets.length > 1 && (
+        <div style={{ display: "flex", gap: space.xs, flexWrap: "wrap" }}>
+          {sheets.map((item, index) => (
+            <button
+              key={item.name}
+              type="button"
+              data-testid="docs-sheet-tab"
+              onClick={() => setActive(index)}
+              style={{
+                padding: `2px ${space.sm}px`,
+                borderRadius: radius.sm,
+                border: `1px solid ${index === active ? "#0D9488" : neutral[200]}`,
+                backgroundColor: index === active ? "rgba(13,148,136,0.10)" : "#FFF",
+                color: index === active ? "#0D9488" : neutral[600],
+                fontSize: fontSize.xs,
+                fontFamily: fontFamily.body,
+                cursor: "pointer",
+              }}
+            >
+              {item.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <div data-testid="docs-sheet-body" style={{ overflow: "auto", maxHeight: 640, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
+        <table style={{ borderCollapse: "collapse", fontSize: fontSize.xs, fontFamily: fontFamily.mono, width: "100%" }}>
+          <tbody>
+            {sheet.rows.map((row, rowIndex) => (
+              <tr key={rowIndex} style={{ backgroundColor: rowIndex === 0 ? neutral[50] : "#FFF" }}>
+                {row.map((cell, cellIndex) => (
+                  <td
+                    key={cellIndex}
+                    style={{
+                      border: `1px solid ${neutral[200]}`,
+                      padding: `2px ${space.sm}px`,
+                      whiteSpace: "pre-wrap",
+                      maxWidth: 320,
+                      verticalAlign: "top",
+                    }}
+                  >
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sheet.totalRows > sheet.rows.length && (
+        <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+          仅预览前 {sheet.rows.length} 行（共 {sheet.totalRows} 行），完整内容请下载查看。
+        </div>
+      )}
+    </OfficeShell>
+  );
+}
+
 /* ------------------------------ 主组件：渲染矩阵 ------------------------------ */
 
 /**
@@ -470,6 +734,30 @@ export function FilePreview({
     return <TextFilePreview version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
   }
 
-  // doc/docx/xls/xlsx/未知 → 下载卡（零预览库）。
+  if (DOCX_PREVIEW_EXTS.has(ext)) {
+    return (
+      <DocxFilePreview
+        version={version}
+        fileUrl={fileUrl}
+        ext={ext}
+        displayName={displayName}
+        title={title}
+      />
+    );
+  }
+
+  if (SHEET_PREVIEW_EXTS.has(ext)) {
+    return (
+      <SheetFilePreview
+        version={version}
+        fileUrl={fileUrl}
+        ext={ext}
+        displayName={displayName}
+        title={title}
+      />
+    );
+  }
+
+  // 未知 / 老二进制格式（doc、xls 以外的 .doc）/ 无预览分支 → 下载卡。
   return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
 }

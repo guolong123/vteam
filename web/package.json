@@ -25,6 +25,7 @@
     "anser": "^2.3.5",
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
+    "docx-preview": "^0.3.3",
     "esbuild-wasm": "^0.28.2",
     "html2canvas-pro": "^2.4.4",
     "immer": "^10.2.0",
@@ -51,6 +52,7 @@
     "shiki": "^4.6.0",
     "simple-icons": "^16.31.0",
     "tailwindcss": "^4.3.3",
+    "xlsx": "^0.18.5",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
