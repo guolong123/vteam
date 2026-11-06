@@ -71,6 +71,13 @@ export interface WorkerItem {
   opencodeVersion: string;
   capabilities?: {
     maxInstances?: number;
+    /**
+     * 执行引擎（缺省 opencode —— 兼容 capabilities 里没有 engine 键的存量 worker）。
+     * dsh = DeepSeek Harness 引擎：**没有 opencode serve**，控制面只连执行端点。
+     */
+    engine?: "opencode" | "dsh";
+    /** 执行端点端口（控制面按 baseUrl 主机 + 该端口直连；opencode 侧另有 serve 的 port）。 */
+    execPort?: number;
     /** T9：worker 侧注入的真实技能名清单（注册/reload-config 后刷新）。 */
     skills?: string[];
     /** T9：内置 git 7 工具 + 注入的自定义工具（去重）。 */

@@ -114,6 +114,9 @@ function WorkerCard({
 
   /* v2 标识：版本号 v2.x / 2.x 开头（对齐原型 v2.0.0-beta.1 → V2Runtime） */
   const isV2 = /^v?2\./.test(worker.opencodeVersion);
+  /* 引擎：dsh 节点没有 opencode 版本（上报 unknown）⇒ 徽章改显引擎名，别显示 "unknown" */
+  const engine = worker.capabilities?.engine === "dsh" ? "dsh" : "opencode";
+  const isDsh = engine === "dsh";
 
   /* UX-01 操作可用性：workers.edit 权限 + 非 offline（命令需心跳下发）+ 非 busy */
   const isBusy = busy?.workerId === worker.id;
@@ -194,24 +197,35 @@ function WorkerCard({
         <span
           data-testid="worker-version"
           data-v2={isV2 ? "true" : "false"}
+          data-engine={engine}
           style={{
             display: "inline-flex",
             alignItems: "center",
             gap: space.xs,
             fontSize: fontSize.sm,
             fontWeight: 600,
-            color: isV2 ? "#7C3AED" : neutral[600],
-            backgroundColor: isV2 ? "rgba(124,58,237,0.10)" : neutral[100],
-            border: `1px solid ${isV2 ? "rgba(124,58,237,0.22)" : neutral[200]}`,
+            color: isDsh ? "#7C3AED" : isV2 ? "#7C3AED" : neutral[600],
+            backgroundColor: isDsh ? "rgba(124,58,237,0.10)" : isV2 ? "rgba(124,58,237,0.10)" : neutral[100],
+            border: `1px solid ${isDsh ? "rgba(124,58,237,0.22)" : isV2 ? "rgba(124,58,237,0.22)" : neutral[200]}`,
             padding: "2px 8px",
             borderRadius: radius.pill,
             fontFamily: fontFamily.mono,
           }}
         >
-          {isV2 && <span aria-hidden style={{ fontSize: fontSize.xs }}>⬢</span>}
-          {worker.opencodeVersion}
-          {isV2 && (
-            <span aria-hidden style={{ fontWeight: 400, opacity: 0.7 }}>· V2Runtime</span>
+          {isDsh ? (
+            <>
+              <span aria-hidden style={{ fontSize: fontSize.xs }}>⬢</span>
+              dsh
+              <span aria-hidden style={{ fontWeight: 400, opacity: 0.7 }}>· DeepSeek Harness</span>
+            </>
+          ) : (
+            <>
+              {isV2 && <span aria-hidden style={{ fontSize: fontSize.xs }}>⬢</span>}
+              {worker.opencodeVersion}
+              {isV2 && (
+                <span aria-hidden style={{ fontWeight: 400, opacity: 0.7 }}>· V2Runtime</span>
+              )}
+            </>
           )}
         </span>
         <span

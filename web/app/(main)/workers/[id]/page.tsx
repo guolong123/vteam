@@ -40,6 +40,12 @@ import { OmoPanel, OpencodeAgentsPanel } from "./omo-panel";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
+/** 引擎文案：capabilities.engine 缺省 opencode（兼容没有该键的存量 worker）。 */
+const ENGINE_LABEL: Record<"opencode" | "dsh", string> = {
+  opencode: "opencode",
+  dsh: "dsh（DeepSeek Harness）",
+};
+
 /* ------------------------------ 模型卡 API 数据模型（C3/C8 契约） ------------------------------ */
 
 /** GET /models 目录条目（id=md_xxx 目录主键；providerID/modelID 为默认模型 ref 格式）。 */
@@ -293,6 +299,10 @@ export default function WorkerDetailPage() {
     refetchInterval: 10_000,
   });
 
+  /* 引擎判定：dsh 节点没有 opencode serve，卡片字段与文案都不同（缺省 opencode 兼容存量 worker） */
+  const engine: "opencode" | "dsh" = worker?.capabilities?.engine === "dsh" ? "dsh" : "opencode";
+  const isDsh = engine === "dsh";
+
   /**
    * 模型目录：只取 **enabled** 的（与"可用模型"口径一致，也是模型名映射的数据源）。
    * 全量目录有 8000+ 条且多为无凭据的元数据，拉全量既慢又无意义。
@@ -505,7 +515,30 @@ export default function WorkerDetailPage() {
                   {worker.id}
                 </span>
               </div>
-              <WorkerStatusBadge status={worker.status} />
+              <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexShrink: 0 }}>
+                {/* 引擎类型：dsh / opencode —— 详情页此前只有"opencode 运行时"区块，
+                    dsh 节点被当成 opencode 展示（用户实测反馈） */}
+                <span
+                  data-testid="worker-detail-engine"
+                  data-engine={engine}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: `2px ${space.sm}px`,
+                    borderRadius: radius.pill,
+                    backgroundColor: isDsh ? "rgba(124,58,237,0.10)" : "rgba(13,148,136,0.10)",
+                    border: `1px solid ${isDsh ? "rgba(124,58,237,0.25)" : "rgba(13,148,136,0.22)"}`,
+                    color: isDsh ? "#7C3AED" : "#0D9488",
+                    fontSize: fontSize.sm,
+                    fontWeight: 500,
+                    ...baseFont,
+                  }}
+                >
+                  {engine}
+                </span>
+                <WorkerStatusBadge status={worker.status} />
+              </div>
             </div>
             <div style={{ fontSize: fontSize.sm, color: neutral[400], fontFamily: fontFamily.mono }}>
               {worker.name ?? "未命名节点"}
@@ -525,9 +558,9 @@ export default function WorkerDetailPage() {
             </div>
           </section>
 
-          {/* opencode 信息卡 */}
+          {/* 运行时信息卡（按引擎分叉：dsh 没有 serve，控制面只连执行端点） */}
           <section data-testid="worker-detail-runtime" style={cardStyle()}>
-            <SectionHeader icon="⬢" title="opencode 运行时" />
+            <SectionHeader icon="⬢" title={isDsh ? "dsh 运行时" : "opencode 运行时"} />
             <div
               style={{
                 display: "grid",
@@ -535,12 +568,22 @@ export default function WorkerDetailPage() {
                 gap: space.md,
               }}
             >
-              <InfoRow label="版本" value={worker.opencodeVersion} />
-              <InfoRow
-                label="serve 端口"
-                value={worker.capabilities?.port !== undefined ? String(worker.capabilities.port) : "未上报"}
-              />
-              <InfoRow label="baseUrl" value={worker.capabilities?.baseUrl ?? "未上报"} />
+              <InfoRow label="引擎" value={ENGINE_LABEL[engine]} />
+              {isDsh ? (
+                <InfoRow
+                  label="执行端点"
+                  value={`${worker.capabilities?.baseUrl ?? "未上报"}${worker.capabilities?.execPort !== undefined ? `:${worker.capabilities.execPort}` : ":4198"}`}
+                />
+              ) : (
+                <>
+                  <InfoRow label="版本" value={worker.opencodeVersion} />
+                  <InfoRow
+                    label="serve 端口"
+                    value={worker.capabilities?.port !== undefined ? String(worker.capabilities.port) : "未上报"}
+                  />
+                  <InfoRow label="baseUrl" value={worker.capabilities?.baseUrl ?? "未上报"} />
+                </>
+              )}
               <MaxInstancesControl
                 workerId={workerId}
                 reported={worker.capabilities !== undefined}
