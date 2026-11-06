@@ -382,23 +382,63 @@ export class ChatService {
   ) {
     await this.resolveChannelAccess(channelId, userId);
     const limit = this.normalizeLimit(query.limit);
-    const where: Prisma.MessageWhereInput = {
+    const pageIds = await this.findMessagePageIds({
       channelId,
-      ...(query.cursor ? { id: { lt: query.cursor } } : {}),
-    };
-    const rows = await this.prisma.message.findMany({
-      where,
-      orderBy: { id: 'desc' },
+      beforeId: query.cursor,
       take: limit + 1,
+      limit,
     });
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
+    const rows = await this.loadMessageRowsInIdOrder(pageIds.ids);
     return {
-      // page 为 id 降序（最新优先），反转回升序供前端时间正序渲染
-      items: [...page].reverse().map((row) => this.toMessageDto(row)),
-      // 当前页最早一条 id（降序下为 page 末项），供下一页取更老
-      nextCursor: hasMore ? page[page.length - 1].id : null,
+      // ids 为 id 降序（最新优先），反转回升序供前端时间正序渲染
+      items: [...rows].reverse().map((row) => this.toMessageDto(row)),
+      // 当前页最早一条 id（降序下为末项），供下一页取更老
+      nextCursor: pageIds.hasMore ? pageIds.ids[pageIds.ids.length - 1] : null,
     };
+  }
+
+  /**
+   * 分页取一页**消息 id**（id 降序）。
+   *
+   * 为什么两段式（2026-11-06 实测修复）：
+   * `messages` 表带 `content` JSON 列，单行可达数百 KB（工具输出全量落库）。直接
+   * `findMany({ where, orderBy: { id: 'desc' }, take })` 会让 MySQL 把**整行（含大 JSON）**
+   * 带进排序缓冲区 —— 大消息频道直接报 `1038 Out of sort memory`（k8s 实测私聊频道
+   * c_0000000035，MySQL sort_buffer=8M，/messages 与 /session-history 双双 500）。
+   * 先只查 id（行极小，排序廉价），再按主键 in 取整行 ⇒ 不再有大行排序。
+   */
+  private async findMessagePageIds(opts: {
+    channelId: string;
+    beforeId?: string;
+    take: number;
+    limit: number;
+  }): Promise<{ ids: string[]; hasMore: boolean }> {
+    const idRows = await this.prisma.message.findMany({
+      where: {
+        channelId: opts.channelId,
+        ...(opts.beforeId ? { id: { lt: opts.beforeId } } : {}),
+      },
+      orderBy: { id: 'desc' },
+      take: opts.take,
+      select: { id: true },
+    });
+    const hasMore = idRows.length > opts.limit;
+    const ids = (hasMore ? idRows.slice(0, opts.limit) : idRows).map(
+      (row) => row.id,
+    );
+    return { ids, hasMore };
+  }
+
+  /** 按给定 id 顺序取整行（主键 in 查询，无排序；缺失的行跳过）。 */
+  private async loadMessageRowsInIdOrder(ids: string[]): Promise<MessageRow[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.prisma.message.findMany({
+      where: { id: { in: ids } },
+    });
+    const byId = new Map(rows.map((row) => [row.id, row as MessageRow]));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is MessageRow => row !== undefined);
   }
 
   /**
@@ -415,7 +455,11 @@ export class ChatService {
    * 复用 findMessages 首页语义）。群聊（team_group）不支持 → 400
    * SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）。
    */
-  async getSessionHistory(channelId: string, userId: string) {
+  async getSessionHistory(
+    channelId: string,
+    userId: string,
+    query: QueryMessagesDto = {},
+  ) {
     const { channel } = await this.resolveChannelAccess(channelId, userId);
     if (channel.type !== CHANNEL_TYPE.private) {
       throw new BadRequestException({
@@ -423,11 +467,15 @@ export class ChatService {
         message: '仅私聊频道支持会话历史（群聊保持平台消息表）',
       });
     }
-    const fallback = async () => ({
-      items: (await this.findMessages(channelId, userId, {})).items,
-      nextCursor: null,
-      source: 'db' as const,
-    });
+    const limit = this.normalizeLimit(query.limit);
+    const beforeId = query.cursor;
+    const fallback = async () => {
+      const page = await this.findMessages(channelId, userId, {
+        limit,
+        ...(beforeId ? { cursor: beforeId } : {}),
+      });
+      return { ...page, source: 'db' as const };
+    };
     let session: {
       instanceRef: string | null;
       workerId: string | null;
@@ -469,15 +517,29 @@ export class ChatService {
       capabilities: workerRow.capabilities,
     };
     try {
-      const raw = await this.workerClient.getMessages(
-        worker,
-        session.instanceRef,
-      );
-      const sessionItems = this.convertSessionMessages(raw, channel, session);
+      /**
+       * ⚠️ 分页（性能关键路径，2026-11-06 实测）：此前这里**不带 limit**，
+       * 每次都把整个 serve 会话历史拉回来 —— 实测单频道 4224 条 / 15.6MB / 22.4s，
+       * 加上 DB 500 行合并后返回前端 14.6MB/31.9s，切一次私聊就卡半分钟。
+       * serve 的 `GET /sessions/:id/message?limit=&order=desc` 实测 48 条/415KB/258ms
+       * ⇒ 只取「最近窗口」即可（补取的量按 limit 的 4 倍留余量，避免合并后被截断）。
+       * 翻更老页（beforeId 非空）**完全不碰 worker**：历史真源是平台 messages 表。
+       */
+      let sessionItems: Array<Record<string, unknown>> = [];
+      if (!beforeId) {
+        const raw = await this.workerClient.getMessages(
+          worker,
+          session.instanceRef,
+          { limit: Math.min(limit * 2, 200), order: 'desc' },
+        );
+        sessionItems = this.convertSessionMessages(raw, channel, session);
+      }
       return {
-        items: await this.mergeSessionWithPlatform(channelId, sessionItems),
-        nextCursor: null,
-        source: 'session' as const,
+        ...(await this.mergeSessionWithPlatform(channelId, sessionItems, {
+          limit,
+          beforeId,
+        })),
+        source: sessionItems.length > 0 ? ('session' as const) : ('db' as const),
       };
     } catch (err) {
       // worker 不可达/serve 异常 → 回退平台表（历史主数据源降级，不发错误阻塞读历史）
@@ -559,6 +621,10 @@ export class ChatService {
             );
       // 空消息（无文本且无保留 parts，如仅 step-start 的空壳）→ 跳过
       if (!text && kept.length === 0) continue;
+      // 大字段截断（列表页性能关键）：tool 输出/思考单条可达数百 KB，
+      // 实测某私聊 50 条就有 7.6MB ⇒ 切页要几秒。列表只保留每个字段前 16KB
+      // （超出追加可见截断标记），完整内容后续可按需拉取。
+      const cappedKept = ChatService.capPartPayloads(kept);
       const hasFinish = parts.some(
         (p) => p.type === 'step-finish' && p.reason === 'stop',
       );
@@ -578,7 +644,7 @@ export class ChatService {
             role === 'user' ? null : (channel.agentId ?? session.agentId),
           senderInstanceId:
             role === 'user' ? null : ((channel as any).teamMemberId ?? null),
-          content: { text, parts: kept },
+          content: { text, parts: cappedKept },
           mentions: [],
           status: MESSAGE_STATUS.sent,
           createdAt: new Date(createdMs).toISOString(),
@@ -617,12 +683,24 @@ export class ChatService {
   private async mergeSessionWithPlatform(
     channelId: string,
     sessionItems: Array<Record<string, unknown>>,
-  ): Promise<Array<Record<string, unknown>>> {
-    const rows = await this.prisma.message.findMany({
-      where: { channelId },
-      orderBy: { id: 'desc' },
-      take: 500,
+    page: { limit: number; beforeId?: string } = { limit: 500 },
+  ): Promise<{
+    items: Array<Record<string, unknown>>;
+    nextCursor: string | null;
+  }> {
+    // DB 分页：游标即消息主键 id（数值序==字典序，与 findMessages 同口径）。
+    // 多取一条用于判断 hasMore；首页额外留一倍余量（session 增补项会插入时间线，
+    // 可能把窗口内最新的几条 DB 行挤出 limit 之外）。
+    const take = page.beforeId ? page.limit + 1 : page.limit * 2 + 1;
+    // 两段式取行（见 findMessagePageIds 注释：直接 orderBy 大行会 OOM sort memory）
+    const pageIds = await this.findMessagePageIds({
+      channelId,
+      beforeId: page.beforeId,
+      take,
+      // hasMore 语义由调用处按「本页装下的 DB 行数」重算，这里取满 take 即可
+      limit: take,
     });
+    const rows = await this.loadMessageRowsInIdOrder(pageIds.ids);
     const dbItems = [...rows]
       .reverse()
       .map((row) => this.toMessageDto(row as any));
@@ -664,6 +742,31 @@ export class ChatService {
       (a, b) =>
         Date.parse(a.createdAt as string) - Date.parse(b.createdAt as string),
     );
+    // 只保留窗口内**最新** limit 条（增补项可能把页尾挤出窗口）。
+    const windowed = merged.slice(-page.limit);
+    // ⚠️ 截断必须作用在**合并后的最终项**上：本页绝大多数是 DB 行（toMessageDto 直出，
+    // 不过 convertSessionMessages），只截 session 增补项对体积毫无作用（实测仍 7.6MB/页）。
+    for (const item of windowed) {
+      const content = item.content as
+        | { parts?: unknown; text?: unknown }
+        | undefined;
+      if (content && Array.isArray(content.parts)) {
+        content.parts = ChatService.capPartPayloads(
+          content.parts as Array<Record<string, unknown>>,
+        );
+      }
+    }
+    // nextCursor = 本页最早的一条 **DB 行** id：前端「加载更多」走平台表分页
+    // （历史真源 = messages 表）；session 增补项无平台 id，不能作为游标。
+    const dbIds = new Set(rows.map((row) => row.id));
+    const oldestDbInPage = windowed.find((item) => dbIds.has(item.id as string));
+    // hasMore：还有**没进本页**的 DB 行（rows 按 id 降序取，本页只装下其中最新的一批）。
+    // 不能用 `rows.length >= take`：DB 总行数不足 take 但仍多于 limit 时会误判末页，
+    // 用户就再也点不出更早的历史了。
+    const dbRowsInPage = windowed.filter((item) =>
+      dbIds.has(item.id as string),
+    ).length;
+    const hasMore = rows.length > dbRowsInPage;
     // **取消"processing 钉到末尾"**（实测是错的）：
     //
     // 原实现把进行中的流式聚合行一律后置，理由是"前端轮询要能看到最新流式块"。
@@ -673,7 +776,72 @@ export class ChatService {
     //
     // 正确做法：严格按 createdAt 升序（保持对话真实时间线）。前端已有
     // loading/streaming 指示器标识"进行中"，不需要靠列表位置来强调。
-    return merged;
+    return {
+      items: windowed,
+      nextCursor: hasMore && oldestDbInPage ? (oldestDbInPage.id as string) : null,
+    };
+  }
+
+  /**
+   * 列表接口的 part 大字段截断：只保留每个字符串字段前 `MAX_PART_FIELD_CHARS` 字符。
+   *
+   * 为什么必须截断：`content.parts` 里 tool 的 input/output、reasoning 的 text 是**全量**
+   * 落库的，单条可达 300KB+（实测单频道 50 条 = 7.6MB）。私聊列表一次性把这些塞给浏览器，
+   * 既慢又占内存。列表页只需要「能看出这步干了什么」，完整内容可以按需拉。
+   * 截断标记写进文本本身（`…（已截断）`），前端无需改渲染即可让用户看到"这里被截了"。
+   */
+  /** 单个字符串字段上限（字符）。前端工具卡本身也只展示前 2000 字符（TOOL_IO_MAX_CHARS），
+   *  列表页没必要为看不到的内容付流量。 */
+  private static readonly MAX_PART_STRING_CHARS = 2 * 1024;
+  /** 数组型载荷（如 tool 的 `state.content` 结果块）最多保留多少项。 */
+  private static readonly MAX_PART_ARRAY_ITEMS = 20;
+  /** 递归深度上限（防异常深对象）。 */
+  private static readonly MAX_PART_DEPTH = 4;
+  private static readonly PART_TRUNCATED_SUFFIX = '…（内容过长，已截断）';
+
+  /**
+   * 递归截断 part 载荷（字符串/数组/对象）。
+   *
+   * 为什么是**递归**而不是只截顶层字段：实测超大 part 的真实载荷在
+   * `part.state.content` —— 一个**数组**（tool 结果块），单条可达 1.1MB；
+   * 只截 `text`/`output` 这类顶层字符串完全没效果（截断后仍 7.6MB/页）。
+   * 前端工具卡只展示前 2000 字符，所以列表页按 2KB/字符串 + 20 项/数组封顶即可，
+   * 既不影响可读性判断，也把单页体积压到百 KB 量级。
+   */
+  private static capValue(value: unknown, depth = 0): unknown {
+    if (typeof value === 'string') {
+      return value.length <= ChatService.MAX_PART_STRING_CHARS
+        ? value
+        : value.slice(0, ChatService.MAX_PART_STRING_CHARS) +
+            ChatService.PART_TRUNCATED_SUFFIX;
+    }
+    if (Array.isArray(value)) {
+      const kept = value
+        .slice(0, ChatService.MAX_PART_ARRAY_ITEMS)
+        .map((item) => ChatService.capValue(item, depth + 1));
+      if (value.length > ChatService.MAX_PART_ARRAY_ITEMS) {
+        kept.push(
+          `…（共 ${value.length} 项，仅展示前 ${ChatService.MAX_PART_ARRAY_ITEMS} 项）`,
+        );
+      }
+      return kept;
+    }
+    if (value && typeof value === 'object' && depth < ChatService.MAX_PART_DEPTH) {
+      const out: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+        out[key] = ChatService.capValue(item, depth + 1);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  private static capPartPayloads(
+    parts: Array<Record<string, unknown>>,
+  ): Array<Record<string, unknown>> {
+    return parts.map(
+      (part) => ChatService.capValue(part) as Record<string, unknown>,
+    );
   }
 
   /** 错误信息归一（worker 拉取失败时用于日志）。 */

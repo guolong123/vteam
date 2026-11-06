@@ -1231,12 +1231,16 @@ describe('ChatService', () => {
 
       const result = await service.findMessages(channelId, userId, {} as any);
 
-      // 查询契约：idx_messages_channel_id 命中（channelId，ORDER BY id DESC，take=limit+1 判末页）
-      expect(prisma.message.findMany).toHaveBeenCalledWith({
-        where: { channelId },
-        orderBy: { id: 'desc' },
-        take: 51, // limit(50) + 1 判末页
-      });
+      // 查询契约：idx_messages_channel_id 命中（channelId，ORDER BY id DESC，take=limit+1 判末页）。
+      // 两段式：首查只取 id（大 JSON 行不参与排序，避免 MySQL 1038 out of sort memory）。
+      expect(prisma.message.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { channelId },
+          orderBy: { id: 'desc' },
+          take: 51, // limit(50) + 1 判末页
+          select: { id: true },
+        }),
+      );
       // 最新 50 条（m_2..m_51），items id 升序（时间正序）返回
       expect(result.items).toHaveLength(50);
       expect(result.items[0].id).toBe('m_0000000002');
@@ -1269,11 +1273,14 @@ describe('ChatService', () => {
         cursor: 'm_0000000050',
       } as any);
 
-      expect(prisma.message.findMany).toHaveBeenCalledWith({
-        where: { channelId, id: { lt: 'm_0000000050' } },
-        orderBy: { id: 'desc' },
-        take: 51,
-      });
+      expect(prisma.message.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { channelId, id: { lt: 'm_0000000050' } },
+          orderBy: { id: 'desc' },
+          take: 51,
+          select: { id: true },
+        }),
+      );
       // items 反转回升序（时间正序），nextCursor 续传即下一页起始游标 → 无重复无遗漏
       expect(result.items.map((m) => m.id)).toEqual([
         'm_0000000001',
@@ -1374,9 +1381,11 @@ describe('ChatService', () => {
       const result = await service.getSessionHistory(channelId, userId);
 
       // 调 worker GET /sessions/:id/messages（worker 引用 + instanceRef）
+      // 分页（2026-11-06）：只取最近窗口，limit = 页大小(50) × 2，order=desc
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: { baseUrl: 'http://worker' } },
         'ses_abc',
+        { limit: 100, order: 'desc' },
       );
       expect(result.source).toBe('session');
       expect(result.nextCursor).toBeNull();
@@ -1687,6 +1696,7 @@ describe('ChatService', () => {
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: {} },
         'ses_abc',
+        { limit: 100, order: 'desc' },
       );
       expect(result.source).toBe('session');
       expect(
@@ -1749,6 +1759,7 @@ describe('ChatService', () => {
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         expect.anything(),
         'ses_abc',
+        { limit: 100, order: 'desc' },
       );
       expect(result.source).toBe('session');
     });
@@ -1972,6 +1983,163 @@ describe('ChatService', () => {
         'm_0000000002',
         'msg_asst_live',
       ]);
+    });
+
+    /* -------------------- 分页（2026-11-06 性能修复） -------------------- */
+    // 背景：此前不带 limit，每次都把整个 serve 会话 + 500 条 DB 全量返回，
+    // 实测单频道 2391 条 / 14.6MB / 31.9s → 切一次私聊卡半分钟。
+
+    /** 造 n 条 DB 行（id 递增、createdAt 递增），模拟历史分页数据。 */
+    const genRows = (n: number) =>
+      Array.from({ length: n }, (_, i) =>
+        messageRow({
+          id: `m_${String(i + 1).padStart(10, '0')}`,
+          senderType: SENDER_TYPE.user,
+          senderId: userId,
+          content: { text: `第${i + 1}条`, parts: [] },
+          createdAt: new Date(1000 + i * 10),
+        }),
+      );
+
+    it('首页：只返回最近 limit 条 + 给出 nextCursor + worker 只拉窗口（limit×4, order=desc）', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([]);
+      // DB 有 120 条：首页 limit=10 应该只返回最近 10 条（m_...0111 ~ 0120）
+      prisma.message.findMany.mockResolvedValue(genRows(120).reverse());
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        limit: 10,
+      });
+
+      const items = result.items as Array<Record<string, any>>;
+      expect(items).toHaveLength(10);
+      expect(items.map((m) => m.id)).toEqual(
+        Array.from(
+          { length: 10 },
+          (_, i) => `m_${String(111 + i).padStart(10, '0')}`,
+        ),
+      );
+      // nextCursor = 本页最早一条（供「加载更多」取更老）
+      expect(result.nextCursor).toBe('m_0000000111');
+      // worker 只拉最近窗口，不再全量
+      expect(workerClient.getMessages).toHaveBeenCalledWith(
+        { id: 'w_1', capabilities: {} },
+        'ses_abc',
+        { limit: 20, order: 'desc' },
+      );
+    });
+
+    it('翻更老页（cursor 非空）：完全不调 worker，走平台表分页（source=db）', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.message.findMany.mockResolvedValue(genRows(200).reverse());
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        limit: 10,
+        cursor: 'm_0000000100',
+      });
+
+      // 历史真源是平台表：翻老页不碰 worker（省掉一次几百 ms~几十秒的会话拉取）
+      expect(workerClient.getMessages).not.toHaveBeenCalled();
+      expect(result.source).toBe('db');
+      expect(prisma.message.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { channelId, id: { lt: 'm_0000000100' } },
+          orderBy: { id: 'desc' },
+          take: 11,
+        }),
+      );
+    });
+
+    it('末页：DB 行数不足 limit → 全量返回且 nextCursor=null', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([]);
+      prisma.message.findMany.mockResolvedValue(genRows(5).reverse());
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        limit: 10,
+      });
+
+      expect((result.items as unknown[]).length).toBe(5);
+      expect(result.nextCursor).toBeNull();
+    });
+
+    it('大字段截断：tool 输出超过 16KB 时截断并带可见标记（列表体积封顶）', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      const huge = 'x'.repeat(50 * 1024);
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: { id: 'msg_asst_huge', role: 'assistant', time: { created: 2000 } },
+          parts: [
+            {
+              type: 'tool',
+              tool: 'vteam_read_file',
+              state: { status: 'success', input: '{"p":1}', output: huge },
+            },
+            { type: 'text', text: '结论', synthetic: false },
+          ],
+        },
+      ]);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        limit: 10,
+      });
+
+      const item = (result.items as Array<Record<string, any>>)[0];
+      const toolPart = item.content.parts.find(
+        (p: Record<string, any>) => p.type === 'tool',
+      );
+      // 截断到 16KB + 标记；原始 50KB 不再整包下发（载荷在 state.output）
+      expect(toolPart.state.output.length).toBeLessThan(50 * 1024);
+      expect(toolPart.state.output).toContain('已截断');
+      expect(toolPart.state.output.startsWith('xxx')).toBe(true);
+      // 小字段不受影响
+      expect(toolPart.state.input).toBe('{"p":1}');
+      expect(item.content.text).toBe('结论');
+    });
+
+    it('回退路径同样分页：未绑定会话时 limit 透传给平台表查询', async () => {
+      allowAccess(unboundMemberChannel());
+      prisma.message.findMany.mockResolvedValue(genRows(30).reverse());
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        limit: 10,
+      });
+
+      expect(result.source).toBe('db');
+      expect(prisma.message.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { id: 'desc' }, take: 11 }),
+      );
+      expect((result.items as unknown[]).length).toBe(10);
+      expect(result.nextCursor).toBe('m_0000000021');
     });
   });
 

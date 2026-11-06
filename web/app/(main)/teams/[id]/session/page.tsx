@@ -397,8 +397,13 @@ export default function TeamSessionPage() {
     queryFn: async () => {
       if (!activePrivateId) return { items: [], nextCursor: null } as MessagesResponse;
       try {
+        // ⚠️ 必须带分页：不带 limit 时服务端会把整个会话历史（含全部 tool/reasoning
+        // parts）一次性返回 —— 实测单频道 2391 条 / 14.6MB / 31.9s，切一次私聊卡半分钟。
+        // 带 limit=50 后服务端只取最近窗口（worker 侧同样按 limit 拉），并返回
+        // nextCursor 供「加载更多」；更老的历史走平台 messages 表分页。
         const res = await api.get<{ items: RealtimeChatMessage[]; nextCursor: string | null }>(
           `/channels/${activePrivateId}/session-history`,
+          { query: { limit: 50 } },
         );
         return { items: res.items, nextCursor: res.nextCursor ?? null } as MessagesResponse;
       } catch (e) {
@@ -407,8 +412,10 @@ export default function TeamSessionPage() {
       }
     },
     enabled: !!activePrivateId && !!user?.id,
-    // C2 轮询兜底：SSE 断连 / delta 丢失时私聊仍以 30s 拉齐（群聊查询行为不变）
-    refetchInterval: 30_000,
+    // C2 轮询兜底：SSE 断连 / delta 丢失时私聊仍能拉齐。
+    // 由 30s 放宽到 60s：分页前每次轮询要拉 14MB/30 秒级，现在虽已降到 ~1MB/2s，
+    // 但活跃聊天仍会每 30s 打一次 worker 会话窗口；SSE 是主路径，兜底不必这么密。
+    refetchInterval: 60_000,
   });
 
   /* ---------- 当前任务派生查询（三 Tab 数据源） ---------- */

@@ -167,11 +167,22 @@ export class ChatController {
   @ApiOperation({
     summary: '私聊会话历史（serve 完整会话，含思考/工具；回退平台表）',
   })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: '每页条数（默认 50，上限 100）',
+  })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    description: '游标 = 上页最早一条平台消息 id；缺省查第一页（最新 limit 条）',
+  })
   getSessionHistory(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
+    @Query() query: QueryMessagesDto,
   ) {
-    return this.chatService.getSessionHistory(id, user.id);
+    return this.chatService.getSessionHistory(id, user.id, query);
   }
 
   /**
