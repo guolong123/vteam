@@ -10,6 +10,7 @@ import { SESSION_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
+import { GLOBAL_SESSION_ERRORS } from './global-session.constants';
 
 /** TaskGroupInstance 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const TASK_GROUP_INSTANCE_ID_PREFIX = 'ti';
@@ -212,6 +213,145 @@ export class SessionLifecycleService implements OnModuleInit {
         }
         throw err;
       }
+    });
+  }
+
+  /**
+   * 全局会话确保存在（37 篇 P3）：按成员维度（member_key = member_id，仅 team-mode 行）
+   * 查找命中则复用；未命中则创建一条 team-mode 会话，并把当前上下文（最近席位/团队/
+   * 频道/任务）写入 current_* 便捷列。**current_* 仅供展示/兼容，鉴权/落库以
+   * session_turns 冻结的轮次为准**。
+   *
+   * 本方法只建/取会话，不执行轮次；轮次入队/认领/收口见 SessionTurnsService。
+   */
+  async ensureMemberSession(
+    memberId: string,
+    context: {
+      seatId?: string | null;
+      teamId?: string | null;
+      taskId?: string | null;
+      channelId?: string | null;
+    } = {},
+  ) {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const member = await tx.member.findUnique({
+        where: { id: memberId },
+        select: { id: true, name: true, status: true, agentId: true },
+      });
+      if (!member) {
+        throw new NotFoundException({
+          code: GLOBAL_SESSION_ERRORS.MEMBER_NOT_FOUND,
+          message: `成员 ${memberId} 不存在`,
+        });
+      }
+      if (member.status !== 'active') {
+        throw new BadRequestException({
+          code: GLOBAL_SESSION_ERRORS.MEMBER_DISABLED,
+          message: `成员 ${member.name} 已停用`,
+        });
+      }
+
+      const select = {
+        id: true,
+        memberId: true,
+        memberKey: true,
+        seatId: true,
+        currentTeamId: true,
+        currentTaskId: true,
+        currentChannelId: true,
+        agentId: true,
+        workerId: true,
+        instanceRef: true,
+        status: true,
+        busyState: true,
+        turnSeq: true,
+      } as const;
+
+      const memberKey = memberId;
+      const existing = await tx.session.findUnique({
+        where: { memberKey },
+        select,
+      });
+      if (existing) {
+        // 上下文只在调用方显式给出时更新（不覆盖未提供的维度）。
+        const data: Record<string, unknown> = {};
+        if (context.seatId !== undefined) data.seatId = context.seatId;
+        if (context.teamId !== undefined) {
+          data.currentTeamId = context.teamId;
+          data.teamId = context.teamId;
+        }
+        if (context.taskId !== undefined) data.currentTaskId = context.taskId;
+        if (context.channelId !== undefined) {
+          data.currentChannelId = context.channelId;
+        }
+        if (Object.keys(data).length > 0) {
+          const updated = await tx.session.update({
+            where: { id: existing.id },
+            data: data as never,
+            select,
+          });
+          return { ...updated, reused: true };
+        }
+        return { ...existing, reused: true };
+      }
+
+      try {
+        const created = await tx.session.create({
+          data: {
+            id: await this.idGen.nextId(SESSION_ID_PREFIX),
+            memberId,
+            memberKey,
+            seatId: context.seatId ?? null,
+            currentTeamId: context.teamId ?? null,
+            currentTaskId: context.taskId ?? null,
+            currentChannelId: context.channelId ?? null,
+            // 旧列语义降级为「最近上下文」：team-only 视图仍能读到 teamId/teamMemberId。
+            teamId: context.teamId ?? null,
+            teamMemberId: context.seatId ?? null,
+            taskId: null,
+            agentId: member.agentId,
+            status: SESSION_STATUS.created,
+          },
+          select,
+        });
+        return { ...created, reused: false };
+      } catch (err) {
+        // 并发竞态：两个入口同时 findUnique 未命中后 create 同 memberKey → P2002
+        if ((err as { code?: string })?.code === 'P2002') {
+          this.logger.warn(
+            `ensureMemberSession 并发竞态 memberKey=${memberKey}，重读复用`,
+          );
+          const raced = await tx.session.findUnique({
+            where: { memberKey },
+            select,
+          });
+          if (raced) return { ...raced, reused: true };
+        }
+        throw err;
+      }
+    });
+  }
+
+  /** 读取成员全局会话（不存在返回 null；只读，不创建）。 */
+  async findMemberSession(memberId: string) {
+    return this.prisma.session.findUnique({
+      where: { memberKey: memberId },
+      select: {
+        id: true,
+        memberId: true,
+        seatId: true,
+        currentTeamId: true,
+        currentTaskId: true,
+        currentChannelId: true,
+        agentId: true,
+        workerId: true,
+        instanceRef: true,
+        status: true,
+        busyState: true,
+        busySince: true,
+        turnSeq: true,
+        lastTurnOutcome: true,
+      },
     });
   }
 

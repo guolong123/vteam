@@ -284,6 +284,7 @@ model Member {
   teamMembers       TeamMember[]
   chatChannels      ChatChannel[]
   notificationLinks MemberNotificationChannel[]
+  sessions          Session[]
 
   @@index([defaultRoleId], map: "idx_members_default_role")
   @@index([agentId], map: "idx_members_agent")
@@ -401,6 +402,25 @@ model Session {
   // 检出。活动列为 NULL 时回退自身 updatedAt，不授予新 lease；pending/active
   // 否决仍独立保留。
   lastActivityAt DateTime? @map("last_activity_at")
+  // ── 全局会话（37 篇 P3）：一成员一条 team-mode 会话；current_* 仅作展示/兼容，
+  // 鉴权与落库以 session_turns 冻结的轮次上下文为准。member_key = member_id（应用层列）。
+  memberId         String?   @map("member_id")
+  /// 应用层维护的成员唯一键：team-mode 行 = member_id，task 行 = NULL（task_id 为空才参与唯一）
+  memberKey        String?   @unique(map: "uk_sessions_member") @map("member_key")
+  /// 最近使用的席位（tmm_），展示/兼容用，不作鉴权依据
+  seatId           String?   @map("seat_id")
+  currentTeamId    String?   @map("current_team_id")
+  currentTaskId    String?   @map("current_task_id")
+  currentChannelId String?   @map("current_channel_id")
+  /// 轮次序号（每次入队 +1，session_turns.seq 的来源）
+  turnSeq          Int       @default(0) @map("turn_seq")
+  /// idle / running（信息态；执行互斥由 session_turns.running_key 唯一索引兜底）
+  busyState        String    @default("idle") @map("busy_state") @db.VarChar(16)
+  busySince        DateTime? @map("busy_since")
+  /// 最近一轮结果：ok / error / timeout / cancelled
+  lastTurnOutcome  String?   @map("last_turn_outcome") @db.VarChar(16)
+  member           Member?   @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  turns            SessionTurn[]
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -412,9 +432,42 @@ model Session {
 
   @@unique([teamMemberKey], map: "uk_sessions_team_member")
   @@index([teamId], map: "idx_sessions_team_id")
+  @@index([memberId], map: "idx_sessions_member")
   // trigger-unification todo-7：空闲判死扫描索引（status='running' AND last_activity_at < cutoff；NULL 行按 updatedAt 回退）。
   @@index([status, lastActivityAt], map: "idx_sessions_status_last_activity")
   @@map("sessions")
+}
+
+/// 每轮不可变上下文（37 篇 §3.6.2）：全局会话下一成员跨群服务多轮，
+/// 回复/回执/中止/审计必须按本轮冻结的 team/channel/seat 收口，不能读 Session.current_*。
+model SessionTurn {
+  id             String    @id // st_ 前缀
+  sessionId      String    @map("session_id")
+  seq            Int       // session.turnSeq 递增；FIFO 排序键
+  memberId       String    @map("member_id")
+  seatId         String?   @map("seat_id")
+  teamId         String?   @map("team_id")
+  channelId      String?   @map("channel_id")
+  taskId         String?   @map("task_id")
+  messageId      String?   @map("message_id")
+  /// user_mention / agent_notify / hook_wake / task_start / manual
+  source         String    @default("user_mention") @db.VarChar(32)
+  /// pending / running / done / failed / cancelled / expired（待执行，不是产品队列位次）
+  status         String    @default("pending") @db.VarChar(16)
+  /// 应用层维护：status=running 时 = session_id，其余 NULL；唯一索引保证「每会话至多一轮在飞」
+  runningKey     String?   @unique(map: "uk_session_turns_running") @map("running_key")
+  enqueuedAt     DateTime  @default(now()) @map("enqueued_at")
+  startedAt      DateTime? @map("started_at")
+  endedAt        DateTime? @map("ended_at")
+  error          String?   @db.VarChar(1024)
+  engineMessageId String?  @map("engine_message_id")
+  session        Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([sessionId, seq], map: "uk_session_turns_seq")
+  @@index([sessionId, status, seq], map: "idx_session_turns_pick")
+  @@index([status, enqueuedAt], map: "idx_session_turns_claim")
+  @@index([teamId, status], map: "idx_session_turns_team")
+  @@map("session_turns")
 }
 
 // ==================================================================

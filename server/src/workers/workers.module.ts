@@ -4,6 +4,7 @@ import { McpServersModule } from '../mcp-servers/mcp-servers.module';
 import { ModelsModule } from '../models/models.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { SessionLifecycleService } from './session-lifecycle.service';
+import { SessionTurnsService } from './session-turns.service';
 import { WorkerClient } from './worker.client';
 import { WorkerEventIngress } from './worker-event.ingress';
 import { WorkerEventsController } from './worker-events.controller';
@@ -41,6 +42,7 @@ import { WorkersService } from './workers.service';
   controllers: [WorkersController, WorkerEventsController],
   providers: [
     WorkersService,
+    SessionTurnsService,
     WorkerTokenGuard,
     WorkerClient,
     SessionLifecycleService,
@@ -49,6 +51,7 @@ import { WorkersService } from './workers.service';
   ],
   exports: [
     WorkersService,
+    SessionTurnsService,
     WorkerClient,
     SessionLifecycleService,
     WorkerEventIngress,
