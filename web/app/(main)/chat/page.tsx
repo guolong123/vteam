@@ -859,17 +859,29 @@ function conversationRole(
 }
 
 /** 群头像配色（按群名哈希从固定色板取，稳定且区分度足够）。 */
-function groupAvatarPalette(title: string): { bg: string; color: string; border: string } {
+function groupAvatarPalette(title: string): {
+  backgroundImage: string;
+  backgroundColor: string;
+  color: string;
+  border: string;
+} {
+  // 原型群头像为渐变圆角方块：按群名哈希取一组渐变，白字。
   const palettes = [
-    { bg: "#6366F1", color: "#FFFFFF", border: "#6366F1" },
-    { bg: "#0D9488", color: "#FFFFFF", border: "#0D9488" },
-    { bg: "#3B82F6", color: "#FFFFFF", border: "#3B82F6" },
-    { bg: "#F59E0B", color: "#FFFFFF", border: "#F59E0B" },
-    { bg: "#8B5CF6", color: "#FFFFFF", border: "#8B5CF6" },
+    { from: "#818CF8", to: "#4F46E5" },
+    { from: "#2DD4BF", to: "#0D9488" },
+    { from: "#60A5FA", to: "#2563EB" },
+    { from: "#FBBF24", to: "#EA580C" },
+    { from: "#A78BFA", to: "#7C3AED" },
   ];
   let hash = 0;
   for (let i = 0; i < title.length; i += 1) hash = (hash * 31 + title.charCodeAt(i)) >>> 0;
-  return palettes[hash % palettes.length];
+  const p = palettes[hash % palettes.length];
+  return {
+    backgroundImage: `linear-gradient(135deg, ${p.from}, ${p.to})`,
+    backgroundColor: p.to,
+    color: "#FFFFFF",
+    border: "none",
+  };
 }
 
 function ConversationRow({
