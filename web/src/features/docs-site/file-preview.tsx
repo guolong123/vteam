@@ -432,10 +432,16 @@ function PdfPreview({
 function OfficeShell({
   title,
   status,
+  fileUrl,
+  displayName,
   children,
 }: {
   title: string;
   status: "loading" | "ready" | "error";
+  /** 原文件 URL（工具条下载用；office 预览把下载卡替换掉了，需要显式入口）。 */
+  fileUrl: string;
+  /** 下载文件名（原始名；老数据由 humanFileName 兜底成标题+扩展名）。 */
+  displayName: string;
   children: React.ReactNode;
 }) {
   return (
@@ -454,11 +460,37 @@ function OfficeShell({
         ...baseFont,
       }}
     >
-      {status === "loading" && (
-        <div data-testid="docs-office-loading" style={{ fontSize: fontSize.sm, color: neutral[500] }}>
-          正在解析「{title}」…
-        </div>
-      )}
+      {/* 工具条：预览取代了下载卡，必须保留「下载原文件」入口 */}
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+        <a
+          data-testid="docs-office-download"
+          href={fileUrl}
+          {...(fileUrl.startsWith("/uploads/") ? { download: displayName || true } : {})}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `2px ${space.md}px`,
+            borderRadius: radius.sm,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: surface,
+            color: "#0D9488",
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            textDecoration: "none",
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>↓</span>
+          下载原文件
+        </a>
+        {status === "loading" && (
+          <span data-testid="docs-office-loading" style={{ fontSize: fontSize.sm, color: neutral[500] }}>
+            正在解析「{title}」…
+          </span>
+        )}
+      </div>
       {children}
     </div>
   );
@@ -519,7 +551,12 @@ function DocxFilePreview({
     return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
   }
   return (
-    <OfficeShell title={title} status={status}>
+    <OfficeShell
+      title={title}
+      status={status}
+      fileUrl={fileUrl}
+      displayName={displayName}
+    >
       <div
         ref={hostRef}
         data-testid="docs-docx-body"
@@ -614,7 +651,12 @@ function SheetFilePreview({
   }
   if (sheets === null) {
     return (
-      <OfficeShell title={title} status="loading">
+      <OfficeShell
+        title={title}
+        status="loading"
+        fileUrl={fileUrl}
+        displayName={displayName}
+      >
         <span />
       </OfficeShell>
     );
@@ -625,7 +667,12 @@ function SheetFilePreview({
 
   const sheet = sheets[Math.min(active, sheets.length - 1)];
   return (
-    <OfficeShell title={title} status="ready">
+    <OfficeShell
+      title={title}
+      status="ready"
+      fileUrl={fileUrl}
+      displayName={displayName}
+    >
       {sheets.length > 1 && (
         <div style={{ display: "flex", gap: space.xs, flexWrap: "wrap" }}>
           {sheets.map((item, index) => (
