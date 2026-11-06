@@ -428,6 +428,10 @@ HELM_ARGS=(
   --set "web.image.tag=$TAG"
   --set "worker.image.repository=$(repo_of "$IMAGE_WORKER")"
   --set "worker.image.tag=$TAG"
+  # worker 代码版本（WORKER_CODE_VERSION，configmap 下发）：与镜像 tag 同源。
+  # 漏了这项 worker 会报 'dev'（镜像内无版本戳文件），「Worker 节点」页版本徽章
+  # 与自更新比对全部失真（2026-11-06 实测：v1.4.1 部署后 opencode worker 仍报 dev）。
+  --set "worker.env.codeVersion=$TAG"
   --set "ingress.enabled=$INGRESS_ENABLED"
   --set "ingress.host=$INGRESS_HOST"
   --set "ingress.className=$INGRESS_CLASS"
