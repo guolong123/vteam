@@ -36,6 +36,7 @@ describe('全局会话（P3）', () => {
       },
       sessionTurn: {
         findMany: jest.fn(),
+        findFirst: jest.fn(),
       },
     };
     idGen = {
@@ -168,7 +169,9 @@ describe('全局会话（P3）', () => {
         status: 'active',
         agentId: 'a_arch',
       });
-      tx.teamMember.findMany.mockResolvedValue([{ id: 'tmm_1', teamId: 'tm_1' }]);
+      tx.teamMember.findMany.mockResolvedValue([
+        { id: 'tmm_1', teamId: 'tm_1' },
+      ]);
       tx.taskGroupInstance.updateMany.mockResolvedValue({ count: 1 });
       tx.sessionTurn.updateMany.mockResolvedValue({ count: 1 });
       tx.session.delete.mockResolvedValue({});
@@ -197,7 +200,9 @@ describe('全局会话（P3）', () => {
           error: 'member_manual_reset',
         }),
       });
-      expect(tx.session.delete).toHaveBeenCalledWith({ where: { id: 's_old' } });
+      expect(tx.session.delete).toHaveBeenCalledWith({
+        where: { id: 's_old' },
+      });
       expect(tx.session.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           memberId: 'mbr_1',
@@ -222,9 +227,9 @@ describe('全局会话（P3）', () => {
         currentChannelId: null,
       });
       tx.member.findUnique.mockResolvedValue(null);
-      await expect(service().resetMemberSession('mbr_x')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        service().resetMemberSession('mbr_x'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
@@ -322,6 +327,33 @@ describe('全局会话（P3）', () => {
         data: { busyState: 'idle', busySince: null, lastTurnOutcome: 'ok' },
       });
       expect(result).toMatchObject({ status: 'done', outcome: 'ok' });
+    });
+
+    it('finishRunning：无在飞 → null；有则收口并返回该轮', async () => {
+      prisma.sessionTurn.findFirst.mockResolvedValueOnce(null);
+      expect(await service().finishRunning('s_1', 'done')).toBeNull();
+
+      prisma.sessionTurn.findFirst.mockResolvedValueOnce({
+        id: 'st_9',
+        sessionId: 's_1',
+        seq: 9,
+        seatId: 'tmm_1',
+        teamId: 'tm_1',
+      });
+      tx.sessionTurn.findUnique = jest.fn().mockResolvedValue({
+        id: 'st_9',
+        sessionId: 's_1',
+        status: 'running',
+      });
+      tx.sessionTurn.update.mockResolvedValue({});
+      tx.session.update.mockResolvedValue({});
+
+      const r: any = await service().finishRunning('s_1', 'done');
+      expect(r).toMatchObject({ id: 'st_9', sessionId: 's_1' });
+      expect(tx.sessionTurn.update).toHaveBeenCalledWith({
+        where: { id: 'st_9' },
+        data: expect.objectContaining({ status: 'done', runningKey: null }),
+      });
     });
 
     it('finish：超时/失败映射 timeout/error，保证后续消息能继续', async () => {

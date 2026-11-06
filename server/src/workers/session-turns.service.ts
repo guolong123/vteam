@@ -209,6 +209,35 @@ export class SessionTurnsService {
     });
   }
 
+  /** 当前在飞轮次（running_key 唯一，至多一条）；无则 null。 */
+  async findRunningTurn(sessionId: string) {
+    return this.prisma.sessionTurn.findFirst({
+      where: { sessionId, status: SESSION_TURN_STATUS.running },
+      select: {
+        id: true,
+        sessionId: true,
+        seq: true,
+        seatId: true,
+        teamId: true,
+      },
+    });
+  }
+
+  /** 按会话收口当前在飞轮次（回流/失败/超时路径的便捷入口；无在飞返回 null）。 */
+  async finishRunning(
+    sessionId: string,
+    status: Extract<
+      SessionTurnStatus,
+      'done' | 'failed' | 'cancelled' | 'expired'
+    >,
+    opts: { error?: string | null; engineMessageId?: string | null } = {},
+  ) {
+    const running = await this.findRunningTurn(sessionId);
+    if (!running) return null;
+    await this.finish(running.id, status, opts);
+    return running;
+  }
+
   /** 待执行轮次（信息展示/运维排障用，不对外暴露位次）。 */
   async listPending(sessionId: string) {
     return this.prisma.sessionTurn.findMany({

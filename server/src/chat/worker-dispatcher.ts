@@ -44,7 +44,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
+import { SessionTurnsService } from '../workers/session-turns.service';
 import { isMemberSessionScope } from '../workers/session-scope';
+import { SESSION_TURN_STATUS } from '../workers/global-session.constants';
 import {
   ExecuteAttachment,
   isWorkerSessionInvalid,
@@ -1804,6 +1806,10 @@ export class WorkerDispatcher
     @Optional()
     @Inject(MessageReceiptsService)
     private readonly receipts?: MessageReceiptsService,
+    // P3 轮次台账（成员全局会话）：enqueue/claim/finish 与待执行 drain。
+    // 缺省可空——旧装配/单测不提供时跳过轮次台账（席位会话行为不变）。
+    @Optional()
+    private readonly sessionTurns?: SessionTurnsService,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -1927,6 +1933,15 @@ export class WorkerDispatcher
           `agent ${target.agentId} dispatch failed: ${message}`,
           (err as Error).stack,
         );
+        if (this.sessionTurns && target.sessionId) {
+          const failedSessionId = target.sessionId;
+          void this.sessionTurns
+            .finishRunning(failedSessionId, SESSION_TURN_STATUS.failed, {
+              error: message,
+            })
+            .then(() => this.drainMemberSession(failedSessionId))
+            .catch(() => undefined);
+        }
         this.emitError({
           taskId: scope,
           agentId: target.agentId,
@@ -2147,6 +2162,123 @@ export class WorkerDispatcher
    * 成员（seq 升序）；团队缺失/空名册/主成员悬空 → null。语义对齐 chat.service
    * buildMainAgentTrigger 团队分支（mainAgentMemberId 优先，否则首位）。
    */
+  /**
+   * P3 轮次收口 + 续跑：仅在 member scope 生效。
+   * 收口当前在飞轮次后 drain 下一条 pending（无 pending 则空转）。
+   */
+  private async finishTurnAndDrain(
+    sessionId: string | undefined,
+    status: 'done' | 'failed' | 'cancelled' | 'expired',
+    opts: { error?: string | null; engineMessageId?: string | null } = {},
+  ): Promise<void> {
+    if (!sessionId || !this.sessionTurns || !isMemberSessionScope()) return;
+    try {
+      await this.sessionTurns.finishRunning(sessionId, status, opts);
+      await this.drainMemberSession(sessionId);
+    } catch (err) {
+      this.logger.warn(
+        `[turn] 收口/续跑失败 session=${sessionId}: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 成员会话待执行轮次 drain：claim 最早 pending → 还原本轮上下文（seat/team/
+   * channel/message 文本）→ 以 skipTurn 走同一派发链路。每会话只推一轮，
+   * 其余留到下轮完成回调继续——不做优先级/位次/限流。
+   */
+  private async drainMemberSession(sessionId: string): Promise<void> {
+    const turns = this.sessionTurns;
+    if (!turns || !isMemberSessionScope()) return;
+    const session = await (this.prisma as any).session.findUnique({
+      where: { id: sessionId },
+      select: {
+        memberId: true,
+        agentId: true,
+        seatId: true,
+        currentTeamId: true,
+        currentTaskId: true,
+        currentChannelId: true,
+      },
+    });
+    if (!session?.memberId) return;
+    for (let i = 0; i < 5; i += 1) {
+      const claimed = await turns.claimNext(sessionId);
+      if (!claimed) return;
+      try {
+        const seatId = claimed.seatId ?? session.seatId;
+        const teamId = claimed.teamId ?? session.currentTeamId;
+        if (!seatId || !teamId) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_missing_context',
+          });
+          continue;
+        }
+        const seat = await (this.prisma as any).teamMember.findUnique({
+          where: { id: seatId },
+          select: { agentId: true },
+        });
+        if (!seat?.agentId) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_seat_missing',
+          });
+          continue;
+        }
+        let text = '';
+        if (claimed.messageId) {
+          const msg = await (this.prisma as any).message.findUnique({
+            where: { id: claimed.messageId },
+            select: { content: true },
+          });
+          const content = msg?.content as
+            { text?: unknown; parts?: unknown } | string | null;
+          text =
+            typeof content === 'string'
+              ? content
+              : typeof content?.text === 'string'
+                ? content.text
+                : '';
+        }
+        if (!text.trim()) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_message_missing',
+          });
+          continue;
+        }
+        const channelId = claimed.channelId ?? session.currentChannelId ?? '';
+        if (!channelId) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_channel_missing',
+          });
+          continue;
+        }
+        await this.dispatchForTeamTarget(
+          {
+            ...(claimed.messageId ? { messageId: claimed.messageId } : {}),
+            channelId,
+            taskId: claimed.taskId ?? '',
+            teamId,
+            text,
+            targets: [],
+          } as DispatchRequest,
+          { agentId: seat.agentId, instanceId: seatId, sessionId },
+          teamId,
+          true,
+        );
+        // 已推出本轮：等 task.completed/失败回调继续 drain，避免并发执行。
+        return;
+      } catch (err) {
+        this.logger.warn(
+          `[turn] drain 轮次 ${claimed.id} 失败: ${this.describeError(err)}`,
+        );
+        await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+    }
+  }
+
   async resolveTeamMainMember(teamId: string): Promise<{
     /** 席位 id（tmm_，对外 instanceId 语义） */
     memberId: string;
@@ -2406,6 +2538,8 @@ export class WorkerDispatcher
       instanceId?: string | null;
     },
     teamId: string,
+    /** 内部 drain 已认领轮次时置 true，避免二次 enqueue。 */
+    skipTurn = false,
   ): Promise<void> {
     const scope = toExecutionScope(null, teamId);
     // team-mode 仅取 teamMemberId，缺失即错，不回退
@@ -2488,6 +2622,36 @@ export class WorkerDispatcher
       throw new Error(
         `会话 ${sessionId} 与团队成员 ${teamMemberId} 不匹配（团队 ${teamId}），无法分派`,
       );
+    }
+
+    // ── P3 轮次台账（member scope）：消息到达即入队；无在飞则认领执行，有在飞则留在
+    // pending，由上一轮 finish 后 drain。**不拒绝、不排队拦截用户消息**——消息已落库，
+    // 这里只决定「现在执行还是稍后执行」。
+    if (useMemberSession && this.sessionTurns && !skipTurn) {
+      const turn = await this.sessionTurns.enqueue({
+        sessionId,
+        memberId: platformMemberId as string,
+        seatId: teamMemberId,
+        teamId,
+        channelId: request.channelId,
+        taskId: request.taskId || null,
+        messageId: request.messageId ?? null,
+      });
+      const claimed = await this.sessionTurns.claimNext(sessionId);
+      if (!claimed) {
+        // 已有在飞轮次：本轮保持 pending，完成回调里 drain 继续。
+        this.logger.log(
+          `[turn] session=${sessionId} 已有在飞轮次，本轮 seq=${turn.seq} 待执行`,
+        );
+        return;
+      }
+      if (claimed.id !== turn.id) {
+        // 历史遗留 pending（崩溃/重启）：先让最早一轮执行，本条等下一轮 drain。
+        this.logger.warn(
+          `[turn] session=${sessionId} 认领到更早轮次 ${claimed.id}（seq=${claimed.seq}），本轮 seq=${turn.seq} 顺延`,
+        );
+        return;
+      }
     }
 
     // 2. 定位 worker：已绑复用，未绑/残留 pending 则分配 + 首次 bind 占位
@@ -3281,7 +3445,17 @@ export class WorkerDispatcher
       this.silentWakeAttempts.delete(sessionId);
     }
     // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
-    const settled = await this.handleTeamTaskCompleted(payload);
+    let settled: Awaited<ReturnType<typeof this.handleTeamTaskCompleted>>;
+    try {
+      settled = await this.handleTeamTaskCompleted(payload);
+    } catch (err) {
+      await this.finishTurnAndDrain(sessionId, SESSION_TURN_STATUS.failed, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+    // P3：本轮收口 → 若有 pending 轮次，继续 drain（每会话至多一轮在飞）。
+    await this.finishTurnAndDrain(sessionId, SESSION_TURN_STATUS.done);
     if (sessionId) {
       this.clearDispatchSnapshotBySession(sessionId);
     }
