@@ -27,6 +27,7 @@ import {
 import { membersApi, type MemberDetailDto, type MemberDto } from "@/src/api/members";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
+import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -71,6 +72,9 @@ function ChatPageContent() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [showDmPicker, setShowDmPicker] = useState(false);
   const [dmSearch, setDmSearch] = useState("");
+  const [search, setSearch] = useState("");
+  const [convFilter, setConvFilter] = useState<"all" | "group" | "dm">("all");
+  const [filterMemberId, setFilterMemberId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const conversationsQuery = useQuery({
@@ -136,6 +140,21 @@ function ChatPageContent() {
     enabled: !!user?.id && isGroup && !!teamId,
   });
   const teamTasks = teamTasksQuery.data?.items ?? [];
+
+  // 成员目录：会话头像角色色、成员切换条忙碌态、右侧成员 Tab 共用。
+  const directoryQuery = useQuery({
+    queryKey: ["members", "directory"],
+    queryFn: () => membersApi.list({ page: 1, pageSize: 100 }),
+    enabled: !!user?.id,
+  });
+  const directory = useMemo<MemberDto[]>(
+    () => directoryQuery.data?.items ?? [],
+    [directoryQuery.data],
+  );
+  const memberById = useMemo(
+    () => new Map(directory.map((m) => [m.id, m])),
+    [directory],
+  );
 
   const rolesQuery = useQuery({
     queryKey: ["agent-roles", "chat"],
@@ -217,6 +236,11 @@ function ChatPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id, active?.unreadCount, channelId]);
 
+  // 切换会话时清空「成员过滤」，避免把上一个群的视角带到新会话。
+  useEffect(() => {
+    setFilterMemberId(null);
+  }, [active?.id]);
+
   // SSE：新消息自动 upsert 到 ["channel", channelId, "messages"]（hook 内建），
   // 这里额外刷新左列表并滚动到底；agent.loading 事件只用来更新占位（下一步细化）。
   useRealtimeEvents({
@@ -280,42 +304,190 @@ function ChatPageContent() {
     sendMutation.mutate(text);
   };
 
+  const keyword = search.trim().toLowerCase();
+  const filteredItems = items.filter((item) => {
+    if (convFilter === "group" && item.type !== "group") return false;
+    if (convFilter === "dm" && item.type !== "dm") return false;
+    if (!keyword) return true;
+    return (
+      item.title.toLowerCase().includes(keyword) ||
+      (item.lastMessage?.text ?? "").toLowerCase().includes(keyword)
+    );
+  });
+  const pinnedItems = filteredItems.filter(
+    (item) => item.type === "group" && item.pinned,
+  );
+  const restItems = filteredItems.filter(
+    (item) => !(item.type === "group" && item.pinned),
+  );
+  const groupCount = items.filter((i) => i.type === "group").length;
+  const dmCount = items.filter((i) => i.type === "dm").length;
+  const busySeats = (team?.members ?? []).filter(
+    (seat) =>
+      memberById.get(seat.memberId ?? "")?.session?.busyState === "running",
+  );
+
   return (
     <main style={{ flex: 1, minHeight: 0, display: "flex", position: "relative", backgroundColor: "var(--color-bg, #F8FAFC)" }}>
       {/* 左侧会话列表 */}
       <aside style={{ width: 300, flexShrink: 0, borderRight: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div style={{ padding: `${space.lg}px ${space.lg}px ${space.sm}px` }}>
+        <div style={{ padding: `${space.lg}px ${space.lg}px ${space.sm}px`, display: "flex", flexDirection: "column", gap: space.sm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>会话</div>
-            <button type="button" data-testid="new-dm-button" onClick={() => setShowDmPicker(true)} title="发起新私聊" style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 新私聊</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button type="button" data-testid="new-group-chat" title="新建群聊" onClick={() => router.push("/teams/new")} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 群聊</button>
+              <button type="button" data-testid="new-dm-button" title="发起新私聊" onClick={() => setShowDmPicker(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 私聊</button>
+            </div>
           </div>
-          <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>
-            {items.filter((i) => i.type === "group").length} 个群聊 · {items.filter((i) => i.type === "dm").length} 位成员
+          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+            {groupCount} 个群聊 · {dmCount} 位成员
+          </div>
+          <input
+            data-testid="conversation-search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索群聊 / 成员"
+            style={{ width: "100%", boxSizing: "border-box", padding: `6px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, fontFamily: fontFamily.body, outline: "none", backgroundColor: neutral[50] }}
+          />
+          <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
+            {([
+              { key: "all", label: "全部", count: items.length },
+              { key: "group", label: "群聊", count: groupCount },
+              { key: "dm", label: "成员", count: dmCount },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                data-testid={`conversation-filter-${tab.key}`}
+                onClick={() => setConvFilter(tab.key)}
+                style={{ flex: 1, padding: "4px 0", border: "none", borderRadius: radius.sm, cursor: "pointer", fontSize: fontSize.xs, fontWeight: 600, fontFamily: fontFamily.body, backgroundColor: convFilter === tab.key ? "var(--color-surface)" : "transparent", color: convFilter === tab.key ? "#0F766E" : neutral[500], boxShadow: convFilter === tab.key ? shadow.sm : undefined }}
+              >
+                {tab.label} {tab.count}
+              </button>
+            ))}
           </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `0 8px ${space.md}px` }}>
           {conversationsQuery.isPending ? (
             <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
-          ) : items.length === 0 ? (
+          ) : filteredItems.length === 0 ? (
             <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>
-              还没有会话：先加入一个团队，或在成员库中发起私聊。
+              {items.length === 0 ? "还没有会话：先加入一个团队，或在成员库中发起私聊。" : "没有匹配的会话"}
             </div>
           ) : (
-            items.map((item) => (
-              <ConversationRow
-                key={item.id}
-                item={item}
-                active={active?.id === item.id}
-                onClick={() => {
-                  setSendError(null);
-                  router.replace(`/chat?c=${encodeURIComponent(item.id)}`);
-                }}
-              />
-            ))
+            <>
+              {pinnedItems.length > 0 && (
+                <>
+                  <div style={{ padding: `${space.sm}px ${space.sm}px 4px`, fontSize: 10, color: neutral[400], fontWeight: 600 }}>置顶</div>
+                  {pinnedItems.map((item) => (
+                    <ConversationRow
+                      key={item.id}
+                      item={item}
+                      active={active?.id === item.id}
+                      roleKey={conversationRole(item, memberById)}
+                      onClick={() => { setSendError(null); router.replace(`/chat?c=${encodeURIComponent(item.id)}`); }}
+                    />
+                  ))}
+                </>
+              )}
+              <div style={{ padding: `${space.sm}px ${space.sm}px 4px`, fontSize: 10, color: neutral[400], fontWeight: 600 }}>{pinnedItems.length > 0 ? "全部会话" : "会话"}</div>
+              {restItems.map((item) => (
+                <ConversationRow
+                  key={item.id}
+                  item={item}
+                  active={active?.id === item.id}
+                  roleKey={conversationRole(item, memberById)}
+                  onClick={() => { setSendError(null); router.replace(`/chat?c=${encodeURIComponent(item.id)}`); }}
+                />
+              ))}
+            </>
           )}
         </div>
       </aside>
 
+      {isGroup && teamId ? (
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <header style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", alignItems: "center", gap: space.sm }}>
+              <AgentAvatar role="product" size="sm" />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+                  {(() => {
+                    const running = teamTasks.find(
+                      (t) => t.status === "in_progress" || t.status === "blocked",
+                    );
+                    if (!running) return null;
+                    return (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: running.status === "blocked" ? "#B91C1C" : "#0F766E", backgroundColor: running.status === "blocked" ? "rgba(239,68,68,0.10)" : "rgba(13,148,136,0.10)", border: `1px solid ${running.status === "blocked" ? "rgba(239,68,68,0.25)" : "rgba(13,148,136,0.22)"}`, borderRadius: radius.pill, padding: "1px 8px" }}>
+                        {running.status === "blocked" ? "阻塞中" : "进行中"}
+                      </span>
+                    );
+                  })()}
+                </div>
+                <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>群聊 · {team?.members.length ?? active?.memberCount ?? 0} 个成员 · 仅被 @ 的成员会收到消息</div>
+              </div>
+              <span style={{ flex: 1 }} />
+              <div style={{ display: "flex", alignItems: "center", gap: -4, marginRight: space.sm }}>
+                {(team?.members ?? []).slice(0, 5).map((seat) => (
+                  <span key={seat.id} style={{ marginLeft: -6 }} title={seat.member?.name ?? seat.alias}>
+                    <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
+                  </span>
+                ))}
+              </div>
+              <a href={`/teams/${teamId}`} style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px" }}>群设置</a>
+            </header>
+
+            <div data-testid="group-member-switcher" style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.lg}px`, borderBottom: `1px solid ${neutral[100]}`, backgroundColor: "var(--color-surface)", overflowX: "auto" }}>
+              <span style={{ fontSize: 10, color: neutral[400], whiteSpace: "nowrap" }}>成员切换</span>
+              <button type="button" onClick={() => setFilterMemberId(null)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body }}>
+                <span style={{ width: 28, height: 28, borderRadius: "50%", backgroundColor: !filterMemberId ? "#0D9488" : neutral[100], color: !filterMemberId ? "#FFF" : neutral[500], display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>全</span>
+                <span style={{ fontSize: 10, color: !filterMemberId ? "#0F766E" : neutral[500], fontWeight: !filterMemberId ? 700 : 400 }}>全部</span>
+              </button>
+              {(team?.members ?? []).map((seat) => {
+                const memberId = seat.memberId ?? "";
+                const roleKey = toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null);
+                const busy = memberById.get(memberId)?.session?.busyState === "running";
+                const selected = filterMemberId === seat.id;
+                return (
+                  <button key={seat.id} type="button" data-testid="group-member-chip" onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
+                    <span style={{ position: "relative" }}>
+                      <AgentAvatar role={roleKey} size="sm" />
+                      {busy && <span title="在其他群处理中（消息照常送达）" style={{ position: "absolute", right: -1, top: -1, width: 8, height: 8, borderRadius: "50%", backgroundColor: "#F59E0B", border: "1.5px solid #FFF" }} />}
+                    </span>
+                    <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 56, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</span>
+                  </button>
+                );
+              })}
+              <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400], whiteSpace: "nowrap" }}>⊙ 橙标=忙碌于其他群（照常送达）</span>
+            </div>
+
+            {busySeats.length > 0 && (
+              <div data-testid="group-busy-banner" style={{ display: "flex", alignItems: "center", gap: 8, padding: `${space.xs + 2}px ${space.lg}px`, backgroundColor: "#FFFBEB", borderBottom: "1px solid #FDE68A", fontSize: fontSize.xs, color: "#92400E" }}>
+                <span>⏳</span>
+                <span style={{ fontWeight: 600 }}>{busySeats.map((s) => memberById.get(s.memberId ?? "")?.name ?? s.alias).join("、")} 正在其他群处理消息</span>
+                <span style={{ color: "#B45309" }}>消息照常送达，不拦截，成员自行安排先后</span>
+              </div>
+            )}
+
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              <TeamSessionView teamId={teamId} embedded hideRightPanel filterMemberId={filterMemberId} />
+            </div>
+          </div>
+
+          <GroupContextPanel
+            team={team}
+            active={active}
+            tasks={teamTasks}
+            tasksLoading={teamTasksQuery.isPending}
+            roleKeyById={roleKeyById}
+            memberById={memberById}
+            filterMemberId={filterMemberId}
+            onFilterMember={(seatId: string | null) => setFilterMemberId(seatId)}
+          />
+        </div>
+      ) : (
+      <>
       {/* 中间消息区 */}
       <section style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
         <header style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>
@@ -425,12 +597,11 @@ function ChatPageContent() {
 
       {/* 右侧栏 */}
       <aside style={{ width: 280, flexShrink: 0, borderLeft: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", minHeight: 0, overflow: "auto", padding: space.lg }}>
-        {isGroup ? (
-          <GroupSidePanel team={team} active={active} tasks={teamTasks} tasksLoading={teamTasksQuery.isPending} roleKeyById={roleKeyById} />
-        ) : (
-          <MemberSidePanel member={member} fallbackTitle={title} />
-        )}
+        <MemberSidePanel member={member} fallbackTitle={title} />
       </aside>
+
+      </>
+      )}
 
       {showDmPicker && (
         <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
@@ -485,7 +656,26 @@ export default function ChatPage() {
   );
 }
 
-function ConversationRow({ item, active, onClick }: { item: ConversationItemDto; active: boolean; onClick: () => void }) {
+function conversationRole(
+  item: ConversationItemDto,
+  memberById: Map<string, MemberDto>,
+): RoleKey {
+  if (item.type === "group") return "product";
+  const memberId = item.id.replace("dm:", "");
+  return toRoleKey(memberById.get(memberId)?.role?.key ?? null);
+}
+
+function ConversationRow({
+  item,
+  active,
+  roleKey,
+  onClick,
+}: {
+  item: ConversationItemDto;
+  active: boolean;
+  roleKey: RoleKey;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
@@ -494,7 +684,7 @@ function ConversationRow({ item, active, onClick }: { item: ConversationItemDto;
       data-conv-id={item.id}
       style={{ width: "100%", textAlign: "left", border: "none", cursor: "pointer", display: "flex", gap: space.sm, alignItems: "center", padding: `${space.sm}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: active ? "rgba(13,148,136,0.10)" : "transparent", fontFamily: fontFamily.body }}
     >
-      <AgentAvatar role={item.type === "group" ? "product" : "developer"} size="sm" />
+      <AgentAvatar role={roleKey} size="sm" />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
@@ -528,83 +718,6 @@ function MemberChip({ name, role, active }: { name: string; role: RoleKey; activ
   );
 }
 
-function GroupSidePanel({
-  team,
-  active,
-  tasks,
-  tasksLoading,
-  roleKeyById,
-}: {
-  team?: TeamDto;
-  active: ConversationItemDto | null;
-  tasks: Array<{ id: string; title: string; status: string }>;
-  tasksLoading: boolean;
-  roleKeyById: Map<string, string>;
-}) {
-  const [tab, setTab] = useState<"tasks" | "members" | "outputs">("tasks");
-  const tabs: Array<{ key: typeof tab; label: string }> = [
-    { key: "tasks", label: "任务" },
-    { key: "members", label: "成员" },
-    { key: "outputs", label: "产出" },
-  ];
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
-      <div>
-        <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>群聊信息</div>
-        <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900], marginTop: 2 }}>{team?.name ?? active?.title}</div>
-        <div style={{ fontSize: fontSize.xs, color: neutral[500], marginTop: 2 }}>{team?.members.length ?? active?.memberCount ?? 0} 位成员</div>
-      </div>
-      <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
-        {tabs.map((t) => (
-          <button key={t.key} type="button" data-testid={`chat-right-tab-${t.key}`} onClick={() => setTab(t.key)} style={{ flex: 1, padding: `${space.xs + 1}px 0`, border: "none", borderRadius: radius.sm, cursor: "pointer", backgroundColor: tab === t.key ? "var(--color-surface)" : "transparent", color: tab === t.key ? "#0F766E" : neutral[500], fontSize: fontSize.xs, fontWeight: 600, fontFamily: fontFamily.body, boxShadow: tab === t.key ? shadow.sm : undefined }}>{t.label}</button>
-        ))}
-      </div>
-
-      {tab === "tasks" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {tasksLoading ? (
-            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</span>
-          ) : tasks.length === 0 ? (
-            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无任务</span>
-          ) : (
-            tasks.map((task) => (
-              <a key={task.id} href={`/teams/${team?.id ?? active?.contextTeamId ?? ""}/tasks`} style={{ textDecoration: "none", display: "flex", flexDirection: "column", gap: 2, padding: `${space.xs + 1}px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}` }}>
-                <span style={{ fontSize: fontSize.xs, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.title}</span>
-                <span style={{ fontSize: 10, color: statusColor(task.status) }}>{statusLabel(task.status)}</span>
-              </a>
-            ))
-          )}
-        </div>
-      )}
-
-      {tab === "members" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {(team?.members ?? []).map((seat) => (
-            <div key={seat.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: fontSize.xs, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</div>
-                <div style={{ fontSize: 10, color: neutral[400] }}>{seat.member ? "平台成员" : "旧席位"} · #{seat.seq}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {tab === "outputs" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>产出物按任务归档。打开任务文档站查看版本与预览。</span>
-          <a href={`/docs?teamId=${team?.id ?? active?.contextTeamId ?? ""}`} style={{ textDecoration: "none", textAlign: "center", padding: `${space.xs + 2}px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600 }}>打开团队文档站 →</a>
-        </div>
-      )}
-
-      <div style={{ fontSize: 10, color: neutral[400], borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm }}>
-        实时消息已接入（SSE）；任务/产出深度操作仍在旧会话页，后续迁移。
-      </div>
-    </div>
-  );
-}
-
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
     pending: "待开始",
@@ -624,6 +737,100 @@ function statusColor(status: string): string {
   if (status === "pending_review") return "#B45309";
   if (status === "completed") return neutral[400];
   return neutral[500];
+}
+
+function GroupContextPanel({
+  team,
+  active,
+  tasks,
+  tasksLoading,
+  roleKeyById,
+  memberById,
+  filterMemberId,
+  onFilterMember,
+}: {
+  team?: TeamDto;
+  active: ConversationItemDto | null;
+  tasks: Array<{ id: string; title: string; status: string }>;
+  tasksLoading: boolean;
+  roleKeyById: Map<string, string>;
+  memberById: Map<string, MemberDto>;
+  filterMemberId: string | null;
+  onFilterMember: (seatId: string | null) => void;
+}) {
+  const [tab, setTab] = useState<"tasks" | "members" | "outputs">("tasks");
+  const tabs: Array<{ key: typeof tab; label: string }> = [
+    { key: "tasks", label: "任务" },
+    { key: "members", label: "成员" },
+    { key: "outputs", label: "产出" },
+  ];
+  return (
+    <aside data-testid="group-context-panel" style={{ width: 300, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
+      <div style={{ display: "flex", borderBottom: `1px solid ${neutral[100]}`, flexShrink: 0 }}>
+        {tabs.map((t) => (
+          <button key={t.key} type="button" data-testid={`group-context-tab-${t.key}`} onClick={() => setTab(t.key)} style={{ flex: 1, padding: `${space.md}px 0`, border: "none", borderBottom: tab === t.key ? "2px solid #0D9488" : "2px solid transparent", background: "none", cursor: "pointer", fontSize: fontSize.sm, fontWeight: tab === t.key ? 700 : 500, color: tab === t.key ? "#0F766E" : neutral[500], fontFamily: fontFamily.body }}>{t.label}</button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: space.lg, display: "flex", flexDirection: "column", gap: space.md }}>
+        {tab === "tasks" && (
+          <>
+            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>关联任务</div>
+            {tasksLoading ? (
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</span>
+            ) : tasks.length === 0 ? (
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无任务</span>
+            ) : (
+              tasks.slice(0, 6).map((task) => (
+                <a key={task.id} href={`/teams/${team?.id ?? ""}/tasks`} style={{ textDecoration: "none", display: "flex", flexDirection: "column", gap: 4, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.title}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: statusColor(task.status) }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: statusColor(task.status) }} />
+                    {statusLabel(task.status)}
+                  </span>
+                </a>
+              ))
+            )}
+            <a href={`/teams/${team?.id ?? ""}/tasks`} style={{ textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>查看全部任务 →</a>
+          </>
+        )}
+
+        {tab === "members" && (
+          <>
+            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>参与成员 · {team?.members.length ?? 0}</div>
+            {(team?.members ?? []).map((seat) => {
+              const member = memberById.get(seat.memberId ?? "");
+              const busy = member?.session?.busyState === "running";
+              const selected = filterMemberId === seat.id;
+              return (
+                <button key={seat.id} type="button" onClick={() => onFilterMember(selected ? null : seat.id)} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${selected ? "#0F766E" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.06)" : "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}>
+                  <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member?.name ?? seat.member?.name ?? seat.alias}</span>
+                    <span style={{ display: "block", fontSize: 10, color: busy ? "#B45309" : neutral[400] }}>{member?.role?.name ?? "成员"} · {busy ? "其他群处理中" : "在线/空闲"}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </>
+        )}
+
+        {tab === "outputs" && (
+          <>
+            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>产出物</div>
+            <div style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.7 }}>产出物按任务归档，打开团队文档站查看版本、预览与下载。</div>
+            <a href={`/docs?teamId=${team?.id ?? active?.contextTeamId ?? ""}`} style={{ textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开团队文档站 →</a>
+          </>
+        )}
+      </div>
+
+      <div style={{ flexShrink: 0, margin: space.md, padding: space.md, borderRadius: radius.md, border: `1px dashed ${neutral[300]}`, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ fontSize: fontSize.xs, fontWeight: 700, color: neutral[700] }}>查看 Agent 会话</div>
+        <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>Agent 内部推理过程不广播到群聊，仅最终回复展示。</div>
+        <a href={`/chat?c=${encodeURIComponent(`dm:${(team?.members ?? [])[0]?.memberId ?? ""}`)}`} style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}>打开成员会话 →</a>
+      </div>
+    </aside>
+  );
 }
 
 function MemberSidePanel({ member, fallbackTitle }: { member?: MemberDetailDto; fallbackTitle: string }) {
