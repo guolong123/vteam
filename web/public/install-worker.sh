@@ -34,8 +34,25 @@
 #      地址取 WORKER_ADVERTISE_HOST 的**主机部分**（serve 端口不再被使用）。
 #      ⇒ 控制面要能访问的是 **<advertise-host>:4198**；serve 端口绑回环（127.0.0.1）完全没问题。
 #
+# 引擎（--engine）：
+#   opencode（缺省）  需 opencode CLI v2 + OPENCODE_SERVER_PASSWORD。
+#   dsh               需 Node >= 24.9 + dsh CLI + bubblewrap；本脚本自动装齐，
+#                     并给全局 dsh 打上「bwrap 不挂 /proc」补丁（本集群内核拒绝在非初始
+#                     user namespace 里挂 procfs，不打补丁沙箱不可用）。
+#                     ⚠️ **请用普通用户运行**（不要 root）：bwrap 以 root 走特权路径，
+#                     受限内核上没有 CAP_SYS_ADMIN 会直接失败。
+#
 # 参数：
 #   --server <url>      控制面地址（缺省 http://localhost:3000）
+#   --engine <name>     执行引擎：opencode（缺省）/ dsh
+#   --dsh-provider <p>  dsh 模型路由 provider（如 opencode-go）
+#   --dsh-model <m>     dsh 模型 id（如 deepseek-v4.1-flash）
+#   --dsh-api-key <k>   dsh 模型 API key（写进 .env 的 DSH_API_KEY，权限 600）
+#   --dsh-base-url <u>  provider 网关基址（如 https://opencode.ai/inference/go/v1）
+#   --dsh-session-header <h> / --dsh-session-header-value <v>
+#                       provider 要求的请求头（opencode-go 网关要 x-opencode-session）
+#   --dsh-bin <path>    dsh CLI 路径覆盖（DSH_BIN，缺省走 PATH）
+#   --dsh-home-dir <d>  dsh 运行时 home（DSH_HOME_DIR，缺省 <安装目录>/.dsh-home）
 #   --worker-id <id>    worker 唯一 id（缺省 w_<hostname>）
 #   --concurrency <n>   并发上限（写入 .env 的 WORKER_MAX_INSTANCES）：worker 侧读该变量
 #                       （worker/src/config.ts，缺省 5），并随注册上报 capabilities.maxInstances，
@@ -102,6 +119,15 @@ OPENCODE_VERSION=""
 WORKER_TOKEN=""
 WORKER_SRC_URL=""
 INSTALL_DIR="${HOME}/vteam-worker"
+ENGINE="opencode"
+DSH_PROVIDER=""
+DSH_MODEL=""
+DSH_API_KEY=""
+DSH_BASE_URL=""
+DSH_SESSION_HEADER=""
+DSH_SESSION_HEADER_VALUE=""
+DSH_HOME_DIR=""
+DSH_BIN=""
 WORKER_MCP_URL=""
 WORKER_ADVERTISE_HOST=""
 # 缺省 0.0.0.0（保持既有安装不变，不改动已生成 .env 的暴露面）：v2 拓扑下**控制面不再连
@@ -116,6 +142,15 @@ SERVE_PORT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --server) SERVER_URL="${2:-}"; shift 2 ;;
+    --engine) ENGINE="${2:-}"; shift 2 ;;
+    --dsh-provider) DSH_PROVIDER="${2:-}"; shift 2 ;;
+    --dsh-model) DSH_MODEL="${2:-}"; shift 2 ;;
+    --dsh-api-key) DSH_API_KEY="${2:-}"; shift 2 ;;
+    --dsh-base-url) DSH_BASE_URL="${2:-}"; shift 2 ;;
+    --dsh-session-header) DSH_SESSION_HEADER="${2:-}"; shift 2 ;;
+    --dsh-session-header-value) DSH_SESSION_HEADER_VALUE="${2:-}"; shift 2 ;;
+    --dsh-home-dir) DSH_HOME_DIR="${2:-}"; shift 2 ;;
+    --dsh-bin) DSH_BIN="${2:-}"; shift 2 ;;
     --worker-id) WORKER_ID="${2:-}"; shift 2 ;;
     --concurrency) CONCURRENCY="${2:-}"; CONCURRENCY_SET="1"; shift 2 ;;
     --opencode) OPENCODE_VERSION="${2:-}"; shift 2 ;;
@@ -130,7 +165,7 @@ while [[ $# -gt 0 ]]; do
     --no-service) NO_SERVICE="1"; shift ;;
     --system-service) SYSTEM_SERVICE="1"; shift ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--serve-port/--work-dir/--system-service/--no-service）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--engine/--dsh-provider/--dsh-model/--dsh-api-key/--dsh-base-url/--dsh-session-header/--dsh-session-header-value/--dsh-home-dir/--dsh-bin/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--serve-port/--work-dir/--system-service/--no-service）" >&2
       exit 1
       ;;
   esac
@@ -138,6 +173,15 @@ done
 
 SERVER_URL="${SERVER_URL:-http://localhost:3000}"
 WORKER_ID="${WORKER_ID:-w_$(hostname)}"
+
+# --engine 校验：只认 opencode / dsh（其余值直接拒绝）
+case "${ENGINE}" in
+  opencode|dsh) ;;
+  *)
+    echo "[install-worker] ERROR: 未知引擎 --engine ${ENGINE}（支持 opencode / dsh）" >&2
+    exit 1
+    ;;
+esac
 WORKER_SRC_URL="${WORKER_SRC_URL:-${SERVER_URL%/}/worker-src.tar.gz}"
 
 # --concurrency 校验：写入 .env 的 WORKER_MAX_INSTANCES（worker 侧真实读取的变量，缺省 5）。
@@ -179,12 +223,15 @@ ensure_git_curl() {
   fi
 }
 
+# ensure_node <min_major> <node_version>
+# opencode 引擎只需 >= 18；dsh 引擎要求 >= 24.9（DSH 的硬性要求），故版本由调用方指定。
 ensure_node() {
-  if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0]) < 18 ? 1 : 0)' 2>/dev/null; then
+  local min_major="${1:-18}"
+  local node_ver="${2:-v22.12.0}"
+  if command -v node >/dev/null 2>&1 && node -e "process.exit(Number(process.versions.node.split('.')[0]) < ${min_major} ? 1 : 0)" 2>/dev/null; then
     return 0
   fi
-  echo "[install-worker] 未找到 Node.js >= 18，自动下载官方二进制到 \${HOME}/.local/node ..."
-  local node_ver="v22.12.0"
+  echo "[install-worker] 未找到 Node.js >= ${min_major}，自动下载官方二进制 ${node_ver} 到 \${HOME}/.local/node ..."
   local arch
   case "$(uname -m)" in
     x86_64|amd64) arch="x64" ;;
@@ -383,9 +430,90 @@ ensure_opencode() {
   fi
 }
 
+# ------------------------------ dsh 引擎前置（Node 24 + dsh CLI + bubblewrap + 沙箱补丁） ------------------------------
+# 与 worker/Dockerfile.dsh 对齐：同一套运行时前置。补丁原因见 worker/scripts/vendor-dsh-sandbox-proc.mjs：
+# 本集群内核拒绝在非初始 user namespace 里挂 procfs ⇒ bwrap 的 `--proc /proc` 必然失败
+# ⇒ DSH 沙箱后端链（bwrap→landlock）全挂 ⇒ 默认 workspace-write 模式下 bash 跑不了。
+ensure_dsh() {
+  # 1) bubblewrap（bwrap）：沙箱后端。缺失时尝试装（需要 root 权限；非 apt/dnf 系统只告警）
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo "[install-worker] 未找到 bubblewrap（bwrap），尝试安装 ..."
+    local sudo_prefix=""
+    if [ "$(id -u)" != "0" ]; then
+      command -v sudo >/dev/null 2>&1 && sudo_prefix="sudo"
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+      ${sudo_prefix} apt-get install -y bubblewrap >&2 || true
+    elif command -v dnf >/dev/null 2>&1; then
+      ${sudo_prefix} dnf install -y bubblewrap >&2 || true
+    elif command -v yum >/dev/null 2>&1; then
+      ${sudo_prefix} yum install -y bubblewrap >&2 || true
+    fi
+    if ! command -v bwrap >/dev/null 2>&1; then
+      echo "[install-worker] ⚠️  bubblewrap 未安装成功：dsh 的默认沙箱将不可用（只能 danger-full-access）。" >&2
+      echo "  请手动安装：apt-get install -y bubblewrap（或 dnf/yum install -y bubblewrap）后重跑。" >&2
+    fi
+  fi
+
+  # 2) dsh CLI（锁版本，与 worker/Dockerfile.dsh 的 DSH_SPEC 同版）
+  local dsh_spec="@deepseek-ai/dsh@0.2.2-alpha.2"
+  if ! command -v dsh >/dev/null 2>&1; then
+    echo "[install-worker] 安装 dsh CLI：npm install -g ${dsh_spec} ..."
+    if ! npm install -g "${dsh_spec}"; then
+      echo "[install-worker] ERROR: dsh CLI 安装失败（npm install -g ${dsh_spec}）" >&2
+      exit 1
+    fi
+  fi
+  echo "[install-worker] dsh 已就绪：$(dsh --version 2>/dev/null || echo '(版本未知)')"
+
+  # 3) 沙箱 profile 补丁：去掉 bwrap 的 `--proc /proc`（保留 --unshare-pid）
+  node - <<'DSH_PATCH_EOF'
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const globalRoot = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim();
+const candidates = [
+  path.join(globalRoot, '@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-sandbox-local/lib/index.js'),
+  path.join(globalRoot, '@deepseek-ai/dsh-sandbox-local/lib/index.js'),
+];
+const file = candidates.find((f) => fs.existsSync(f));
+if (!file) {
+  console.error('[install-worker] ERROR: 未找到 dsh-sandbox-local（沙箱补丁无法应用）');
+  process.exit(1);
+}
+const MARKER = 'vteam-patch: no-proc-mount';
+const ORIGINAL = ['\t\t"--dev",', '\t\t"/dev",', '\t\t"--unshare-pid",', '\t\t"--proc",', '\t\t"/proc",', '\t\t"--die-with-parent"'].join('\n');
+const PATCHED = ['\t\t"--dev",', '\t\t"/dev",', '\t\t"--unshare-pid",', '\t\t"--die-with-parent"'].join('\n');
+const src = fs.readFileSync(file, 'utf8');
+if (src.includes(MARKER)) {
+  console.log('[install-worker] 沙箱补丁已存在，跳过');
+  process.exit(0);
+}
+const hits = src.split(ORIGINAL).length - 1;
+if (hits !== 1) {
+  console.error(`[install-worker] ERROR: 沙箱补丁锚点漂移（命中 ${hits} 处）：dsh 版本变化，请人工核对 ${file}`);
+  process.exit(1);
+}
+fs.writeFileSync(file, src.replace(ORIGINAL, `${PATCHED}\n\t\t// ${MARKER}`), 'utf8');
+console.log('[install-worker] 已应用沙箱补丁（bwrap 不再挂 /proc）');
+DSH_PATCH_EOF
+
+  # 4) 沙箱前提提醒：root 下 bwrap 走特权路径，受限内核没有 CAP_SYS_ADMIN 会失败
+  if [ "$(id -u)" = "0" ]; then
+    echo "[install-worker] ⚠️  当前以 root 运行：dsh 的 bubblewrap 会走特权路径，受限内核上没有 CAP_SYS_ADMIN 会失败（沙箱不可用）。" >&2
+    echo "  建议改用普通用户安装/运行（如 useradd -m vteam && su - vteam）。" >&2
+  fi
+}
+
 ensure_git_curl
-ensure_node
-ensure_opencode
+if [ "${ENGINE}" = "dsh" ]; then
+  # DSH 要求 Node >= 24.9（opencode 只需 >= 18）
+  ensure_node 24 v24.22.2
+  ensure_dsh
+else
+  ensure_node 18 v22.12.0
+  ensure_opencode
+fi
 
 # ------------------------------ 下载 worker 发布包 ------------------------------
 if [ -d "${INSTALL_DIR}/worker/dist" ] && [ -f "${INSTALL_DIR}/worker/package.json" ]; then
@@ -466,6 +594,8 @@ if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
   esac
   update_env WORKER_ADVERTISE_HOST "${WORKER_ADVERTISE_HOST}"
 fi
+# opencode serve 相关（仅 opencode 引擎需要；dsh 无 serve 子进程）
+if [ "${ENGINE}" = "opencode" ]; then
 if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
   # 缺省即 0.0.0.0（保持既有安装不变）；显式传 127.0.0.1 可退回仅本机（v2 下同样可用）。
   update_env OPENCODE_SERVE_HOSTNAME "${WORKER_SERVE_HOSTNAME}"
@@ -475,6 +605,32 @@ if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
 fi
 if [ -n "${WORK_DIR}" ]; then
   update_env WORK_DIR "${WORK_DIR}"
+fi
+
+# ---- 执行引擎（WORKER_ENGINE）：worker 据此选驱动（opencode / dsh） ----
+update_env WORKER_ENGINE "${ENGINE}"
+if [ "${ENGINE}" = "dsh" ]; then
+  # dsh：模型路由 + 网关凭据走 env（dsh 引擎没有控制面下发凭据的通道）
+  [ -n "${DSH_PROVIDER}" ] && update_env DSH_PROVIDER "${DSH_PROVIDER}"
+  [ -n "${DSH_MODEL}" ] && update_env DSH_MODEL "${DSH_MODEL}"
+  [ -n "${DSH_BASE_URL}" ] && update_env DSH_BASE_URL "${DSH_BASE_URL}"
+  [ -n "${DSH_SESSION_HEADER}" ] && update_env DSH_SESSION_HEADER "${DSH_SESSION_HEADER}"
+  [ -n "${DSH_SESSION_HEADER_VALUE}" ] && update_env DSH_SESSION_HEADER_VALUE "${DSH_SESSION_HEADER_VALUE}"
+  [ -n "${DSH_BIN}" ] && update_env DSH_BIN "${DSH_BIN}"
+  if [ -z "${DSH_HOME_DIR}" ]; then
+    DSH_HOME_DIR="${INSTALL_DIR}/.dsh-home"
+  fi
+  mkdir -p "${DSH_HOME_DIR}"
+  update_env DSH_HOME_DIR "${DSH_HOME_DIR}"
+  if [ -n "${DSH_API_KEY}" ]; then
+    update_env_secret DSH_API_KEY "${DSH_API_KEY}"
+  fi
+  if [ -z "${DSH_API_KEY}" ] && ! grep -q '^DSH_API_KEY=' .env; then
+    echo "[install-worker] ⚠️  未提供 --dsh-api-key：dsh 引擎只能经 env 拿模型凭据，缺了会在首次调用模型时报错。" >&2
+  fi
+  if [ -z "${DSH_MODEL}" ] && ! grep -q '^DSH_MODEL=' .env; then
+    echo "[install-worker] ⚠️  未提供 --dsh-model：worker 将使用自身缺省模型（DSH_MODEL 为空时由 dsh 决定）。" >&2
+  fi
 fi
 # 固定 opencode serve 端口（安装时选定一次，重启不再漂移）：
 # - 显式 --serve-port 总是覆盖（--serve-port 0 = 明确改回随机，后续重装也保留 0）；
@@ -504,6 +660,7 @@ const net = require("net");
   fi
 fi
 resolved_serve_port="$(grep '^OPENCODE_SERVE_PORT=' .env | tail -n 1 | cut -d= -f2- || true)"
+fi
 
 # ------------------------------ 执行端点端口（v2 拓扑：控制面唯一要访问的端口） ------------------------------
 # v2 下控制面只调 worker 的执行端点（/sessions、/execute、/file、/agents、/todos…），
@@ -528,7 +685,8 @@ if [ "${exec_port_state}" = "busy" ]; then
   echo "  请确认 ${INSTALL_DIR}/worker/.env 里的 WORKER_EXEC_PORT 为空闲端口（控制面需能访问 <advertise-host>:<端口>）" >&2
 fi
 
-# ------------------------------ opencode serve 密码（v2 恒开鉴权，必填） ------------------------------
+# ------------------------------ opencode serve 密码（v2 恒开鉴权，必填；仅 opencode 引擎） ------------------------------
+if [ "${ENGINE}" = "opencode" ]; then
 # v2 的 serve **恒开鉴权**（Basic Auth，用户名固定 opencode）：OPENCODE_SERVER_PASSWORD 为空时，
 # opencode 自动生成随机密码并打到 stdout，worker 不解析它 → 启动即 fail-fast
 # （"[opencode-server] v2 恒开鉴权：请设置环境变量 OPENCODE_SERVER_PASSWORD"），
@@ -561,17 +719,23 @@ else
   echo "[install-worker] 已生成随机 OPENCODE_SERVER_PASSWORD 并写入 ${INSTALL_DIR}/worker/.env（读取：grep OPENCODE_SERVER_PASSWORD ${INSTALL_DIR}/worker/.env）"
 fi
 unset serve_password
+fi
 
 # .env 含注册 token 与 serve 密码 → 收紧权限（systemd 以同用户读取，不影响启动）
 if ! chmod 600 .env; then
   echo "[install-worker] ⚠️  未能把 .env 权限收紧到 600，请手动执行：chmod 600 ${INSTALL_DIR}/worker/.env" >&2
 fi
 
+if [ "${ENGINE}" = "dsh" ]; then
+  echo "[install-worker] .env 已更新（WORKER_ENGINE=dsh，SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORK_DIR:+，WORK_DIR 已注入}${CONCURRENCY_SET:+，WORKER_MAX_INSTANCES=${CONCURRENCY} 已注入}，DSH_PROVIDER=${DSH_PROVIDER:-（沿用 .env）}，DSH_MODEL=${DSH_MODEL:-（沿用 .env）}，DSH_HOME_DIR=${DSH_HOME_DIR}，DSH_API_KEY 已注入）"
+  echo "[install-worker] dsh 拓扑：无 opencode serve 子进程，控制面直接调执行端点（<advertise-host>:${resolved_exec_port}）——请确保该端口可达"
+else
 echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}${CONCURRENCY_SET:+，WORKER_MAX_INSTANCES=${CONCURRENCY} 已注入}，OPENCODE_SERVE_PORT=${resolved_serve_port:-0}，OPENCODE_SERVER_PASSWORD 已注入）"
 if [ "${resolved_serve_port:-0}" != "0" ]; then
   echo "[install-worker] opencode serve 端口已固定为 ${resolved_serve_port}（重启不变；改端口可重跑并加 --serve-port <port>）"
 fi
 echo "[install-worker] v2 拓扑提醒：控制面只调 worker 的执行端点（<advertise-host>:${resolved_exec_port}），不连 opencode serve——请确保控制面到该端口可达（防火墙/安全组放行）"
+fi
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then

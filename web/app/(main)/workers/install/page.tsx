@@ -307,10 +307,20 @@ export default function WorkerInstallPage() {
      ⚠️ 镜像必须含 opencode v2 适配：latest 自 v1.1.0 起已带 v2 适配；v1.0.x 各 tag 仍是 v1 worker
      （v1 worker + v1 opencode CLI），与 v2 控制面不兼容（见 dockerSteps 的告警）⇒ 勿钉 v1.0.x tag。 */
   const [workerImage, setWorkerImage] = useState("guojongg/vteam-worker:latest");
+  /** dsh 镜像（引擎选 dsh 时 docker 路径用；Dockerfile.dsh 构建，含 node 24 + dsh CLI + bubblewrap）。 */
+  const [workerDshImage, setWorkerDshImage] = useState("guojongg/vteam-worker-dsh:latest");
 
   /* 网络可达性（可选）：外部/跨机 worker 专用，空值不拼接命令——集群内/本机无需配置 */
   const [advertiseHost, setAdvertiseHost] = useState("");
   const [serveHostname, setServeHostname] = useState("");
+  /** 执行引擎：opencode（缺省）/ dsh。dsh 需要 Node 24 + dsh CLI + bubblewrap，且**只能经 env 拿模型凭据**。 */
+  const [engine, setEngine] = useState<"opencode" | "dsh">("opencode");
+  const [dshProvider, setDshProvider] = useState("opencode-go");
+  const [dshModel, setDshModel] = useState("deepseek-v4.1-flash");
+  const [dshApiKey, setDshApiKey] = useState("");
+  const [dshBaseUrl, setDshBaseUrl] = useState("https://opencode.ai/inference/go/v1");
+  const [dshSessionHeader, setDshSessionHeader] = useState("x-opencode-session");
+  const [dshSessionHeaderValue, setDshSessionHeaderValue] = useState("vteam-worker");
   const [mcpUrl, setMcpUrl] = useState("");
   const [workDir, setWorkDir] = useState("");
 
@@ -366,8 +376,34 @@ export default function WorkerInstallPage() {
      并发上限注入 WORKER_MAX_INSTANCES（worker 侧真实读取的变量，随注册上报 capabilities.maxInstances；
      旧的 CONCURRENCY 环境变量 worker 根本不读）；镜像引用取自「worker 镜像」字段
      （缺省 guojongg/vteam-worker:latest，可改内网仓库）。 */
-  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`;
-  const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
+  const isDsh = engine === "dsh";
+  /** dsh 专属参数（curl 脚本与 docker run 共用同一组语义）。 */
+  const dshCurlArgs = [
+    dshProvider ? ` --dsh-provider ${dshProvider}` : "",
+    dshModel ? ` --dsh-model ${dshModel}` : "",
+    dshApiKey ? ` --dsh-api-key ${dshApiKey}` : "",
+    dshBaseUrl ? ` --dsh-base-url ${dshBaseUrl}` : "",
+    dshSessionHeader ? ` --dsh-session-header ${dshSessionHeader}` : "",
+    dshSessionHeaderValue ? ` --dsh-session-header-value ${dshSessionHeaderValue}` : "",
+  ].join("");
+  const dshDockerEnv = [
+    `-e WORKER_ENGINE=dsh`,
+    dshProvider ? `-e DSH_PROVIDER=${dshProvider}` : "",
+    dshModel ? `-e DSH_MODEL=${dshModel}` : "",
+    dshApiKey ? `-e DSH_API_KEY=${dshApiKey}` : "",
+    dshBaseUrl ? `-e DSH_BASE_URL=${dshBaseUrl}` : "",
+    dshSessionHeader ? `-e DSH_SESSION_HEADER=${dshSessionHeader}` : "",
+    dshSessionHeaderValue ? `-e DSH_SESSION_HEADER_VALUE=${dshSessionHeaderValue}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const curlCommand = isDsh
+    ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh --worker-id ${workerId} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`
+    : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`;
+  const dockerCommand = isDsh
+    ? `docker run -d --name dsh-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
+    : `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
@@ -375,6 +411,14 @@ export default function WorkerInstallPage() {
     "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
     "脚本自动安装前置（node / opencode CLI v2（@opencode/cli，缺省按 npm latest 装最新已发布的 v2）缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / v2 serve 恒开鉴权的 OPENCODE_SERVER_PASSWORD 由脚本随机生成 / --advertise-host 传入的 IP 由脚本自动补全为 http://<ip> 作为 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
     "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度；控制面随后只拨 worker 的执行端点 <上报主机>:4198（opencode serve 不再对外）",
+  ];
+
+  const curlDshSteps = [
+    "在目标机器执行命令：脚本会自动装 Node ≥ 24.9（dsh 要求）、dsh CLI（@deepseek-ai/dsh@0.2.2-alpha.2）与 bubblewrap，并给全局 dsh 打上「bwrap 不挂 /proc」沙箱补丁",
+    "⚠️ 请用**普通用户**运行（不要 root/sudo）：bubblewrap 以 root 运行会走特权路径，受限内核上没有 CAP_SYS_ADMIN 会直接失败（沙箱不可用）",
+    "dsh 只能经 env 拿模型凭据：脚本把 DSH_PROVIDER / DSH_MODEL / DSH_API_KEY / DSH_BASE_URL / DSH_SESSION_HEADER(_VALUE) 写进安装目录 .env（权限 600）——缺 API key 或网关地址会在首次调用模型时失败",
+    "脚本以 systemd 用户级服务守护（无 systemd 环境回退前台）；注册使用 X_WORKER_TOKEN，外部/跨机 worker 需填写「上报 IP」",
+    "等待首次心跳：控制面按注册上报的 <上报主机>:4198 直连执行端点；dsh 没有 opencode serve",
   ];
 
   const dockerSteps = [
@@ -385,7 +429,15 @@ export default function WorkerInstallPage() {
     "等待首次心跳：宿主机端口 4198 是 worker 的执行端点（控制面按注册上报的 <上报主机>:4198 拨，X-Worker-Token 鉴权）；opencode serve 只在容器内使用，无需映射到宿主机",
   ];
 
-  const steps = method === "curl" ? curlSteps : dockerSteps;
+  /** dsh 引擎的 docker 步骤（与 opencode 的差异：无 serve 密码、必须给 DSH_* 凭据、非 root 沙箱）。 */
+  const dockerDshSteps = [
+    "在目标机器执行 docker run 命令，拉取「worker 镜像」字段指定的镜像（缺省 guojongg/vteam-worker-dsh:latest：node 24 + dsh CLI + bubblewrap，已内置「bwrap 不挂 /proc」沙箱补丁）",
+    "dsh 只能经 env 拿模型凭据：命令里已带上 WORKER_ENGINE=dsh 与 DSH_PROVIDER / DSH_MODEL / DSH_API_KEY / DSH_BASE_URL / DSH_SESSION_HEADER(_VALUE)——缺 DSH_API_KEY 或 DSH_BASE_URL 会在首次调用模型时失败（网关地址留空会回落 https://<provider>/v1，通常不存在）",
+    "容器注册使用 X_WORKER_TOKEN（注册鉴权必填）；外部/跨机 worker 需在上方填写「上报 IP」，否则控制面拨不到 <上报主机>:4198 执行端点",
+    "SERVER_URL 必须是目标机器能访问到的控制面地址（跨机别留 127.0.0.1——那指向 worker 机器自身）",
+    "等待首次心跳：宿主机端口 4198 是执行端点（控制面按注册上报的 <上报主机>:4198 直连，X-Worker-Token 鉴权）；dsh 没有 opencode serve，无需映射 4000",
+  ];
+  const steps = method === "curl" ? (isDsh ? curlDshSteps : curlSteps) : isDsh ? dockerDshSteps : dockerSteps;
 
   /* Tab 配置 */
   const methods: { key: InstallMethod; label: string; icon: string; desc: string }[] = [
@@ -448,6 +500,48 @@ export default function WorkerInstallPage() {
                 </span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>对齐 11.2 Worker 注册配置</span>
               </div>
+
+              <FieldRow
+                label="执行引擎（engine）"
+                hint="opencode = 现有引擎（光/容器镜像 vteam-worker）；dsh = DeepSeek Harness 引擎（镜像 vteam-worker-dsh，需 Node ≥ 24）"
+              >
+                <div data-testid="engine-select" style={{ display: "flex", gap: space.sm }}>
+                  {([
+                    { key: "opencode" as const, label: "opencode（缺省）", desc: "opencode CLI v2" },
+                    { key: "dsh" as const, label: "dsh", desc: "DeepSeek Harness" },
+                  ]).map((item) => {
+                    const active = engine === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        data-engine={item.key}
+                        data-active={active ? "true" : "false"}
+                        onClick={() => setEngine(item.key)}
+                        style={{
+                          flex: 1,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: 2,
+                          padding: `${space.sm}px ${space.md}px`,
+                          borderRadius: radius.md,
+                          border: `1px solid ${active ? "#0D9488" : neutral[200]}`,
+                          backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+                          color: active ? "#0D9488" : neutral[700],
+                          fontSize: fontSize.md,
+                          cursor: "pointer",
+                          fontFamily: fontFamily.body,
+                          textAlign: "left",
+                        }}
+                      >
+                        <span style={{ fontWeight: 600 }}>{item.label}</span>
+                        <span style={{ fontSize: fontSize.xs, color: active ? "#0D9488" : neutral[400] }}>{item.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </FieldRow>
 
               <FieldRow label="控制面地址（serverUrl）" hint="worker 直连 server（非 web 端口）；默认已由页面地址自动修正，可手动改">
                 <input
@@ -517,6 +611,7 @@ export default function WorkerInstallPage() {
                     ))}
                   </select>
                 </FieldRow>
+                {!isDsh && (
                 <FieldRow label="opencode 版本" hint="v2（主版本 ≥ 2）· 缺省 latest（最新 v2）· 仅 curl 脚本路径可选">
                   <select
                     value={opencodeVersion}
@@ -534,7 +629,83 @@ export default function WorkerInstallPage() {
                     版本上，但都满足 worker 的「主版本 ≥ 2」闸门。
                   </span>
                 </FieldRow>
+                )}
               </div>
+
+              {isDsh && (
+                <div
+                  data-testid="dsh-config"
+                  style={{ display: "flex", flexDirection: "column", gap: space.md, paddingTop: space.sm, borderTop: `1px solid ${neutral[100]}` }}
+                >
+                  <div style={{ display: "flex", alignItems: "baseline", gap: space.sm }}>
+                    <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>dsh 引擎配置</span>
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                      dsh 只能经 env 拿模型凭据（无控制面下发通道）· 写入安装目录 .env（权限 600）
+                    </span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
+                    <FieldRow label="provider（dsh-provider）" hint="模型路由，如 opencode-go">
+                      <input
+                        data-testid="dsh-provider-input"
+                        value={dshProvider}
+                        onChange={(e) => setDshProvider(e.target.value)}
+                        spellCheck={false}
+                        style={inputStyle}
+                      />
+                    </FieldRow>
+                    <FieldRow label="model（dsh-model）" hint="模型 id，如 deepseek-v4.1-flash">
+                      <input
+                        data-testid="dsh-model-input"
+                        value={dshModel}
+                        onChange={(e) => setDshModel(e.target.value)}
+                        spellCheck={false}
+                        style={inputStyle}
+                      />
+                    </FieldRow>
+                  </div>
+                  <FieldRow label="模型 API key（dsh-api-key）" hint="写进 .env 的 DSH_API_KEY · 必填，否则首次调用模型即失败">
+                    <input
+                      type="password"
+                      data-testid="dsh-api-key-input"
+                      value={dshApiKey}
+                      onChange={(e) => setDshApiKey(e.target.value)}
+                      placeholder="oc_sk_..."
+                      spellCheck={false}
+                      style={inputStyle}
+                    />
+                  </FieldRow>
+                  <FieldRow label="网关基址（dsh-base-url）" hint="provider 网关地址；留空会回落到 https://<provider>/v1（通常不存在 → 连接失败）">
+                    <input
+                      data-testid="dsh-base-url-input"
+                      value={dshBaseUrl}
+                      onChange={(e) => setDshBaseUrl(e.target.value)}
+                      placeholder="https://opencode.ai/inference/go/v1"
+                      spellCheck={false}
+                      style={inputStyle}
+                    />
+                  </FieldRow>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
+                    <FieldRow label="请求头名（dsh-session-header）" hint="部分网关必填，如 opencode-go 要 x-opencode-session">
+                      <input
+                        data-testid="dsh-session-header-input"
+                        value={dshSessionHeader}
+                        onChange={(e) => setDshSessionHeader(e.target.value)}
+                        spellCheck={false}
+                        style={inputStyle}
+                      />
+                    </FieldRow>
+                    <FieldRow label="请求头值（dsh-session-header-value）" hint="稳定即可（用于网关侧路由/缓存亲和）">
+                      <input
+                        data-testid="dsh-session-header-value-input"
+                        value={dshSessionHeaderValue}
+                        onChange={(e) => setDshSessionHeaderValue(e.target.value)}
+                        spellCheck={false}
+                        style={inputStyle}
+                      />
+                    </FieldRow>
+                  </div>
+                </div>
+              )}
 
               {/* 网络可达性（可选）：外部/跨机 worker 专用 */}
               <div style={{ display: "flex", flexDirection: "column", gap: space.md, paddingTop: space.sm, borderTop: `1px solid ${neutral[100]}` }}>
@@ -554,6 +725,7 @@ export default function WorkerInstallPage() {
                   />
                 </FieldRow>
 
+                {!isDsh && (
                 <FieldRow label="监听地址（serve-hostname）" hint="opencode serve 监听地址 · v2 下控制面不连 serve（只拨执行端点 4198），跨机 worker 也可留空">
                   <input
                     data-testid="serve-hostname-input"
@@ -564,6 +736,7 @@ export default function WorkerInstallPage() {
                     style={inputStyle}
                   />
                 </FieldRow>
+                )}
 
                 <FieldRow label="MCP 地址（mcp-url）" hint="默认已填当前控制面内置 MCP 入口 · 外部/集群外场景可改">
                   <input
@@ -681,22 +854,25 @@ export default function WorkerInstallPage() {
               {method === "docker" && (
                 <FieldRow
                   label="worker 镜像"
-                  hint="Docker Hub 缺省 guojongg/vteam-worker · 内网可换内网仓库 · 须为含 opencode v2 适配的构建（≥ v1.1.0）"
+                  hint={
+                    isDsh
+                      ? "dsh 引擎镜像（Dockerfile.dsh 构建：node 24 + dsh CLI + bubblewrap）· 内网可换内网仓库"
+                      : "Docker Hub 缺省 guojongg/vteam-worker · 内网可换内网仓库 · 须为含 opencode v2 适配的构建（≥ v1.1.0）"
+                  }
                 >
                   <input
                     data-testid="worker-image-input"
-                    value={workerImage}
-                    onChange={(e) => setWorkerImage(e.target.value)}
-                    placeholder="guojongg/vteam-worker:latest"
+                    value={isDsh ? workerDshImage : workerImage}
+                    onChange={(e) => (isDsh ? setWorkerDshImage(e.target.value) : setWorkerImage(e.target.value))}
+                    placeholder={isDsh ? "guojongg/vteam-worker-dsh:latest" : "guojongg/vteam-worker:latest"}
                     spellCheck={false}
                     style={inputStyle}
                   />
                   <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>
-                    填完整镜像引用（仓库 + tag）。Docker Hub 缺省 guojongg/vteam-worker:latest——发布流水线
-                    IMAGE_NAMESPACE=guojongg 推送的命名空间；内网机器改填内网仓库
-                    docker-hosted.ketaops.cc/ketaops/vteam-worker、docker-release.ketaops.cc/ketaops/vteam-worker
-                    （chart 缺省 docker.ketaops.cc/ketaops/vteam-worker），取目标机能拉通的那一个。
-                    镜像必须是包含 opencode v2 适配的构建。
+                    填完整镜像引用（仓库 + tag）。
+                    {isDsh
+                      ? "dsh 引擎缺省 guojongg/vteam-worker-dsh:latest（node 24 + dsh CLI + bubblewrap，已内置沙箱补丁）；内网机器改填内网仓库的 vteam-worker-dsh。"
+                      : "opencode 引擎缺省 guojongg/vteam-worker:latest——发布流水线 IMAGE_NAMESPACE=guojongg 推送的命名空间；内网机器改填内网仓库 docker-hosted.ketaops.cc/ketaops/vteam-worker、docker-release.ketaops.cc/ketaops/vteam-worker（chart 缺省 docker.ketaops.cc/ketaops/vteam-worker），取目标机能拉通的那一个。镜像必须是包含 opencode v2 适配的构建。"}
                   </span>
                 </FieldRow>
               )}
