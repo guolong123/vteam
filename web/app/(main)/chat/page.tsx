@@ -555,7 +555,7 @@ function ChatPageContent() {
             )}
 
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <TeamSessionView teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} />
+              <TeamSessionView teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} hideInlineStatus />
             </div>
           </div>
 
