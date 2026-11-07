@@ -5122,7 +5122,10 @@ export class WorkerDispatcher
     if (!defaultModelId) {
       return null;
     }
-    const slash = defaultModelId.lastIndexOf('/');
+    // 用**第一个**斜杠切：providerID 不含 '/'，而 modelID 可能带 '/'（如 commandcode
+    // 的 deepseek/deepseek-v4.1-flash）。用 lastIndexOf 会把 providerID 切成
+    // 「commandcode/deepseek」，worker 侧报 Model unavailable。
+    const slash = defaultModelId.indexOf('/');
     if (slash <= 0 || slash === defaultModelId.length - 1) {
       return null;
     }
