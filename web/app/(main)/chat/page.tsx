@@ -555,7 +555,7 @@ function ChatPageContent() {
             )}
 
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <TeamSessionView teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} hideInlineStatus />
+              <TeamSessionView teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} />
             </div>
           </div>
 
@@ -589,6 +589,12 @@ function ChatPageContent() {
               </div>
               <span style={{ flex: 1 }} />
               {dmNotice && <span style={{ fontSize: 10, color: "#0F766E", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dmNotice}</span>}
+              {member?.session?.busyState === "running" && (
+                <span data-testid="dm-processing" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: fontSize.xs, color: "#B45309", backgroundColor: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: radius.pill, padding: "2px 10px" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#F59E0B", animation: "pulse 1.2s infinite" }} />
+                  处理中…
+                </span>
+              )}
               <button type="button" disabled={resetSessionMutation.isPending} onClick={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[600], borderRadius: radius.md, padding: "3px 10px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>{resetSessionMutation.isPending ? "重置中…" : "重置会话"}</button>
             </header>
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>

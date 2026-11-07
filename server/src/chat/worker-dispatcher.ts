@@ -2886,7 +2886,20 @@ export class WorkerDispatcher
         this.unregisterExecution(workerId, scope, teamMemberId);
       }
     }
-    const injectFlight = busyInFlight && !!opencodeSessionId && !staleInFlight;
+    // 私聊（DM）不做「注入在飞会话」：私聊的消息必须逐条走完整派发/回流，
+    // 否则一次执行登记泄漏后，后续私聊会被当成“注入”送进空闲会话，模型不会再
+    // 产生终态事件，表现为「发了没回复」。群聊保留注入优化。
+    const sourceChannelType = (
+      await (this.prisma as any).chatChannel.findUnique({
+        where: { id: request.channelId },
+        select: { type: true },
+      })
+    )?.type as string | null;
+    const injectFlight =
+      busyInFlight &&
+      !!opencodeSessionId &&
+      !staleInFlight &&
+      sourceChannelType !== CHANNEL_TYPE.private;
     if (busyInFlight && !opencodeSessionId) {
       this.logger.warn(
         `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，但会话实例引用缺失，回退常规派发`,
