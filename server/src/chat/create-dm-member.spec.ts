@@ -107,6 +107,30 @@ describe('ChatService.createDmChannel (memberId)', () => {
     });
   });
 
+  it('旧形状（teamId+teamMemberId）但席位已挂 member_id → 复用成员唯一私聊频道', async () => {
+    prisma.team.findUnique.mockResolvedValue({ id: 'tm_2' });
+    prisma.teamMember.findUnique.mockResolvedValue({
+      id: 'tmm_2',
+      agentId: 'a_architect',
+      teamId: 'tm_2',
+      memberId: 'mbr_1',
+    });
+    prisma.chatChannel.findFirst.mockResolvedValue({ ...channelRow, teamId: 'tm_1' });
+
+    const result: any = await service.createDmChannel('u_1', {
+      teamId: 'tm_2',
+      teamMemberId: 'tmm_2',
+    } as any);
+
+    expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+      where: { memberId: 'mbr_1', type: 'private' },
+      orderBy: { createdAt: 'asc' },
+      include: expect.anything(),
+    });
+    expect(prisma.chatChannel.create).not.toHaveBeenCalled();
+    expect(result.teamId).toBe('tm_1');
+  });
+
   it('成员停用 → 400 MEMBER_DISABLED', async () => {
     prisma.member.findUnique.mockResolvedValue({
       id: 'mbr_1',

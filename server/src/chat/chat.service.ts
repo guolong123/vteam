@@ -1736,11 +1736,12 @@ export class ChatService {
     }
     const memberId = resolvedMemberId ?? (teamMember as any).memberId ?? null;
     // P4：成员维度优先复用「该成员已有的 private 频道」（全局一个 DM），
-    // 不再要求 (teamId, teamMemberId) 完全一致；旧席位频道继续按旧键兼容。
-    const existing = resolvedMemberId
+    // 不再要求 (teamId, teamMemberId) 完全一致；旧形状（teamId+teamMemberId）
+    // 只要席位已挂 member_id 也走成员复用，避免同一成员在不同群各建一条私聊频道。
+    const existing = memberId
       ? await this.prisma.chatChannel.findFirst({
           where: {
-            memberId: resolvedMemberId,
+            memberId,
             type: CHANNEL_TYPE.private,
           } as any,
           orderBy: { createdAt: 'asc' },
