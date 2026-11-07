@@ -1093,6 +1093,45 @@ function MemberContextPanel({
   onReset: () => void;
   resetting: boolean;
 }) {
+  const qc = useQueryClient();
+  const [agentId, setAgentId] = useState(member?.agentId ?? "");
+  const [modelId, setModelId] = useState(member?.defaultModelId ?? "");
+  const [workerId, setWorkerId] = useState(member?.preferredWorkerId ?? "");
+  useEffect(() => {
+    setAgentId(member?.agentId ?? "");
+    setModelId(member?.defaultModelId ?? "");
+    setWorkerId(member?.preferredWorkerId ?? "");
+  }, [member?.id, member?.agentId, member?.defaultModelId, member?.preferredWorkerId]);
+  const agentsQuery = useQuery({
+    queryKey: ["agents", "chat-member-panel"],
+    queryFn: () => api.get<{ items: Array<{ id: string; name: string; agentKey: string | null }> }>("/agents", { query: { page: 1, pageSize: 100 } }),
+    enabled: !!member,
+  });
+  const modelsQuery = useQuery({
+    queryKey: ["models", "chat-member-panel"],
+    queryFn: () => api.get<{ items: Array<{ id: string; name: string }> }>("/models", { query: { page: 1, pageSize: 100 } }),
+    enabled: !!member,
+  });
+  const workersQuery = useQuery({
+    queryKey: ["workers", "chat-member-panel"],
+    queryFn: () => api.get<Array<{ id: string; name: string | null; status: string }>>("/workers"),
+    enabled: !!member,
+  });
+  const currentWorker = (workersQuery.data ?? []).find((w) => w.id === session?.workerId) ?? null;
+  const saveMemberConfig = useMutation({
+    mutationFn: () => membersApi.update(member!.id, {
+      agentId: agentId || undefined,
+      defaultModelId: modelId || undefined,
+      preferredWorkerId: workerId || undefined,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["member", member?.id] });
+      qc.invalidateQueries({ queryKey: ["members"] });
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+  const dirty = !!member && (agentId !== member.agentId || modelId !== (member.defaultModelId ?? "") || workerId !== (member.preferredWorkerId ?? ""));
+
   return (
     <aside data-testid="member-context-panel" style={{ width: 300, flexShrink: 0, minHeight: 0, overflow: "auto", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}`, padding: space.lg, display: "flex", flexDirection: "column", gap: space.md }}>
       <div style={{ display: "flex", alignItems: "center", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
@@ -1120,12 +1159,42 @@ function MemberContextPanel({
         <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>跨群共享同一会话；会话不随任务完成自动重置，只可手动重置。</div>
       </div>
 
-      <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "grid", gridTemplateColumns: "76px 1fr", gap: "6px 8px", fontSize: fontSize.xs }}>
-        <span style={{ color: neutral[400] }}>绑定 Agent</span><span style={{ color: neutral[700] }}>{member?.agent?.name ?? "—"}</span>
-        <span style={{ color: neutral[400] }}>默认模型</span><span style={{ color: neutral[700] }}>{member?.defaultModel?.name ?? "—"}</span>
-        <span style={{ color: neutral[400] }}>首选 Worker</span><span style={{ color: neutral[700] }}>{member?.preferredWorker?.name ?? "自动调度"}</span>
-        <span style={{ color: neutral[400] }}>私有目录</span><span style={{ color: neutral[700], fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{member?.privateWorkDir ?? "—"}</span>
-        <span style={{ color: neutral[400] }}>所在群聊</span><span style={{ color: neutral[700] }}>{member?.groupCount ?? 0} 个</span>
+      <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <span style={{ fontSize: fontSize.xs, fontWeight: 700, color: neutral[700] }}>运行配置</span>
+          <span style={{ flex: 1 }} />
+          {dirty && <button type="button" disabled={saveMemberConfig.isPending} onClick={() => saveMemberConfig.mutate()} style={{ border: "none", backgroundColor: "#0D9488", color: "#FFF", borderRadius: radius.sm, padding: "2px 10px", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>{saveMemberConfig.isPending ? "保存中…" : "保存配置"}</button>}
+        </div>
+        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{ fontSize: 10, color: neutral[400] }}>执行 Agent</span>
+          <select value={agentId} onChange={(e) => setAgentId(e.target.value)} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
+            {!agentId && <option value="">跟随岗位默认</option>}
+            {(agentsQuery.data?.items ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{ fontSize: 10, color: neutral[400] }}>默认模型</span>
+          <select value={modelId} onChange={(e) => setModelId(e.target.value)} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
+            <option value="">跟随 Agent / Worker</option>
+            {(modelsQuery.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{ fontSize: 10, color: neutral[400] }}>首选 Worker 节点</span>
+          <select value={workerId} onChange={(e) => setWorkerId(e.target.value)} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
+            <option value="">自动调度</option>
+            {(workersQuery.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.name ?? w.id}{w.status !== "online" ? "（离线）" : ""}</option>)}
+          </select>
+        </label>
+        <div style={{ display: "grid", gridTemplateColumns: "76px 1fr", gap: "4px 8px", fontSize: fontSize.xs }}>
+          <span style={{ color: neutral[400] }}>当前节点</span>
+          <span style={{ color: neutral[700] }}>{currentWorker ? `${currentWorker.name ?? currentWorker.id}（${currentWorker.status}）` : session?.workerId ?? "尚未绑定"}</span>
+          <span style={{ color: neutral[400] }}>私有目录</span>
+          <span style={{ color: neutral[700], fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{member?.privateWorkDir ?? "—"}</span>
+          <span style={{ color: neutral[400] }}>所在群聊</span>
+          <span style={{ color: neutral[700] }}>{member?.groupCount ?? 0} 个</span>
+        </div>
+        {saveMemberConfig.isError && <span style={{ fontSize: 10, color: "#B91C1C" }}>{errorText(saveMemberConfig.error)}</span>}
       </div>
 
       {(member?.groups ?? []).length > 0 && (
