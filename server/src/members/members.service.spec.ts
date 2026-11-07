@@ -24,7 +24,7 @@ function createService() {
     agent: { findUnique: jest.fn() },
     model: { findUnique: jest.fn() },
     worker: { findUnique: jest.fn() },
-    teamMember: { count: jest.fn(), findMany: jest.fn() },
+    teamMember: { count: jest.fn(), findMany: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     session: {
       findUnique: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
@@ -219,6 +219,17 @@ describe('MembersService', () => {
     await expect(
       service.update('mbr_1', { agentId: 'a_missing' }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rename：成员改名时同步旧成员名的席位别名', async () => {
+    const { service, prisma } = createService();
+    prisma.member.findUnique.mockResolvedValue({ id: 'mbr_1', name: '旧名' });
+    prisma.member.update.mockResolvedValue({});
+    await service.update('mbr_1', { name: '新名' });
+    expect(prisma.teamMember.updateMany).toHaveBeenCalledWith({
+      where: { memberId: 'mbr_1', alias: '旧名' },
+      data: { alias: '新名' },
+    });
   });
 
   it('resetSession：成员不存在 → 404；存在则委托生命周期重置', async () => {

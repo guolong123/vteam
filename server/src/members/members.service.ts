@@ -427,10 +427,26 @@ export class MembersService implements OnModuleInit {
     }
     if (dto.status !== undefined) data.status = dto.status;
 
+    const previousName = existing.name;
     try {
       await this.prisma.member.update({ where: { id }, data });
     } catch (err) {
-      this.rethrowNameConflict(err, String(data.name ?? existing.name));
+      this.rethrowNameConflict(err, String(data.name ?? previousName));
+    }
+    // 改名同步：成员是平台级名称，席位里由平台自动生成的别名（等于旧成员名）一并更新，
+    // 否则群聊/私聊的发送者身份仍显示旧名；用户自定义过的别名（不等于旧名）保持不变。
+    if (
+      dto.name !== undefined &&
+      String(data.name).trim() !== previousName
+    ) {
+      try {
+        await this.prisma.teamMember.updateMany({
+          where: { memberId: id, alias: previousName },
+          data: { alias: String(data.name).trim() },
+        });
+      } catch {
+        // 同步别名是增强项，失败不回滚成员改名
+      }
     }
     return this.findOne(id);
   }
