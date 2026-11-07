@@ -4886,9 +4886,17 @@ export class WorkerDispatcher
     try {
       const row = (await repo.findFirst({
         where: { id: teamMemberId },
-        select: { overrideModelId: true },
-      })) as { overrideModelId: string | null } | null;
-      return row?.overrideModelId ?? null;
+        select: {
+          overrideModelId: true,
+          member: { select: { defaultModelId: true } },
+        },
+      })) as {
+        overrideModelId: string | null;
+        member?: { defaultModelId: string | null } | null;
+      } | null;
+      // 优先级：席位级覆盖 > 平台成员默认模型（成员库/会话右栏设置）> Agent 默认。
+      const raw = row?.overrideModelId ?? row?.member?.defaultModelId ?? null;
+      return await this.toProviderModelRef(raw);
     } catch (err) {
       void err; // 故意忽略：降级路径，错误原因不改变语义
       // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
@@ -4918,9 +4926,16 @@ export class WorkerDispatcher
     try {
       const row = (await repo.findFirst({
         where: { id: teamMemberId },
-        select: { preferredWorkerId: true },
-      })) as { preferredWorkerId: string | null } | null;
-      return row?.preferredWorkerId ?? null;
+        select: {
+          preferredWorkerId: true,
+          member: { select: { preferredWorkerId: true } },
+        },
+      })) as {
+        preferredWorkerId: string | null;
+        member?: { preferredWorkerId: string | null } | null;
+      } | null;
+      // 优先级：席位级 > 平台成员默认（成员库/会话右栏设置）。
+      return row?.preferredWorkerId ?? row?.member?.preferredWorkerId ?? null;
     } catch (err) {
       void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
@@ -5080,6 +5095,27 @@ export class WorkerDispatcher
   }
 
   /** Agent.defaultModelId（`provider/model`）→ opencode serve 模型选择；缺省/非法 → null。 */
+  /**
+   * 模型引用归一：成员/席位覆盖值可能存的是目录行 id（md_），而执行链路需要
+   * `providerID/modelID`（Agent.defaultModelId 就是这种格式）。这里统一转成后者。
+   */
+  private async toProviderModelRef(
+    raw: string | null | undefined,
+  ): Promise<string | null> {
+    if (!raw) return null;
+    if (raw.includes('/')) return raw;
+    if (!raw.startsWith('md_')) return raw;
+    try {
+      const row = await this.prisma.model.findUnique({
+        where: { id: raw },
+        select: { providerID: true, modelID: true },
+      });
+      return row ? `${row.providerID}/${row.modelID}` : null;
+    } catch {
+      return null;
+    }
+  }
+
   private toModelSelection(
     defaultModelId: string | null | undefined,
   ): { providerID: string; modelID: string } | null {
