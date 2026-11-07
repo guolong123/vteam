@@ -8504,6 +8504,25 @@ export class PlatformMcpService implements OnModuleInit {
         session = { id: adopted.id, teamMemberId: adopted.teamMemberId };
       }
     }
+    // 成员全局会话（P3）：会话行只有一条，teamMemberId 是「最近席位」——成员跨群时
+    // 用另一个群的席位调工具会查不到按 (teamId, teamMemberId) 定位的会话。这里按
+    // 「席位属于同一 member + 该 member 的全局会话在本 worker」放行，callerId 仍用
+    // 本轮席位，保证消息归属到目标群的真实席位。
+    if (!session && selfInstanceId) {
+      const seat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: selfInstanceId },
+        select: { teamId: true, memberId: true },
+      });
+      if (seat && seat.teamId === teamId && seat.memberId) {
+        const memberSession = await (this.prisma as any).session.findFirst({
+          where: { memberKey: seat.memberId, workerId: ctx.workerId },
+          select: { id: true },
+        });
+        if (memberSession) {
+          session = { id: memberSession.id, teamMemberId: selfInstanceId };
+        }
+      }
+    }
     if (!session) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,

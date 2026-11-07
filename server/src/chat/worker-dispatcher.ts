@@ -2941,6 +2941,52 @@ export class WorkerDispatcher
       where: { id: request.channelId },
       select: { type: true },
     });
+    // 私聊来源：明确告诉模型「这是私聊，不是群聊」，并附上该成员所在的所有群聊。
+    // 目的（用户预期）：① 私聊回复直接回私聊，不调用 group_post 发到群；② 成员在多个群时
+    // 知道每个群的 teamId / 席位 selfInstanceId / 群聊频道，需要时能自行选择往哪个群发。
+    if (sourceChannel?.type === CHANNEL_TYPE.private) {
+      promptBlocks.push(
+        '【私聊上下文】本条消息来自成员私聊（不是群聊）。你的回复会直接回到这个私聊窗口；' +
+          '**不要调用 vteam_group_post 把私聊回复发到群聊**。' +
+          '只有用户明确要求「发到某个群」时，才按下方群聊清单选择目标群并调用 vteam_group_post' +
+          '（传对应 teamId 与 selfInstanceId）。',
+      );
+      const sessionMemberId = (session as { memberId?: string | null }).memberId ?? null;
+      if (sessionMemberId) {
+        const seats = await (this.prisma as any).teamMember.findMany({
+          where: { memberId: sessionMemberId },
+          select: {
+            id: true,
+            teamId: true,
+            alias: true,
+            team: { select: { name: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (Array.isArray(seats) && seats.length > 0) {
+          const teamIds = [...new Set(seats.map((x: any) => x.teamId))];
+          const groupChannels = await (this.prisma as any).chatChannel.findMany({
+            where: {
+              teamId: { in: teamIds },
+              type: CHANNEL_TYPE.team_group,
+              deletedAt: null,
+            },
+            select: { id: true, teamId: true },
+          });
+          const channelByTeam = new Map<string, string>(
+            (groupChannels ?? []).map((c: any) => [c.teamId, c.id]),
+          );
+          const lines = seats.map((seat: any) => {
+            const teamName = seat.team?.name ?? seat.teamId;
+            return `- 团队「${teamName}」（teamId=${seat.teamId}）：你在该群的席位 selfInstanceId=${seat.id}，群聊频道=${channelByTeam.get(seat.teamId) ?? "（暂无群频道）"}`;
+          });
+          promptBlocks.push(
+            `【你所在的群聊】你同时属于以下 ${seats.length} 个群聊：\n${lines.join("\n")}`,
+          );
+        }
+      }
+    }
+
     if (
       sourceChannel?.type === CHANNEL_TYPE.team_group &&
       !request.text.includes('[WeCom:')
