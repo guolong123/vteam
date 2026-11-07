@@ -153,8 +153,6 @@ export class ConversationsService {
       if (!byMember.has(memberId)) byMember.set(memberId, []);
       byMember.get(memberId)!.push(ch);
     }
-    if (byMember.size === 0) return [];
-
     const allChannels = [...byMember.values()].flat();
     const channelIds = allChannels.map((c) => c.id);
     const [latest, unread] = await Promise.all([
@@ -190,6 +188,41 @@ export class ConversationsService {
         unreadCount: totalUnread,
         pinned: list.some((c) => c.pinned === true),
         lastMessage: newest ?? null,
+      });
+    }
+
+    // 还没有私聊频道的成员也要出现在左栏（原型：成员会话与群聊平铺）——
+    // 否则「在群成员里看得到、会话列表里找不到」。channelId=null，前端首次打开
+    // 时走 POST /dm-channels 即建（成员维度复用唯一频道）。
+    const seats = await (this.prisma as any).teamMember.findMany({
+      where: { teamId: { in: teamIds }, memberId: { not: null } },
+      select: {
+        teamId: true,
+        memberId: true,
+        member: { select: { id: true, name: true, status: true } },
+      },
+    });
+    const seen = new Set(items.map((i) => i.id));
+    const contextTeamByMember = new Map<string, string>();
+    for (const seat of seats ?? []) {
+      const memberId = seat.memberId as string | null;
+      if (!memberId || seen.has(`dm:${memberId}`)) continue;
+      if (!contextTeamByMember.has(memberId)) {
+        contextTeamByMember.set(memberId, seat.teamId);
+      }
+    }
+    for (const [memberId, contextTeamId] of contextTeamByMember) {
+      const seat = (seats as any[]).find((x) => x.memberId === memberId);
+      items.push({
+        id: `dm:${memberId}`,
+        type: 'dm',
+        title: seat?.member?.name ?? memberId,
+        badge: '成员',
+        channelId: null,
+        contextTeamId,
+        unreadCount: 0,
+        pinned: false,
+        lastMessage: null,
       });
     }
     return items;
