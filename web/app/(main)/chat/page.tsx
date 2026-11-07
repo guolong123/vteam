@@ -154,6 +154,8 @@ function ChatPageContent() {
     queryKey: ["members", "directory"],
     queryFn: () => membersApi.list({ page: 1, pageSize: 100 }),
     enabled: !!user?.id,
+    // 成员运行状态（黄点）跟随轮询刷新；会话列表本身也 5s 轮询。
+    refetchInterval: 5000,
   });
   const directory = useMemo<MemberDto[]>(
     () => directoryQuery.data?.items ?? [],
