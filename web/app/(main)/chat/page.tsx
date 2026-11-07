@@ -1109,7 +1109,7 @@ function MemberContextPanel({
   });
   const modelsQuery = useQuery({
     queryKey: ["models", "chat-member-panel"],
-    queryFn: () => api.get<{ items: Array<{ id: string; name: string }> }>("/models", { query: { page: 1, pageSize: 100 } }),
+    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 100 } }),
     enabled: !!member,
   });
   const workersQuery = useQuery({
@@ -1176,7 +1176,7 @@ function MemberContextPanel({
           <span style={{ fontSize: 10, color: neutral[400] }}>默认模型</span>
           <select value={modelId} onChange={(e) => setModelId(e.target.value)} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
             <option value="">跟随 Agent / Worker</option>
-            {(modelsQuery.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            {(modelsQuery.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.providerID} · {m.name}</option>)}
           </select>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>

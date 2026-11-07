@@ -168,7 +168,7 @@ export default function MembersPage() {
   const modelsQuery = useQuery({
     queryKey: ["models", "members-page"],
     queryFn: () =>
-      api.get<{ items: Array<{ id: string; name: string; modelID?: string }> }>(
+      api.get<{ items: Array<{ id: string; name: string; providerID: string; modelID?: string }> }>(
         "/models",
         { query: { page: 1, pageSize: 100 } },
       ),
@@ -638,7 +638,7 @@ export default function MembersPage() {
                   <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>默认模型</span>
                   <select value={form.defaultModelId} onChange={(e) => setForm({ ...form, defaultModelId: e.target.value })} style={inputStyle}>
                     <option value="">跟随 Agent / Worker</option>
-                    {modelOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    {modelOptions.map((m) => <option key={m.id} value={m.id}>{m.providerID} · {m.name}</option>)}
                   </select>
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
