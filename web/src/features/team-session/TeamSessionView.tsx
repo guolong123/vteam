@@ -1889,7 +1889,7 @@ export function TeamSessionView({
                 <ChatBubble key={msg.id} text={stripInjectedContext((msg.content?.text ?? "") as string)} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} initials={initials} status={msg.status} />,
               );
             })}
-            {loadingLabel && (
+            {!hideInlineStatus && loadingLabel && (
               <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
                 <LoadingIndicator label={loadingLabel} />
                 {/* P5：用户主动停止本轮（不是重置会话） */}
