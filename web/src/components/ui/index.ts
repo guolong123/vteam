@@ -27,6 +27,8 @@ export type {
 export { StatusBadge } from "./status-badge";
 export type { StatusBadgeProps } from "./status-badge";
 export { EmptyState } from "./empty-state";
+export { SearchableSelect } from "./searchable-select";
+export type { SearchableOption, SearchableSelectProps } from "./searchable-select";
 export type { EmptyStateProps } from "./empty-state";
 export { ConfirmDialog } from "./confirm-dialog";
 export type { ConfirmDialogProps } from "./confirm-dialog";

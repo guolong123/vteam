@@ -18,7 +18,7 @@ import { useRealtimeEvents } from "@/hooks/use-realtime";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar, ChatBubble } from "@/src/components/ui";
+import { AgentAvatar, ChatBubble, SearchableSelect } from "@/src/components/ui";
 import { MsgParts } from "@/src/components/chat";
 import {
   conversationsApi,
@@ -1174,10 +1174,21 @@ function MemberContextPanel({
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <span style={{ fontSize: 10, color: neutral[400] }}>默认模型</span>
-          <select value={modelId} onChange={(e) => setModelId(e.target.value)} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
-            <option value="">跟随 Agent / Worker</option>
-            {(modelsQuery.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.providerID} · {m.name}</option>)}
-          </select>
+          <SearchableSelect
+            testId="member-model-select"
+            value={modelId}
+            onChange={setModelId}
+            placeholder="跟随 Agent / Worker"
+            searchPlaceholder="搜索模型 / provider"
+            options={[
+              { value: "", label: "跟随 Agent / Worker" },
+              ...(modelsQuery.data?.items ?? []).map((m) => ({
+                value: m.id,
+                label: `${m.providerID} · ${m.name}`,
+                keywords: `${m.providerID} ${m.name}`,
+              })),
+            ]}
+          />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <span style={{ fontSize: 10, color: neutral[400] }}>首选 Worker 节点</span>

@@ -15,7 +15,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar, ConfirmDialog, EmptyState, PageWindow } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog, EmptyState, PageWindow, SearchableSelect } from "@/src/components/ui";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   membersApi,
@@ -636,10 +636,21 @@ export default function MembersPage() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.md }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>默认模型</span>
-                  <select value={form.defaultModelId} onChange={(e) => setForm({ ...form, defaultModelId: e.target.value })} style={inputStyle}>
-                    <option value="">跟随 Agent / Worker</option>
-                    {modelOptions.map((m) => <option key={m.id} value={m.id}>{m.providerID} · {m.name}</option>)}
-                  </select>
+                  <SearchableSelect
+                    testId="member-edit-model-select"
+                    value={form.defaultModelId}
+                    onChange={(value) => setForm({ ...form, defaultModelId: value })}
+                    placeholder="跟随 Agent / Worker"
+                    searchPlaceholder="搜索模型 / provider"
+                    options={[
+                      { value: "", label: "跟随 Agent / Worker" },
+                      ...modelOptions.map((m) => ({
+                        value: m.id,
+                        label: `${m.providerID} · ${m.name}`,
+                        keywords: `${m.providerID} ${m.name}`,
+                      })),
+                    ]}
+                  />
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>首选 Worker</span>
