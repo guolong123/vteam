@@ -277,6 +277,9 @@ export class ModelsService implements OnModuleInit {
     const providerIds = new Set<string>([
       ...groups.map((g) => g.providerID),
       ...workerCountByProvider.keys(),
+      // 仅保存了凭据、尚未建目录模型的 provider（如新增 Provider 时只走了
+      // 「远端选择/凭据」路径）也必须出现在列表里，否则用户无法继续为其添加模型。
+      ...credentials.map((c) => c.providerID),
     ]);
     return (
       [...providerIds]
