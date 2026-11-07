@@ -103,9 +103,12 @@ export class MembersService implements OnModuleInit {
     const sessions =
       ids.length > 0
         ? await this.prisma.session.findMany({
-            where: { memberKey: { in: ids } },
+            where: {
+              OR: [{ memberKey: { in: ids } }, { memberId: { in: ids } }],
+            },
             select: {
               memberKey: true,
+              memberId: true,
               id: true,
               status: true,
               workerId: true,
@@ -118,11 +121,17 @@ export class MembersService implements OnModuleInit {
             },
           })
         : [];
-    const sessionByMember = new Map(
-      sessions
-        .filter((s) => !!s.memberKey)
-        .map((s) => [s.memberKey as string, s]),
-    );
+    // SESSION_SCOPE=seat 时没有 member_key 行，但席位会话仍带 member_id：
+    // 取该成员任一在跑会话（优先 busy=running）作为状态来源，黄点/状态才不丢。
+    const sessionByMember = new Map<string, (typeof sessions)[number]>();
+    for (const s of sessions) {
+      const key = (s.memberKey ?? s.memberId) as string | null;
+      if (!key) continue;
+      const prev = sessionByMember.get(key);
+      if (!prev || (prev.busyState !== 'running' && s.busyState === 'running')) {
+        sessionByMember.set(key, s);
+      }
+    }
     return {
       items: rows.map((row) => ({
         ...this.toMemberDto(row),
