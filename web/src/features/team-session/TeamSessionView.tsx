@@ -231,12 +231,15 @@ export function TeamSessionView({
   filterMemberId = null,
   /** 私聊态：直接切到该平台成员的私聊 Tab（/chat 成员会话复用旧私聊实现）。 */
   privateMemberId = null,
+  /** 隐藏消息区底部「操作中…停止」内联状态条（/chat 改为头像黄点表示进行中）。 */
+  hideInlineStatus = false,
 }: {
   teamId?: string;
   embedded?: boolean;
   hideRightPanel?: boolean;
   filterMemberId?: string | null;
   privateMemberId?: string | null;
+  hideInlineStatus?: boolean;
 } = {}) {
   const params = useParams<{ id: string }>();
   const teamId = teamIdProp ?? params?.id ?? "";
@@ -1914,7 +1917,7 @@ export function TeamSessionView({
             )}
             {errorLabel && <MsgError kind={errorLabel.kind} detail={errorLabel.detail} time={formatTime(new Date().toISOString())} />}
             {/* B12：瞬态 session 状态行复用 LoadingIndicator 的容器（testid=session-status，指示点 testid=session-status-dots）；仍在 messages.map 之外追加，不进消息数组。 */}
-            {sessionLabel && <LoadingIndicator label={sessionLabel} testid="session-status" dotsTestId="session-status-dots" />}
+            {!hideInlineStatus && sessionLabel && <LoadingIndicator label={sessionLabel} testid="session-status" dotsTestId="session-status-dots" />}
           </div>
 
           <div style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "var(--color-surface)", borderTop: `1px solid ${neutral[200]}` }}>

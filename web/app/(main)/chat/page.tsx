@@ -459,6 +459,7 @@ function ChatPageContent() {
                       item={item}
                       active={active?.id === item.id}
                       roleKey={conversationRole(item, memberById)}
+                      busy={item.type === "dm" && memberById.get(item.id.replace("dm:", ""))?.session?.busyState === "running"}
                       onClick={() => { setSendError(null); router.replace(`/chat?c=${encodeURIComponent(item.id)}`); }}
                     />
                   ))}
@@ -589,7 +590,7 @@ function ChatPageContent() {
               <button type="button" disabled={resetSessionMutation.isPending} onClick={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[600], borderRadius: radius.md, padding: "3px 10px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>{resetSessionMutation.isPending ? "重置中…" : "重置会话"}</button>
             </header>
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <TeamSessionView teamId={dmTeamId} embedded hideRightPanel privateMemberId={memberId} />
+              <TeamSessionView teamId={dmTeamId} embedded hideRightPanel privateMemberId={memberId} hideInlineStatus />
             </div>
           </div>
           <MemberContextPanel
@@ -888,11 +889,13 @@ function ConversationRow({
   item,
   active,
   roleKey,
+  busy = false,
   onClick,
 }: {
   item: ConversationItemDto;
   active: boolean;
   roleKey: RoleKey;
+  busy?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -903,11 +906,16 @@ function ConversationRow({
       data-conv-id={item.id}
       style={{ width: "100%", textAlign: "left", border: "none", cursor: "pointer", display: "flex", gap: space.sm, alignItems: "center", padding: `${space.sm}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: active ? "rgba(13,148,136,0.10)" : "transparent", fontFamily: fontFamily.body }}
     >
-      {item.type === "group" ? (
-        <AgentAvatar role="product" size="md" shape="square" dot={false} initials={item.title.slice(0, 1)} style={groupAvatarPalette(item.title)} />
-      ) : (
-        <AgentAvatar role={roleKey} size="md" />
-      )}
+      <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+        {item.type === "group" ? (
+          <AgentAvatar role="product" size="md" shape="square" dot={false} initials={item.title.slice(0, 1)} style={groupAvatarPalette(item.title)} />
+        ) : (
+          <AgentAvatar role={roleKey} size="md" />
+        )}
+        {busy && (
+          <span data-testid="conversation-busy-dot" title="处理中" style={{ position: "absolute", right: -1, bottom: -1, width: 9, height: 9, borderRadius: "50%", backgroundColor: "#F59E0B", border: "1.5px solid var(--color-surface)" }} />
+        )}
+      </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
