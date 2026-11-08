@@ -3804,6 +3804,37 @@ export class PlatformMcpService implements OnModuleInit {
     // 解析不到 ⇒ null（不抛错）：缺作者不能把一次正常的提交搞失败。
     const authorAgentId = await this.resolveArtifactAuthorAgentId(instanceId);
 
+    // 岗位级产出物门禁（项目经理不下场）：PM 只允许提交「进度/风险/协调/核验/派发」
+    // 类记录（category 缺省或「其他」），需求/设计/实现/用例/测试报告/计划属于各专业
+    // 岗位的交付物，PM 提交直接被拒绝——把「不要越界」从提示词变成技术卡点。
+    try {
+      const seat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: instanceId },
+        select: { role: { select: { key: true } } },
+      });
+      if (seat?.role?.key === 'project_manager') {
+        const forbidden = [
+          '需求',
+          '设计',
+          '实现',
+          '测试用例',
+          '测试报告',
+          '计划',
+        ];
+        if (args.category && forbidden.includes(args.category)) {
+          throw new BadRequestException({
+            code: 'ARTIFACT_ROLE_FORBIDDEN',
+            message:
+              `项目经理不产出「${args.category}」类交付物：请先 vteam_notify_agent 派发给对应岗位，` +
+              '只提交进度/风险/协调/核验类记录（category 用「其他」或省略）。',
+          });
+        }
+      }
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      // 查询失败 fail-open：不因岗位校验查询异常阻断正常提交
+    }
+
     if (
       args.category !== undefined &&
       !(ARTIFACT_CATEGORIES as readonly string[]).includes(args.category)
