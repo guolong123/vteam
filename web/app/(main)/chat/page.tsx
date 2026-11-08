@@ -1135,18 +1135,15 @@ function MemberContextPanel({
   });
   const currentWorker = (workersQuery.data ?? []).find((w) => w.id === session?.workerId) ?? null;
   const saveMemberConfig = useMutation({
-    mutationFn: () => membersApi.update(member!.id, {
-      agentId: agentId || undefined,
-      defaultModelId: modelId || undefined,
-      preferredWorkerId: workerId || undefined,
-    }),
+    mutationFn: (updates: { agentId?: string; defaultModelId?: string; preferredWorkerId?: string }) =>
+      membersApi.update(member!.id, updates),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["member", member?.id] });
       qc.invalidateQueries({ queryKey: ["members"] });
       qc.invalidateQueries({ queryKey: ["conversations"] });
     },
   });
-  const dirty = !!member && (agentId !== member.agentId || modelId !== (member.defaultModelId ?? "") || workerId !== (member.preferredWorkerId ?? ""));
+
 
   return (
     <aside data-testid="member-context-panel" style={{ width: 300, flexShrink: 0, minHeight: 0, overflow: "auto", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}`, padding: space.lg, display: "flex", flexDirection: "column", gap: space.md }}>
@@ -1176,14 +1173,16 @@ function MemberContextPanel({
       </div>
 
       <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.xs, fontWeight: 700, color: neutral[700] }}>运行配置</span>
           <span style={{ flex: 1 }} />
-          {dirty && <button type="button" disabled={saveMemberConfig.isPending} onClick={() => saveMemberConfig.mutate()} style={{ border: "none", backgroundColor: "#0D9488", color: "#FFF", borderRadius: radius.sm, padding: "2px 10px", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>{saveMemberConfig.isPending ? "保存中…" : "保存配置"}</button>}
+          <span data-testid="member-config-autosave" style={{ fontSize: 10, color: saveMemberConfig.isPending ? "#B45309" : neutral[400] }}>
+            {saveMemberConfig.isPending ? "保存中…" : "修改自动保存"}
+          </span>
         </div>
         <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <span style={{ fontSize: 10, color: neutral[400] }}>执行 Agent</span>
-          <select value={agentId} onChange={(e) => setAgentId(e.target.value)} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
+          <select value={agentId} onChange={(e) => { const v = e.target.value; setAgentId(v); if (member) saveMemberConfig.mutate({ agentId: v || undefined }); }} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
             {!agentId && <option value="">跟随岗位默认</option>}
             {(agentsQuery.data?.items ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
@@ -1193,7 +1192,7 @@ function MemberContextPanel({
           <SearchableSelect
             testId="member-model-select"
             value={modelId}
-            onChange={setModelId}
+            onChange={(v) => { setModelId(v); if (member) saveMemberConfig.mutate({ defaultModelId: v || undefined }); }}
             placeholder="跟随 Agent / Worker"
             searchPlaceholder="搜索模型 / provider"
             options={[
@@ -1208,7 +1207,7 @@ function MemberContextPanel({
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <span style={{ fontSize: 10, color: neutral[400] }}>首选 Worker 节点</span>
-          <select value={workerId} onChange={(e) => setWorkerId(e.target.value)} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
+          <select value={workerId} onChange={(e) => { const v = e.target.value; setWorkerId(v); if (member) saveMemberConfig.mutate({ preferredWorkerId: v || undefined }); }} style={{ padding: "5px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.body }}>
             <option value="">自动调度</option>
             {(workersQuery.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.name ?? w.id}{w.status !== "online" ? "（离线）" : ""}</option>)}
           </select>
