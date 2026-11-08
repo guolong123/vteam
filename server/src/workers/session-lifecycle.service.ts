@@ -498,10 +498,7 @@ export class SessionLifecycleService implements OnModuleInit {
    *  3) 未完成轮次置 cancelled（保留审计，不用删除）；
    *  4) 删旧会话行 → 以同一 member_key/member_id 建新 team-mode 会话（回收序号靠 idGen）。
    */
-  async resetMemberSession(
-    memberId: string,
-    opts: { reason?: string } = {},
-  ) {
+  async resetMemberSession(memberId: string, opts: { reason?: string } = {}) {
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const session = await tx.session.findUnique({
         where: { memberKey: memberId },

@@ -9,7 +9,8 @@ import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
  */
 export class CreateMemberDto {
   @ApiPropertyOptional({
-    description: '成员名（全局唯一；缺省按岗位自动生成，如开发者第 2 位=胡二开）',
+    description:
+      '成员名（全局唯一；缺省按岗位自动生成，如开发者第 2 位=胡二开）',
     maxLength: 64,
   })
   @IsOptional()

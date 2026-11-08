@@ -1754,7 +1754,9 @@ describe('TeamsService', () => {
       const original = process.env.SESSION_SCOPE;
       process.env.SESSION_SCOPE = 'member';
       try {
-        await expect(service.resetSessions('tm_0000000001')).rejects.toMatchObject({
+        await expect(
+          service.resetSessions('tm_0000000001'),
+        ).rejects.toMatchObject({
           response: { code: 'TEAM_RESET_DISABLED' },
         });
       } finally {

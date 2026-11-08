@@ -164,5 +164,4 @@ export class TaskChannelBindingsController {
         '任务级通知渠道绑定已下线：通知渠道现在只能绑定到团队或成员（成员库/团队详情）',
     });
   }
-
 }

@@ -322,7 +322,13 @@ export class ConversationsService {
         where: { channelId, status: { not: 'processing' } },
         orderBy: { id: 'desc' },
         take: 20,
-        select: { id: true, senderType: true, content: true, status: true, createdAt: true },
+        select: {
+          id: true,
+          senderType: true,
+          content: true,
+          status: true,
+          createdAt: true,
+        },
       });
       const hit = (candidates ?? []).find((r: any) => {
         const t = this.summarize(r.content);

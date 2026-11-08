@@ -2967,7 +2967,8 @@ export class WorkerDispatcher
           '只有用户明确要求「发到某个群」时，才按下方群聊清单选择目标群并调用 vteam_group_post' +
           '（传对应 teamId 与 selfInstanceId）。',
       );
-      const sessionMemberId = (session as { memberId?: string | null }).memberId ?? null;
+      const sessionMemberId =
+        (session as { memberId?: string | null }).memberId ?? null;
       if (sessionMemberId) {
         const seats = await (this.prisma as any).teamMember.findMany({
           where: { memberId: sessionMemberId },
@@ -2981,23 +2982,25 @@ export class WorkerDispatcher
         });
         if (Array.isArray(seats) && seats.length > 0) {
           const teamIds = [...new Set(seats.map((x: any) => x.teamId))];
-          const groupChannels = await (this.prisma as any).chatChannel.findMany({
-            where: {
-              teamId: { in: teamIds },
-              type: CHANNEL_TYPE.team_group,
-              deletedAt: null,
+          const groupChannels = await (this.prisma as any).chatChannel.findMany(
+            {
+              where: {
+                teamId: { in: teamIds },
+                type: CHANNEL_TYPE.team_group,
+                deletedAt: null,
+              },
+              select: { id: true, teamId: true },
             },
-            select: { id: true, teamId: true },
-          });
+          );
           const channelByTeam = new Map<string, string>(
             (groupChannels ?? []).map((c: any) => [c.teamId, c.id]),
           );
           const lines = seats.map((seat: any) => {
             const teamName = seat.team?.name ?? seat.teamId;
-            return `- 团队「${teamName}」（teamId=${seat.teamId}）：你在该群的席位 selfInstanceId=${seat.id}，群聊频道=${channelByTeam.get(seat.teamId) ?? "（暂无群频道）"}`;
+            return `- 团队「${teamName}」（teamId=${seat.teamId}）：你在该群的席位 selfInstanceId=${seat.id}，群聊频道=${channelByTeam.get(seat.teamId) ?? '（暂无群频道）'}`;
           });
           promptBlocks.push(
-            `【你所在的群聊】你同时属于以下 ${seats.length} 个群聊：\n${lines.join("\n")}`,
+            `【你所在的群聊】你同时属于以下 ${seats.length} 个群聊：\n${lines.join('\n')}`,
           );
         }
       }

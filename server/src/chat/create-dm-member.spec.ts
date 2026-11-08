@@ -115,7 +115,10 @@ describe('ChatService.createDmChannel (memberId)', () => {
       teamId: 'tm_2',
       memberId: 'mbr_1',
     });
-    prisma.chatChannel.findFirst.mockResolvedValue({ ...channelRow, teamId: 'tm_1' });
+    prisma.chatChannel.findFirst.mockResolvedValue({
+      ...channelRow,
+      teamId: 'tm_1',
+    });
 
     const result: any = await service.createDmChannel('u_1', {
       teamId: 'tm_2',

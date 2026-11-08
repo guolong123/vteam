@@ -14,14 +14,29 @@ const NAME_PARTS: Record<string, { surname: string; tail: string }> = {
   librarian: { surname: '文', tail: '知' },
 };
 
-const CN_NUM = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+const CN_NUM = [
+  '零',
+  '一',
+  '二',
+  '三',
+  '四',
+  '五',
+  '六',
+  '七',
+  '八',
+  '九',
+  '十',
+];
 
 export function cnNumber(n: number): string {
   if (n <= 10) return CN_NUM[n] ?? String(n);
   if (n < 20) return `十${CN_NUM[n - 10] ?? ''}`;
   const tens = Math.floor(n / 10);
   const ones = n % 10;
-  return `${CN_NUM[tens] ?? tens}十${ones ? (CN_NUM[ones] ?? ones) : ''}`.replace('二十', '二十');
+  return `${CN_NUM[tens] ?? tens}十${ones ? (CN_NUM[ones] ?? ones) : ''}`.replace(
+    '二十',
+    '二十',
+  );
 }
 
 /** 按岗位 key + 序号生成默认姓名；未知岗位回退「成<序号>员」。 */

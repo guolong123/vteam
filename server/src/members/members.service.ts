@@ -129,7 +129,10 @@ export class MembersService implements OnModuleInit {
       const key = (s.memberKey ?? s.memberId) as string | null;
       if (!key) continue;
       const prev = sessionByMember.get(key);
-      if (!prev || (prev.busyState !== 'running' && s.busyState === 'running')) {
+      if (
+        !prev ||
+        (prev.busyState !== 'running' && s.busyState === 'running')
+      ) {
         sessionByMember.set(key, s);
       }
     }
@@ -461,10 +464,7 @@ export class MembersService implements OnModuleInit {
     }
     // 改名同步：成员是平台级名称，席位里由平台自动生成的别名（等于旧成员名）一并更新，
     // 否则群聊/私聊的发送者身份仍显示旧名；用户自定义过的别名（不等于旧名）保持不变。
-    if (
-      dto.name !== undefined &&
-      String(data.name).trim() !== previousName
-    ) {
+    if (dto.name !== undefined && String(data.name).trim() !== previousName) {
       try {
         await this.prisma.teamMember.updateMany({
           where: { memberId: id, alias: previousName },

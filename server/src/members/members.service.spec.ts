@@ -24,7 +24,11 @@ function createService() {
     agent: { findUnique: jest.fn() },
     model: { findUnique: jest.fn() },
     worker: { findUnique: jest.fn() },
-    teamMember: { count: jest.fn(), findMany: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    teamMember: {
+      count: jest.fn(),
+      findMany: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     session: {
       findUnique: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
