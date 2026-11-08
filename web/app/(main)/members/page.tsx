@@ -170,7 +170,7 @@ export default function MembersPage() {
     queryFn: () =>
       api.get<{ items: Array<{ id: string; name: string; providerID: string; modelID?: string }> }>(
         "/models",
-        { query: { page: 1, pageSize: 100 } },
+        { query: { page: 1, pageSize: 200, available: 1 } },
       ),
     enabled: !!user?.id,
   });
