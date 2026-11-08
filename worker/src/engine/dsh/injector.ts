@@ -212,7 +212,21 @@ export class DshResourceInjector implements ResourceInjector {
         cred.models !== undefined && cred.models.length > 0
           ? cred.models.map((m) => ({ id: m.id, name: m.name }))
           : // 兜底：只声明凭据里的那一个模型（平台未提供目录时）
-            [{ id: cred.modelID ?? 'deepseek-v4-flash', name: cred.modelID ?? 'deepseek-v4-flash' }],
+            (() => {
+              // 兜底也要覆盖默认模型（DSH_MODEL），否则 patch 只声明
+              // deepseek-v4-flash、而派发的是 deepseek-v4.1-flash → initialize 失败。
+              const ids = [
+                ...new Set(
+                  [cred.modelID, process.env.DSH_MODEL].filter(
+                    (id): id is string => typeof id === 'string' && id.length > 0,
+                  ),
+                ),
+              ];
+              return (ids.length > 0 ? ids : ['deepseek-v4-flash']).map((id) => ({
+                id,
+                name: id,
+              }));
+            })(),
     };
   }
 
