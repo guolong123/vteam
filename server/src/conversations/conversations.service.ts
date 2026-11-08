@@ -279,7 +279,13 @@ export class ConversationsService {
       .filter((id: unknown): id is string => typeof id === 'string');
     if (ids.length === 0) return result;
     // 只取正文生成列（body_text），不把 content 的 parts/工具输出整包拉回来。
-    const raw = (this.prisma as any).$queryRawUnsafe;
+    // 必须绑定 this：Prisma 的 $queryRawUnsafe 是实例方法，解构后直接调用会丢 this
+    // （Cannot read properties of undefined (reading '_createPrismaPromise')）。
+    const raw =
+      typeof (this.prisma as any).$queryRawUnsafe === 'function'
+        ? (sql: string, ...params: any[]) =>
+            (this.prisma as any).$queryRawUnsafe(sql, ...params)
+        : undefined;
     const rows =
       typeof raw === 'function'
         ? await raw(
@@ -397,7 +403,11 @@ export class ConversationsService {
     const result = new Map<string, number>();
     const ids = channels.map((c) => c.id);
     if (ids.length === 0) return result;
-    const raw = (this.prisma as any).$queryRawUnsafe;
+    const raw =
+      typeof (this.prisma as any).$queryRawUnsafe === 'function'
+        ? (sql: string, ...params: any[]) =>
+            (this.prisma as any).$queryRawUnsafe(sql, ...params)
+        : undefined;
     if (typeof raw === 'function') {
       // 一次聚合替代「每频道一次 findMany」：只数正文非空、非自己、非生成中占位。
       const placeholders = ids.map(() => '?').join(',');
