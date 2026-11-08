@@ -433,6 +433,49 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
             ) : (
               procPartsDeduped.map((p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView))
             )}
+            {body ? (
+              streaming ? (
+                <div
+                  data-testid="msg-streaming"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: space.sm,
+                    maxWidth: "78%",
+                    alignSelf: "flex-start",
+                    padding: `${space.sm}px ${space.md}px`,
+                    borderRadius: radius.md,
+                    backgroundColor: "var(--color-surface)",
+                    border: `1px solid ${neutral[200]}`,
+                    ...baseFont,
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: fontSize.md,
+                      color: neutral[700],
+                      lineHeight: 1.6,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    <Markdown>{cleanBody}</Markdown>
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+                    <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>生成中</span>
+                  </span>
+                </div>
+              ) : messageStatus === "failed" ? (
+                <MsgError kind="failed" detail={cleanBody} />
+              ) : (
+                <ChatBubble showIdentity={false} text={cleanBody} type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
+              )
+            ) : hasAttachments ? (
+              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
+            ) : null}
           </>
         )}
       </div>
