@@ -138,9 +138,12 @@ async function main() {
       continue;
     }
 
-    const wantedName =
+    // 存量回填按「席位别名（团队名·席位尾号）」命名：同一岗位在多个团队各有一个席位时
+    // 左栏私聊/成员库不再出现一串同名成员，也避免跨团队重名唯一键冲突。
+    const baseName =
       seat.alias?.trim() ||
       `${seat.role?.name ?? seat.agent?.name ?? '成员'}-${seat.seq}`;
+    const wantedName = `${baseName}（${seat.team.name.slice(0, 24)}·${seat.id.slice(-4)}）`;
     const name = DRY_RUN ? wantedName : await uniqueName(wantedName);
     if (name !== wantedName) {
       report.nameAdjustments.push({
