@@ -74,7 +74,9 @@ function ChatPageContent() {
   const [showDmPicker, setShowDmPicker] = useState(false);
   const [dmSearch, setDmSearch] = useState("");
   const [search, setSearch] = useState("");
-  const [convFilter, setConvFilter] = useState<"all" | "group" | "dm">("all");
+  const [convFilter, setConvFilter] = useState<"all" | "group" | "dm">(() =>
+    selected.startsWith("dm:") ? "dm" : "group",
+  );
   const [filterMemberId, setFilterMemberId] = useState<string | null>(null);
   /** 右栏视图：full = 旧完整任务面板（默认，保留全部既有功能）；compact = 原型三 Tab。 */
   const [rightPanelMode, setRightPanelMode] = useState<"full" | "compact">("full");
@@ -98,10 +100,22 @@ function ChatPageContent() {
 
   // 无选中会话时自动落到第一条（仅替换 URL，不新增历史栈）。
   useEffect(() => {
-    if (!selected && items.length > 0) {
-      router.replace(`/chat?c=${encodeURIComponent(items[0].id)}`);
-    }
-  }, [items, selected, router]);
+    if (selected || items.length === 0) return;
+    // 默认落在群聊（成员多时「全部」列表过长）；没有群时再退第一条。
+    const first =
+      convFilter === "group"
+        ? (items.find((i) => i.type === "group") ?? items[0])
+        : items[0];
+    router.replace(`/chat?c=${encodeURIComponent(first.id)}`);
+  }, [items, selected, router, convFilter]);
+
+  // 直接打开私聊链接（/chat?c=dm:…）或从“+私聊/建群”跳转时，切到对应 Tab，
+  // 否则默认「群聊」过滤会把刚打开的会话藏起来。
+  useEffect(() => {
+    if (!selected) return;
+    if (selected.startsWith("dm:") && convFilter === "group") setConvFilter("dm");
+    if (selected.startsWith("group:") && convFilter === "dm") setConvFilter("group");
+  }, [selected, convFilter]);
 
   const active =
     items.find((item) => item.id === selected) ?? items[0] ?? null;
