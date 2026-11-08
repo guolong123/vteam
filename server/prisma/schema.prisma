@@ -95,6 +95,8 @@ model Team {
   mainAgentMemberId  String?  @map("main_agent_member_id")
   /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
   preferredWorkerId  String?  @map("preferred_worker_id")
+  /// 群聊默认模型（md_ 目录行 id）；成员级 defaultModelId 优先于它
+  defaultModelId     String?  @map("default_model_id")
   /// 并行任务并发上限（并行任务计划 D1）：NULL = 不限；start 时校验活跃占用（in_progress+blocked）。
   maxConcurrentTasks Int?     @map("max_concurrent_tasks")
   version            Int      @default(0) @map("version")
@@ -105,6 +107,7 @@ model Team {
   creator      User          @relation("TeamCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   currentTask  Task?         @relation("TeamCurrentTask", fields: [currentTaskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   mainAgentMember TeamMember? @relation("TeamMainAgent", fields: [mainAgentMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  defaultModel Model?        @relation("TeamDefaultModel", fields: [defaultModelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
   members      TeamMember[]
   userMembers  TeamUserMember[]
   sessions     Session[]
@@ -935,6 +938,7 @@ model Model {
 
   workerAvailabilities WorkerModelAvailability[]
   defaultForMembers    Member[]                   @relation("MemberDefaultModel")
+  teamDefaults         Team[]                     @relation("TeamDefaultModel")
 
   @@unique([providerID, modelID], map: "uk_models_provider_model")
   @@map("models")
