@@ -247,6 +247,8 @@ export function TeamSessionView({
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement | null>(null);
+  /** 用户是否贴在底部：上翻阅读历史时不再被流式输出强制拉回底部。 */
+  const stickToBottomRef = useRef(true);
   /** 消息输入框命令式句柄：窗口级「拖入文件」转交给输入框，复用其校验/上传/附件 chip 全链路。 */
   const messageInputRef = useRef<MessageInputHandle | null>(null);
 
@@ -898,6 +900,7 @@ export function TeamSessionView({
     if (items.length === 0 || !listRef.current) return;
     if (bottomTabRef.current === key) return;
     bottomTabRef.current = key;
+    stickToBottomRef.current = true;
     const el = listRef.current;
     requestAnimationFrame(() => {
       el.scrollTop = el.scrollHeight;
@@ -920,9 +923,10 @@ export function TeamSessionView({
     queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId], exact: true });
   }, [queryClient, teamId]);
 
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottom = useCallback((force = false) => {
     const el = listRef.current;
     if (!el) return;
+    if (!force && !stickToBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
   }, []);
 
@@ -1236,7 +1240,8 @@ export function TeamSessionView({
     onSuccess: () => {
       setInput("");
       setSendError(null);
-      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+      scrollToBottom(true);
+      stickToBottomRef.current = true;
       queryClient.invalidateQueries({ queryKey: ["channel", targetChannelId, "messages"] });
     },
     onError: (err) => {
@@ -1777,7 +1782,7 @@ export function TeamSessionView({
             })}
           </div>
 
-          <div data-testid="chat-message-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.xl}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
+          <div data-testid="chat-message-list" ref={listRef} onScroll={(e) => { const el = e.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120; }} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.xl}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
             <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
               <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
               <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{isGroupTab ? "团队会话 · 历史跨任务可见" : "私聊 · 仅你与该成员可见"}</span>
