@@ -67,6 +67,48 @@ async function main() {
     nameAdjustments: [],
   };
 
+  // 存量席位可能引用已删除的模型/Worker（历史脏数据）。直接复制会触发
+  // members.default_model_id / preferred_worker_id 外键失败，导致整批回填中断；
+  // 先筛出真实存在的引用，失效的置空（这些引用本身已不可用）。
+  const seatModelRefs = await prisma.teamMember.findMany({
+    where: { memberId: null, overrideModelId: { not: null } },
+    select: { overrideModelId: true },
+    distinct: ['overrideModelId'],
+  });
+  const seatWorkerRefs = await prisma.teamMember.findMany({
+    where: { memberId: null, preferredWorkerId: { not: null } },
+    select: { preferredWorkerId: true },
+    distinct: ['preferredWorkerId'],
+  });
+  const validModelIds = new Set(
+    (
+      await prisma.model.findMany({
+        where: {
+          id: {
+            in: seatModelRefs
+              .map((s) => s.overrideModelId)
+              .filter((id): id is string => !!id),
+          },
+        },
+        select: { id: true },
+      })
+    ).map((m) => m.id),
+  );
+  const validWorkerIds = new Set(
+    (
+      await prisma.worker.findMany({
+        where: {
+          id: {
+            in: seatWorkerRefs
+              .map((s) => s.preferredWorkerId)
+              .filter((id): id is string => !!id),
+          },
+        },
+        select: { id: true },
+      })
+    ).map((w) => w.id),
+  );
+
   const seats = await prisma.teamMember.findMany({
     where: { memberId: null },
     include: {
@@ -129,8 +171,14 @@ async function main() {
           name,
           defaultRoleId: roleId as string,
           agentId: seat.agentId,
-          defaultModelId: seat.overrideModelId,
-          preferredWorkerId: seat.preferredWorkerId,
+          defaultModelId:
+            seat.overrideModelId && validModelIds.has(seat.overrideModelId)
+              ? seat.overrideModelId
+              : null,
+          preferredWorkerId:
+            seat.preferredWorkerId && validWorkerIds.has(seat.preferredWorkerId)
+              ? seat.preferredWorkerId
+              : null,
           privateWorkDir: null,
           status: 'active',
           description: `由团队「${seat.team.name}」的席位 ${seat.id} 回填`,
