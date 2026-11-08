@@ -2336,6 +2336,63 @@ export class PlatformMcpService implements OnModuleInit {
         });
       }
     }
+    // 成员私聊镜像：agent → agent 的派发/协调消息原本只落在群聊频道；在目标成员的
+    // 私聊里也留一条发送记录（sender = 本次调用者），这样“项目经理发给某成员的消息”
+    // 能在该成员的消息列表里看到。
+    if (!isJoinReport) {
+      try {
+        const targetSeat = await (this.prisma as any).teamMember.findUnique({
+          where: { id: args.targetInstanceId },
+          select: { memberId: true, teamId: true },
+        });
+        const privateChannel = targetSeat?.memberId
+          ? await (this.prisma as any).chatChannel.findFirst({
+              where: {
+                memberId: targetSeat.memberId,
+                type: 'private',
+                deletedAt: null,
+              },
+              orderBy: { createdAt: 'asc' },
+              select: { id: true },
+            })
+          : await (this.prisma as any).chatChannel.findFirst({
+              where: {
+                teamMemberId: args.targetInstanceId,
+                type: 'private',
+                deletedAt: null,
+              },
+              select: { id: true },
+            });
+        if (privateChannel) {
+          const senderAgentId = await this.resolveTeamSenderAgentId(
+            execTeamId ?? targetSeat?.teamId ?? '',
+            args.selfInstanceId,
+          );
+          const mirrored = await (this.prisma as any).message.create({
+            data: {
+              id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+              channelId: privateChannel.id,
+              taskId: effTaskId,
+              senderType: SENDER_TYPE.agent,
+              senderId: senderAgentId,
+              senderInstanceId: args.selfInstanceId,
+              content: { text: args.content, parts: [] },
+              mentions: null,
+              status: MESSAGE_STATUS.sent,
+            },
+          });
+          await this.realtime.broadcast(
+            EVENT_TYPES.CHAT_MESSAGE_NEW,
+            { message: this.toMessageDto(mirrored) },
+            { type: 'channel', id: privateChannel.id },
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[mcp] notify_agent 私聊镜像失败（不阻断派发） to=${args.targetInstanceId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     if (kind === 'execution') {
       if (isJoinReport) {
         // join 报告行审计记账（v1.0.3 D4/D5）：sub→main 回执照落，但落库即 acked
