@@ -73,7 +73,7 @@ export interface MsgThinkingProps {
 
 /** 思考中消息（reasoning 阶段）：pending=思考中带动画 / done=可折叠（单行缩略 + 思考摘要，点击展开） */
 export function MsgThinking({ state, text, style, className }: MsgThinkingProps) {
-  const [open, setOpen] = useState(state === "done" ? false : true);
+  const [open, setOpen] = useState(false);
   // 完成即自动折叠：用户展开过也不保留展开态（次要信息默认收起）。
   useEffect(() => {
     if (state === "done") setOpen(false);

@@ -424,12 +424,15 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
           </>
         ) : (
           <>
-            {procSegments.map((seg, si) => {
-              if (seg.kind === "group") {
-                return <ProcessGroup key={`grp-${si}`} items={seg.items} streaming={isStreaming} renderItem={(p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView)} />;
-              }
-              return renderProcPart(seg.part, seg.i, isStreaming, lastReasoningIndex, toolView);
-            })}
+            {procPartsDeduped.length > 1 ? (
+              <ProcessGroup
+                items={procPartsDeduped.map((p, i) => ({ part: p, i }))}
+                streaming={isStreaming}
+                renderItem={(p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView)}
+              />
+            ) : (
+              procPartsDeduped.map((p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView))
+            )}
           </>
         )}
       </div>
