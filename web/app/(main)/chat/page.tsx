@@ -404,7 +404,10 @@ function ChatPageContent() {
     active?.type === "dm" &&
     (active.processing === true ||
       lastDmMessage?.status === "processing" ||
-      (lastDmMessage?.senderType === "user" &&
+      // 私聊里系统消息（会话建立提示）也会插在用户消息之后；在 agent 回复出现前
+      // 一律视为「等待/处理中」，避免状态条一闪就消失。
+      (!!lastDmMessage &&
+        lastDmMessage.senderType !== "agent" &&
         Date.now() - Date.parse(lastDmMessage.createdAt) < 120_000));
   const dmStreaming = active?.processing === true || lastDmMessage?.status === "processing";
   const busyTeamName = (memberId: string): string | null => {
