@@ -147,6 +147,61 @@ export class TeamsService implements OnModuleInit {
     );
   }
 
+  /**
+   * 旧「roleId/agentId」建席位路径的兼容：席位必须同时有平台成员，否则成员库看不到。
+   * 用「席位别名（团队名）」做默认名，重名自动加序号；解析不到岗位时返回 null（保持旧行为）。
+   */
+  private async autoCreateMemberForSeat(
+    tx: any,
+    opts: {
+      baseName: string;
+      roleId: string | null;
+      agentId: string;
+      createdBy: string;
+    },
+  ): Promise<string | null> {
+    // 单测/裁剪事务客户端没有 member/agentRole 模型时保持旧行为（返回 null 不绑定）。
+    if (
+      typeof tx?.member?.findUnique !== 'function' ||
+      typeof tx?.agentRole?.findFirst !== 'function'
+    ) {
+      return null;
+    }
+    let roleId = opts.roleId;
+    if (!roleId) {
+      const role = await tx.agentRole.findFirst({
+        where: { defaultAgentId: opts.agentId },
+        select: { id: true },
+      });
+      roleId = role?.id ?? null;
+    }
+    if (!roleId) return null;
+    const base = opts.baseName.trim().slice(0, 50) || '成员';
+    let name = base;
+    let n = 2;
+    while (
+      await tx.member.findUnique({ where: { name }, select: { id: true } })
+    ) {
+      name = `${base}-${n++}`.slice(0, 64);
+    }
+    const id = await this.idGen.nextId(ID_PREFIX.member);
+    try {
+      await tx.member.create({
+        data: {
+          id,
+          name,
+          defaultRoleId: roleId,
+          agentId: opts.agentId,
+          status: 'active',
+          createdBy: opts.createdBy,
+        },
+      });
+    } catch (err) {
+      this.rethrowMemberNameConflict(err, name);
+    }
+    return id;
+  }
+
   async create(userId: string, dto: CreateTeamDto) {
     const name = dto.name?.trim();
     if (!name) {
@@ -248,6 +303,15 @@ export class TeamsService implements OnModuleInit {
         const workDir =
           plan.workDir?.trim() ||
           this.defaultWorkDir(agent, seq, plan.role, !!plan.opencodeAgentName);
+        // 旧 roleId/agentId 路径：自动补平台成员并绑定，避免建群后成员库看不到。
+        if (!platformMemberId) {
+          platformMemberId = await this.autoCreateMemberForSeat(tx, {
+            baseName: `${alias}（${name}）`,
+            roleId: plan.roleId ?? null,
+            agentId: plan.agentId,
+            createdBy: userId,
+          });
+        }
         const seatId = await this.idGen.nextId(ID_PREFIX.teamMember);
         await tx.teamMember.create({
           data: {
@@ -873,6 +937,14 @@ export class TeamsService implements OnModuleInit {
       const workDir =
         dto.workDir?.trim() ||
         this.defaultWorkDir(agent, seq, plan.role, !!plan.opencodeAgentName);
+      if (!platformMemberId) {
+        platformMemberId = await this.autoCreateMemberForSeat(tx, {
+          baseName: `${alias}（${team.name}）`,
+          roleId: plan.roleId ?? null,
+          agentId: plan.agentId,
+          createdBy: team.createdBy,
+        });
+      }
       const created = await tx.teamMember.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),

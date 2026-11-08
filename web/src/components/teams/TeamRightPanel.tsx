@@ -4049,7 +4049,7 @@ function TeamRuntimeConfig({ team }: { team: any }) {
   const qc = useQueryClient();
   const modelsQuery = useQuery({
     queryKey: ["models", "team-runtime-config"],
-    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 100 } }),
+    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 200, available: 1 } }),
     enabled: !!team?.id,
   });
   const workersQuery = useQuery({
