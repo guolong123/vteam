@@ -522,6 +522,9 @@ model Message {
   // 带偏到别的群；取不到才回退 lastChatid。详见 20261009000000 迁移说明。
   externalChatId  String?  @map("external_chat_id")
   content          Json
+  /// 正文 text 的生成列（DB 侧 GENERATED，仅读）：会话列表预览/未读统计直接读它，
+  /// 避免把含大量工具输出的 content JSON 整包取回解析。
+  bodyText         String?  @map("body_text") @db.Text
   mentions         Json?
   // UX-10 群聊附件：客户端先 POST /uploads 拿 url，随消息提交（图片/文档均可）
   attachmentUrl    String?  @map("attachment_url")

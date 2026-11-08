@@ -94,7 +94,7 @@ export class ConversationsService {
     if (!channels || channels.length === 0) return [];
 
     const channelIds = channels.map((c: any) => c.id);
-    const [latest, unread, counts] = await Promise.all([
+    const [latest, unread, counts, processingChannels] = await Promise.all([
       this.latestMessages(channelIds),
       this.unreadCounts(channels),
       (this.prisma as any).teamMember.groupBy({
@@ -102,6 +102,7 @@ export class ConversationsService {
         where: { teamId: { in: teamIds } },
         _count: { _all: true },
       }),
+      this.processingChannels(channelIds),
     ]);
     const countByTeam = new Map<string, number>(
       (counts ?? []).map((c: any) => [c.teamId, c._count._all]),
@@ -118,6 +119,7 @@ export class ConversationsService {
       memberCount: countByTeam.get(ch.teamId) ?? 0,
       unreadCount: unread.get(ch.id) ?? 0,
       pinned: ch.pinned === true,
+      processing: processingChannels.has(ch.id),
       lastMessage: latest.get(ch.id) ?? null,
     }));
   }
@@ -156,9 +158,10 @@ export class ConversationsService {
     }
     const allChannels = [...byMember.values()].flat();
     const channelIds = allChannels.map((c) => c.id);
-    const [latest, unread] = await Promise.all([
+    const [latest, unread, processingChannels] = await Promise.all([
       this.latestMessages(channelIds),
       this.unreadCounts(allChannels),
+      this.processingChannels(channelIds),
     ]);
 
     const items: ConversationItem[] = [];
@@ -188,7 +191,7 @@ export class ConversationsService {
         contextTeamId: context?.teamId ?? null,
         unreadCount: totalUnread,
         pinned: list.some((c) => c.pinned === true),
-        processing: await this.hasProcessingMany(list.map((c) => c.id)),
+        processing: list.some((c) => processingChannels.has(c.id)),
         lastMessage: newest ?? null,
       });
     }
@@ -231,24 +234,23 @@ export class ConversationsService {
     return items;
   }
 
-  /** 频道内是否有正在生成的 agent 消息（status=processing）。 */
-  private async hasProcessing(channelId: string): Promise<boolean> {
-    const n = await (this.prisma as any).message.count({
-      where: { channelId, senderType: 'agent', status: 'processing' },
-    });
-    return n > 0;
-  }
-
-  private async hasProcessingMany(channelIds: string[]): Promise<boolean> {
-    if (channelIds.length === 0) return false;
-    const n = await (this.prisma as any).message.count({
+  /** 批量查「频道内是否有正在生成的 agent 消息」（1 条 groupBy，替代逐频道 count）。 */
+  private async processingChannels(channelIds: string[]): Promise<Set<string>> {
+    if (channelIds.length === 0) return new Set();
+    const rows = await (this.prisma as any).message.groupBy({
+      by: ['channelId'],
       where: {
         channelId: { in: channelIds },
         senderType: 'agent',
         status: 'processing',
       },
+      _count: { _all: true },
     });
-    return n > 0;
+    return new Set(
+      (rows ?? [])
+        .filter((r: any) => (r._count?._all ?? 0) > 0)
+        .map((r: any) => r.channelId as string),
+    );
   }
 
   /** 每频道最新一条消息（groupBy max(id) + 主键回查，避免全量拉取）。 */
@@ -276,18 +278,30 @@ export class ConversationsService {
       .map((g: any) => g._max?.id)
       .filter((id: unknown): id is string => typeof id === 'string');
     if (ids.length === 0) return result;
-    const rows = await (this.prisma as any).message.findMany({
-      where: { id: { in: ids } },
-      select: {
-        id: true,
-        channelId: true,
-        senderType: true,
-        senderId: true,
-        status: true,
-        content: true,
-        createdAt: true,
-      },
-    });
+    // 只取正文生成列（body_text），不把 content 的 parts/工具输出整包拉回来。
+    const raw = (this.prisma as any).$queryRawUnsafe;
+    const rows =
+      typeof raw === 'function'
+        ? await raw(
+            `SELECT id, channel_id AS channelId, sender_type AS senderType,
+                    sender_id AS senderId, status, created_at AS createdAt,
+                    COALESCE(body_text, '') AS text
+               FROM messages
+              WHERE id IN (${ids.map(() => '?').join(',')})`,
+            ...ids,
+          )
+        : await (this.prisma as any).message.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              channelId: true,
+              senderType: true,
+              senderId: true,
+              status: true,
+              content: true,
+              createdAt: true,
+            },
+          });
     const agentSenderIds = (rows ?? [])
       .filter((r: any) => r.senderType === 'agent' && r.senderId)
       .map((r: any) => r.senderId);
@@ -304,7 +318,7 @@ export class ConversationsService {
     for (const row of rows ?? []) {
       result.set(row.channelId, {
         id: row.id,
-        text: this.summarize(row.content),
+        text: row.text ?? this.summarize(row.content),
         senderType: row.senderType,
         senderName: this.senderName(row, aliases),
         status: row.status ?? null,
@@ -315,35 +329,63 @@ export class ConversationsService {
       });
     }
     // 正文兜底：最新一条可能是只有思考/工具片段的 agent 占位消息（正文为空），
-    // 预览不能空着——往前找该频道最近一条有正文的消息。
-    for (const [channelId, entry] of result) {
-      if (entry.text && entry.text.trim()) continue;
-      const candidates = await (this.prisma as any).message.findMany({
-        where: { channelId, status: { not: 'processing' } },
-        orderBy: { id: 'desc' },
-        take: 20,
-        select: {
-          id: true,
-          senderType: true,
-          content: true,
-          status: true,
-          createdAt: true,
-        },
-      });
-      const hit = (candidates ?? []).find((r: any) => {
-        const t = this.summarize(r.content);
-        return t && t.trim().length > 0;
-      });
-      if (!hit) {
-        result.delete(channelId);
-        continue;
+    // 预览不能空着——批量取空频道的最近消息，一次查询内按频道挑第一条有正文的。
+    const emptyIds = [...result.entries()]
+      .filter(([, entry]) => !entry.text || !entry.text.trim())
+      .map(([channelId]) => channelId);
+    if (emptyIds.length > 0) {
+      const take = Math.min(600, emptyIds.length * 20);
+      const candidates =
+        typeof raw === 'function'
+          ? await raw(
+              `SELECT id, channel_id AS channelId, sender_type AS senderType,
+                      status, created_at AS createdAt, body_text AS text
+                 FROM messages
+                WHERE channel_id IN (${emptyIds.map(() => '?').join(',')})
+                  AND status <> 'processing'
+                  AND COALESCE(body_text, '') <> ''
+                ORDER BY id DESC
+                LIMIT ${take}`,
+              ...emptyIds,
+            )
+          : await (this.prisma as any).message.findMany({
+              where: {
+                channelId: { in: emptyIds },
+                status: { not: 'processing' },
+              },
+              orderBy: { id: 'desc' },
+              take,
+              select: {
+                id: true,
+                channelId: true,
+                senderType: true,
+                content: true,
+                status: true,
+                createdAt: true,
+              },
+            });
+      const grouped = new Map<string, any[]>();
+      for (const row of candidates ?? []) {
+        if (!grouped.has(row.channelId)) grouped.set(row.channelId, []);
+        grouped.get(row.channelId)!.push(row);
       }
-      result.set(channelId, {
-        ...entry,
-        id: hit.id,
-        text: this.summarize(hit.content),
-        status: hit.status ?? null,
-      });
+      for (const channelId of emptyIds) {
+        const hit = (grouped.get(channelId) ?? []).find((r: any) => {
+          const t = r.text ?? this.summarize(r.content);
+          return t && t.trim().length > 0;
+        });
+        if (!hit) {
+          result.delete(channelId);
+          continue;
+        }
+        const entry = result.get(channelId);
+        result.set(channelId, {
+          ...entry,
+          id: hit.id,
+          text: hit.text ?? this.summarize(hit.content),
+          status: hit.status ?? null,
+        });
+      }
     }
     return result;
   }
@@ -353,6 +395,31 @@ export class ConversationsService {
     channels: Array<{ id: string; lastReadAt: Date | null }>,
   ): Promise<Map<string, number>> {
     const result = new Map<string, number>();
+    const ids = channels.map((c) => c.id);
+    if (ids.length === 0) return result;
+    const raw = (this.prisma as any).$queryRawUnsafe;
+    if (typeof raw === 'function') {
+      // 一次聚合替代「每频道一次 findMany」：只数正文非空、非自己、非生成中占位。
+      const placeholders = ids.map(() => '?').join(',');
+      const rows: any[] = await raw(
+        `SELECT c.id AS channelId, COUNT(m.id) AS cnt
+           FROM chat_channels c
+           LEFT JOIN messages m
+             ON m.channel_id = c.id
+            AND m.created_at > COALESCE(c.last_read_at, '1970-01-01 00:00:00')
+            AND m.sender_type <> 'user'
+            AND m.status <> 'processing'
+            AND COALESCE(m.body_text, '') <> ''
+          WHERE c.id IN (${placeholders})
+          GROUP BY c.id`,
+        ...ids,
+      );
+      for (const row of rows ?? []) {
+        result.set(String(row.channelId), Number(row.cnt ?? 0));
+      }
+      return result;
+    }
+    // 单测/非 MySQL 环境（mock 无 raw）走旧逐频道路径。
     await Promise.all(
       channels.map(async (ch) => {
         const rows = await (this.prisma as any).message.findMany({
@@ -364,7 +431,6 @@ export class ConversationsService {
           },
           select: { content: true },
         });
-        // 思考/工具消息没有正文 → 不计未读、不点亮红点。
         const count = (rows ?? []).filter(
           (r: any) => this.summarize(r.content).trim().length > 0,
         ).length;
