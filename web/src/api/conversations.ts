@@ -27,6 +27,8 @@ export interface ConversationItemDto {
   memberCount?: number;
   unreadCount: number;
   pinned: boolean;
+  /** 有 agent 消息仍在生成（status=processing）。 */
+  processing?: boolean;
   lastMessage: ConversationLastMessage | null;
 }
 

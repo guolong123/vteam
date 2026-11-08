@@ -14,6 +14,7 @@ export interface ConversationItem {
   memberCount?: number;
   unreadCount: number;
   pinned: boolean;
+  processing?: boolean;
   lastMessage: {
     id: string;
     text: string;
@@ -187,6 +188,7 @@ export class ConversationsService {
         contextTeamId: context?.teamId ?? null,
         unreadCount: totalUnread,
         pinned: list.some((c) => c.pinned === true),
+        processing: await this.hasProcessingMany(list.map((c) => c.id)),
         lastMessage: newest ?? null,
       });
     }
@@ -222,10 +224,31 @@ export class ConversationsService {
         contextTeamId,
         unreadCount: 0,
         pinned: false,
+        processing: false,
         lastMessage: null,
       });
     }
     return items;
+  }
+
+  /** 频道内是否有正在生成的 agent 消息（status=processing）。 */
+  private async hasProcessing(channelId: string): Promise<boolean> {
+    const n = await (this.prisma as any).message.count({
+      where: { channelId, senderType: 'agent', status: 'processing' },
+    });
+    return n > 0;
+  }
+
+  private async hasProcessingMany(channelIds: string[]): Promise<boolean> {
+    if (channelIds.length === 0) return false;
+    const n = await (this.prisma as any).message.count({
+      where: {
+        channelId: { in: channelIds },
+        senderType: 'agent',
+        status: 'processing',
+      },
+    });
+    return n > 0;
   }
 
   /** 每频道最新一条消息（groupBy max(id) + 主键回查，避免全量拉取）。 */

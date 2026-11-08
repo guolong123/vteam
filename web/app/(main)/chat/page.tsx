@@ -402,10 +402,11 @@ function ChatPageContent() {
   const lastDmMessage = active?.lastMessage ?? null;
   const dmWaiting =
     active?.type === "dm" &&
-    (lastDmMessage?.status === "processing" ||
+    (active.processing === true ||
+      lastDmMessage?.status === "processing" ||
       (lastDmMessage?.senderType === "user" &&
         Date.now() - Date.parse(lastDmMessage.createdAt) < 120_000));
-  const dmStreaming = lastDmMessage?.status === "processing";
+  const dmStreaming = active?.processing === true || lastDmMessage?.status === "processing";
   const busyTeamName = (memberId: string): string | null => {
     const currentTeamId = memberById.get(memberId)?.session?.currentTeamId ?? null;
     return currentTeamId ? (teamNameById.get(currentTeamId) ?? null) : null;
