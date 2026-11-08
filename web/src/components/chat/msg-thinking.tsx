@@ -74,6 +74,10 @@ export interface MsgThinkingProps {
 /** 思考中消息（reasoning 阶段）：pending=思考中带动画 / done=可折叠（单行缩略 + 思考摘要，点击展开） */
 export function MsgThinking({ state, text, style, className }: MsgThinkingProps) {
   const [open, setOpen] = useState(state === "done" ? false : true);
+  // 完成即自动折叠：用户展开过也不保留展开态（次要信息默认收起）。
+  useEffect(() => {
+    if (state === "done") setOpen(false);
+  }, [state]);
   const pending = state === "pending";
   // 空白归一（与摘录同口径）：折叠摘录取前 200 字符；
   // pending 单行跑马灯取归一化全文的前 2000 字符（第 2001 字符起不进入 DOM，DOM 有界）；

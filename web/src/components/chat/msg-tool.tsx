@@ -13,7 +13,7 @@
  * 这些 props（server/worker 契约保证），组件也不做任何拼接渲染。
  */
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   neutral,
@@ -56,6 +56,10 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
   const failed = status === "failed";
   const awaiting = status === "awaiting-input";
   const [open, setOpen] = useState(false);
+  // 工具执行结束后自动收起，避免历史消息残留展开的工具输出。
+  useEffect(() => {
+    if (status === "success" || status === "failed") setOpen(false);
+  }, [status]);
   // 单值 I/O 展开为值原文（不包 JSON）：{"command":"…"} → 直接显示命令。
   // 多键/数组按调用场景分两种序列化：
   // - 标题行（pretty 缺省）保持单行紧凑，配合 whiteSpace:nowrap + ellipsis 截断；
