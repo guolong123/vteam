@@ -921,6 +921,7 @@ async function main() {
   const memberPermissions = {
     all: false,
     agents: { view: true, create: true, edit: true, delete: false },
+    members: { view: true, create: true, edit: true, delete: false },
     artifacts: { view: true, create: true },
     chats: { view: true, create: true, edit: true, delete: false },
     skills: { view: true, create: false, edit: false },
@@ -2692,6 +2693,22 @@ version: 0.1.0
     a_plan: 'plan',
     a_librarian: 'librarian',
   };
+  const seedMemberName = (role: string, seq: number): string => {
+    const map: Record<string, [string, string]> = {
+      product: ['苏', '产'],
+      project_manager: ['周', '项'],
+      architect: ['林', '架'],
+      developer: ['胡', '开'],
+      tester: ['秦', '测'],
+      plan: ['许', '计'],
+      librarian: ['文', '知'],
+    };
+    const cn = ['零','一','二','三','四','五','六','七','八','九','十'];
+    const n = Math.max(1, Math.floor(seq));
+    const num = n <= 10 ? cn[n] : n < 20 ? `十${cn[n - 10] ?? ''}` : `${cn[Math.floor(n / 10)] ?? ''}十${n % 10 ? cn[n % 10] : ''}`;
+    const parts = map[role] ?? ['成', '员'];
+    return `${parts[0]}${num}${parts[1]}`;
+  };
   const teamRoleLabels: Record<string, string> = {
     product: '产品经理',
     project_manager: '项目经理',
@@ -2725,7 +2742,7 @@ version: 0.1.0
     const m = seedMemberAgents[i];
     const id = `tmm_${String(i + 1).padStart(10, '0')}`;
     const role = teamRoleMap[m.agentId] ?? '';
-    const alias = `${teamRoleLabels[role] ?? m.name}-1`;
+    const alias = seedMemberName(role, 1);
     const workDir = `/data/vteam-worker/${sanitizeWorkDirNameSeed(m.name)}`;
     await prisma.teamMember.upsert({
       where: { id },

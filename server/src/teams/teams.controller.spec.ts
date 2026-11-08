@@ -95,10 +95,16 @@ describe('TeamsController', () => {
 
   it('POST /teams/:id/members 转发到 addMember', async () => {
     service.addMember.mockResolvedValue({ id: 'tm_1' });
-    const result = await controller.addMember('tm_1', {
-      agentId: 'a_1',
-    } as any);
-    expect(service.addMember).toHaveBeenCalledWith('tm_1', { agentId: 'a_1' });
+    const result = await controller.addMember(
+      'tm_1',
+      { agentId: 'a_1' } as any,
+      { id: 'u_1', username: 'admin', roleId: 'r_admin' } as any,
+    );
+    expect(service.addMember).toHaveBeenCalledWith(
+      'tm_1',
+      { agentId: 'a_1' },
+      'u_1',
+    );
     expect(result).toEqual({ id: 'tm_1' });
   });
 

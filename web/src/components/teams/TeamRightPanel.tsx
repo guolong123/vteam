@@ -8,7 +8,7 @@ import { useAuthStore } from "@/lib/stores/authStore";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { useSSE } from "@/hooks/use-sse";
 import { STATUS_LABEL } from "@/src/types/task-status";
-import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog, SearchableSelect } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import {
   PlanDocModal,
@@ -1194,6 +1194,7 @@ function TeamSubTabs({
                   marginBottom: space.sm,
                 }}
               >
+                <TeamRuntimeConfig team={team} />
                 会话设置
               </div>
               <div
@@ -4039,6 +4040,65 @@ export function TaskRightTabs({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/** 群聊默认运行配置：默认模型 / 首选 Worker（成员级配置优先）。 */
+function TeamRuntimeConfig({ team }: { team: any }) {
+  const qc = useQueryClient();
+  const modelsQuery = useQuery({
+    queryKey: ["models", "team-runtime-config"],
+    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 100 } }),
+    enabled: !!team?.id,
+  });
+  const workersQuery = useQuery({
+    queryKey: ["workers", "team-runtime-config"],
+    queryFn: () => api.get<Array<{ id: string; name: string | null; status: string }>>("/workers"),
+    enabled: !!team?.id,
+  });
+  const save = useMutation({
+    mutationFn: (payload: { defaultModelId?: string | null; preferredWorkerId?: string | null }) =>
+      teamsApi.update(team.id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["team", team.id] });
+      qc.invalidateQueries({ queryKey: ["teams"] });
+    },
+  });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", borderRadius: 10, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>
+      <div style={{ fontSize: fontSize.sm, fontWeight: 700, color: neutral[800] }}>运行配置</div>
+      <div style={{ fontSize: 10, color: neutral[400] }}>群聊默认；成员单独配置的模型/Worker 优先。</div>
+      <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <span style={{ fontSize: 10, color: neutral[400] }}>默认模型</span>
+        <SearchableSelect
+          testId="team-default-model"
+          value={team.defaultModelId ?? ""}
+          onChange={(v) => save.mutate({ defaultModelId: v || null })}
+          placeholder="跟随 Agent / Worker"
+          searchPlaceholder="搜索模型 / provider"
+          options={[
+            { value: "", label: "跟随 Agent / Worker" },
+            ...((modelsQuery.data?.items ?? []).map((m) => ({ value: m.id, label: `${m.providerID} · ${m.name}`, keywords: `${m.providerID} ${m.name}` }))),
+          ]}
+        />
+      </label>
+      <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <span style={{ fontSize: 10, color: neutral[400] }}>首选 Worker</span>
+        <SearchableSelect
+          testId="team-default-worker"
+          value={team.preferredWorkerId ?? ""}
+          onChange={(v) => save.mutate({ preferredWorkerId: v || null })}
+          placeholder="自动调度"
+          searchPlaceholder="搜索 Worker"
+          options={[
+            { value: "", label: "自动调度" },
+            ...((workersQuery.data ?? []).map((w) => ({ value: w.id, label: `${w.name ?? w.id}${w.status !== "online" ? "（离线）" : ""}`, keywords: w.name ?? w.id }))),
+          ]}
+        />
+      </label>
+      {save.isError && <span style={{ fontSize: 10, color: "#B91C1C" }}>{isApiError(save.error) ? save.error.message : "保存失败"}</span>}
+      <span style={{ fontSize: 9, color: neutral[400] }}>{save.isPending ? "保存中…" : "修改自动保存"}</span>
     </div>
   );
 }

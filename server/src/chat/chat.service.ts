@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -25,6 +26,8 @@ import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerClient, WorkerEndpointRef } from '../workers/worker.client';
+import { SessionLifecycleService } from '../workers/session-lifecycle.service';
+import { isMemberSessionScope } from '../workers/session-scope';
 import { CHAT_ERRORS } from './chat.constants';
 import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
@@ -120,6 +123,8 @@ const TEAM_MEMBER_SELECT = {
   agentId: true,
   alias: true,
   seq: true,
+  /** P3：成员全局会话键（旧席位未回填时为 null → 回落席位会话）。 */
+  memberId: true,
 } as const;
 
 const CHANNEL_TASK_SELECT = {
@@ -172,6 +177,9 @@ export class ChatService {
     private readonly workerClient: WorkerClient,
     @Inject(MessageDispatcher)
     private readonly dispatcher: MessageDispatcher,
+    /** P3：SESSION_SCOPE=member 时触发解析走成员全局会话；缺省（旧/单测）走席位会话。 */
+    @Optional()
+    private readonly sessionLifecycle?: SessionLifecycleService,
   ) {
     // 接通分派回调（计划 §5.1：onLoading/onFinal/onError）——仅日志，行为不变：
     // loading 广播 / 回复落库 + 广播均由分派器内部完成，此处不重复广播（否则改变
@@ -1564,10 +1572,55 @@ export class ChatService {
   }
 
   async createDmChannel(userId: string, dto: CreateDmChannelDto) {
-    const teamId = (dto as any).teamId as string | undefined;
-    const teamMemberIdInput = (dto as any).teamMemberId as string | undefined;
+    let teamId = (dto as any).teamId as string | undefined;
+    const memberIdInput = (dto as any).memberId as string | undefined;
+    let teamMemberIdInput = (dto as any).teamMemberId as string | undefined;
     const agentIdInput = (dto as any).agentId as string | undefined;
     const legacyTaskId = (dto as any).taskId as string | undefined;
+
+    // 新形状（成员维度）：解析成员 → 其席位（可选指定 context teamId）→ 复用/创建私聊频道。
+    // 私聊频道仍是「团队 × 成员」一条（P4 合并前的过渡），member_id 同步落库。
+    let resolvedMemberId: string | null = null;
+    if (memberIdInput) {
+      const member = await (this.prisma as any).member.findUnique({
+        where: { id: memberIdInput },
+        select: { id: true, name: true, status: true },
+      });
+      if (!member) {
+        throw new NotFoundException({
+          code: CHAT_ERRORS.MEMBER_NOT_FOUND,
+          message: `成员 ${memberIdInput} 不存在`,
+        });
+      }
+      if (member.status !== 'active') {
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MEMBER_DISABLED,
+          message: `成员 ${member.name} 已停用`,
+        });
+      }
+      const seats: Array<{ id: string; agentId: string; teamId: string }> =
+        await (this.prisma as any).teamMember.findMany({
+          where: { memberId: member.id },
+          select: { id: true, agentId: true, teamId: true },
+          orderBy: { createdAt: 'asc' },
+        });
+      if (!seats || seats.length === 0) {
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MEMBER_NOT_IN_ANY_TEAM,
+          message: '成员尚未加入任何群聊，无法创建私聊',
+        });
+      }
+      const seat = teamId ? seats.find((s) => s.teamId === teamId) : seats[0];
+      if (!seat) {
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MEMBER_NOT_IN_TEAM,
+          message: '成员不属于指定团队',
+        });
+      }
+      teamId = seat.teamId;
+      teamMemberIdInput = seat.id;
+      resolvedMemberId = member.id;
+    }
     if (legacyTaskId && !teamId) {
       const legacyTask = await this.prisma.task.findUnique({
         where: { id: legacyTaskId },
@@ -1639,7 +1692,7 @@ export class ChatService {
     if (teamMemberIdInput) {
       teamMember = await (this.prisma as any).teamMember.findUnique({
         where: { id: teamMemberIdInput },
-        select: { id: true, agentId: true, teamId: true },
+        select: { id: true, agentId: true, teamId: true, memberId: true },
       });
       if (!teamMember) {
         throw new NotFoundException({
@@ -1667,7 +1720,7 @@ export class ChatService {
       teamMember = await (this.prisma as any).teamMember.findFirst({
         where: { teamId, agentId: agentIdInput },
         orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-        select: { id: true, agentId: true },
+        select: { id: true, agentId: true, memberId: true },
       });
       if (!teamMember) {
         throw new BadRequestException({
@@ -1681,18 +1734,36 @@ export class ChatService {
         message: 'teamMemberId 或 agentId 必填',
       });
     }
-    const existing = await this.prisma.chatChannel.findFirst({
-      where: { teamId, teamMemberId: teamMember.id } as any,
-      include: CHANNEL_TASK_SELECT,
-    });
-    if (existing) {
-      if ((existing as any).deletedAt) {
-        const revived = await this.prisma.chatChannel.update({
-          where: { id: existing.id },
-          data: { deletedAt: null },
+    const memberId = resolvedMemberId ?? (teamMember as any).memberId ?? null;
+    // P4：成员维度优先复用「该成员已有的 private 频道」（全局一个 DM），
+    // 不再要求 (teamId, teamMemberId) 完全一致；旧形状（teamId+teamMemberId）
+    // 只要席位已挂 member_id 也走成员复用，避免同一成员在不同群各建一条私聊频道。
+    const existing = memberId
+      ? await this.prisma.chatChannel.findFirst({
+          where: {
+            memberId,
+            type: CHANNEL_TYPE.private,
+          } as any,
+          orderBy: { createdAt: 'asc' },
+          include: CHANNEL_TASK_SELECT,
+        })
+      : await this.prisma.chatChannel.findFirst({
+          where: { teamId, teamMemberId: teamMember.id } as any,
           include: CHANNEL_TASK_SELECT,
         });
-        return this.toChannelDto(revived);
+    if (existing) {
+      const needRevive = !!(existing as any).deletedAt;
+      const needMember = !!(memberId && !(existing as any).memberId);
+      if (needRevive || needMember) {
+        const updated = await this.prisma.chatChannel.update({
+          where: { id: existing.id },
+          data: {
+            ...(needRevive ? { deletedAt: null } : {}),
+            ...(needMember ? { memberId } : {}),
+          } as any,
+          include: CHANNEL_TASK_SELECT,
+        });
+        return this.toChannelDto(updated);
       }
       return this.toChannelDto(existing);
     }
@@ -1701,6 +1772,7 @@ export class ChatService {
         id: await this.idGen.nextId(CHANNEL_ID_PREFIX),
         type: CHANNEL_TYPE.private,
         teamId,
+        memberId,
         teamMemberId: teamMember.id,
         agentId: teamMember.agentId,
         taskId: null,
@@ -1760,6 +1832,86 @@ export class ChatService {
       id: updated.id,
       lastReadAt: updated.lastReadAt.toISOString(),
     };
+  }
+
+  /**
+   * P4：成员跨群私聊消息聚合读（不移动历史消息）。
+   * 成员的 private 频道可能来自多个群（历史数据），这里按 memberId 聚合后统一分页；
+   * 可见性沿用会话聚合口径（调用者与成员至少共享一个团队）。
+   */
+  async findMemberMessages(
+    memberId: string,
+    userId: string,
+    query: QueryMessagesDto,
+  ) {
+    await this.assertMemberChatVisible(memberId, userId);
+    const channels = await this.prisma.chatChannel.findMany({
+      where: { memberId, type: CHANNEL_TYPE.private } as any,
+      select: { id: true },
+    });
+    if (channels.length === 0) {
+      return { items: [], nextCursor: null as string | null };
+    }
+    const limit = this.normalizeLimit(query.limit);
+    const idRows = await this.prisma.message.findMany({
+      where: {
+        channelId: { in: channels.map((c) => c.id) },
+        ...(query.cursor ? { id: { lt: query.cursor } } : {}),
+      },
+      orderBy: { id: 'desc' },
+      take: limit + 1,
+      select: { id: true },
+    });
+    const hasMore = idRows.length > limit;
+    const ids = idRows.slice(0, limit).map((r) => r.id);
+    const rows = await this.loadMessageRowsInIdOrder(ids);
+    return {
+      items: [...rows].reverse().map((row) => this.toMessageDto(row)),
+      nextCursor: hasMore ? ids[ids.length - 1] : null,
+    };
+  }
+
+  /** P4：成员私聊已读 —— 一次把该成员所有 private 频道置为已读。 */
+  async markMemberRead(memberId: string, userId: string) {
+    await this.assertMemberChatVisible(memberId, userId);
+    const now = new Date();
+    const updated = await this.prisma.chatChannel.updateMany({
+      where: { memberId, type: CHANNEL_TYPE.private } as any,
+      data: { lastReadAt: now },
+    });
+    return { memberId, updated: updated.count, lastReadAt: now.toISOString() };
+  }
+
+  /** 成员私聊可见性：成员存在 + 调用者与其至少共享一个团队（对齐 conversations 口径）。 */
+  private async assertMemberChatVisible(memberId: string, userId: string) {
+    const member = await this.prisma.member.findUnique({
+      where: { id: memberId },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new NotFoundException({
+        code: CHAT_ERRORS.MEMBER_NOT_FOUND,
+        message: `成员 ${memberId} 不存在`,
+      });
+    }
+    const seats = await this.prisma.teamMember.findMany({
+      where: { memberId },
+      select: { teamId: true },
+    });
+    const teamIds = [...new Set(seats.map((s) => s.teamId))];
+    const visible =
+      teamIds.length > 0
+        ? await this.prisma.teamUserMember.findFirst({
+            where: { userId, teamId: { in: teamIds } },
+            select: { id: true },
+          })
+        : null;
+    if (!visible) {
+      throw new ForbiddenException({
+        code: CHAT_ERRORS.TEAM_FORBIDDEN,
+        message: '无权访问该成员的私聊',
+      });
+    }
   }
 
   /**
@@ -2104,6 +2256,8 @@ export class ChatService {
       agentId: string;
       removedAt: Date | null;
       enabled?: boolean | null;
+      /** 平台成员 id（P3 成员全局会话键；null = 旧席位未回填）。 */
+      memberId?: string | null;
     },
   ): Promise<TriggerResult> {
     if (row.removedAt) {
@@ -2121,6 +2275,26 @@ export class ChatService {
         sessionId: null,
         status: 'agent_disabled',
       };
+    }
+    // P3（SESSION_SCOPE=member）：优先成员全局会话 —— 一个成员跨群只有一个 session；
+    // 平台成员不存在/未回填时回落旧席位会话，保证开关可渐进开启。
+    if (isMemberSessionScope() && row.memberId && this.sessionLifecycle) {
+      try {
+        const ensured = await this.sessionLifecycle.ensureMemberSession(
+          row.memberId,
+          { seatId: row.id, teamId },
+        );
+        return {
+          agentId: row.agentId,
+          instanceId: row.id,
+          sessionId: ensured.id,
+          status: 'dispatched',
+        };
+      } catch (err) {
+        this.logger.warn(
+          `member-session 解析失败 team=${teamId} seat=${row.id} member=${row.memberId}，回落席位会话: ${(err as Error)?.message ?? err}`,
+        );
+      }
     }
     // 团队直查：按 (teamId, teamMemberId) 定位团队会话（单成员单会话，
     // 同 agent 多实例会话独立，不再按 agentId 撞首条；任务锚定分支已删）。
@@ -2164,6 +2338,7 @@ export class ChatService {
         agentId: string;
         removedAt: Date | null;
         enabled?: boolean | null;
+        memberId?: string | null;
       },
     );
   }
@@ -2173,6 +2348,7 @@ export class ChatService {
       id: row.id,
       type: row.type,
       teamId: (row as any).teamId ?? null,
+      memberId: (row as any).memberId ?? null,
       teamMemberId: (row as any).teamMemberId ?? null,
       taskId: row.taskId,
       agentId: row.agentId,

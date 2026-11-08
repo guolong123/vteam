@@ -22,6 +22,8 @@ export interface AgentAvatarProps {
   size?: "sm" | "md" | "lg";
   /** 是否显示右下角色点 */
   dot?: boolean;
+  /** 形状：member/agent 圆形（默认）；group 圆角方形（原型群头像） */
+  shape?: "circle" | "square";
   style?: CSSProperties;
   className?: string;
 }
@@ -33,6 +35,7 @@ export function AgentAvatar({
   initials,
   size = "md",
   dot = true,
+  shape = "circle",
   style,
   className,
 }: AgentAvatarProps) {
@@ -55,7 +58,7 @@ export function AgentAvatar({
         justifyContent: "center",
         width: dim,
         height: dim,
-        borderRadius: "50%",
+        borderRadius: shape === "square" ? Math.round(dim * 0.28) : "50%",
         backgroundColor: theme.bg,
         border: `1.5px solid ${theme.border}`,
         color: theme.color,

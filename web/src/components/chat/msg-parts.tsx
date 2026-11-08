@@ -30,6 +30,7 @@
  * msg-aborted/msg-unknown-part/chat-bubble），token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 import { ChatBubble, Markdown, MessageIdentity } from "@/src/components/ui";
@@ -240,6 +241,29 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
   const body = textParts.map((t) => t.text ?? "").join("\n") || bodyText || "";
   const cleanBody = stripInjectedContext(body);
 
+  /** 连续 reasoning/tool 片段合并为一条折叠摘要（避免一长串工具卡刷屏）。 */
+  type ProcSegment =
+    | { kind: "group"; items: Array<{ part: PartShape; i: number }> }
+    | { kind: "single"; part: PartShape; i: number };
+  const procSegments: ProcSegment[] = [];
+  {
+    let run: Array<{ part: PartShape; i: number }> = [];
+    const isSecondary = (p: PartShape) =>
+      p.type === "reasoning" || p.type === "thinking" || p.type === "tool";
+    procPartsDeduped.forEach((p, i) => {
+      if (isSecondary(p)) {
+        run.push({ part: p, i });
+      } else {
+        if (run.length > 1) procSegments.push({ kind: "group", items: run });
+        else if (run.length === 1) procSegments.push({ kind: "single", part: run[0].part, i: run[0].i });
+        run = [];
+        procSegments.push({ kind: "single", part: p, i });
+      }
+    });
+    if (run.length > 1) procSegments.push({ kind: "group", items: run });
+    else if (run.length === 1) procSegments.push({ kind: "single", part: run[0].part, i: run[0].i });
+  }
+
   /**
    * tool part 的渲染视图（状态 + 规范化 I/O）；返回 null 表示该卡片不予渲染。
    *
@@ -400,37 +424,15 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
           </>
         ) : (
           <>
-            {procPartsDeduped.map((p, i) => {
-              if (p.type === "reasoning" || p.type === "thinking") {
-                if (!procRenderable(p)) return null;
-                return (
-                  <MsgThinking
-                    key={i}
-                    state={p.state ?? (isStreaming && i === lastReasoningIndex ? "pending" : "done")}
-                    text={p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""}
-                  />
-                );
-              }
-              if (p.type === "tool") {
-                const view = toolView(p);
-                if (!view) return null;
-                return (
-                  <MsgTool
-                    key={i}
-                    name={view.name}
-                    status={view.status}
-                    input={view.input}
-                    output={view.output}
-                  />
-                );
-              }
-              if (p.type === "error") {
-                return <MsgError key={i} kind={p.kind ?? "retry"} detail={p.detail ?? "处理失败"} />;
-              }
-              // step-start/step-finish/patch 等内部过程 part 不渲染（过程噪声）。
-              // 已在分发层显式处理之外的未识别 type 同样不渲染。
-              return null;
-            })}
+            {procPartsDeduped.length > 1 ? (
+              <ProcessGroup
+                items={procPartsDeduped.map((p, i) => ({ part: p, i }))}
+                streaming={isStreaming}
+                renderItem={(p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView)}
+              />
+            ) : (
+              procPartsDeduped.map((p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView))
+            )}
             {body ? (
               streaming ? (
                 <div
@@ -459,7 +461,6 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
                       wordBreak: "break-word",
                     }}
                   >
-                    {/* 流式正文 markdown 渲染（is_0000000019，终态走 ChatBubble 同链路） */}
                     <Markdown>{cleanBody}</Markdown>
                   </span>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
@@ -478,6 +479,75 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 渲染单个过程片段（thinking / tool / error）。 */
+function renderProcPart(
+  p: PartShape,
+  i: number,
+  isStreaming: boolean,
+  lastReasoningIndex: number,
+  toolView: (p: PartShape) => { name: string; status: MsgToolStatus; input?: string; output?: string } | null,
+): React.ReactNode {
+  if (p.type === "reasoning" || p.type === "thinking") {
+    if (!p.text && !p.summary && !p.thoughts && !p.detail) return null;
+    return (
+      <MsgThinking
+        key={i}
+        state={p.state ?? (isStreaming && i === lastReasoningIndex ? "pending" : "done")}
+        text={p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""}
+      />
+    );
+  }
+  if (p.type === "tool") {
+    const view = toolView(p);
+    if (!view) return null;
+    return <MsgTool key={i} name={view.name} status={view.status} input={view.input ?? ""} output={view.output ?? ""} />;
+  }
+  if (p.type === "error") {
+    return <MsgError key={i} kind={p.kind ?? "retry"} detail={p.detail ?? "处理失败"} />;
+  }
+  return null;
+}
+
+/** 连续「思考/工具调用」合并为一条可展开的摘要行，默认收起。 */
+function ProcessGroup({
+  items,
+  streaming,
+  renderItem,
+}: {
+  items: Array<{ part: PartShape; i: number }>;
+  streaming: boolean;
+  renderItem: (p: PartShape, i: number) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!streaming) setOpen(false);
+  }, [streaming]);
+  const tools = items.filter((x) => x.part.type === "tool").length;
+  const thinks = items.length - tools;
+  const partsText: string[] = [];
+  if (tools > 0) partsText.push(`${tools} 个工具调用`);
+  if (thinks > 0) partsText.push(`${thinks} 段思考`);
+  const label = tools > 0 ? `执行了 ${tools} 个工具调用并已调用工具` : `思考了 ${thinks} 段`;
+  return (
+    <div data-testid="msg-process-group" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 8, alignSelf: "flex-start", border: "none", background: "none", cursor: "pointer", padding: "2px 0", color: neutral[500], fontSize: fontSize.xs, fontFamily: fontFamily.body }}
+      >
+        <span aria-hidden style={{ color: neutral[400] }}>{open ? "▾" : "▸"}</span>
+        <span>{label}{streaming ? " · 进行中" : ""}</span>
+        <span style={{ color: neutral[400] }}>({partsText.join(" · ")})</span>
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+          {items.map((x) => renderItem(x.part, x.i))}
+        </div>
+      )}
     </div>
   );
 }

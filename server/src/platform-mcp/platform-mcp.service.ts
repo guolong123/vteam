@@ -2336,6 +2336,58 @@ export class PlatformMcpService implements OnModuleInit {
         });
       }
     }
+    // 成员私聊镜像：agent → agent 的派发/协调消息原本只落在群聊频道；在目标成员的
+    // 私聊里也留一条发送记录（sender = 本次调用者），这样“项目经理发给某成员的消息”
+    // 能在该成员的消息列表里看到。
+    if (!isJoinReport) {
+      try {
+        const targetSeat = await (this.prisma as any).teamMember.findUnique({
+          where: { id: args.targetInstanceId },
+          select: { memberId: true, teamId: true },
+        });
+        // 只镜像到「已回填平台成员」的私聊：旧席位没有 memberId 时保持原行为，
+        // 且避免单测/旧数据把群频道误当私聊。
+        const privateChannel = targetSeat?.memberId
+          ? await (this.prisma as any).chatChannel.findFirst({
+              where: {
+                memberId: targetSeat.memberId,
+                type: 'private',
+                deletedAt: null,
+              },
+              orderBy: { createdAt: 'asc' },
+              select: { id: true },
+            })
+          : null;
+        if (privateChannel) {
+          const senderAgentId = await this.resolveTeamSenderAgentId(
+            execTeamId ?? targetSeat?.teamId ?? '',
+            args.selfInstanceId,
+          );
+          const mirrored = await (this.prisma as any).message.create({
+            data: {
+              id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+              channelId: privateChannel.id,
+              taskId: effTaskId,
+              senderType: SENDER_TYPE.agent,
+              senderId: senderAgentId,
+              senderInstanceId: args.selfInstanceId,
+              content: { text: args.content, parts: [] },
+              mentions: null,
+              status: MESSAGE_STATUS.sent,
+            },
+          });
+          await this.realtime.broadcast(
+            EVENT_TYPES.CHAT_MESSAGE_NEW,
+            { message: this.toMessageDto(mirrored) },
+            { type: 'channel', id: privateChannel.id },
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[mcp] notify_agent 私聊镜像失败（不阻断派发） to=${args.targetInstanceId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     if (kind === 'execution') {
       if (isJoinReport) {
         // join 报告行审计记账（v1.0.3 D4/D5）：sub→main 回执照落，但落库即 acked
@@ -3803,6 +3855,37 @@ export class PlatformMcpService implements OnModuleInit {
     // 产出物作者（Agent id）：按提交者实例 id 解析（团队成员行 → 模板 Agent）。
     // 解析不到 ⇒ null（不抛错）：缺作者不能把一次正常的提交搞失败。
     const authorAgentId = await this.resolveArtifactAuthorAgentId(instanceId);
+
+    // 岗位级产出物门禁（项目经理不下场）：PM 只允许提交「进度/风险/协调/核验/派发」
+    // 类记录（category 缺省或「其他」），需求/设计/实现/用例/测试报告/计划属于各专业
+    // 岗位的交付物，PM 提交直接被拒绝——把「不要越界」从提示词变成技术卡点。
+    try {
+      const seat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: instanceId },
+        select: { role: { select: { key: true } } },
+      });
+      if (seat?.role?.key === 'project_manager') {
+        const forbidden = [
+          '需求',
+          '设计',
+          '实现',
+          '测试用例',
+          '测试报告',
+          '计划',
+        ];
+        if (args.category && forbidden.includes(args.category)) {
+          throw new BadRequestException({
+            code: 'ARTIFACT_ROLE_FORBIDDEN',
+            message:
+              `项目经理不产出「${args.category}」类交付物：请先 vteam_notify_agent 派发给对应岗位，` +
+              '只提交进度/风险/协调/核验类记录（category 用「其他」或省略）。',
+          });
+        }
+      }
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      // 查询失败 fail-open：不因岗位校验查询异常阻断正常提交
+    }
 
     if (
       args.category !== undefined &&
@@ -7872,14 +7955,17 @@ export class PlatformMcpService implements OnModuleInit {
     }
     let taskId: string | null = null;
     let teamId: string | null = null;
+    let memberId: string | null = null;
     try {
       const session = await (this.prisma as any).session.findFirst({
         where: { workerId: ctx.workerId },
         orderBy: { createdAt: 'desc' },
-        select: { taskId: true, teamId: true },
+        select: { taskId: true, teamId: true, memberId: true },
       });
       taskId = session?.taskId ?? null;
       teamId = session?.teamId ?? null;
+      // P5：成员全局会话优先按成员绑定解析通知渠道（D16/Q26）。
+      memberId = session?.memberId ?? null;
     } catch {}
     if (!taskId && !teamId) {
       return {
@@ -7913,7 +7999,7 @@ export class PlatformMcpService implements OnModuleInit {
         taskId,
         target,
         text,
-        { teamId },
+        { teamId, ...(memberId ? { memberId } : {}) },
       );
       const preview = text.slice(0, 100);
       return {
@@ -8499,6 +8585,25 @@ export class PlatformMcpService implements OnModuleInit {
       });
       if (adopted) {
         session = { id: adopted.id, teamMemberId: adopted.teamMemberId };
+      }
+    }
+    // 成员全局会话（P3）：会话行只有一条，teamMemberId 是「最近席位」——成员跨群时
+    // 用另一个群的席位调工具会查不到按 (teamId, teamMemberId) 定位的会话。这里按
+    // 「席位属于同一 member + 该 member 的全局会话在本 worker」放行，callerId 仍用
+    // 本轮席位，保证消息归属到目标群的真实席位。
+    if (!session && selfInstanceId) {
+      const seat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: selfInstanceId },
+        select: { teamId: true, memberId: true },
+      });
+      if (seat && seat.teamId === teamId && seat.memberId) {
+        const memberSession = await (this.prisma as any).session.findFirst({
+          where: { memberKey: seat.memberId, workerId: ctx.workerId },
+          select: { id: true },
+        });
+        if (memberSession) {
+          session = { id: memberSession.id, teamMemberId: selfInstanceId };
+        }
       }
     }
     if (!session) {

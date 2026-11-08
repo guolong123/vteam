@@ -117,6 +117,37 @@ export class ChatController {
   }
 
   /**
+   * P4：成员跨群私聊消息聚合读（不移动历史消息）。
+   * GET /api/v1/members/:id/messages?cursor=&limit=
+   */
+  @Get('members/:id/messages')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('chats.view')
+  @ApiOperation({ summary: '成员私聊消息聚合（按 memberId 跨群，id 升序）' })
+  findMemberMessages(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query() query: QueryMessagesDto,
+  ) {
+    return this.chatService.findMemberMessages(id, user.id, query);
+  }
+
+  /**
+   * P4：成员私聊一次全部已读（该成员所有 private 频道）。
+   * PATCH /api/v1/members/:id/read
+   */
+  @Patch('members/:id/read')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('chats.view')
+  @ApiOperation({ summary: '成员私聊已读（跨群全部 private 频道）' })
+  markMemberRead(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.chatService.markMemberRead(id, user.id);
+  }
+
+  /**
    * 待回执查询（plan-review-execution-gates Todo 5 缺失的独立端点）。
    * GET /api/v1/messages/receipts?taskId=&teamId=&status= → {items, pending, total}
    * - items：回执行（id/messageId/from/to/status/createdAt），按查询参数过滤，

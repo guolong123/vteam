@@ -61,6 +61,7 @@ model User {
   createdIssues  Issue[]         @relation("IssueCreatorUser")
   teamsCreated   Team[]          @relation("TeamCreator")
   teamUserMembers TeamUserMember[]
+  membersCreated Member[]        @relation("MemberCreator")
 
   @@map("users")
 }
@@ -94,6 +95,8 @@ model Team {
   mainAgentMemberId  String?  @map("main_agent_member_id")
   /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
   preferredWorkerId  String?  @map("preferred_worker_id")
+  /// 群聊默认模型（md_ 目录行 id）；成员级 defaultModelId 优先于它
+  defaultModelId     String?  @map("default_model_id")
   /// 并行任务并发上限（并行任务计划 D1）：NULL = 不限；start 时校验活跃占用（in_progress+blocked）。
   maxConcurrentTasks Int?     @map("max_concurrent_tasks")
   version            Int      @default(0) @map("version")
@@ -104,6 +107,7 @@ model Team {
   creator      User          @relation("TeamCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   currentTask  Task?         @relation("TeamCurrentTask", fields: [currentTaskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   mainAgentMember TeamMember? @relation("TeamMainAgent", fields: [mainAgentMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  defaultModel Model?        @relation("TeamDefaultModel", fields: [defaultModelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
   members      TeamMember[]
   userMembers  TeamUserMember[]
   sessions     Session[]
@@ -172,6 +176,7 @@ model AgentRole {
 
   defaultAgent Agent?       @relation("AgentRoleDefaultAgent", fields: [defaultAgentId], references: [id], onDelete: SetNull, onUpdate: Restrict)
   members      TeamMember[]
+  memberDefaults Member[]   @relation("MemberDefaultRole")
 
   @@index([defaultAgentId], map: "idx_agent_roles_default_agent")
   @@index([sortOrder], map: "idx_agent_roles_sort_order")
@@ -181,6 +186,8 @@ model AgentRole {
 model TeamMember {
   id             String   @id
   teamId         String   @map("team_id")
+  /// 平台级成员（members.id）。expand 阶段可空，回填后收紧为 NOT NULL。
+  memberId       String?  @map("member_id")
   agentId        String   @map("agent_id")
   alias          String?
   seq            Int      @default(1)
@@ -199,6 +206,7 @@ model TeamMember {
   createdAt      DateTime @default(now()) @map("created_at")
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  member       Member?       @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   role         AgentRole?    @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   sessions     Session[]
@@ -207,6 +215,7 @@ model TeamMember {
   mainForTeams Team[]        @relation("TeamMainAgent")
 
   @@index([roleId], map: "idx_team_members_role")
+  @@index([memberId], map: "idx_team_members_member")
   @@unique([teamId, agentId, seq], map: "uk_team_members_team_agent_seq")
   @@map("team_members")
 }
@@ -237,6 +246,69 @@ model TeamUserMember {
 
   @@unique([teamId, userId], map: "uk_team_user_members_team_user")
   @@map("team_user_members")
+}
+
+// ==================================================================
+// 成员库域（vteam-member-decouple P0）
+//
+// 成员 = 平台级「数字员工」：绑定一个执行 Agent + 默认岗位/模型/worker/私有目录，
+// 通过 TeamMember（席位）加入 0..N 个群聊。会话（sessions.member_id）与通知渠道
+// 归属（member_notification_channels）在后续阶段接入。
+// ==================================================================
+
+model Member {
+  id                String   @id
+  /// 成员名（全局唯一，@ 与私聊列表寻址用）
+  name              String   @unique
+  /// 默认岗位（入群时预填 team_members.role_id；权限仍按席位 roleId 判定）
+  defaultRoleId     String   @map("default_role_id")
+  /// 绑定的执行 Agent（prompt/policy/skills 来源）
+  agentId           String   @map("agent_id")
+  /// 默认模型（席位可覆盖）
+  defaultModelId    String?  @map("default_model_id")
+  /// 默认 worker 偏好（席位可覆盖）
+  preferredWorkerId String?  @map("preferred_worker_id")
+  /// 成员私有工作目录（会话默认 cwd；团队目录按轮授权切换）
+  privateWorkDir    String?  @map("private_work_dir") @db.VarChar(255)
+  /// active / disabled（停用后不可加群、不可派发）
+  status            String   @default("active") @db.VarChar(16)
+  description       String?  @db.Text
+  /// 回填溯源（旧 team_members.id），唯一保证回填脚本可重跑
+  originTeamMemberId String? @unique @map("origin_team_member_id")
+  createdBy         String   @map("created_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  role              AgentRole     @relation("MemberDefaultRole", fields: [defaultRoleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent             Agent         @relation("MemberAgent", fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  defaultModel      Model?        @relation("MemberDefaultModel", fields: [defaultModelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  preferredWorker   Worker?       @relation("MemberPreferredWorker", fields: [preferredWorkerId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  creator           User          @relation("MemberCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  teamMembers       TeamMember[]
+  chatChannels      ChatChannel[]
+  notificationLinks MemberNotificationChannel[]
+  sessions          Session[]
+
+  @@index([defaultRoleId], map: "idx_members_default_role")
+  @@index([agentId], map: "idx_members_agent")
+  @@index([status], map: "idx_members_status")
+  @@map("members")
+}
+
+/// 成员 × 通知渠道绑定（渠道归属唯一：同一渠道至多属于一个成员或一个团队）。
+model MemberNotificationChannel {
+  memberId              String   @map("member_id")
+  /// 归属唯一：一个渠道最多属于一个成员（团队归属由服务层查 team_notification_channels 判定）
+  notificationChannelId String   @unique(map: "uk_member_notif_channel") @map("notification_channel_id")
+  /// 绑定人（审计用；不建 FK，用户删除不影响配置）
+  createdBy             String?  @map("created_by")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  member              Member              @relation(fields: [memberId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  notificationChannel NotificationChannel @relation(fields: [notificationChannelId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([memberId, notificationChannelId])
+  @@map("member_notification_channels")
 }
 
 // ==================================================================
@@ -333,6 +405,25 @@ model Session {
   // 检出。活动列为 NULL 时回退自身 updatedAt，不授予新 lease；pending/active
   // 否决仍独立保留。
   lastActivityAt DateTime? @map("last_activity_at")
+  // ── 全局会话（37 篇 P3）：一成员一条 team-mode 会话；current_* 仅作展示/兼容，
+  // 鉴权与落库以 session_turns 冻结的轮次上下文为准。member_key = member_id（应用层列）。
+  memberId         String?   @map("member_id")
+  /// 应用层维护的成员唯一键：team-mode 行 = member_id，task 行 = NULL（task_id 为空才参与唯一）
+  memberKey        String?   @unique(map: "uk_sessions_member") @map("member_key")
+  /// 最近使用的席位（tmm_），展示/兼容用，不作鉴权依据
+  seatId           String?   @map("seat_id")
+  currentTeamId    String?   @map("current_team_id")
+  currentTaskId    String?   @map("current_task_id")
+  currentChannelId String?   @map("current_channel_id")
+  /// 轮次序号（每次入队 +1，session_turns.seq 的来源）
+  turnSeq          Int       @default(0) @map("turn_seq")
+  /// idle / running（信息态；执行互斥由 session_turns.running_key 唯一索引兜底）
+  busyState        String    @default("idle") @map("busy_state") @db.VarChar(16)
+  busySince        DateTime? @map("busy_since")
+  /// 最近一轮结果：ok / error / timeout / cancelled
+  lastTurnOutcome  String?   @map("last_turn_outcome") @db.VarChar(16)
+  member           Member?   @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  turns            SessionTurn[]
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -344,9 +435,42 @@ model Session {
 
   @@unique([teamMemberKey], map: "uk_sessions_team_member")
   @@index([teamId], map: "idx_sessions_team_id")
+  @@index([memberId], map: "idx_sessions_member")
   // trigger-unification todo-7：空闲判死扫描索引（status='running' AND last_activity_at < cutoff；NULL 行按 updatedAt 回退）。
   @@index([status, lastActivityAt], map: "idx_sessions_status_last_activity")
   @@map("sessions")
+}
+
+/// 每轮不可变上下文（37 篇 §3.6.2）：全局会话下一成员跨群服务多轮，
+/// 回复/回执/中止/审计必须按本轮冻结的 team/channel/seat 收口，不能读 Session.current_*。
+model SessionTurn {
+  id             String    @id // st_ 前缀
+  sessionId      String    @map("session_id")
+  seq            Int       // session.turnSeq 递增；FIFO 排序键
+  memberId       String    @map("member_id")
+  seatId         String?   @map("seat_id")
+  teamId         String?   @map("team_id")
+  channelId      String?   @map("channel_id")
+  taskId         String?   @map("task_id")
+  messageId      String?   @map("message_id")
+  /// user_mention / agent_notify / hook_wake / task_start / manual
+  source         String    @default("user_mention") @db.VarChar(32)
+  /// pending / running / done / failed / cancelled / expired（待执行，不是产品队列位次）
+  status         String    @default("pending") @db.VarChar(16)
+  /// 应用层维护：status=running 时 = session_id，其余 NULL；唯一索引保证「每会话至多一轮在飞」
+  runningKey     String?   @unique(map: "uk_session_turns_running") @map("running_key")
+  enqueuedAt     DateTime  @default(now()) @map("enqueued_at")
+  startedAt      DateTime? @map("started_at")
+  endedAt        DateTime? @map("ended_at")
+  error          String?   @db.VarChar(1024)
+  engineMessageId String?  @map("engine_message_id")
+  session        Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([sessionId, seq], map: "uk_session_turns_seq")
+  @@index([sessionId, status, seq], map: "idx_session_turns_pick")
+  @@index([status, enqueuedAt], map: "idx_session_turns_claim")
+  @@index([teamId, status], map: "idx_session_turns_team")
+  @@map("session_turns")
 }
 
 // ==================================================================
@@ -357,6 +481,8 @@ model ChatChannel {
   id           String    @id
   type         String
   teamId       String?   @map("team_id")
+  /// 平台级成员（私聊成员维度，expand 阶段可空）
+  memberId     String?   @map("member_id")
   teamMemberId String?   @map("team_member_id")
   taskId       String?   @map("task_id")
   agentId      String?   @map("agent_id") // 保留（角色渲染），不再是唯一键维度
@@ -370,6 +496,7 @@ model ChatChannel {
   createdAt    DateTime  @default(now()) @map("created_at")
 
   team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  member     Member?     @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   task       Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent      Agent?      @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -378,6 +505,7 @@ model ChatChannel {
   @@unique([teamId, teamMemberId], map: "uk_channels_team_member")
   @@unique([teamGroupKey], map: "uk_channels_team_group_single")
   @@index([teamId], map: "idx_chat_channels_team_id")
+  @@index([memberId], map: "idx_chat_channels_member")
   @@index([teamId, type], map: "idx_chat_channels_team_type")
   @@map("chat_channels")
 }
@@ -682,6 +810,7 @@ model Agent {
   creator           User              @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   skills            AgentSkill[]
   teamMembers       TeamMember[]
+  defaultMembers    Member[]           @relation("MemberAgent")
   sessions          Session[]
   channels          ChatChannel[]
   authoredArtifacts ArtifactVersion[] @relation("ArtifactAuthor")
@@ -808,6 +937,8 @@ model Model {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   workerAvailabilities WorkerModelAvailability[]
+  defaultForMembers    Member[]                   @relation("MemberDefaultModel")
+  teamDefaults         Team[]                     @relation("TeamDefaultModel")
 
   @@unique([providerID, modelID], map: "uk_models_provider_model")
   @@map("models")
@@ -965,6 +1096,7 @@ model Worker {
   sessions            Session[]
   taskGroupInstances  TaskGroupInstance[]
   modelAvailabilities WorkerModelAvailability[]
+  defaultForMembers   Member[]                   @relation("MemberPreferredWorker")
 
   @@index([status, lastHeartbeatAt], map: "idx_workers_status_heartbeat")
   @@map("workers")
@@ -1207,6 +1339,7 @@ model NotificationChannel {
   deliveries NotificationDelivery[]
   taskLinks  TaskNotificationChannel[]
   teamLinks  TeamNotificationChannel[]
+  memberLinks MemberNotificationChannel[]
 
   @@map("notification_channels")
 }

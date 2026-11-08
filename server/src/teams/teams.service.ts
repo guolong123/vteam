@@ -26,6 +26,7 @@ import { CreateTeamDto } from './dto/create-team.dto';
 import { QueryTeamsDto } from './dto/query-teams.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto, UpdateMemberDto } from './dto/add-member.dto';
+import { isMemberSessionScope } from '../workers/session-scope';
 
 const ID_PREFIX = {
   team: 'tm',
@@ -35,6 +36,7 @@ const ID_PREFIX = {
   teamQueue: 'tq',
   channel: 'c',
   message: 'm',
+  member: 'mbr',
 } as const;
 
 const TEAM_ERRORS = {
@@ -47,6 +49,14 @@ const TEAM_ERRORS = {
   MEMBER_AGENT_REQUIRED: 'MEMBER_AGENT_REQUIRED',
   MEMBER_ROLE_REQUIRED: 'MEMBER_ROLE_REQUIRED',
   MEMBER_NOT_FOUND: 'MEMBER_NOT_FOUND',
+  /** 同一成员在同一团队只允许一个席位（D3） */
+  MEMBER_ALREADY_IN_TEAM: 'MEMBER_ALREADY_IN_TEAM',
+  /** 成员已停用，不可加入新群 */
+  MEMBER_DISABLED: 'MEMBER_DISABLED',
+  /** 内联新建成员名重复 */
+  MEMBER_NAME_CONFLICT: 'MEMBER_NAME_CONFLICT',
+  /** memberId 与 newMember 同时给出 */
+  MEMBER_SELECTION_CONFLICT: 'MEMBER_SELECTION_CONFLICT',
   /**
    * 移除成员兜底：事务内已把 sessions / chat_channels / task_group_instances 的
    * `team_member_id` 与 `teams.main_agent_member_id` 全部解绑，理论上 `teamMember.delete`
@@ -81,6 +91,33 @@ function isForeignKeyViolation(err: unknown): boolean {
     typeof e?.message === 'string' &&
     e.message.includes('Foreign key constraint violated')
   );
+}
+
+/**
+ * 建群/加成员的"成员选择计划"（D17）。
+ * - legacy：旧 roleId/agentId 形状，不产生 Member（member_id 保持 NULL，回填脚本兜底）
+ * - existing：引用成员库成员（memberId）
+ * - new：内联新建 Member（事务内创建，再建席位）
+ */
+interface TeamMemberPlan {
+  memberId: string | null;
+  createMember: boolean;
+  newMember?: {
+    name: string;
+    roleId: string;
+    agentId?: string;
+    defaultModelId?: string;
+    preferredWorkerId?: string;
+    privateWorkDir?: string;
+    description?: string;
+  };
+  agentId: string;
+  roleId: string | null;
+  role: { key: string; name: string } | null;
+  alias?: string;
+  workDir?: string;
+  opencodeAgentName: string | null;
+  memberName?: string;
 }
 
 @Injectable()
@@ -125,8 +162,8 @@ export class TeamsService implements OnModuleInit {
     const members = dto.members ?? [];
     // 成员 agent 绑定解析（roleId 预填 / 显式 agentId 优先，见 resolveMemberBinding）
     // 在事务前完成：快速失败，且解析结果直接进入事务循环，避免事务内重复查询 AgentRole。
-    const resolvedMembers = await Promise.all(
-      members.map((m) => this.resolveMemberBinding(m)),
+    const memberPlans = await Promise.all(
+      members.map((m) => this.resolveMemberSelection(m)),
     );
 
     const teamId = await this.idGen.nextId(ID_PREFIX.team);
@@ -148,41 +185,92 @@ export class TeamsService implements OnModuleInit {
         id: string;
         agentId: string;
         seq: number;
+        memberId: string | null;
       }> = [];
-      for (const item of resolvedMembers) {
+      for (const plan of memberPlans) {
         const agent = await tx.agent.findUnique({
-          where: { id: item.agentId },
+          where: { id: plan.agentId },
           select: { id: true, name: true },
         });
         if (!agent) {
           throw new NotFoundException({
             code: TEAM_ERRORS.AGENT_NOT_FOUND,
-            message: `Agent ${item.agentId} 不存在`,
+            message: `Agent ${plan.agentId} 不存在`,
           });
         }
-        const seq = await this.nextSeqForUpdate(tx, teamId, item.agentId);
+        // 内联新建成员（D17）：Member + 席位同一事务；任何失败整体回滚。
+        let platformMemberId = plan.memberId;
+        if (plan.createMember && plan.newMember) {
+          const name = plan.newMember.name?.trim();
+          if (!name) {
+            throw new BadRequestException({
+              code: TEAM_ERRORS.MEMBER_NAME_CONFLICT,
+              message: '内联新建成员必须提供名称',
+            });
+          }
+          platformMemberId = await this.idGen.nextId(ID_PREFIX.member);
+          try {
+            await tx.member.create({
+              data: {
+                id: platformMemberId,
+                name,
+                defaultRoleId: plan.roleId as string,
+                agentId: plan.agentId,
+                defaultModelId: plan.newMember.defaultModelId ?? null,
+                preferredWorkerId: plan.newMember.preferredWorkerId ?? null,
+                privateWorkDir: plan.newMember.privateWorkDir?.trim() || null,
+                status: 'active',
+                description: plan.newMember.description?.trim() || null,
+                createdBy: userId,
+              },
+            });
+          } catch (err) {
+            this.rethrowMemberNameConflict(err, name);
+          }
+        }
+        if (platformMemberId) {
+          const dup = await tx.teamMember.findFirst({
+            where: { teamId, memberId: platformMemberId },
+            select: { id: true },
+          });
+          if (dup) {
+            throw new ConflictException({
+              code: TEAM_ERRORS.MEMBER_ALREADY_IN_TEAM,
+              message: '该成员已在团队中',
+            });
+          }
+        }
+        const seq = await this.nextSeqForUpdate(tx, teamId, plan.agentId);
         const alias =
-          item.alias?.trim() || this.defaultAlias(agent, seq, item.role);
+          plan.alias?.trim() ||
+          plan.memberName?.trim() ||
+          this.defaultAlias(agent, seq, plan.role);
         const workDir =
-          item.workDir?.trim() ||
-          this.defaultWorkDir(agent, seq, item.role, !!item.opencodeAgentName);
-        const memberId = await this.idGen.nextId(ID_PREFIX.teamMember);
+          plan.workDir?.trim() ||
+          this.defaultWorkDir(agent, seq, plan.role, !!plan.opencodeAgentName);
+        const seatId = await this.idGen.nextId(ID_PREFIX.teamMember);
         await tx.teamMember.create({
           data: {
-            id: memberId,
+            id: seatId,
             teamId,
-            agentId: item.agentId,
-            roleId: item.roleId ?? null,
+            memberId: platformMemberId ?? null,
+            agentId: plan.agentId,
+            roleId: plan.roleId ?? null,
             // 外部槽位预填（规则 5，resolveMemberBinding）：角色绑定外部引擎 agent 时随角色来；
             // 显式/角色都无 → null（存量行为不变）。
-            opencodeAgentName: item.opencodeAgentName ?? null,
+            opencodeAgentName: plan.opencodeAgentName ?? null,
             alias,
             seq,
             workDir,
           },
         });
-        createdMemberIds.push(memberId);
-        createdMembersMeta.push({ id: memberId, agentId: item.agentId, seq });
+        createdMemberIds.push(seatId);
+        createdMembersMeta.push({
+          id: seatId,
+          agentId: plan.agentId,
+          seq,
+          memberId: platformMemberId,
+        });
       }
 
       const mainAgentRaw = (dto as any).mainAgentMemberId;
@@ -195,6 +283,9 @@ export class TeamsService implements OnModuleInit {
         let resolvedId: string | null = null;
         if (createdMemberIds.includes(raw)) {
           resolvedId = raw;
+        } else if (createdMembersMeta.some((m) => m.memberId === raw)) {
+          resolvedId =
+            createdMembersMeta.find((m) => m.memberId === raw)?.id ?? null;
         } else if (/^\d+$/.test(raw)) {
           const idx = parseInt(raw, 10);
           if (idx >= 0 && idx < createdMemberIds.length) {
@@ -235,21 +326,15 @@ export class TeamsService implements OnModuleInit {
         },
       });
 
-      // 建团队即建群聊频道（一团队一群；team_group_key 为生成列由 DB 自动计算，禁止显式写入）
-      try {
-        await tx.chatChannel.create({
-          data: {
-            id: await this.idGen.nextId(ID_PREFIX.channel),
-            type: CHANNEL_TYPE.team_group,
-            teamId,
-            taskId: null,
-          } as any,
-        });
-      } catch (e) {
-        this.logger.warn(
-          `创建团队群聊频道失败 teamId=${teamId}（任务流会幂等补建）: ${(e as Error)?.message ?? e}`,
-        );
-      }
+      // 建团队即建群聊频道（D11：一团队一群，与团队同事务；失败整体回滚，不再依赖懒创建兜底）。
+      await tx.chatChannel.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.channel),
+          type: CHANNEL_TYPE.team_group,
+          teamId,
+          taskId: null,
+        } as any,
+      });
 
       return created;
     });
@@ -284,6 +369,15 @@ export class TeamsService implements OnModuleInit {
             include: {
               agent: { select: { id: true, name: true } },
               role: { select: { key: true, name: true } },
+              member: {
+                select: {
+                  id: true,
+                  name: true,
+                  status: true,
+                  agentId: true,
+                  defaultRoleId: true,
+                },
+              },
             },
             orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           },
@@ -377,6 +471,15 @@ export class TeamsService implements OnModuleInit {
           include: {
             agent: { select: { id: true, name: true } },
             role: { select: { key: true, name: true } },
+            member: {
+              select: {
+                id: true,
+                name: true,
+                status: true,
+                agentId: true,
+                defaultRoleId: true,
+              },
+            },
           },
           orderBy: [{ agentId: 'asc' }, { seq: 'asc' }],
         },
@@ -439,6 +542,9 @@ export class TeamsService implements OnModuleInit {
     // preferredWorkerId 置顶分支），并回退自动调度。
     if (dto.preferredWorkerId !== undefined) {
       data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+    }
+    if (dto.defaultModelId !== undefined) {
+      data.defaultModelId = dto.defaultModelId?.trim() || null;
     }
     // 并发上限（D1）：null = 不限；正整数 = 活跃占用（in_progress+blocked）上限。
     if (dto.maxConcurrentTasks !== undefined) {
@@ -679,7 +785,7 @@ export class TeamsService implements OnModuleInit {
     return { deleted: true, id };
   }
 
-  async addMember(teamId: string, dto: AddMemberDto) {
+  async addMember(teamId: string, dto: AddMemberDto, userId?: string) {
     const team = await this.prisma.team.findUnique({ where: { id: teamId } });
     if (!team) {
       throw new NotFoundException({
@@ -687,16 +793,16 @@ export class TeamsService implements OnModuleInit {
         message: '团队不存在',
       });
     }
-    // roleId 预填 / 显式 agentId 优先的唯一判定点。
-    const binding = await this.resolveMemberBinding(dto);
+    // 成员选择解析（D17）：既有成员 / 内联新建 / 旧 roleId|agentId 形状。
+    const plan = await this.resolveMemberSelection(dto);
     const agent = await this.prisma.agent.findUnique({
-      where: { id: binding.agentId },
+      where: { id: plan.agentId },
       select: { id: true, name: true },
     });
     if (!agent) {
       throw new NotFoundException({
         code: TEAM_ERRORS.AGENT_NOT_FOUND,
-        message: `Agent ${binding.agentId} 不存在`,
+        message: `Agent ${plan.agentId} 不存在`,
       });
     }
 
@@ -711,25 +817,71 @@ export class TeamsService implements OnModuleInit {
 
     let sysMsg: any = null;
     const member = await this.prisma.$transaction(async (tx) => {
-      const seq = await this.nextSeqForUpdate(tx, teamId, binding.agentId);
+      // 内联新建成员（D17）：与席位同事务；重复入群 / 重名均显式 409。
+      let platformMemberId = plan.memberId;
+      if (plan.createMember && plan.newMember) {
+        if (!userId) {
+          throw new BadRequestException({
+            code: TEAM_ERRORS.MEMBER_SELECTION_CONFLICT,
+            message: '内联新建成员缺少操作者上下文',
+          });
+        }
+        const name = plan.newMember.name?.trim();
+        if (!name) {
+          throw new BadRequestException({
+            code: TEAM_ERRORS.MEMBER_NAME_CONFLICT,
+            message: '内联新建成员必须提供名称',
+          });
+        }
+        platformMemberId = await this.idGen.nextId(ID_PREFIX.member);
+        try {
+          await tx.member.create({
+            data: {
+              id: platformMemberId,
+              name,
+              defaultRoleId: plan.roleId as string,
+              agentId: plan.agentId,
+              defaultModelId: plan.newMember.defaultModelId ?? null,
+              preferredWorkerId: plan.newMember.preferredWorkerId ?? null,
+              privateWorkDir: plan.newMember.privateWorkDir?.trim() || null,
+              status: 'active',
+              description: plan.newMember.description?.trim() || null,
+              createdBy: userId,
+            },
+          });
+        } catch (err) {
+          this.rethrowMemberNameConflict(err, name);
+        }
+      }
+      if (platformMemberId) {
+        const dup = await tx.teamMember.findFirst({
+          where: { teamId, memberId: platformMemberId },
+          select: { id: true },
+        });
+        if (dup) {
+          throw new ConflictException({
+            code: TEAM_ERRORS.MEMBER_ALREADY_IN_TEAM,
+            message: '该成员已在团队中',
+          });
+        }
+      }
+      const seq = await this.nextSeqForUpdate(tx, teamId, plan.agentId);
       const alias =
-        dto.alias?.trim() || this.defaultAlias(agent, seq, binding.role);
+        dto.alias?.trim() ||
+        plan.memberName?.trim() ||
+        this.defaultAlias(agent, seq, plan.role);
       const workDir =
         dto.workDir?.trim() ||
-        this.defaultWorkDir(
-          agent,
-          seq,
-          binding.role,
-          !!binding.opencodeAgentName,
-        );
+        this.defaultWorkDir(agent, seq, plan.role, !!plan.opencodeAgentName);
       const created = await tx.teamMember.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),
           teamId,
-          agentId: binding.agentId,
-          roleId: binding.roleId,
+          memberId: platformMemberId ?? null,
+          agentId: plan.agentId,
+          roleId: plan.roleId,
           // 外部槽位预填（规则 5，resolveMemberBinding）：显式成员值 > 角色默认外部名 > null。
-          opencodeAgentName: binding.opencodeAgentName,
+          opencodeAgentName: plan.opencodeAgentName,
           alias,
           seq,
           workDir,
@@ -1135,6 +1287,13 @@ export class TeamsService implements OnModuleInit {
    * 同事务写入系统消息“已为下一任务开新会话”并广播 chat.message.new + team.changed。
    */
   async resetSessions(teamId: string) {
+    if (isMemberSessionScope()) {
+      throw new BadRequestException({
+        code: 'TEAM_RESET_DISABLED',
+        message:
+          '已启用成员全局会话（SESSION_SCOPE=member）：请到成员库重置该成员的全局会话，团队重置不再可用',
+      });
+    }
     const team = await this.prisma.team.findUnique({ where: { id: teamId } });
     if (!team) {
       throw new NotFoundException({
@@ -1439,6 +1598,106 @@ export class TeamsService implements OnModuleInit {
     };
   }
 
+  /**
+   * 成员选择解析（D17）：
+   * - `memberId`：引用成员库成员（校验存在且 active，取成员的 Agent/默认岗位）
+   * - `newMember`：内联新建（只做 Agent/岗位解析与校验，Member 行在事务内创建）
+   * - 两者都无：旧 `roleId`/`agentId` 形状（保持既有行为，member_id 为 NULL）
+   * 只读校验；真正的 Member 写入在事务内，保证「建人 + 入群」原子。
+   */
+  private async resolveMemberSelection(input: any): Promise<TeamMemberPlan> {
+    const memberId = input.memberId?.trim() || null;
+    const newMember = input.newMember;
+    if (memberId && newMember) {
+      throw new BadRequestException({
+        code: TEAM_ERRORS.MEMBER_SELECTION_CONFLICT,
+        message: 'memberId 与 newMember 只能二选一',
+      });
+    }
+
+    if (memberId) {
+      const member = await this.prisma.member.findUnique({
+        where: { id: memberId },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          agentId: true,
+          defaultRoleId: true,
+        },
+      });
+      if (!member) {
+        throw new NotFoundException({
+          code: TEAM_ERRORS.MEMBER_NOT_FOUND,
+          message: `成员 ${memberId} 不存在`,
+        });
+      }
+      if (member.status !== 'active') {
+        throw new BadRequestException({
+          code: TEAM_ERRORS.MEMBER_DISABLED,
+          message: `成员 ${member.name} 已停用，不能加入群聊`,
+        });
+      }
+      const role = await this.prisma.agentRole.findUnique({
+        where: { id: member.defaultRoleId },
+        select: { key: true, name: true },
+      });
+      return {
+        memberId: member.id,
+        createMember: false,
+        agentId: member.agentId,
+        roleId: member.defaultRoleId,
+        role: role ? { key: role.key, name: role.name } : null,
+        alias: input.alias,
+        workDir: input.workDir,
+        opencodeAgentName: input.opencodeAgentName ?? null,
+        memberName: member.name,
+      };
+    }
+
+    if (newMember) {
+      const binding = await this.resolveMemberBinding({
+        agentId: newMember.agentId,
+        roleId: newMember.roleId,
+        opencodeAgentName: null,
+      } as any);
+      return {
+        memberId: null,
+        createMember: true,
+        newMember,
+        agentId: binding.agentId,
+        roleId: binding.roleId,
+        role: binding.role,
+        alias: input.alias,
+        workDir: input.workDir,
+        opencodeAgentName: binding.opencodeAgentName,
+        memberName: newMember.name,
+      };
+    }
+
+    const binding = await this.resolveMemberBinding(input);
+    return {
+      memberId: null,
+      createMember: false,
+      agentId: binding.agentId,
+      roleId: binding.roleId,
+      role: binding.role,
+      alias: input.alias,
+      workDir: input.workDir,
+      opencodeAgentName: binding.opencodeAgentName,
+    };
+  }
+
+  private rethrowMemberNameConflict(err: unknown, name: string): never {
+    if ((err as { code?: string })?.code === 'P2002') {
+      throw new ConflictException({
+        code: TEAM_ERRORS.MEMBER_NAME_CONFLICT,
+        message: `成员名「${name}」已存在`,
+      });
+    }
+    throw err;
+  }
+
   private async nextSeqForUpdate(
     tx: any,
     teamId: string,
@@ -1549,6 +1808,17 @@ export class TeamsService implements OnModuleInit {
     const members = (team.members ?? []).map((m: any) => ({
       id: m.id,
       teamId: m.teamId,
+      // 平台成员引用（旧数据/旧形状为 null；回填后非空）
+      memberId: m.memberId ?? null,
+      member: m.member
+        ? {
+            id: m.member.id,
+            name: m.member.name,
+            status: m.member.status,
+            agentId: m.member.agentId,
+            defaultRoleId: m.member.defaultRoleId,
+          }
+        : null,
       agentId: m.agentId,
       roleId: m.roleId ?? null,
       alias: m.alias,
@@ -1599,6 +1869,7 @@ export class TeamsService implements OnModuleInit {
       // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
       // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
       preferredWorkerId: team.preferredWorkerId ?? null,
+      defaultModelId: (team as any).defaultModelId ?? null,
       maxConcurrentTasks: team.maxConcurrentTasks ?? null,
       activeTaskCount,
       // 团队群聊最近活动时间（ISO 字符串；null = 从未活动）。团队切换器按它排序。

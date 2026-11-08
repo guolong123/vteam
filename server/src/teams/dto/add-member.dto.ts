@@ -1,5 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsOptional,
+  IsString,
+  MaxLength,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
+import { TeamMemberNewMemberInput } from './create-team.dto';
 
 /**
  * 成员 ⇄ 角色绑定（agent-role-entity todo 7）。
@@ -31,7 +39,25 @@ export class AddMemberDto {
   roleId?: string;
 
   @ApiPropertyOptional({
-    description: '实例别名（缺省 = `<角色中文名>-<seq>`）',
+    description:
+      '既有成员 id（mbr_ 前缀；与 newMember/旧 roleId|agentId 形状互斥）',
+  })
+  @IsOptional()
+  @IsString()
+  memberId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '内联新建成员（与 memberId 互斥；创建 Member + 席位在同一事务）',
+    type: () => TeamMemberNewMemberInput,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TeamMemberNewMemberInput)
+  newMember?: TeamMemberNewMemberInput;
+
+  @ApiPropertyOptional({
+    description: '实例别名（缺省 = 成员名；旧形状为 `<角色中文名>-<seq>`）',
   })
   @IsOptional()
   @IsString()

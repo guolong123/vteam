@@ -248,7 +248,6 @@ export default function TaskCreatePage() {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("中");
   const [selectedMessageChannelIds, setSelectedMessageChannelIds] = useState<string[]>([]);
-  const [selectedNotificationChannelIds, setSelectedNotificationChannelIds] = useState<string[]>([]);
   const [backgroundDocs, setBackgroundDocs] = useState<BackgroundDoc[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -278,7 +277,6 @@ export default function TaskCreatePage() {
   const handleRemoveDoc = (url: string) => setBackgroundDocs((prev) => prev.filter((d) => d.url !== url));
 
   const messageChannelsQuery = useQuery({ queryKey: ["message-channels"], queryFn: () => api.get<any[]>("/message-channels"), enabled: !!user?.id });
-  const notificationChannelsQuery = useQuery({ queryKey: ["notification-channels"], queryFn: () => api.get<any[]>("/notification-channels"), enabled: !!user?.id });
 
   const handleCreate = async () => {
     if (!title.trim()) { setTitleError("请输入任务标题"); return; }
@@ -300,7 +298,6 @@ export default function TaskCreatePage() {
       setCreated(true);
       const taskId = res.id;
       if (selectedMessageChannelIds.length > 0) { try { await api.post(`/tasks/${taskId}/message-channels`, { messageChannelIds: selectedMessageChannelIds }); } catch {} }
-      if (selectedNotificationChannelIds.length > 0) { try { await api.post(`/tasks/${taskId}/notification-channels`, { notificationChannelIds: selectedNotificationChannelIds }); } catch {} }
       router.push(`/teams/${selectedTeamId}/session`);
     } catch (err) {
       setCreateError(isApiError(err) ? err.message : "创建任务失败，请稍后重试");
@@ -332,14 +329,8 @@ export default function TaskCreatePage() {
                 </label>
               ))}
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-              <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>通知渠道 (出站)</span>
-              {(notificationChannelsQuery.data as any[] ?? []).length === 0 ? <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>{notificationChannelsQuery.isPending ? "加载中…" : "暂无通知渠道"}</span> : (notificationChannelsQuery.data as any[]).map((ch: any) => (
-                <label key={ch.id} style={{ display: "flex", alignItems: "center", gap: space.sm, cursor: "pointer" }}>
-                  <input type="checkbox" data-testid="notification-channel-checkbox" data-channel-id={ch.id} checked={selectedNotificationChannelIds.includes(ch.id)} onChange={(e) => setSelectedNotificationChannelIds((prev) => e.target.checked ? [...prev, ch.id] : prev.filter((id) => id !== ch.id))} />
-                  <span style={{ fontSize: fontSize.sm, color: neutral[700] }}>{ch.name}</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{ch.type}</span>
-                </label>
-              ))}
+            <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>
+              通知渠道不再绑定到任务：请到「团队详情 / 成员库」绑定通知渠道（团队级或成员级），任务事件会自动路由。
             </div>
           </div>
         </div>

@@ -32,6 +32,7 @@ import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
+import { isMemberSessionScope } from '../workers/session-scope';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
@@ -1810,7 +1811,8 @@ export class TasksService implements OnModuleInit {
           const taskReset = Boolean((task as any).resetAfterComplete);
           needReset = !teamRow.reuseSession || taskReset;
         }
-        if (needReset) {
+        // P3 成员全局会话：任务完成不再自动重置（记忆开关只对席位会话生效）。
+        if (needReset && !isMemberSessionScope()) {
           await this.sessionLifecycle.resetTeamSessionsInTx(
             tx as unknown as Prisma.TransactionClient,
             teamIdForReset,

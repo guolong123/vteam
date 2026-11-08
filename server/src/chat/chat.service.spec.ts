@@ -3008,6 +3008,7 @@ describe('ChatService', () => {
           id: 'c_0000000001',
           type: 'private',
           teamId,
+          memberId: null,
           teamMemberId,
           agentId: 'a_product',
           taskId: null,

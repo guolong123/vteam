@@ -10,6 +10,10 @@ import { SESSION_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  GLOBAL_SESSION_ERRORS,
+  SESSION_TURN_STATUS,
+} from './global-session.constants';
 
 /** TaskGroupInstance 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const TASK_GROUP_INSTANCE_ID_PREFIX = 'ti';
@@ -81,6 +85,13 @@ export class SessionLifecycleService implements OnModuleInit {
     sessionId: string,
     workerId: string,
     instanceId: string,
+    /**
+     * P3 成员全局会话：绑定时的归属维度（本轮 turn 的 team/seat）。
+     * 不传 = 读 Session 行上的旧维度（存量行为逐字节不变）。
+     * 全局会话的 team_member_id 是「最近席位」，跨群派发必须显式传本轮维度，
+     * 否则 TaskGroupInstance 会归因到上一个群。
+     */
+    dims?: { teamId: string; teamMemberId: string },
   ) {
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const session = await tx.session.findUnique({
@@ -93,15 +104,15 @@ export class SessionLifecycleService implements OnModuleInit {
           message: `会话 ${sessionId} 不存在`,
         });
       }
-      // team-only：只认团队行，无团队维度即错
-      if (!session.teamId || !session.teamMemberId) {
+      // team-only：只认团队行，无团队维度即错（成员全局会话用本轮 dims 覆盖）
+      if (!dims && (!session.teamId || !session.teamMemberId)) {
         throw new BadRequestException({
           code: SESSION_ERRORS.TEAM_SESSION_MISSING_DIMENSION,
           message: `会话 ${sessionId} 缺少团队维度（teamId/teamMemberId），无法绑定 worker`,
         });
       }
-      const teamId = session.teamId;
-      const teamMemberId = session.teamMemberId;
+      const teamId = dims?.teamId ?? session.teamId;
+      const teamMemberId = dims?.teamMemberId ?? session.teamMemberId;
       const existing = await tx.taskGroupInstance.findFirst({
         where: { teamId, teamMemberId, workerId, instanceId },
         select: { id: true },
@@ -212,6 +223,145 @@ export class SessionLifecycleService implements OnModuleInit {
         }
         throw err;
       }
+    });
+  }
+
+  /**
+   * 全局会话确保存在（37 篇 P3）：按成员维度（member_key = member_id，仅 team-mode 行）
+   * 查找命中则复用；未命中则创建一条 team-mode 会话，并把当前上下文（最近席位/团队/
+   * 频道/任务）写入 current_* 便捷列。**current_* 仅供展示/兼容，鉴权/落库以
+   * session_turns 冻结的轮次为准**。
+   *
+   * 本方法只建/取会话，不执行轮次；轮次入队/认领/收口见 SessionTurnsService。
+   */
+  async ensureMemberSession(
+    memberId: string,
+    context: {
+      seatId?: string | null;
+      teamId?: string | null;
+      taskId?: string | null;
+      channelId?: string | null;
+    } = {},
+  ) {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const member = await tx.member.findUnique({
+        where: { id: memberId },
+        select: { id: true, name: true, status: true, agentId: true },
+      });
+      if (!member) {
+        throw new NotFoundException({
+          code: GLOBAL_SESSION_ERRORS.MEMBER_NOT_FOUND,
+          message: `成员 ${memberId} 不存在`,
+        });
+      }
+      if (member.status !== 'active') {
+        throw new BadRequestException({
+          code: GLOBAL_SESSION_ERRORS.MEMBER_DISABLED,
+          message: `成员 ${member.name} 已停用`,
+        });
+      }
+
+      const select = {
+        id: true,
+        memberId: true,
+        memberKey: true,
+        seatId: true,
+        currentTeamId: true,
+        currentTaskId: true,
+        currentChannelId: true,
+        agentId: true,
+        workerId: true,
+        instanceRef: true,
+        status: true,
+        busyState: true,
+        turnSeq: true,
+      } as const;
+
+      const memberKey = memberId;
+      const existing = await tx.session.findUnique({
+        where: { memberKey },
+        select,
+      });
+      if (existing) {
+        // 上下文只在调用方显式给出时更新（不覆盖未提供的维度）。
+        const data: Record<string, unknown> = {};
+        if (context.seatId !== undefined) data.seatId = context.seatId;
+        if (context.teamId !== undefined) {
+          data.currentTeamId = context.teamId;
+          data.teamId = context.teamId;
+        }
+        if (context.taskId !== undefined) data.currentTaskId = context.taskId;
+        if (context.channelId !== undefined) {
+          data.currentChannelId = context.channelId;
+        }
+        if (Object.keys(data).length > 0) {
+          const updated = await tx.session.update({
+            where: { id: existing.id },
+            data: data as never,
+            select,
+          });
+          return { ...updated, reused: true };
+        }
+        return { ...existing, reused: true };
+      }
+
+      try {
+        const created = await tx.session.create({
+          data: {
+            id: await this.idGen.nextId(SESSION_ID_PREFIX),
+            memberId,
+            memberKey,
+            seatId: context.seatId ?? null,
+            currentTeamId: context.teamId ?? null,
+            currentTaskId: context.taskId ?? null,
+            currentChannelId: context.channelId ?? null,
+            // 旧列语义降级为「最近上下文」：team-only 视图仍能读到 teamId/teamMemberId。
+            teamId: context.teamId ?? null,
+            teamMemberId: context.seatId ?? null,
+            taskId: null,
+            agentId: member.agentId,
+            status: SESSION_STATUS.created,
+          },
+          select,
+        });
+        return { ...created, reused: false };
+      } catch (err) {
+        // 并发竞态：两个入口同时 findUnique 未命中后 create 同 memberKey → P2002
+        if ((err as { code?: string })?.code === 'P2002') {
+          this.logger.warn(
+            `ensureMemberSession 并发竞态 memberKey=${memberKey}，重读复用`,
+          );
+          const raced = await tx.session.findUnique({
+            where: { memberKey },
+            select,
+          });
+          if (raced) return { ...raced, reused: true };
+        }
+        throw err;
+      }
+    });
+  }
+
+  /** 读取成员全局会话（不存在返回 null；只读，不创建）。 */
+  async findMemberSession(memberId: string) {
+    return this.prisma.session.findUnique({
+      where: { memberKey: memberId },
+      select: {
+        id: true,
+        memberId: true,
+        seatId: true,
+        currentTeamId: true,
+        currentTaskId: true,
+        currentChannelId: true,
+        agentId: true,
+        workerId: true,
+        instanceRef: true,
+        status: true,
+        busyState: true,
+        busySince: true,
+        turnSeq: true,
+        lastTurnOutcome: true,
+      },
     });
   }
 
@@ -333,6 +483,102 @@ export class SessionLifecycleService implements OnModuleInit {
       });
     }
     return sessions.length;
+  }
+
+  /**
+   * 成员级全局会话重置（37 篇 §3.6.6 / P3）。
+   *
+   * 语义：丢弃该成员当前引擎会话（跨群共享的记忆上下文），下一轮重新开引擎会话；
+   * **不删除消息/记忆**，也不影响其他成员。任务完成不再自动重置，重置只由用户
+   * 显式触发（成员卡/成员库）或运维操作。
+   *
+   * 步骤（单事务）：
+   *  1) 找 member_key=memberId 的全局会话；无则 reset=0；
+   *  2) 软移除该成员所有席位的 TaskGroupInstance（引擎实例可能来自多个群）；
+   *  3) 未完成轮次置 cancelled（保留审计，不用删除）；
+   *  4) 删旧会话行 → 以同一 member_key/member_id 建新 team-mode 会话（回收序号靠 idGen）。
+   */
+  async resetMemberSession(memberId: string, opts: { reason?: string } = {}) {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const session = await tx.session.findUnique({
+        where: { memberKey: memberId },
+        select: {
+          id: true,
+          memberId: true,
+          agentId: true,
+          seatId: true,
+          currentTeamId: true,
+          currentTaskId: true,
+          currentChannelId: true,
+        },
+      });
+      if (!session) {
+        return { reset: 0, sessionId: null as string | null };
+      }
+      const member = await tx.member.findUnique({
+        where: { id: memberId },
+        select: { id: true, name: true, status: true, agentId: true },
+      });
+      if (!member) {
+        throw new NotFoundException({
+          code: GLOBAL_SESSION_ERRORS.MEMBER_NOT_FOUND,
+          message: `成员 ${memberId} 不存在`,
+        });
+      }
+
+      const seats = await tx.teamMember.findMany({
+        where: { memberId },
+        select: { id: true, teamId: true },
+      });
+      for (const seat of seats) {
+        await (tx as any).taskGroupInstance.updateMany({
+          where: {
+            teamId: seat.teamId,
+            teamMemberId: seat.id,
+            removedAt: null,
+          },
+          data: { removedAt: new Date() },
+        });
+      }
+
+      await (tx as any).sessionTurn.updateMany({
+        where: {
+          sessionId: session.id,
+          status: {
+            in: [SESSION_TURN_STATUS.pending, SESSION_TURN_STATUS.running],
+          },
+        },
+        data: {
+          status: SESSION_TURN_STATUS.cancelled,
+          runningKey: null,
+          endedAt: new Date(),
+          error: opts.reason ?? 'member_session_reset',
+        },
+      });
+
+      await tx.session.delete({ where: { id: session.id } });
+      const created = await tx.session.create({
+        data: {
+          id: await this.idGen.nextId(SESSION_ID_PREFIX),
+          memberId,
+          memberKey: memberId,
+          seatId: session.seatId,
+          currentTeamId: session.currentTeamId,
+          currentTaskId: session.currentTaskId,
+          currentChannelId: session.currentChannelId,
+          teamId: session.currentTeamId,
+          teamMemberId: session.seatId,
+          taskId: null,
+          agentId: member.agentId,
+          status: SESSION_STATUS.created,
+        },
+        select: { id: true },
+      });
+      this.logger.log(
+        `成员全局会话已重置 member=${memberId} 旧会话=${session.id} 新会话=${created.id}`,
+      );
+      return { reset: 1, sessionId: created.id };
+    });
   }
 
   /** 兼容：单团队批量重置（事务外入口，供 TeamsService 手动调用事务包装前置）。 */

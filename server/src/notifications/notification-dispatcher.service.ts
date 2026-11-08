@@ -107,7 +107,8 @@ function formatQuestionText(question: Record<string, unknown>): string {
   try {
     const json = JSON.stringify(question);
     return `【待确认】${json.slice(0, 500)}`;
-  } catch {
+  } catch (err) {
+    void err;
     return '【待确认】请前往Web处理';
   }
 }
@@ -295,12 +296,34 @@ export class NotificationDispatcherService
       (question as any).taskId ??
       (payload as any).taskId ??
       null;
-    if (!taskId) return;
+    // P5：成员全局会话的 question 可无任务 —— 按成员渠道通知（Q26）。
+    let memberId: string | null =
+      ((question as any).memberId as string | undefined) ??
+      ((payload as any).memberId as string | undefined) ??
+      null;
+    if (!memberId && (question as any).sessionId) {
+      try {
+        const session = await (this.prisma as any).session.findUnique({
+          where: { id: (question as any).sessionId },
+          select: { memberId: true },
+        });
+        memberId = session?.memberId ?? null;
+      } catch (err) {
+        void err;
+        memberId = null;
+      }
+    }
+    if (!taskId && !memberId) return;
 
-    const channels = await this.resolveChannelsForTask(
-      taskId,
-      NOTIFICATION_EVENTS.AGENT_QUESTION,
-    );
+    const channels = memberId
+      ? await this.resolveChannelsForMember(
+          memberId,
+          NOTIFICATION_EVENTS.AGENT_QUESTION,
+        )
+      : await this.resolveChannelsForTask(
+          taskId as string,
+          NOTIFICATION_EVENTS.AGENT_QUESTION,
+        );
     if (channels.length === 0) return;
 
     const text = formatQuestionText(question as Record<string, unknown>);
@@ -406,18 +429,21 @@ export class NotificationDispatcherService
       (event.scopeType === 'channel' && typeof event.scopeId === 'string'
         ? event.scopeId
         : null);
+    // P5：成员私聊（channel.memberId 非空）→ 走成员通知渠道，而不是整条跳过。
+    let replyMemberId: string | null = null;
     if (channelIdCandidate) {
       try {
         const ch = await (this.prisma as any).chatChannel.findUnique({
           where: { id: channelIdCandidate },
-          select: { type: true },
+          select: { type: true, memberId: true },
         });
         if (
           ch?.type === CHANNEL_TYPE.private ||
           ch?.type === 'private' ||
           ch?.type === 'single'
         ) {
-          return;
+          if (!ch?.memberId) return;
+          replyMemberId = ch.memberId as string;
         }
       } catch {}
     }
@@ -454,7 +480,8 @@ export class NotificationDispatcherService
           select: { taskId: true },
         });
         taskId = ch?.taskId ?? null;
-      } catch {
+      } catch (err) {
+        void err;
         taskId = null;
       }
     }
@@ -470,12 +497,17 @@ export class NotificationDispatcherService
     if (!taskId && event.scopeType === 'task' && event.scopeId) {
       taskId = event.scopeId;
     }
-    if (!taskId) return;
+    if (!taskId && !replyMemberId) return;
 
-    const channels = await this.resolveChannelsForTask(
-      taskId,
-      NOTIFICATION_EVENTS.AGENT_REPLY,
-    );
+    const channels = replyMemberId
+      ? await this.resolveChannelsForMember(
+          replyMemberId,
+          NOTIFICATION_EVENTS.AGENT_REPLY,
+        )
+      : await this.resolveChannelsForTask(
+          taskId as string,
+          NOTIFICATION_EVENTS.AGENT_REPLY,
+        );
     if (channels.length === 0) return;
 
     const msg: OutboundMessage = { kind: 'markdown', text };
@@ -503,7 +535,8 @@ export class NotificationDispatcherService
         select: { teamId: true },
       });
       teamId = task?.teamId ?? null;
-    } catch {
+    } catch (err) {
+      void err;
       return [];
     }
     if (!teamId) return [];
@@ -521,7 +554,8 @@ export class NotificationDispatcherService
         where: { teamId },
         select: { notificationChannelId: true },
       });
-    } catch {
+    } catch (err) {
+      void err;
       return [];
     }
     if (!links || links.length === 0) return [];
@@ -533,7 +567,8 @@ export class NotificationDispatcherService
       channels = await (this.prisma as any).notificationChannel.findMany({
         where: { id: { in: ids }, enabled: true },
       });
-    } catch {
+    } catch (err) {
+      void err;
       return [];
     }
 
@@ -550,6 +585,30 @@ export class NotificationDispatcherService
     return events.includes(event);
   }
 
+  /**
+   * P5：成员维度的通知解析（Q26：仅 channel_send / question/reply 走成员渠道，
+   * 不接任务状态类事件）。停用成员 → 空集（绑定保留但过滤）。
+   */
+  private async resolveChannelsForMember(
+    memberId: string,
+    eventType: string,
+  ): Promise<any[]> {
+    try {
+      const member = await (this.prisma as any).member.findUnique({
+        where: { id: memberId },
+        select: { status: true },
+      });
+      if (!member || member.status !== 'active') return [];
+      const channels = await this.boundChannelsOfMember(memberId);
+      return channels.filter(
+        (ch) => ch.enabled && this.hasEvent(ch.config, eventType),
+      );
+    } catch (err) {
+      void err;
+      return [];
+    }
+  }
+
   private async resolveTaskTitle(taskId: string): Promise<string | null> {
     try {
       const task = await (this.prisma as any).task.findUnique({
@@ -557,7 +616,8 @@ export class NotificationDispatcherService
         select: { title: true },
       });
       return task?.title ?? null;
-    } catch {
+    } catch (err) {
+      void err;
       return null;
     }
   }
@@ -576,8 +636,43 @@ export class NotificationDispatcherService
     taskId: string | null,
     target: string,
     text: string,
-    opts?: { teamId?: string | null },
+    opts?: { teamId?: string | null; memberId?: string | null },
   ): Promise<void> {
+    // P5（D16/Q26）：成员全局会话下 channel_send 优先按成员绑定解析；
+    // 成员已停用 → 直接拒绝（停用成员保留绑定但不参与解析）。
+    if (opts?.memberId) {
+      const member = await (this.prisma as any).member.findUnique({
+        where: { id: opts.memberId },
+        select: { id: true, status: true },
+      });
+      if (!member || member.status !== 'active') {
+        throw new Error(`成员 ${opts.memberId} 不存在或已停用`);
+      }
+      const memberChannels = await this.boundChannelsOfMember(opts.memberId);
+      const memberAvailable = memberChannels
+        .filter((c) => c.enabled)
+        .map((c) => `${c.id}(${c.name})`);
+      if (memberChannels.length === 0) {
+        throw new NotificationChannelNotBoundError(
+          opts.memberId,
+          memberAvailable,
+        );
+      }
+      const memberCh = memberChannels.find(
+        (c) => c.id === target || c.name === target,
+      );
+      if (!memberCh) {
+        throw new NotificationChannelNotFoundError(
+          opts.memberId,
+          target,
+          memberAvailable,
+        );
+      }
+      if (!memberCh.enabled) throw new Error(`渠道 ${target} 已停用`);
+      await this.dispatchToChannel(memberCh, { kind: 'markdown', text });
+      return;
+    }
+
     const teamId = opts?.teamId ?? (await this.teamIdOfTask(taskId));
     if (!teamId) throw new Error(`任务 ${taskId} 未关联团队`);
 
@@ -605,9 +700,27 @@ export class NotificationDispatcherService
         select: { teamId: true },
       });
       return task?.teamId ?? null;
-    } catch {
+    } catch (err) {
+      void err;
       return null;
     }
+  }
+
+  /** 成员已绑定的通知渠道（含停用行；停用成员在调用方直接拒绝）。 */
+  private async boundChannelsOfMember(memberId: string): Promise<any[]> {
+    const links: Array<{ notificationChannelId: string }> = await (
+      this.prisma as any
+    ).memberNotificationChannel.findMany({
+      where: { memberId },
+      select: { notificationChannelId: true },
+    });
+    const ids = (links ?? [])
+      .map((l) => l.notificationChannelId)
+      .filter(Boolean);
+    if (ids.length === 0) return [];
+    return await (this.prisma as any).notificationChannel.findMany({
+      where: { id: { in: ids } },
+    });
   }
 
   /** 团队已绑定的通知渠道（含停用行——停用与不存在要分开报错）。 */

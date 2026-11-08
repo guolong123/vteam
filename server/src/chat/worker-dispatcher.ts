@@ -44,6 +44,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
+import { SessionTurnsService } from '../workers/session-turns.service';
+import { isMemberSessionScope } from '../workers/session-scope';
+import { SESSION_TURN_STATUS } from '../workers/global-session.constants';
 import {
   ExecuteAttachment,
   isWorkerSessionInvalid,
@@ -817,7 +820,7 @@ export interface BuildSystemInstructionsOptions {
  */
 export const MAIN_AGENT_INSTRUCTION =
   '【主 Agent 职责】你是本任务的主 Agent（牵头人）。除角色本职外，还需承担任务组织职责：' +
-  '牵头拆解工作并分派给团队成员，协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
+  '牵头拆解工作并分派给团队成员（自己不下场产出交付物），协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
   '推进受阻或需要协作时，通过 vteam_notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
   '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
   '唤醒节奏：你不在每条进度汇报时被唤醒；仅当某成员传 stage=answer+end（派发完工）且你所有外派均回执完毕时，平台一次性唤醒你确认进度；' +
@@ -1803,6 +1806,10 @@ export class WorkerDispatcher
     @Optional()
     @Inject(MessageReceiptsService)
     private readonly receipts?: MessageReceiptsService,
+    // P3 轮次台账（成员全局会话）：enqueue/claim/finish 与待执行 drain。
+    // 缺省可空——旧装配/单测不提供时跳过轮次台账（席位会话行为不变）。
+    @Optional()
+    private readonly sessionTurns?: SessionTurnsService,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -1926,6 +1933,15 @@ export class WorkerDispatcher
           `agent ${target.agentId} dispatch failed: ${message}`,
           (err as Error).stack,
         );
+        if (this.sessionTurns && target.sessionId) {
+          const failedSessionId = target.sessionId;
+          void this.sessionTurns
+            .finishRunning(failedSessionId, SESSION_TURN_STATUS.failed, {
+              error: message,
+            })
+            .then(() => this.drainMemberSession(failedSessionId))
+            .catch(() => undefined);
+        }
         this.emitError({
           taskId: scope,
           agentId: target.agentId,
@@ -2146,9 +2162,130 @@ export class WorkerDispatcher
    * 成员（seq 升序）；团队缺失/空名册/主成员悬空 → null。语义对齐 chat.service
    * buildMainAgentTrigger 团队分支（mainAgentMemberId 优先，否则首位）。
    */
-  async resolveTeamMainMember(
-    teamId: string,
-  ): Promise<{ memberId: string; agentId: string } | null> {
+  /**
+   * P3 轮次收口 + 续跑：仅在 member scope 生效。
+   * 收口当前在飞轮次后 drain 下一条 pending（无 pending 则空转）。
+   */
+  private async finishTurnAndDrain(
+    sessionId: string | undefined,
+    status: 'done' | 'failed' | 'cancelled' | 'expired',
+    opts: { error?: string | null; engineMessageId?: string | null } = {},
+  ): Promise<void> {
+    if (!sessionId || !this.sessionTurns || !isMemberSessionScope()) return;
+    try {
+      await this.sessionTurns.finishRunning(sessionId, status, opts);
+      await this.drainMemberSession(sessionId);
+    } catch (err) {
+      this.logger.warn(
+        `[turn] 收口/续跑失败 session=${sessionId}: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 成员会话待执行轮次 drain：claim 最早 pending → 还原本轮上下文（seat/team/
+   * channel/message 文本）→ 以 skipTurn 走同一派发链路。每会话只推一轮，
+   * 其余留到下轮完成回调继续——不做优先级/位次/限流。
+   */
+  private async drainMemberSession(sessionId: string): Promise<void> {
+    const turns = this.sessionTurns;
+    if (!turns || !isMemberSessionScope()) return;
+    const session = await (this.prisma as any).session.findUnique({
+      where: { id: sessionId },
+      select: {
+        memberId: true,
+        agentId: true,
+        seatId: true,
+        currentTeamId: true,
+        currentTaskId: true,
+        currentChannelId: true,
+      },
+    });
+    if (!session?.memberId) return;
+    for (let i = 0; i < 5; i += 1) {
+      const claimed = await turns.claimNext(sessionId);
+      if (!claimed) return;
+      try {
+        const seatId = claimed.seatId ?? session.seatId;
+        const teamId = claimed.teamId ?? session.currentTeamId;
+        if (!seatId || !teamId) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_missing_context',
+          });
+          continue;
+        }
+        const seat = await (this.prisma as any).teamMember.findUnique({
+          where: { id: seatId },
+          select: { agentId: true },
+        });
+        if (!seat?.agentId) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_seat_missing',
+          });
+          continue;
+        }
+        let text = '';
+        if (claimed.messageId) {
+          const msg = await (this.prisma as any).message.findUnique({
+            where: { id: claimed.messageId },
+            select: { content: true },
+          });
+          const content = msg?.content as
+            { text?: unknown; parts?: unknown } | string | null;
+          text =
+            typeof content === 'string'
+              ? content
+              : typeof content?.text === 'string'
+                ? content.text
+                : '';
+        }
+        if (!text.trim()) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_message_missing',
+          });
+          continue;
+        }
+        const channelId = claimed.channelId ?? session.currentChannelId ?? '';
+        if (!channelId) {
+          await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+            error: 'turn_channel_missing',
+          });
+          continue;
+        }
+        await this.dispatchForTeamTarget(
+          {
+            ...(claimed.messageId ? { messageId: claimed.messageId } : {}),
+            channelId,
+            taskId: claimed.taskId ?? '',
+            teamId,
+            text,
+            targets: [],
+          } as DispatchRequest,
+          { agentId: seat.agentId, instanceId: seatId, sessionId },
+          teamId,
+          true,
+        );
+        // 已推出本轮：等 task.completed/失败回调继续 drain，避免并发执行。
+        return;
+      } catch (err) {
+        this.logger.warn(
+          `[turn] drain 轮次 ${claimed.id} 失败: ${this.describeError(err)}`,
+        );
+        await turns.finish(claimed.id, SESSION_TURN_STATUS.failed, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+    }
+  }
+
+  async resolveTeamMainMember(teamId: string): Promise<{
+    /** 席位 id（tmm_，对外 instanceId 语义） */
+    memberId: string;
+    agentId: string;
+    /** 平台成员 id（mbr_，P3 成员全局会话键；旧席位缺省） */
+    platformMemberId?: string | null;
+  } | null> {
     const team = await (this.prisma as any).team.findUnique({
       where: { id: teamId },
       select: { mainAgentMemberId: true },
@@ -2159,16 +2296,28 @@ export class WorkerDispatcher
     if (team.mainAgentMemberId) {
       const main = await (this.prisma as any).teamMember.findFirst({
         where: { id: team.mainAgentMemberId, teamId },
-        select: { id: true, agentId: true },
+        select: { id: true, agentId: true, memberId: true },
       });
-      return main ? { memberId: main.id, agentId: main.agentId } : null;
+      return main
+        ? {
+            memberId: main.id,
+            agentId: main.agentId,
+            ...(main.memberId ? { platformMemberId: main.memberId } : {}),
+          }
+        : null;
     }
     const first = await (this.prisma as any).teamMember.findFirst({
       where: { teamId },
       orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-      select: { id: true, agentId: true },
+      select: { id: true, agentId: true, memberId: true },
     });
-    return first ? { memberId: first.id, agentId: first.agentId } : null;
+    return first
+      ? {
+          memberId: first.id,
+          agentId: first.agentId,
+          ...(first.memberId ? { platformMemberId: first.memberId } : {}),
+        }
+      : null;
   }
 
   /**
@@ -2184,10 +2333,13 @@ export class WorkerDispatcher
     if (!main) {
       return null;
     }
-    const session = await this.sessionLifecycle.ensureTeamSession(
-      teamId,
-      main.memberId,
-    );
+    const session =
+      isMemberSessionScope() && main.platformMemberId
+        ? await this.sessionLifecycle.ensureMemberSession(
+            main.platformMemberId,
+            { seatId: main.memberId, teamId },
+          )
+        : await this.sessionLifecycle.ensureTeamSession(teamId, main.memberId);
     return {
       agentId: main.agentId,
       instanceId: main.memberId,
@@ -2208,15 +2360,18 @@ export class WorkerDispatcher
   ): Promise<{ agentId: string; instanceId: string; sessionId: string }> {
     const member = await (this.prisma as any).teamMember.findFirst({
       where: { id: teamMemberId, teamId },
-      select: { id: true, agentId: true },
+      select: { id: true, agentId: true, memberId: true },
     });
     if (!member) {
       throw new Error(`成员 ${teamMemberId} 不在团队 ${teamId} 内`);
     }
-    const session = await this.sessionLifecycle.ensureTeamSession(
-      teamId,
-      member.id,
-    );
+    const session =
+      isMemberSessionScope() && member.memberId
+        ? await this.sessionLifecycle.ensureMemberSession(member.memberId, {
+            seatId: member.id,
+            teamId,
+          })
+        : await this.sessionLifecycle.ensureTeamSession(teamId, member.id);
     return {
       agentId: member.agentId,
       instanceId: member.id,
@@ -2383,6 +2538,8 @@ export class WorkerDispatcher
       instanceId?: string | null;
     },
     teamId: string,
+    /** 内部 drain 已认领轮次时置 true，避免二次 enqueue。 */
+    skipTurn = false,
   ): Promise<void> {
     const scope = toExecutionScope(null, teamId);
     // team-mode 仅取 teamMemberId，缺失即错，不回退
@@ -2393,26 +2550,71 @@ export class WorkerDispatcher
       );
     }
 
-    // 1. 会话：target.sessionId 缺失 → ensureTeamSession 即建；存在 → 校验归属
+    // 1. 会话：member scope 优先成员全局会话（一成员一 session，跨群复用）；
+    //    否则 target.sessionId 缺失 → ensureTeamSession 即建；存在 → 校验归属。
+    const memberScope = isMemberSessionScope();
+    const seatRow = memberScope
+      ? await (this.prisma as any).teamMember.findUnique({
+          where: { id: teamMemberId },
+          select: { memberId: true },
+        })
+      : null;
+    const platformMemberId = (seatRow?.memberId ?? null) as string | null;
+    const useMemberSession = memberScope && !!platformMemberId;
+
     let sessionId = target.sessionId;
-    if (!sessionId) {
+    if (useMemberSession) {
+      const ensured = await this.sessionLifecycle.ensureMemberSession(
+        platformMemberId as string,
+        {
+          seatId: teamMemberId,
+          teamId,
+          channelId: request.channelId,
+          taskId: request.taskId || null,
+        },
+      );
+      sessionId = ensured.id;
+    } else if (!sessionId) {
       const ensured = await this.sessionLifecycle.ensureTeamSession(
         teamId,
         teamMemberId,
       );
       sessionId = ensured.id;
     }
+    /** 成员全局会话绑定时的归属维度：用本轮 team/seat，不用 Session 上的「最近席位」。 */
+    const bindDims = useMemberSession ? { teamId, teamMemberId } : undefined;
+    /** 保持旧调用 3 参数签名（单测按 3 参断言），仅在 member scope 下追加归属维度。 */
+    const bindSession = (instanceId: string) =>
+      bindDims
+        ? this.sessionLifecycle.bindSessionToWorker(
+            sessionId,
+            workerId as string,
+            instanceId,
+            bindDims,
+          )
+        : this.sessionLifecycle.bindSessionToWorker(
+            sessionId,
+            workerId as string,
+            instanceId,
+          );
     const session = await (this.prisma as any).session.findUnique({
       where: { id: sessionId },
       select: {
         id: true,
+        memberId: true,
         workerId: true,
         instanceRef: true,
         teamId: true,
         teamMemberId: true,
       },
     });
-    if (
+    if (useMemberSession) {
+      if (!session || session.memberId !== platformMemberId) {
+        throw new Error(
+          `成员全局会话 ${sessionId} 与成员 ${platformMemberId} 不匹配，无法分派`,
+        );
+      }
+    } else if (
       !session ||
       session.teamMemberId !== teamMemberId ||
       (session.teamId ?? null) !== teamId
@@ -2420,6 +2622,36 @@ export class WorkerDispatcher
       throw new Error(
         `会话 ${sessionId} 与团队成员 ${teamMemberId} 不匹配（团队 ${teamId}），无法分派`,
       );
+    }
+
+    // ── P3 轮次台账（member scope）：消息到达即入队；无在飞则认领执行，有在飞则留在
+    // pending，由上一轮 finish 后 drain。**不拒绝、不排队拦截用户消息**——消息已落库，
+    // 这里只决定「现在执行还是稍后执行」。
+    if (useMemberSession && this.sessionTurns && !skipTurn) {
+      const turn = await this.sessionTurns.enqueue({
+        sessionId,
+        memberId: platformMemberId as string,
+        seatId: teamMemberId,
+        teamId,
+        channelId: request.channelId,
+        taskId: request.taskId || null,
+        messageId: request.messageId ?? null,
+      });
+      const claimed = await this.sessionTurns.claimNext(sessionId);
+      if (!claimed) {
+        // 已有在飞轮次：本轮保持 pending，完成回调里 drain 继续。
+        this.logger.log(
+          `[turn] session=${sessionId} 已有在飞轮次，本轮 seq=${turn.seq} 待执行`,
+        );
+        return;
+      }
+      if (claimed.id !== turn.id) {
+        // 历史遗留 pending（崩溃/重启）：先让最早一轮执行，本条等下一轮 drain。
+        this.logger.warn(
+          `[turn] session=${sessionId} 认领到更早轮次 ${claimed.id}（seq=${claimed.seq}），本轮 seq=${turn.seq} 顺延`,
+        );
+        return;
+      }
     }
 
     // 2. 定位 worker：已绑复用，未绑/残留 pending 则分配 + 首次 bind 占位
@@ -2438,8 +2670,11 @@ export class WorkerDispatcher
     const memberOverride = teamMemberId
       ? await this.resolveMemberOverrideModelId(teamMemberId)
       : null;
+    // 群聊默认模型：成员未设置时兜底（still 高于任务/Agent 默认）。
+    const teamDefaultModel = await this.resolveTeamDefaultModelId(teamId);
     const agentModelId =
       memberOverride ??
+      teamDefaultModel ??
       request.taskContext?.overrideModelId ??
       (await this.resolveAgentModelId(target.agentId));
 
@@ -2489,11 +2724,7 @@ export class WorkerDispatcher
           '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
         );
       }
-      await this.sessionLifecycle.bindSessionToWorker(
-        sessionId,
-        workerId,
-        PENDING_INSTANCE_REF,
-      );
+      await bindSession(PENDING_INSTANCE_REF);
     }
 
     // 复用已绑定 worker 的在线校验 + 离线重分配（同 task-mode 时序）
@@ -2549,11 +2780,7 @@ export class WorkerDispatcher
         throw new Error(`worker ${workerId} 不存在`);
       }
       opencodeSessionId = null;
-      await this.sessionLifecycle.bindSessionToWorker(
-        sessionId,
-        workerId,
-        PENDING_INSTANCE_REF,
-      );
+      await bindSession(PENDING_INSTANCE_REF);
     }
 
     // ── 首选 worker 迁移（语义②落地）────────────────────────────────────────
@@ -2587,11 +2814,7 @@ export class WorkerDispatcher
         workerId = migratedWorkerId;
         // 旧 instanceRef 属于旧节点，不能复用 → 强制在新节点重建 opencode 会话
         opencodeSessionId = null;
-        await this.sessionLifecycle.bindSessionToWorker(
-          sessionId,
-          workerId,
-          PENDING_INSTANCE_REF,
-        );
+        await bindSession(PENDING_INSTANCE_REF);
         // 重读新节点行：capabilities（能力位门控）与 defaultModelId（模型兜底
         // 来源）必须来自新节点——沿用旧节点的值就是「跑在新节点、用旧节点配置」
         const migratedRow = await this.prisma.worker.findUnique({
@@ -2666,7 +2889,20 @@ export class WorkerDispatcher
         this.unregisterExecution(workerId, scope, teamMemberId);
       }
     }
-    const injectFlight = busyInFlight && !!opencodeSessionId && !staleInFlight;
+    // 私聊（DM）不做「注入在飞会话」：私聊的消息必须逐条走完整派发/回流，
+    // 否则一次执行登记泄漏后，后续私聊会被当成“注入”送进空闲会话，模型不会再
+    // 产生终态事件，表现为「发了没回复」。群聊保留注入优化。
+    const sourceChannelType = (
+      await (this.prisma as any).chatChannel.findUnique({
+        where: { id: request.channelId },
+        select: { type: true },
+      })
+    )?.type as string | null;
+    const injectFlight =
+      busyInFlight &&
+      !!opencodeSessionId &&
+      !staleInFlight &&
+      sourceChannelType !== CHANNEL_TYPE.private;
     if (busyInFlight && !opencodeSessionId) {
       this.logger.warn(
         `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，但会话实例引用缺失，回退常规派发`,
@@ -2721,6 +2957,55 @@ export class WorkerDispatcher
       where: { id: request.channelId },
       select: { type: true },
     });
+    // 私聊来源：明确告诉模型「这是私聊，不是群聊」，并附上该成员所在的所有群聊。
+    // 目的（用户预期）：① 私聊回复直接回私聊，不调用 group_post 发到群；② 成员在多个群时
+    // 知道每个群的 teamId / 席位 selfInstanceId / 群聊频道，需要时能自行选择往哪个群发。
+    if (sourceChannel?.type === CHANNEL_TYPE.private) {
+      promptBlocks.push(
+        '【私聊上下文】本条消息来自成员私聊（不是群聊）。你的回复会直接回到这个私聊窗口；' +
+          '**不要调用 vteam_group_post 把私聊回复发到群聊**。' +
+          '只有用户明确要求「发到某个群」时，才按下方群聊清单选择目标群并调用 vteam_group_post' +
+          '（传对应 teamId 与 selfInstanceId）。',
+      );
+      const sessionMemberId =
+        (session as { memberId?: string | null }).memberId ?? null;
+      if (sessionMemberId) {
+        const seats = await (this.prisma as any).teamMember.findMany({
+          where: { memberId: sessionMemberId },
+          select: {
+            id: true,
+            teamId: true,
+            alias: true,
+            team: { select: { name: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (Array.isArray(seats) && seats.length > 0) {
+          const teamIds = [...new Set(seats.map((x: any) => x.teamId))];
+          const groupChannels = await (this.prisma as any).chatChannel.findMany(
+            {
+              where: {
+                teamId: { in: teamIds },
+                type: CHANNEL_TYPE.team_group,
+                deletedAt: null,
+              },
+              select: { id: true, teamId: true },
+            },
+          );
+          const channelByTeam = new Map<string, string>(
+            (groupChannels ?? []).map((c: any) => [c.teamId, c.id]),
+          );
+          const lines = seats.map((seat: any) => {
+            const teamName = seat.team?.name ?? seat.teamId;
+            return `- 团队「${teamName}」（teamId=${seat.teamId}）：你在该群的席位 selfInstanceId=${seat.id}，群聊频道=${channelByTeam.get(seat.teamId) ?? '（暂无群频道）'}`;
+          });
+          promptBlocks.push(
+            `【你所在的群聊】你同时属于以下 ${seats.length} 个群聊：\n${lines.join('\n')}`,
+          );
+        }
+      }
+    }
+
     if (
       sourceChannel?.type === CHANNEL_TYPE.team_group &&
       !request.text.includes('[WeCom:')
@@ -3225,7 +3510,17 @@ export class WorkerDispatcher
       this.silentWakeAttempts.delete(sessionId);
     }
     // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
-    const settled = await this.handleTeamTaskCompleted(payload);
+    let settled: Awaited<ReturnType<typeof this.handleTeamTaskCompleted>>;
+    try {
+      settled = await this.handleTeamTaskCompleted(payload);
+    } catch (err) {
+      await this.finishTurnAndDrain(sessionId, SESSION_TURN_STATUS.failed, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+    // P3：本轮收口 → 若有 pending 轮次，继续 drain（每会话至多一轮在飞）。
+    await this.finishTurnAndDrain(sessionId, SESSION_TURN_STATUS.done);
     if (sessionId) {
       this.clearDispatchSnapshotBySession(sessionId);
     }
@@ -3929,6 +4224,9 @@ export class WorkerDispatcher
         agentId: resolvedAgentId,
         error: payload.error ?? 'agent 处理失败',
       });
+      await this.finishTurnAndDrain(emitSessionId, SESSION_TURN_STATUS.failed, {
+        error: payload.error ?? 'agent 处理失败',
+      });
     } else {
       this.emitLoading({
         taskId: scope,
@@ -4332,6 +4630,11 @@ export class WorkerDispatcher
           errorType: 'model_error',
           message,
         });
+        await this.finishTurnAndDrain(
+          params.sessionId,
+          SESSION_TURN_STATUS.failed,
+          { error: message },
+        );
         return;
       }
       if (findFinish(fresh)) {
@@ -4349,6 +4652,11 @@ export class WorkerDispatcher
     this.failedSessions.add(params.sessionId);
     this.logger.error(
       `agent ${params.agentId} 自持轮询超时（${this.dispatchTimeoutMs / 1000}s 未出现 step-finish）`,
+    );
+    await this.finishTurnAndDrain(
+      params.sessionId,
+      SESSION_TURN_STATUS.expired,
+      { error: 'poll_timeout' },
     );
   }
 
@@ -4587,6 +4895,22 @@ export class WorkerDispatcher
    * 取自 type=template 祖先或任意非空 defaultModelId 祖先，seed 已预置模板模型）。
    * 全链无配置 → null（不指定模型，由 worker 默认/serve 默认兜底）。
    */
+  /** 群聊默认模型（Team.defaultModelId，md_ 行 id）→ providerID/modelID。 */
+  private async resolveTeamDefaultModelId(
+    teamId: string,
+  ): Promise<string | null> {
+    try {
+      const row = await this.prisma.team.findUnique({
+        where: { id: teamId },
+        select: { defaultModelId: true },
+      });
+      return await this.toProviderModelRef(row?.defaultModelId ?? null);
+    } catch (err) {
+      void err;
+      return null;
+    }
+  }
+
   private async resolveMemberOverrideModelId(
     teamMemberId: string,
   ): Promise<string | null> {
@@ -4597,9 +4921,17 @@ export class WorkerDispatcher
     try {
       const row = (await repo.findFirst({
         where: { id: teamMemberId },
-        select: { overrideModelId: true },
-      })) as { overrideModelId: string | null } | null;
-      return row?.overrideModelId ?? null;
+        select: {
+          overrideModelId: true,
+          member: { select: { defaultModelId: true } },
+        },
+      })) as {
+        overrideModelId: string | null;
+        member?: { defaultModelId: string | null } | null;
+      } | null;
+      // 优先级：席位级覆盖 > 平台成员默认模型（成员库/会话右栏设置）> Agent 默认。
+      const raw = row?.overrideModelId ?? row?.member?.defaultModelId ?? null;
+      return await this.toProviderModelRef(raw);
     } catch (err) {
       void err; // 故意忽略：降级路径，错误原因不改变语义
       // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
@@ -4629,9 +4961,16 @@ export class WorkerDispatcher
     try {
       const row = (await repo.findFirst({
         where: { id: teamMemberId },
-        select: { preferredWorkerId: true },
-      })) as { preferredWorkerId: string | null } | null;
-      return row?.preferredWorkerId ?? null;
+        select: {
+          preferredWorkerId: true,
+          member: { select: { preferredWorkerId: true } },
+        },
+      })) as {
+        preferredWorkerId: string | null;
+        member?: { preferredWorkerId: string | null } | null;
+      } | null;
+      // 优先级：席位级 > 平台成员默认（成员库/会话右栏设置）。
+      return row?.preferredWorkerId ?? row?.member?.preferredWorkerId ?? null;
     } catch (err) {
       void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
@@ -4791,13 +5130,38 @@ export class WorkerDispatcher
   }
 
   /** Agent.defaultModelId（`provider/model`）→ opencode serve 模型选择；缺省/非法 → null。 */
+  /**
+   * 模型引用归一：成员/席位覆盖值可能存的是目录行 id（md_），而执行链路需要
+   * `providerID/modelID`（Agent.defaultModelId 就是这种格式）。这里统一转成后者。
+   */
+  private async toProviderModelRef(
+    raw: string | null | undefined,
+  ): Promise<string | null> {
+    if (!raw) return null;
+    if (raw.includes('/')) return raw;
+    if (!raw.startsWith('md_')) return raw;
+    try {
+      const row = await this.prisma.model.findUnique({
+        where: { id: raw },
+        select: { providerID: true, modelID: true },
+      });
+      return row ? `${row.providerID}/${row.modelID}` : null;
+    } catch (err) {
+      void err;
+      return null;
+    }
+  }
+
   private toModelSelection(
     defaultModelId: string | null | undefined,
   ): { providerID: string; modelID: string } | null {
     if (!defaultModelId) {
       return null;
     }
-    const slash = defaultModelId.lastIndexOf('/');
+    // 用**第一个**斜杠切：providerID 不含 '/'，而 modelID 可能带 '/'（如 commandcode
+    // 的 deepseek/deepseek-v4.1-flash）。用 lastIndexOf 会把 providerID 切成
+    // 「commandcode/deepseek」，worker 侧报 Model unavailable。
+    const slash = defaultModelId.indexOf('/');
     if (slash <= 0 || slash === defaultModelId.length - 1) {
       return null;
     }

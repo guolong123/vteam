@@ -27,6 +27,8 @@ import { MemoriesModule } from './memories/memories.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { MessageChannelsModule } from './message-channels/message-channels.module';
 import { NotificationChannelsModule } from './notifications/notification-channels.module';
+import { ConversationsModule } from './conversations/conversations.module';
+import { MembersModule } from './members/members.module';
 import { TeamsModule } from './teams/teams.module';
 import { TimersModule } from './timers/timers.module';
 import { UsageModule } from './usage/usage.module';
@@ -51,6 +53,8 @@ import { StatsModule } from './stats/stats.module';
     AuthModule,
     UsersModule,
     AgentsModule,
+    MembersModule,
+    ConversationsModule,
     AgentRolesModule,
     TasksModule,
     ChatModule,

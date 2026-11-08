@@ -31,7 +31,8 @@ import * as path from 'path';
  *    「已部署库里该列真实存在」的证据（删一个不存在的列会 ERROR 1091 炸 init job）；
  * 2. 新迁移**必须**含 `ALTER TABLE \`agents\` DROP COLUMN \`worker_id\``；
  * 3. 新迁移**必须**含两条 `ADD COLUMN \`preferred_worker_id\``（teams 与 team_members）；
- * 4. schema.prisma 的 Agent 段**不再**声明 `workerId`，且 `preferred_worker_id` 恰好两处；
+ * 4. schema.prisma 的 Agent 段**不再**声明 `workerId`，且 `preferred_worker_id` 恰好三处
+ *    （Team / TeamMember / Member——成员库 P0 新增 Member.preferred_worker_id）；
  * 5. 新迁移零 `UPDATE`/`INSERT`/`FOREIGN KEY`/`IF EXISTS`/`IF NOT EXISTS`（剔除 `--`
  *    注释行后；本迁移的中文理由头也不得写出这些字面量与裸列名，否则本断言与 schema
  *    注释的同名约束会打架）；
@@ -170,17 +171,20 @@ describe('migration 20261014000000_team_worker_node', () => {
     );
   });
 
-  it('④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处', () => {
+  it('④ schema.prisma 的 Agent 段零 workerId，preferred_worker_id 恰好三处（Team/TeamMember/Member）', () => {
     // 摘声明（Todo 6）与删列（本 todo）必须同时发生：只摘声明会留下死列，
     // 只删列会让 Prisma client 读一个不存在的列 → 运行时 P2022。
     expect(schemaAgentBlock()).not.toMatch(/\bworkerId\b/);
-    // @map 字面量计数：多了说明有第三处声明/注释漏改（schema 注释也不得写裸列名）。
-    expect(schema().match(/preferred_worker_id/g) ?? []).toHaveLength(2);
-    // 两处都必须真的落在 Team 与 TeamMember 两个模型里（不得两处都挤在同一模型）。
+    // @map 字面量计数：多了说明有第四处声明/注释漏改（schema 注释也不得写裸列名）。
+    // 成员库 P0 起 Member 也有 preferred_worker_id（平台成员默认 worker），故为三处。
+    expect(schema().match(/preferred_worker_id/g) ?? []).toHaveLength(3);
+    // 三处必须分别落在 Team / TeamMember / Member 三个模型里（不得挤在同一模型）。
     const teamBlock = /^model Team \{([\s\S]*?)^\}/m.exec(schema());
-    const memberBlock = /^model TeamMember \{([\s\S]*?)^\}/m.exec(schema());
+    const teamMemberBlock = /^model TeamMember \{([\s\S]*?)^\}/m.exec(schema());
+    const platformMemberBlock = /^model Member \{([\s\S]*?)^\}/m.exec(schema());
     expect(teamBlock?.[1]).toContain('@map("preferred_worker_id")');
-    expect(memberBlock?.[1]).toContain('@map("preferred_worker_id")');
+    expect(teamMemberBlock?.[1]).toContain('@map("preferred_worker_id")');
+    expect(platformMemberBlock?.[1]).toContain('@map("preferred_worker_id")');
   });
 
   it('⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后）', () => {

@@ -16,6 +16,12 @@ export function stripInjectedContext(text: string): string {
   out = out.replace(/<doclib>[\s\S]*?<\/doclib>[ \t]*(?:\n?[ \t]*(?:用户|Agent|agent):[^\n]*)*/g, "");
   // 行首 [群聊历史消息] 标记行 + 其后的 用户:/Agent: 历史行（到下一个非历史行边界）
   out = out.replace(/(?:^|\n)[ \t]*\[群聊历史消息\][^\n]*(?:\n[ \t]*(?:用户|Agent|agent):[^\n]*)*/g, "");
+  // 分派器写回用户消息的「注入上下文」段（设计 v1.3：只进模型上下文，不进 UI）：
+  // 各段以【任务上下文】/【团队上下文】/【群聊回复要求】/【企微消息】开头，段间以空行分隔。
+  out = out.replace(
+    /(?:^|\n\n)[ \t]*【(?:任务上下文|团队上下文|群聊回复要求|企微消息|私聊上下文|你所在的群聊)】[\s\S]*?(?=\n\n|$)/g,
+    "",
+  );
   // 清理剥离产生的多余空行并 trim 首尾
   out = out.replace(/\n{3,}/g, "\n\n").trim();
   return out;

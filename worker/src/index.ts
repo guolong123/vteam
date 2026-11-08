@@ -1031,6 +1031,7 @@ export interface ModelCredentialsCommandDeps {
   ) => Promise<{
     authJsonPath: string;
     configPath: string;
+    changed: boolean;
     configChanged: boolean;
   }>;
   /** 记录本次注入的落盘路径（下次写入前 cleanup 明文凭据）。 */
@@ -1052,6 +1053,15 @@ export interface ModelCredentialsCommandDeps {
     providerConfigs?: Record<string, ModelProviderConfigEntry>;
     revokedProviderIDs?: string[];
   }) => Promise<{ changed: boolean; missing: string[]; failures: string[] }>;
+  /**
+   * 凭据实际发生变化后的收尾（生产注入 reRegister）。
+   *
+   * 为什么必须重注册：provider/模型目录由 opencode serve 在热重载后更新，但 worker
+   * 注册时上报的 `capabilities.models` 是**注册快照**——不重注册，服务端目录就看不到
+   * 新 provider 的模型（表现为“加了 provider/密钥，模型列表里没有”）。重注册只更新
+   * capabilities（含最新 models），不重启 serve、不断会话。
+   */
+  onCredentialsApplied?: () => Promise<void>;
   log: (message: string) => void;
   warn: (message: string) => void;
 }
@@ -1074,6 +1084,7 @@ export async function handleModelCredentialsCommand(
     deps.warn('[worker] model-credentials 命令缺少 providerKeys 负载，跳过注入');
     return;
   }
+  let credentialsChanged = false;
   try {
     const result = await deps.injectCredentials(
       payload.providerKeys,
@@ -1082,6 +1093,7 @@ export async function handleModelCredentialsCommand(
       injectedConfigPath,
     );
     deps.onInjectedPaths(result.authJsonPath, result.configPath);
+    credentialsChanged = result.changed || result.configChanged;
     if (result.configChanged) {
       deps.onProviderConfigChanged();
     }
@@ -1092,14 +1104,26 @@ export async function handleModelCredentialsCommand(
   // store 缺行/吊销残留的自愈就靠它；失败只 warn，不阻断文件注入。
   if (deps.syncIntegrationCredentials) {
     try {
-      await deps.syncIntegrationCredentials({
+      const syncResult = await deps.syncIntegrationCredentials({
         providerKeys: payload.providerKeys,
         providerConfigs: payload.providerConfigs,
         revokedProviderIDs: payload.revokedProviderIDs,
       });
+      credentialsChanged = credentialsChanged || syncResult.changed;
     } catch (err) {
       deps.warn(
         `[worker] model-credentials：credential store 同步失败（文件注入不受影响）: ${(err as Error).message}`,
+      );
+    }
+  }
+  // 凭据/配置实际变化 → 重注册刷新 capabilities.models（不重启 serve）。
+  // 修复「新增 provider 后模型目录不更新，必须手动重启 worker 才出现」。
+  if (credentialsChanged && deps.onCredentialsApplied) {
+    try {
+      await deps.onCredentialsApplied();
+    } catch (err) {
+      deps.warn(
+        `[worker] model-credentials：重注册刷新模型目录失败（下次心跳/重启会再同步）: ${(err as Error).message}`,
       );
     }
   }
@@ -2127,6 +2151,10 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
                 log: (message) => console.log(message),
                 warn: (message) => console.warn(message),
               }),
+            onCredentialsApplied: async () => {
+              configChangedSinceRegister = true;
+              await reRegister();
+            },
             log: (message) => console.log(message),
             warn: (message) => console.warn(message),
           },
