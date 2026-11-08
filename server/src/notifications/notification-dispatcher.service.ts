@@ -107,7 +107,8 @@ function formatQuestionText(question: Record<string, unknown>): string {
   try {
     const json = JSON.stringify(question);
     return `【待确认】${json.slice(0, 500)}`;
-  } catch {
+  } catch (err) {
+    void err;
     return '【待确认】请前往Web处理';
   }
 }
@@ -307,7 +308,8 @@ export class NotificationDispatcherService
           select: { memberId: true },
         });
         memberId = session?.memberId ?? null;
-      } catch {
+      } catch (err) {
+        void err;
         memberId = null;
       }
     }
@@ -478,7 +480,8 @@ export class NotificationDispatcherService
           select: { taskId: true },
         });
         taskId = ch?.taskId ?? null;
-      } catch {
+      } catch (err) {
+        void err;
         taskId = null;
       }
     }
@@ -532,7 +535,8 @@ export class NotificationDispatcherService
         select: { teamId: true },
       });
       teamId = task?.teamId ?? null;
-    } catch {
+    } catch (err) {
+      void err;
       return [];
     }
     if (!teamId) return [];
@@ -550,7 +554,8 @@ export class NotificationDispatcherService
         where: { teamId },
         select: { notificationChannelId: true },
       });
-    } catch {
+    } catch (err) {
+      void err;
       return [];
     }
     if (!links || links.length === 0) return [];
@@ -562,7 +567,8 @@ export class NotificationDispatcherService
       channels = await (this.prisma as any).notificationChannel.findMany({
         where: { id: { in: ids }, enabled: true },
       });
-    } catch {
+    } catch (err) {
+      void err;
       return [];
     }
 
@@ -597,7 +603,8 @@ export class NotificationDispatcherService
       return channels.filter(
         (ch) => ch.enabled && this.hasEvent(ch.config, eventType),
       );
-    } catch {
+    } catch (err) {
+      void err;
       return [];
     }
   }
@@ -609,7 +616,8 @@ export class NotificationDispatcherService
         select: { title: true },
       });
       return task?.title ?? null;
-    } catch {
+    } catch (err) {
+      void err;
       return null;
     }
   }
@@ -692,7 +700,8 @@ export class NotificationDispatcherService
         select: { teamId: true },
       });
       return task?.teamId ?? null;
-    } catch {
+    } catch (err) {
+      void err;
       return null;
     }
   }

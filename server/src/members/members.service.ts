@@ -470,7 +470,8 @@ export class MembersService implements OnModuleInit {
           where: { memberId: id, alias: previousName },
           data: { alias: String(data.name).trim() },
         });
-      } catch {
+      } catch (err) {
+        void err;
         // 同步别名是增强项，失败不回滚成员改名
       }
     }

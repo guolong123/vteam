@@ -4905,7 +4905,8 @@ export class WorkerDispatcher
         select: { defaultModelId: true },
       });
       return await this.toProviderModelRef(row?.defaultModelId ?? null);
-    } catch {
+    } catch (err) {
+      void err;
       return null;
     }
   }
@@ -5145,7 +5146,8 @@ export class WorkerDispatcher
         select: { providerID: true, modelID: true },
       });
       return row ? `${row.providerID}/${row.modelID}` : null;
-    } catch {
+    } catch (err) {
+      void err;
       return null;
     }
   }
