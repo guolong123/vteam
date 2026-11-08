@@ -143,7 +143,7 @@ async function main() {
     const baseName =
       seat.alias?.trim() ||
       `${seat.role?.name ?? seat.agent?.name ?? '成员'}-${seat.seq}`;
-    const wantedName = `${baseName}（${seat.team.name.slice(0, 24)}·${seat.id.slice(-4)}）`;
+    const wantedName = `${baseName}（${seat.team.name.slice(0, 40)}）`;
     const name = DRY_RUN ? wantedName : await uniqueName(wantedName);
     if (name !== wantedName) {
       report.nameAdjustments.push({

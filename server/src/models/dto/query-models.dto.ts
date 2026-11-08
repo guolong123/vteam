@@ -19,6 +19,20 @@ export class QueryModelsDto {
   @IsIn([true, false])
   enabled?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      '仅返回「可用」模型：至少一个在线 worker 上报过 availability（下拉选择用）',
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true' || value === true || value === '1' || value === 1)
+      return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
+  @IsIn([true, false])
+  available?: boolean;
+
   @ApiPropertyOptional({ description: 'providerID 模糊搜索（contains）' })
   @IsOptional()
   @IsString()

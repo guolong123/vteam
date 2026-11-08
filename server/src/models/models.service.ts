@@ -150,6 +150,11 @@ export class ModelsService implements OnModuleInit {
       modelID: query.modelID ? { contains: query.modelID } : undefined,
       name: query.name ? { contains: query.name } : undefined,
       providerType: query.providerType ? query.providerType : undefined,
+      // 下拉选择只列真正可用的模型：在线 worker 上报过 availability。
+      workerAvailabilities:
+        query.available === true
+          ? { some: { worker: { status: 'online' } } }
+          : undefined,
     };
 
     const [total, rows] = await this.prisma.$transaction([
