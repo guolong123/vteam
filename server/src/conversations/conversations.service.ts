@@ -349,16 +349,20 @@ export class ConversationsService {
     const result = new Map<string, number>();
     await Promise.all(
       channels.map(async (ch) => {
-        const count = await (this.prisma as any).message.count({
+        const rows = await (this.prisma as any).message.findMany({
           where: {
             channelId: ch.id,
             createdAt: { gt: ch.lastReadAt ?? EMPTY_TIME },
-            // 自己发的消息不算未读；生成中的占位消息（只有思考/工具）也不计入。
             senderType: { not: 'user' },
             status: { not: 'processing' },
           },
+          select: { content: true },
         });
-        result.set(ch.id, count ?? 0);
+        // 思考/工具消息没有正文 → 不计未读、不点亮红点。
+        const count = (rows ?? []).filter(
+          (r: any) => this.summarize(r.content).trim().length > 0,
+        ).length;
+        result.set(ch.id, count);
       }),
     );
     return result;
@@ -371,8 +375,14 @@ export class ConversationsService {
       const c = content as { text?: unknown; parts?: unknown };
       if (typeof c.text === 'string') text = c.text;
       else if (Array.isArray(c.parts)) {
+        // 只认正文 text part：思考(reasoning/thinking)/工具(tool) 的 text 不进预览，
+        // 否则左栏会显示模型的过程文本甚至空白。
         const textPart = c.parts.find(
-          (p: any) => p && typeof p.text === 'string',
+          (p: any) =>
+            p &&
+            p.type === 'text' &&
+            p.synthetic !== true &&
+            typeof p.text === 'string',
         );
         if (textPart) text = textPart.text as string;
       }
