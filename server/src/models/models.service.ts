@@ -150,12 +150,34 @@ export class ModelsService implements OnModuleInit {
       modelID: query.modelID ? { contains: query.modelID } : undefined,
       name: query.name ? { contains: query.name } : undefined,
       providerType: query.providerType ? query.providerType : undefined,
-      // 下拉选择只列真正可用的模型：在线 worker 上报过 availability。
+      // 下拉选择只列真正可用的模型：在线 worker 上报过 availability，
+      // 且 provider 已配置凭据（或本身就是 local/custom 免密钥），
+      // 避免把 worker 目录里「有但没 key」的模型展示成可选。
       workerAvailabilities:
         query.available === true
           ? { some: { worker: { status: 'online' } } }
           : undefined,
     };
+    if (query.available === true) {
+      const [creds, localProviders] = await Promise.all([
+        this.prisma.modelCredential.findMany({
+          where: { revokedAt: null },
+          select: { providerID: true },
+        }),
+        this.prisma.model.findMany({
+          where: { providerType: { in: ['local', 'custom'] } },
+          select: { providerID: true },
+          distinct: ['providerID'],
+        }),
+      ]);
+      const allowed = [
+        ...new Set([
+          ...creds.map((c) => c.providerID),
+          ...localProviders.map((m) => m.providerID),
+        ]),
+      ];
+      where.AND = [{ providerID: { in: allowed } }];
+    }
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.model.count({ where }),

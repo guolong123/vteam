@@ -1167,12 +1167,12 @@ function MemberContextPanel({
   }, [member?.id, member?.agentId, member?.defaultModelId, member?.preferredWorkerId]);
   const agentsQuery = useQuery({
     queryKey: ["agents", "chat-member-panel"],
-    queryFn: () => api.get<{ items: Array<{ id: string; name: string; agentKey: string | null }> }>("/agents", { query: { page: 1, pageSize: 200, available: 1 } }),
+    queryFn: () => api.get<{ items: Array<{ id: string; name: string; agentKey: string | null }> }>("/agents", { query: { page: 1, pageSize: 100 } }),
     enabled: !!member,
   });
   const modelsQuery = useQuery({
     queryKey: ["models", "chat-member-panel"],
-    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 100 } }),
+    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 200, available: 1 } }),
     enabled: !!member,
   });
   const workersQuery = useQuery({
