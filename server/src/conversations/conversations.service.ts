@@ -307,10 +307,36 @@ export class ConversationsService {
         text: this.summarize(row.content),
         senderType: row.senderType,
         senderName: this.senderName(row, aliases),
+        status: row.status ?? null,
         createdAt:
           row.createdAt instanceof Date
             ? row.createdAt.toISOString()
             : String(row.createdAt),
+      });
+    }
+    // 正文兜底：最新一条可能是只有思考/工具片段的 agent 占位消息（正文为空），
+    // 预览不能空着——往前找该频道最近一条有正文的消息。
+    for (const [channelId, entry] of result) {
+      if (entry.text && entry.text.trim()) continue;
+      const candidates = await (this.prisma as any).message.findMany({
+        where: { channelId, status: { not: 'processing' } },
+        orderBy: { id: 'desc' },
+        take: 20,
+        select: { id: true, senderType: true, content: true, status: true, createdAt: true },
+      });
+      const hit = (candidates ?? []).find((r: any) => {
+        const t = this.summarize(r.content);
+        return t && t.trim().length > 0;
+      });
+      if (!hit) {
+        result.delete(channelId);
+        continue;
+      }
+      result.set(channelId, {
+        ...entry,
+        id: hit.id,
+        text: this.summarize(hit.content),
+        status: hit.status ?? null,
       });
     }
     return result;
@@ -327,6 +353,9 @@ export class ConversationsService {
           where: {
             channelId: ch.id,
             createdAt: { gt: ch.lastReadAt ?? EMPTY_TIME },
+            // 自己发的消息不算未读；生成中的占位消息（只有思考/工具）也不计入。
+            senderType: { not: 'user' },
+            status: { not: 'processing' },
           },
         });
         result.set(ch.id, count ?? 0);
