@@ -66,6 +66,8 @@ export interface TeamDto {
   mainAgentMemberId: string | null;
   /** 团队级首选 worker id（null = 自动调度到任意可用节点；节点删除后为悬空软引用）。 */
   preferredWorkerId?: string | null;
+  /** 群聊默认模型（md_ 目录行 id）；成员级默认模型优先。 */
+  defaultModelId?: string | null;
   version: number;
   createdBy: string;
   createdAt: string;

@@ -52,6 +52,11 @@ export class UpdateTeamDto {
   @MaxLength(191)
   preferredWorkerId?: string | null;
 
+  /** 群聊默认模型（md_ 目录行 id）；成员级 defaultModelId 优先。空串/null = 清除。 */
+  @IsOptional()
+  @IsString()
+  defaultModelId?: string | null;
+
   @ApiPropertyOptional({
     description:
       '并行任务并发上限（parallel-tasks D1）：正整数 = 进行中/阻塞任务数上限；null/不传 = 不限',

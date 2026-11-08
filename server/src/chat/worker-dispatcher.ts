@@ -2670,8 +2670,11 @@ export class WorkerDispatcher
     const memberOverride = teamMemberId
       ? await this.resolveMemberOverrideModelId(teamMemberId)
       : null;
+    // 群聊默认模型：成员未设置时兜底（still 高于任务/Agent 默认）。
+    const teamDefaultModel = await this.resolveTeamDefaultModelId(teamId);
     const agentModelId =
       memberOverride ??
+      teamDefaultModel ??
       request.taskContext?.overrideModelId ??
       (await this.resolveAgentModelId(target.agentId));
 
@@ -4889,6 +4892,21 @@ export class WorkerDispatcher
    * 取自 type=template 祖先或任意非空 defaultModelId 祖先，seed 已预置模板模型）。
    * 全链无配置 → null（不指定模型，由 worker 默认/serve 默认兜底）。
    */
+  /** 群聊默认模型（Team.defaultModelId，md_ 行 id）→ providerID/modelID。 */
+  private async resolveTeamDefaultModelId(
+    teamId: string,
+  ): Promise<string | null> {
+    try {
+      const row = await this.prisma.team.findUnique({
+        where: { id: teamId },
+        select: { defaultModelId: true },
+      });
+      return await this.toProviderModelRef(row?.defaultModelId ?? null);
+    } catch {
+      return null;
+    }
+  }
+
   private async resolveMemberOverrideModelId(
     teamMemberId: string,
   ): Promise<string | null> {

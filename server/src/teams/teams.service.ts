@@ -543,6 +543,9 @@ export class TeamsService implements OnModuleInit {
     if (dto.preferredWorkerId !== undefined) {
       data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
     }
+    if (dto.defaultModelId !== undefined) {
+      data.defaultModelId = dto.defaultModelId?.trim() || null;
+    }
     // 并发上限（D1）：null = 不限；正整数 = 活跃占用（in_progress+blocked）上限。
     if (dto.maxConcurrentTasks !== undefined) {
       const max = dto.maxConcurrentTasks;
@@ -1866,6 +1869,7 @@ export class TeamsService implements OnModuleInit {
       // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
       // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
       preferredWorkerId: team.preferredWorkerId ?? null,
+      defaultModelId: (team as any).defaultModelId ?? null,
       maxConcurrentTasks: team.maxConcurrentTasks ?? null,
       activeTaskCount,
       // 团队群聊最近活动时间（ISO 字符串；null = 从未活动）。团队切换器按它排序。
