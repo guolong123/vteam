@@ -11,6 +11,8 @@ export interface ConversationLastMessage {
   text: string;
   senderType: string;
   senderName: string | null;
+  /** 消息状态（processing = 仍在生成，用于「处理中」提示）。 */
+  status?: string | null;
   createdAt: string;
 }
 

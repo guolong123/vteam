@@ -237,6 +237,7 @@ export class ConversationsService {
         text: string;
         senderType: string;
         senderName: string | null;
+        status: string | null;
         createdAt: string;
       }
     >
@@ -259,6 +260,7 @@ export class ConversationsService {
         channelId: true,
         senderType: true,
         senderId: true,
+        status: true,
         content: true,
         createdAt: true,
       },

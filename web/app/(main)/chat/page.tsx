@@ -399,10 +399,13 @@ function ChatPageContent() {
       memberById.get(seat.memberId ?? "")?.session?.busyState === "running",
   );
   /** DM 已发消息但还没等到对方回复：给用户「进行中」反馈（超 2 分钟不再显示）。 */
+  const lastDmMessage = active?.lastMessage ?? null;
   const dmWaiting =
     active?.type === "dm" &&
-    active.lastMessage?.senderType === "user" &&
-    Date.now() - Date.parse(active.lastMessage.createdAt) < 120_000;
+    (lastDmMessage?.status === "processing" ||
+      (lastDmMessage?.senderType === "user" &&
+        Date.now() - Date.parse(lastDmMessage.createdAt) < 120_000));
+  const dmStreaming = lastDmMessage?.status === "processing";
   const busyTeamName = (memberId: string): string | null => {
     const currentTeamId = memberById.get(memberId)?.session?.currentTeamId ?? null;
     return currentTeamId ? (teamNameById.get(currentTeamId) ?? null) : null;
@@ -597,7 +600,7 @@ function ChatPageContent() {
               {(member?.session?.busyState === "running" || dmWaiting) && (
                 <span data-testid="dm-processing" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: fontSize.xs, color: "#B45309", backgroundColor: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: radius.pill, padding: "2px 10px" }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#F59E0B", animation: "pulse 1.2s infinite" }} />
-                  {member?.session?.busyState === "running" ? "处理中…" : "已发送，等待回复…"}
+                  {member?.session?.busyState === "running" || dmStreaming ? "处理中…" : "已发送，等待回复…"}
                 </span>
               )}
               <button type="button" disabled={resetSessionMutation.isPending} onClick={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[600], borderRadius: radius.md, padding: "3px 10px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>{resetSessionMutation.isPending ? "重置中…" : "重置会话"}</button>
