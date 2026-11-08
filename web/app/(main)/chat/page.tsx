@@ -933,7 +933,27 @@ function ConversationRow({
           <AgentAvatar role={roleKey} size="md" />
         )}
         {busy && (
-          <span data-testid="conversation-busy-dot" title="处理中" style={{ position: "absolute", right: -1, bottom: -1, width: 9, height: 9, borderRadius: "50%", backgroundColor: "#F59E0B", border: "1.5px solid var(--color-surface)" }} />
+          <span
+            data-testid="conversation-busy-tag"
+            title="处理中"
+            style={{
+              position: "absolute",
+              right: -10,
+              top: -4,
+              backgroundColor: "#F59E0B",
+              color: "#FFF",
+              borderRadius: radius.pill,
+              padding: "0 5px",
+              fontSize: 9,
+              fontWeight: 700,
+              lineHeight: "14px",
+              whiteSpace: "nowrap",
+              border: "1px solid var(--color-surface)",
+              zIndex: 1,
+            }}
+          >
+            处理中
+          </span>
         )}
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
