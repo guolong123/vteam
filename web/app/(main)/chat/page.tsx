@@ -109,13 +109,17 @@ function ChatPageContent() {
     router.replace(`/chat?c=${encodeURIComponent(first.id)}`);
   }, [items, selected, router, convFilter]);
 
-  // 直接打开私聊链接（/chat?c=dm:…）或从“+私聊/建群”跳转时，切到对应 Tab，
-  // 否则默认「群聊」过滤会把刚打开的会话藏起来。
+  // 只在「URL 选中会话发生变化」时同步左侧 Tab（直接打开 dm 链接、+私聊/建群跳转）。
+  // 不能依赖 convFilter：用户手动点「群聊」Tab 时 selected 仍是旧 DM，会被立刻切回「成员」，
+  // 表现为群聊 Tab 一点就弹回去、群聊点不开。
+  const prevSelectedRef = useRef(selected);
   useEffect(() => {
-    if (!selected) return;
-    if (selected.startsWith("dm:") && convFilter === "group") setConvFilter("dm");
-    if (selected.startsWith("group:") && convFilter === "dm") setConvFilter("group");
-  }, [selected, convFilter]);
+    const prev = prevSelectedRef.current;
+    prevSelectedRef.current = selected;
+    if (!selected || prev === selected) return;
+    if (selected.startsWith("dm:")) setConvFilter("dm");
+    else if (selected.startsWith("group:")) setConvFilter("group");
+  }, [selected]);
 
   const active =
     items.find((item) => item.id === selected) ?? items[0] ?? null;
