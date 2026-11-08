@@ -486,6 +486,7 @@ function ChatPageContent() {
                   item={item}
                   active={active?.id === item.id}
                   roleKey={conversationRole(item, memberById)}
+                  busy={(item.type === "dm" && memberById.get(item.id.replace("dm:", ""))?.session?.busyState === "running") || (dmWaiting && active?.id === item.id)}
                   onClick={() => { setSendError(null); router.replace(`/chat?c=${encodeURIComponent(item.id)}`); }}
                 />
               ))}
