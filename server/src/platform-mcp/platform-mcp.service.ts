@@ -2345,6 +2345,8 @@ export class PlatformMcpService implements OnModuleInit {
           where: { id: args.targetInstanceId },
           select: { memberId: true, teamId: true },
         });
+        // 只镜像到「已回填平台成员」的私聊：旧席位没有 memberId 时保持原行为，
+        // 且避免单测/旧数据把群频道误当私聊。
         const privateChannel = targetSeat?.memberId
           ? await (this.prisma as any).chatChannel.findFirst({
               where: {
@@ -2355,14 +2357,7 @@ export class PlatformMcpService implements OnModuleInit {
               orderBy: { createdAt: 'asc' },
               select: { id: true },
             })
-          : await (this.prisma as any).chatChannel.findFirst({
-              where: {
-                teamMemberId: args.targetInstanceId,
-                type: 'private',
-                deletedAt: null,
-              },
-              select: { id: true },
-            });
+          : null;
         if (privateChannel) {
           const senderAgentId = await this.resolveTeamSenderAgentId(
             execTeamId ?? targetSeat?.teamId ?? '',

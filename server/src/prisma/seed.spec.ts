@@ -1076,10 +1076,10 @@ describe('seed（计划 skills + 评审子句）', () => {
     expect(first.agentId).toBe('a_product');
     const plan = memberCalls[5][0].create;
     expect(plan.agentId).toBe('a_plan');
-    expect(plan.alias).toBe('计划员-1');
+    expect(plan.alias).toBe('许一计');
     const librarian = memberCalls[6][0].create;
     expect(librarian.agentId).toBe('a_librarian');
-    expect(librarian.alias).toBe('知识管理员-1');
+    expect(librarian.alias).toBe('文一知');
   });
 
   it('7 个内置 AgentRole upsert：key/name/type=builtin/defaultAgentId/rolePrompt/sortOrder 与 src 常量一致，capabilities=按角色定制矩阵（agent-role-entity T1+T4）', async () => {

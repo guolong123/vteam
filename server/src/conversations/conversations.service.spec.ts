@@ -114,10 +114,24 @@ describe('ConversationsService', () => {
           );
         }),
         findMany: jest.fn().mockImplementation(({ where }: any) => {
-          const ids = where.id.in as string[];
-          return Promise.resolve(messages.filter((m) => ids.includes(m.id)));
+          if (where.id?.in) {
+            const ids = where.id.in as string[];
+            return Promise.resolve(messages.filter((m) => ids.includes(m.id)));
+          }
+          // 预览兜底 / 未读统计按 channelId 查询
+          const gt = where.createdAt?.gt as Date | undefined;
+          return Promise.resolve(
+            messages.filter(
+              (m) =>
+                m.channelId === where.channelId &&
+                (!gt || m.createdAt > gt) &&
+                m.senderType !== 'user',
+            ),
+          );
         }),
         count: jest.fn().mockImplementation(({ where }: any) => {
+          // processing 探测（无 createdAt 条件）在测试数据里恒 0
+          if (!where.createdAt) return Promise.resolve(0);
           const gt = where.createdAt.gt as Date;
           return Promise.resolve(
             messages.filter(
