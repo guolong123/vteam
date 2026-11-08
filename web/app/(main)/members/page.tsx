@@ -306,17 +306,13 @@ export default function MembersPage() {
     event.preventDefault();
     setFormError(null);
     const name = form.name.trim();
-    if (!name) {
-      setFormError("请填写成员名");
-      return;
-    }
     if (!form.roleId) {
       setFormError("请选择默认岗位");
       return;
     }
     if (editing === "new") {
       createMutation.mutate({
-        name,
+        ...(name ? { name } : {}),
         roleId: form.roleId,
         agentId: form.agentId || undefined,
         defaultModelId: form.defaultModelId || undefined,
@@ -565,7 +561,7 @@ export default function MembersPage() {
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: space.xl, display: "flex", flexDirection: "column", gap: space.lg }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>成员名称 <span style={{ color: "#DC2626" }}>必填</span></span>
-                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：架构师-老周" style={inputStyle} />
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="留空自动生成，例如：胡一开" style={inputStyle} />
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

@@ -8,14 +8,14 @@ import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
  * 模型/worker 为可选默认值，席位可覆盖。
  */
 export class CreateMemberDto {
-  @ApiProperty({
-    description: '成员名（全局唯一，@ 与私聊寻址用）',
+  @ApiPropertyOptional({
+    description: '成员名（全局唯一；缺省按岗位自动生成，如开发者第 2 位=胡二开）',
     maxLength: 64,
   })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(64)
-  name: string;
+  name?: string;
 
   @ApiProperty({
     description: '默认岗位 id（AgentRole）',

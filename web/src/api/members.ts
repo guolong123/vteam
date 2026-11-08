@@ -98,7 +98,8 @@ export interface MembersPage {
 }
 
 export interface CreateMemberPayload {
-  name: string;
+  /** 缺省时后端按岗位自动生成（如 胡一开）。 */
+  name?: string;
   roleId: string;
   agentId?: string;
   defaultModelId?: string;

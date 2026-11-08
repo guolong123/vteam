@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
+import { defaultMemberName } from '../common/member-names';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { CreateMemberDto } from './dto/create-member.dto';
@@ -342,18 +343,34 @@ export class MembersService implements OnModuleInit {
    * 名称全局唯一冲突 → 409 MEMBER_NAME_CONFLICT。
    */
   async create(userId: string, dto: CreateMemberDto) {
-    const name = dto.name?.trim();
+    let name = dto.name?.trim() ?? '';
+    const role = await this.prisma.agentRole.findUnique({
+      where: { id: dto.roleId },
+      select: { id: true, key: true, defaultAgentId: true },
+    });
+    if (!name) {
+      // 未填名称：按岗位生成「姓+中文序号+岗位末字」（如 胡一开），冲突则递增序号。
+      const count = await this.prisma.member.count({
+        where: { defaultRoleId: dto.roleId },
+      });
+      for (let seq = count + 1; seq < count + 100; seq += 1) {
+        const candidate = defaultMemberName(role?.key ?? '', seq);
+        const exists = await this.prisma.member.findUnique({
+          where: { name: candidate },
+          select: { id: true },
+        });
+        if (!exists) {
+          name = candidate;
+          break;
+        }
+      }
+    }
     if (!name) {
       throw new BadRequestException({
         code: MEMBERS_ERRORS.MEMBER_NAME_CONFLICT,
-        message: '成员名不能为空',
+        message: '无法生成可用的成员名，请手填',
       });
     }
-
-    const role = await this.prisma.agentRole.findUnique({
-      where: { id: dto.roleId },
-      select: { id: true, defaultAgentId: true },
-    });
     if (!role) {
       throw new BadRequestException({
         code: MEMBERS_ERRORS.MEMBER_ROLE_NOT_FOUND,
