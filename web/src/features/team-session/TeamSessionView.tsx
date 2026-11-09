@@ -22,6 +22,7 @@ import { dateSeparatorFlags, formatDateSeparatorLabel, localDateKey } from "@/li
 import { resolveDisplayAuthor } from "@/lib/display-author";
 import { messageInitials } from "@/lib/message-initials";
 import { useAuthStore } from "@/lib/stores/authStore";
+import { useChatPrefsStore } from "@/lib/stores/chat-prefs-store";
 import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
 import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
@@ -245,6 +246,7 @@ export function TeamSessionView({
   const teamId = teamIdProp ?? params?.id ?? "";
   const router = useRouter();
   const pathname = usePathname();
+  const streamStyle = useChatPrefsStore((s) => s.streamStyle);
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement | null>(null);
