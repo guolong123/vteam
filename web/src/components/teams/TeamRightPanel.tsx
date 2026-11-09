@@ -178,12 +178,31 @@ export function TeamTaskListCard({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          gap: space.sm,
+          minWidth: 0,
         }}
       >
-        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>
+        <span
+          style={{
+            fontSize: fontSize.sm,
+            fontWeight: 600,
+            color: neutral[700],
+            flexShrink: 0,
+          }}
+        >
           团队任务
         </span>
-        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+        <span
+          style={{
+            fontSize: fontSize.xs,
+            color: neutral[400],
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            textAlign: "right",
+          }}
+        >
           {rows.length} 个 · 点击行切换聚焦
         </span>
       </div>
@@ -232,10 +251,14 @@ export function TeamTaskListCard({
                 data-selected={selected ? "true" : "false"}
                 onClick={() => (isActiveStatus && onOpenTaskDetail ? onOpenTaskDetail(row.id) : onSelectTask?.(row.id))}
                 style={{
+                  // 两行自适应：①状态徽标+标题（标题单行省略）②元信息+行内快捷操作。
+                  // 面板默认仅 300px 宽，单行排布时固定子项（徽标42+按钮100+时间174+gaps≈340px）
+                  // 必然超出可用宽度，会把标题挤成 0 宽、把「✓ 当前聚焦」压成竖排并让时间戳溢出卡片。
                   display: "flex",
-                  alignItems: "center",
-                  gap: space.sm,
-                  padding: `${space.xs}px ${space.sm}px`,
+                  flexDirection: "column",
+                  alignItems: "stretch",
+                  gap: 2,
+                  padding: `${space.sm - 2}px ${space.sm}px`,
                   borderRadius: radius.sm,
                   backgroundColor: isActiveStatus
                     ? "rgba(13,148,136,0.06)"
@@ -250,143 +273,177 @@ export function TeamTaskListCard({
                         : neutral[200]
                   }`,
                   cursor: onOpenTaskDetail || onSelectTask ? "pointer" : "default",
+                  minWidth: 0,
                 }}
               >
-                <span
-                  style={{
-                    fontSize: 10,
-                    color: theme.color,
-                    backgroundColor: theme.bg,
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: radius.pill,
-                    padding: "0 5px",
-                    fontWeight: 600,
-                    flexShrink: 0,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {STATUS_LABEL[row.status]}
-                </span>
                 <div
                   style={{
-                    flex: 1,
-                    minWidth: 0,
                     display: "flex",
-                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: space.xs,
+                    minWidth: 0,
                   }}
                 >
                   <span
                     style={{
+                      fontSize: 10,
+                      color: theme.color,
+                      backgroundColor: theme.bg,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: radius.pill,
+                      padding: "0 5px",
+                      fontWeight: 600,
+                      flexShrink: 0,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {STATUS_LABEL[row.status]}
+                  </span>
+                  {isActiveStatus && (
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        flexShrink: 0,
+                        backgroundColor: row.status === "blocked" ? "#B91C1C" : "#10B981",
+                        animation: "team-task-breathe 1.6s ease-in-out infinite",
+                      }}
+                    />
+                  )}
+                  <span
+                    title={row.title}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
                       fontSize: fontSize.xs,
                       color: neutral[700],
                       fontWeight: 500,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: space.xs,
                     }}
                   >
-                    {isActiveStatus && (
-                      <span
-                        aria-hidden
-                        style={{
-                          width: 6,
-                          height: 6,
-                          borderRadius: "50%",
-                          flexShrink: 0,
-                          backgroundColor: row.status === "blocked" ? "#B91C1C" : "#10B981",
-                          animation: "team-task-breathe 1.6s ease-in-out infinite",
-                        }}
-                      />
-                    )}
                     {row.title}
                   </span>
-                  {selected && <span style={{ fontSize: 10, color: "#0D9488" }}>✓ 当前聚焦</span>}
+                  {selected && (
+                    <span
+                      title="当前聚焦任务"
+                      aria-label="当前聚焦任务"
+                      style={{
+                        flexShrink: 0,
+                        fontSize: 11,
+                        lineHeight: 1,
+                        color: "#0D9488",
+                        fontWeight: 700,
+                      }}
+                    >
+                      ✓
+                    </span>
+                  )}
                 </div>
-                {row.status === "pending" && (
-                  <button
-                    type="button"
-                    data-testid="team-task-start"
-                    disabled={quickActionMutation.isPending}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActionError(null);
-                      quickActionMutation.mutate({ taskId: row.id, action: "start" });
-                    }}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: `${space.xs}px ${space.sm}px`,
+                    minWidth: 0,
+                  }}
+                >
+                  <span
                     style={{
-                      padding: "2px 8px",
-                      borderRadius: radius.pill,
-                      border: "none",
-                      backgroundColor: "#0D9488",
-                      color: "#FFF",
                       fontSize: 10,
-                      fontWeight: 600,
-                      cursor: quickActionMutation.isPending ? "default" : "pointer",
-                      opacity: quickActionMutation.isPending ? 0.6 : 1,
-                      fontFamily: fontFamily.body,
-                      flexShrink: 0,
+                      color: neutral[400],
+                      // 元信息先让步（basis 0 → 省略号），行内快捷按钮保持同一行且完整可点。
+                      flex: "1 1 0",
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
                     }}
                   >
-                    {quickActionMutation.isPending && quickActionMutation.variables?.taskId === row.id ? "启动中…" : "开始"}
-                  </button>
-                )}
-                {row.status === "pending_review" && (
-                  <span style={{ display: "inline-flex", gap: space.xs, flexShrink: 0 }}>
-                    <button
-                      type="button"
-                      data-testid="team-task-accept"
-                      disabled={quickActionMutation.isPending}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActionError(null);
-                        quickActionMutation.mutate({ taskId: row.id, action: "accept" });
-                      }}
-                      style={{
-                        padding: "2px 8px",
-                        borderRadius: radius.pill,
-                        border: "1px solid rgba(5,150,105,0.28)",
-                        backgroundColor: "rgba(5,150,105,0.08)",
-                        color: "#059669",
-                        fontSize: 10,
-                        fontWeight: 600,
-                        cursor: quickActionMutation.isPending ? "default" : "pointer",
-                        fontFamily: fontFamily.body,
-                      }}
-                    >
-                      验收通过
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="team-task-reject"
-                      disabled={quickActionMutation.isPending}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActionError(null);
-                        quickActionMutation.mutate({ taskId: row.id, action: "reject" });
-                      }}
-                      style={{
-                        padding: "2px 8px",
-                        borderRadius: radius.pill,
-                        border: "1px solid rgba(245,158,11,0.28)",
-                        backgroundColor: "rgba(245,158,11,0.08)",
-                        color: "#D97706",
-                        fontSize: 10,
-                        fontWeight: 600,
-                        cursor: quickActionMutation.isPending ? "default" : "pointer",
-                        fontFamily: fontFamily.body,
-                      }}
-                    >
-                      驳回
-                    </button>
+                    {meta.join(" · ")}
                   </span>
-                )}
-                <span
-                  style={{ fontSize: 10, color: neutral[400], flexShrink: 0, whiteSpace: "nowrap" }}
-                >
-                  {meta.join(" · ")}
-                </span>
+                  {row.status === "pending" && (
+                    <button
+                      type="button"
+                      data-testid="team-task-start"
+                      disabled={quickActionMutation.isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActionError(null);
+                        quickActionMutation.mutate({ taskId: row.id, action: "start" });
+                      }}
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: radius.pill,
+                        border: "none",
+                        backgroundColor: "#0D9488",
+                        color: "#FFF",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        cursor: quickActionMutation.isPending ? "default" : "pointer",
+                        opacity: quickActionMutation.isPending ? 0.6 : 1,
+                        fontFamily: fontFamily.body,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {quickActionMutation.isPending && quickActionMutation.variables?.taskId === row.id ? "启动中…" : "开始"}
+                    </button>
+                  )}
+                  {row.status === "pending_review" && (
+                    <span style={{ display: "inline-flex", gap: space.xs, flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        data-testid="team-task-accept"
+                        disabled={quickActionMutation.isPending}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActionError(null);
+                          quickActionMutation.mutate({ taskId: row.id, action: "accept" });
+                        }}
+                        style={{
+                          padding: "2px 8px",
+                          borderRadius: radius.pill,
+                          border: "1px solid rgba(5,150,105,0.28)",
+                          backgroundColor: "rgba(5,150,105,0.08)",
+                          color: "#059669",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          cursor: quickActionMutation.isPending ? "default" : "pointer",
+                          fontFamily: fontFamily.body,
+                        }}
+                      >
+                        验收通过
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="team-task-reject"
+                        disabled={quickActionMutation.isPending}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActionError(null);
+                          quickActionMutation.mutate({ taskId: row.id, action: "reject" });
+                        }}
+                        style={{
+                          padding: "2px 8px",
+                          borderRadius: radius.pill,
+                          border: "1px solid rgba(245,158,11,0.28)",
+                          backgroundColor: "rgba(245,158,11,0.08)",
+                          color: "#D97706",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          cursor: quickActionMutation.isPending ? "default" : "pointer",
+                          fontFamily: fontFamily.body,
+                        }}
+                      >
+                        驳回
+                      </button>
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}
