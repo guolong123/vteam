@@ -13,7 +13,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -244,6 +244,7 @@ export function TeamSessionView({
   const params = useParams<{ id: string }>();
   const teamId = teamIdProp ?? params?.id ?? "";
   const router = useRouter();
+  const pathname = usePathname();
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -361,8 +362,13 @@ export function TeamSessionView({
     fallbackPanelTaskId;
   const handleSelectPanelTask = useCallback((taskId: string) => {
     setPickedTaskId(taskId);
-    router.replace(`/teams/${teamId}/session?task=${taskId}`, { scroll: false });
-  }, [router, teamId]);
+    // /chat 是唯一聊天页；旧 /teams/:id/session 现在只是重定向，且会丢掉 ?task=，
+    // 在 /chat 里切任务必须把 c + task 一起带上，否则会来回重定向/页面异常。
+    const target = pathname.startsWith("/chat")
+      ? `/chat?c=${encodeURIComponent(`group:${teamId}`)}&task=${encodeURIComponent(taskId)}`
+      : `/teams/${teamId}/session?task=${encodeURIComponent(taskId)}`;
+    router.replace(target, { scroll: false });
+  }, [pathname, router, teamId]);
   const panelTaskQuery = useQuery({
     queryKey: ["task", effectivePanelTaskId],
     queryFn: () => api.get<TaskDetail>(`/tasks/${effectivePanelTaskId}`),
