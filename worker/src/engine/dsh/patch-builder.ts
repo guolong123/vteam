@@ -131,29 +131,42 @@ export function buildDshPatch(input: DshPatchInput): string {
     '# 机制：新增条目必须用 insert: 包裹（P0 实测：平铺条目会被当成"修改已有 id"）',
   ];
 
-  // ① provider 路由：修改已有 llm-pi-ai 条目（平铺形态）
-  if (input.providers.length > 0) {
-    lines.push('', '- id: llm-pi-ai', "  name: '@deepseek-ai/dsh-llm-pi-ai'", '  config:', '    providers:');
-    for (const provider of input.providers) {
-      lines.push(`      ${quoteKey(provider.route)}:`);
-      lines.push(`        apiKeyEnv: ${quote(provider.apiKeyEnv)}`);
-      lines.push(`        api: ${quote(provider.api)}`);
-      lines.push(`        baseURL: ${quote(provider.baseURL)}`);
+  // ① provider 路由：**insert 一个 llm-pi-ai 插件实例**。
+  //
+  // 旧实现平铺 `- id: llm-pi-ai` 想“修改已有条目”，但 sdk profile 的 base 组合里
+  // 并没有 llm-pi-ai（只有 dsh-llm + deepseek extension），平铺条目会被静默忽略，
+  // 导致自定义 provider（如 ehsy）永远注册不上（no adapter registered）。
+  // 另外 deepseek-official 由 base 的 deepseek extension 提供，不能放进 pi-ai 里，
+  // 否则 provider route 冲突会让插件整体注册失败；这里只 insert 非内置路由。
+  const piProviders = input.providers.filter(
+    (provider) => provider.route !== 'deepseek-official',
+  );
+  if (piProviders.length > 0) {
+    lines.push('', '- insert:');
+    lines.push('    - id: llm-pi-ai');
+    lines.push("      name: '@deepseek-ai/dsh-llm-pi-ai'");
+    lines.push('      config:');
+    lines.push('        providers:');
+    for (const provider of piProviders) {
+      lines.push(`          ${quoteKey(provider.route)}:`);
+      lines.push(`            apiKeyEnv: ${quote(provider.apiKeyEnv)}`);
+      lines.push(`            api: ${quote(provider.api)}`);
+      lines.push(`            baseURL: ${quote(provider.baseURL)}`);
       if (provider.headers !== undefined && Object.keys(provider.headers).length > 0) {
-        lines.push('        headers:');
+        lines.push('            headers:');
         for (const [key, value] of Object.entries(provider.headers)) {
-          lines.push(`          ${quoteKey(key)}: ${quote(value)}`);
+          lines.push(`              ${quoteKey(key)}: ${quote(value)}`);
         }
       }
-      lines.push('        models:');
+      lines.push('            models:');
       for (const model of provider.models) {
-        lines.push(`          - id: ${quote(model.id)}`);
-        lines.push(`            name: ${quote(model.name)}`);
+        lines.push(`              - id: ${quote(model.id)}`);
+        lines.push(`                name: ${quote(model.name)}`);
         if (model.contextWindow !== undefined) {
-          lines.push(`            contextWindow: ${model.contextWindow}`);
+          lines.push(`                contextWindow: ${model.contextWindow}`);
         }
         if (model.maxTokens !== undefined) {
-          lines.push(`            maxTokens: ${model.maxTokens}`);
+          lines.push(`                maxTokens: ${model.maxTokens}`);
         }
       }
     }

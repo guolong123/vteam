@@ -22,6 +22,7 @@ import { dateSeparatorFlags, formatDateSeparatorLabel, localDateKey } from "@/li
 import { resolveDisplayAuthor } from "@/lib/display-author";
 import { messageInitials } from "@/lib/message-initials";
 import { useAuthStore } from "@/lib/stores/authStore";
+import { useChatPrefsStore } from "@/lib/stores/chat-prefs-store";
 import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
 import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
@@ -245,6 +246,7 @@ export function TeamSessionView({
   const teamId = teamIdProp ?? params?.id ?? "";
   const router = useRouter();
   const pathname = usePathname();
+  const streamStyle = useChatPrefsStore((s) => s.streamStyle);
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -1865,10 +1867,8 @@ export function TeamSessionView({
                   <MsgParts
                     key={msg.id}
                     parts={parts}
-                    // 群聊保持 bubble（字节不变）；私聊走 dsh 变体 = 对齐 DSH Web 的
-                    // 渲染层（真 Markdown + 代码块 + 流式增量解析）。旧的 line 变体
-                    // 仍保留在 MsgParts 里，回退只需把这里改回 "line"。
-                    variant="bubble"
+                    // 私聊按全局设置选 native(bubble) / dsh 变体；群聊保持 bubble。
+                    variant={isGroupTab ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"}
                     messageStatus={msg.status}
                     secretAwaiting={secretAwaiting}
                     bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)}

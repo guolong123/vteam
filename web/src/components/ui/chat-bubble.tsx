@@ -550,14 +550,20 @@ export function AttachmentCard({
     </button>
   );
 
+  // 非图片附件 → 文档站预览（docx/pdf/xlsx/文本等由 FilePreview 渲染），不再点击即下载。
+  const docsPreviewHref =
+    `/docs/file?url=${encodeURIComponent(attachment.url)}` +
+    `&name=${encodeURIComponent(attachment.name)}` +
+    `&ext=${encodeURIComponent(attachment.ext)}` +
+    (typeof attachment.size === "number" ? `&size=${attachment.size}` : "");
   const fileLink = (
     <a
       data-testid="attachment-file"
-      href={attachment.url}
-      download={attachment.name}
+      href={isImage ? attachment.url : docsPreviewHref}
+      download={isImage ? attachment.name : undefined}
       target="_blank"
       rel="noopener noreferrer"
-      title={attachment.name}
+      title={isImage ? attachment.name : `${attachment.name}（打开预览）`}
       style={{
         display: "flex",
         alignItems: "center",

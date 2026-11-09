@@ -20,6 +20,7 @@ export const SYSTEM_NAV_ITEMS: SystemNavItem[] = [
   { key: "users", label: "用户管理", href: "/system/users", icon: "○" },
   { key: "roles", label: "角色权限", href: "/system/roles", icon: "⬡" },
   { key: "memories", label: "记忆管理", href: "/system/memories", icon: "◈" },
+  { key: "settings", label: "全局设置", href: "/system/settings", icon: "⚙" },
 ];
 
 /** /system 落地页默认落点（第一项）；名册为空时为 null（调用方兜底） */
