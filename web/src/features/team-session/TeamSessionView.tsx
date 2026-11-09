@@ -1510,17 +1510,29 @@ export function TeamSessionView({
   const resolveMessage = (msg: RealtimeChatMessage) => {
     const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
     const memberHit = msg.senderId ? teamMemberById.get(msg.senderId) : undefined;
+    const senderInstanceId = (msg as unknown as { senderInstanceId?: string }).senderInstanceId;
+    // 同 agent 多席位（如两个 tester 都是 a_tester）时，senderId 只能定位到 Agent 模板，
+    // 必须优先用 senderInstanceId(tmm_) 定位具体席位，否则两个成员的回复都会被显示成
+    // 第一个席位（实测：测试-2 的私聊消息头像/作者显示为测试-1）。
+    const senderInstanceMember = senderInstanceId
+      ? teamMemberById.get(senderInstanceId)
+      : undefined;
     // 外部渠道（企微）消息：senderId 承载的是**外部发送者展示名**（见
     // message-inbound.service.ts），不是 agentId/成员 id —— 不可拿它查业务
     // 映射或推断角色，否则查不到就回落成硬编码 "developer"（曾把企微消息
     // 误显示为「开发者」）。此处直接用其作作者名，角色标签走中性 external。
     const isExternal = (msg as unknown as { senderType: string }).senderType === "external";
     const role: RoleKey =
-      agent?.role ?? memberHit?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
-    const senderInstanceId = (msg as unknown as { senderInstanceId?: string }).senderInstanceId;
+      agent?.role ??
+      senderInstanceMember?.role ??
+      memberHit?.role ??
+      (msg.senderId ? toRole(msg.senderId) : null) ??
+      "developer";
     // B5/B9：三路业务映射先解析出展示名，裸 sender/成员/实例 id 一律被过滤，
-    // 全部落空时不传 author（由 MessageIdentity/ChatBubble 回落角色标签）
+    // 全部落空时不传 author（由 MessageIdentity/ChatBubble 回落角色标签）。
+    // 顺序：具体席位(tmm) > 任务实例 > 外部发送者 > Agent 模板名 > senderId 成员。
     const author = resolveDisplayAuthor([
+      senderInstanceMember?.name,
       senderInstanceId ? instanceNameById.get(senderInstanceId) : undefined,
       isExternal ? msg.senderId : undefined,
       agent?.name,
