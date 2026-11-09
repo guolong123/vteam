@@ -365,18 +365,129 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
   // 否则仅含 content.text 的历史私聊消息会整条消失（T10 落库 { text, parts } 两者可能其一为空）。
   const hasRenderableText = linePartsDeduped.some(lineRenderable);
   const lineBodyFallback = !hasRenderableText && cleanBody.length > 0 ? cleanBody : "";
+  /**
+   * bubble 模式：按 parts **原始顺序**交替输出「过程摘要 → 正文 → 过程摘要 → 正文」。
+   * 旧实现把所有 process 合并到顶部、所有正文拼成一段，多个正文段会粘在一起，
+   * 也看不到正文前后的思考/工具边界。
+   */
+  type BubbleSegment =
+    | { kind: "proc"; items: Array<{ part: PartShape; i: number }> }
+    | { kind: "text"; text: string };
+  const bubbleSegments: BubbleSegment[] = [];
+  const procIndexByPart = new Map<PartShape, number>(
+    procPartsDeduped.map((p, i) => [p, i]),
+  );
+  {
+    let run: Array<{ part: PartShape; i: number }> = [];
+    const flush = (): void => {
+      if (run.length > 0) {
+        bubbleSegments.push({ kind: "proc", items: run });
+        run = [];
+      }
+    };
+    for (const p of linePartsDeduped) {
+      const t = p.type ?? "";
+      if (t === "text") {
+        if (isSyntheticText(p)) continue;
+        const txt = stripInjectedContext(partText(p));
+        if (txt.trim().length === 0) continue;
+        flush();
+        bubbleSegments.push({ kind: "text", text: txt });
+        continue;
+      }
+      if (t === "reasoning" || t === "thinking") {
+        if (partText(p).trim().length === 0) continue;
+        run.push({ part: p, i: procIndexByPart.get(p) ?? -1 });
+        continue;
+      }
+      if (t === "tool") {
+        if (!toolView(p)) continue;
+        run.push({ part: p, i: procIndexByPart.get(p) ?? -1 });
+        continue;
+      }
+      if (t === "error") {
+        run.push({ part: p, i: procIndexByPart.get(p) ?? -1 });
+      }
+    }
+    flush();
+    if (
+      !bubbleSegments.some((seg) => seg.kind === "text") &&
+      cleanBody.trim().length > 0
+    ) {
+      bubbleSegments.push({ kind: "text", text: cleanBody });
+    }
+  }
+  const bubbleHasContent =
+    bubbleSegments.length > 0 || hasAttachments;
   const hasContent =
     variant === "line"
       ? hasAttachments ||
         linePartsDeduped.some(lineRenderable) ||
         lineBodyFallback.length > 0
-      : cleanBody.length > 0 ||
-        hasAttachments ||
-        procPartsDeduped.some(procRenderable);
+      : bubbleHasContent;
 
   if (!hasContent) {
     return null;
   }
+
+  /** bubble 正文段渲染：流式只对最后一段显示“生成中”，失败只把最后一段标红。 */
+  const renderTextBlock = (text: string, key: string, isLast: boolean): React.ReactNode => {
+    if (streaming && isLast) {
+      return (
+        <div
+          key={key}
+          data-testid="msg-streaming"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            maxWidth: "78%",
+            alignSelf: "flex-start",
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "var(--color-surface)",
+            border: `1px solid ${neutral[200]}`,
+            ...baseFont,
+          }}
+        >
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: fontSize.md,
+              color: neutral[700],
+              lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            <Markdown>{text}</Markdown>
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+            <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>生成中</span>
+          </span>
+        </div>
+      );
+    }
+    if (messageStatus === "failed" && isLast) {
+      return <MsgError key={key} kind="failed" detail={text} />;
+    }
+    return (
+      <ChatBubble
+        key={key}
+        showIdentity={false}
+        text={text}
+        type="agent"
+        author={author}
+        role={role}
+        time={time}
+        attachments={attachments}
+        isMentionMe={isMentionMe}
+      />
+    );
+  };
+
   return (
     <div className={className} style={{ display: "flex", flexDirection: "column", gap: space.sm, ...style }}>
       {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
@@ -424,58 +535,25 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
           </>
         ) : (
           <>
-            {procPartsDeduped.length > 1 ? (
-              <ProcessGroup
-                items={procPartsDeduped.map((p, i) => ({ part: p, i }))}
-                streaming={isStreaming}
-                renderItem={(p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView)}
-              />
-            ) : (
-              procPartsDeduped.map((p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView))
-            )}
-            {body ? (
-              streaming ? (
-                <div
-                  data-testid="msg-streaming"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: space.sm,
-                    maxWidth: "78%",
-                    alignSelf: "flex-start",
-                    padding: `${space.sm}px ${space.md}px`,
-                    borderRadius: radius.md,
-                    backgroundColor: "var(--color-surface)",
-                    border: `1px solid ${neutral[200]}`,
-                    ...baseFont,
-                  }}
-                >
-                  <span
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: fontSize.md,
-                      color: neutral[700],
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    <Markdown>{cleanBody}</Markdown>
-                  </span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
-                    <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
-                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>生成中</span>
-                  </span>
-                </div>
-              ) : messageStatus === "failed" ? (
-                <MsgError kind="failed" detail={cleanBody} />
-              ) : (
-                <ChatBubble showIdentity={false} text={cleanBody} type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
-              )
-            ) : hasAttachments ? (
-              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
-            ) : null}
+            {bubbleSegments.map((seg, si) => {
+              if (seg.kind === "proc") {
+                return seg.items.length > 1 ? (
+                  <ProcessGroup
+                    key={`proc-${si}`}
+                    items={seg.items}
+                    streaming={isStreaming}
+                    renderItem={(p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView)}
+                  />
+                ) : (
+                  renderProcPart(seg.items[0].part, seg.items[0].i, isStreaming, lastReasoningIndex, toolView)
+                );
+              }
+              const lastTextIndex = bubbleSegments.reduce(
+                (last, s, idx) => (s.kind === "text" ? idx : last),
+                -1,
+              );
+              return renderTextBlock(seg.text, `text-${si}`, si === lastTextIndex);
+            })}
           </>
         )}
       </div>
