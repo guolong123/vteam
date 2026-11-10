@@ -117,7 +117,11 @@ export function ChatBubble({
 }: ChatBubbleProps) {
   const isUser = type === "user";
   const isSystem = type === "system";
-  const roleTheme = role ? roles[role] : null;
+  // 区分「缺省」与「非法」：缺省（外部渠道消息）不回落，避免挂假「开发者」标签（见下）；
+  // 非法/未知值（脏数据）回落 developer —— 与 AgentAvatar 的 `roles[safeRole] ?? roles.developer`
+  // 同口径，否则出现「头像开发者色、旁边无角色标签」且 roleText[非法] 取到 undefined。
+  const roleTheme = role ? (roles[role] ?? roles.developer) : null;
+  const roleColor = role ? (roleText[role] ?? roleText.developer) : neutral[400];
   /**
    * B5：身份行主文本 + 并列角色标签（author 已由容器解析，裸 id 不在本组件职责内）。
    *
@@ -255,7 +259,7 @@ export function ChatBubble({
               data-testid="chat-bubble-author"
               style={{
                 fontSize: messageFontSize.identity,
-                color: roleTheme ? roleText[role!] : neutral[400],
+                color: roleColor,
                 fontWeight: messageFontWeight.identity,
                 display: "inline-flex",
                 alignItems: "center",

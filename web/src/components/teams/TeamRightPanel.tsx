@@ -2950,6 +2950,11 @@ function TaskSubTabs({
                 border: `1px solid ${isCurrent ? "rgba(13,148,136,0.14)" : neutral[200]}`,
               }}
             >
+              {/*
+                当前聚焦任务的可测试锚点：/chat 下旧顶栏「当前任务胶囊」
+                （team-session-current-task）因 embedded 模式不再渲染，
+                聚焦任务改由右栏状态卡承载 —— 这里提供同职责的 taskId 锚点供 e2e 断言。
+              */}
               <div
                 style={{
                   fontSize: fontSize.md,
@@ -2960,6 +2965,8 @@ function TaskSubTabs({
                   whiteSpace: "nowrap",
                 }}
                 title={task.title}
+                data-testid="panel-task-title"
+                data-task-id={taskId}
               >
                 {task.title}
               </div>

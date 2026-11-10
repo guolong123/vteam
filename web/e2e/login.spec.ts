@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { LANDING_ADMIN } from "@/lib/landing";
 
 /**
  * 1/17 login 页（无 storageState，测登录页本身）。
@@ -21,12 +22,14 @@ test.describe("1/17 login 登录页", () => {
     await expect(page.getByTestId("login-error")).toBeVisible();
   });
 
-  test("正确密码 → 跳转 /teams", async ({ page }) => {
+  test("正确密码 → 跳转落地页（管理员 /stats）", async ({ page }) => {
     await page.goto("/login");
     await page.getByTestId("username").fill("seed-admin");
     await page.getByTestId("password").fill("Admin@123456");
     await page.getByTestId("login-button").click();
-    await expect(page).toHaveURL(/\/teams/, { timeout: 15_000 });
+    // 落地页由 web/lib/landing.ts 单点决定：管理员 /stats、普通成员 /teams。
+    // seed-admin 是管理员 ⇒ /stats（stats-dashboard 上线后调整）。
+    await expect(page).toHaveURL(new RegExp(`${LANDING_ADMIN}$`), { timeout: 15_000 });
   });
 
   test("register-link → 跳转 /register（ISSUE-011 死链修复）", async ({ page }) => {

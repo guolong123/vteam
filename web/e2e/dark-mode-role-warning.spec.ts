@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { LANDING_ADMIN } from "@/lib/landing";
 import { dirname } from "node:path";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
@@ -36,7 +37,7 @@ async function loginAsAdmin(page: Page) {
   await page.getByTestId("username").fill("admin");
   await page.getByTestId("password").fill("admin123");
   await page.getByTestId("login-button").click();
-  await expect(page).toHaveURL(/\/teams/, { timeout: 15_000 });
+  await expect(page).toHaveURL(new RegExp(`${LANDING_ADMIN}$`), { timeout: 15_000 });
 }
 
 /** 经应用自己的主题菜单切换（与 ThemeProvider 写入 html.dark 同源）。 */

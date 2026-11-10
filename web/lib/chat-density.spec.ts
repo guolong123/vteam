@@ -83,18 +83,28 @@ test("A2 tool I/O 密度：字符串与 JSON 两条路径都封顶 2000 字符",
     .soft(caps, "两条路径的截断上限均应为 2000（改动前 [500, 500]）")
     .toEqual([2000, 2000]);
 
-  // 调用方仍在封顶之内：input/output 均经共享 formatter 进入 MsgTool
-  expect(parts).toMatch(/input=\{formatToolIO\(st\?\.input\)\}/);
-  expect(parts).toMatch(/output=\{formatToolIO\(st\?\.output\)\}/);
+  // 调用方仍在封顶之内：input/output 均经共享 formatter 进入 MsgTool。
+  // 注（2026-11-10 对齐）：实现重构为两段式——先在 view 构建处 formatToolIO，
+  // 再把结果透传给 MsgTool（不再是调用点内联 formatToolIO(st?.input)）。
+  // 断言意图不变：① 两条 I/O 都过共享 formatter；② 透传给 MsgTool 的是该结果。
+  expect(parts).toMatch(/const input = formatToolIO\(state\?\.input\)/);
+  expect(parts).toMatch(/const output = formatToolIO\(state\?\.output\)/);
+  expect(parts).toMatch(/input=\{view\.input\}/);
+  expect(parts).toMatch(/output=\{view\.output\}/);
 
   // 计算校验：3000 字符 payload → DOM 恰好前 2000，第 2001 起共 1000 字符缺席
   expect(3000 - Number(caps[0] ?? 0)).toBe(1000);
 });
 
 test("A3 thinking 密度：折叠摘录 200 字符 / 展开与 title 上限 2000 字符", () => {
-  const tokens = [...thinking.matchAll(/\.slice\(0,\s*([A-Za-z_0-9]+)\)/g)].map(
-    (m) => m[1] ?? ""
-  );
+  // 按**语义**提取两处上限，而不是「源码里第 n 个 slice」：
+  // 折叠摘录 = normalized.slice(0, EXCERPT)，展开/title = text.slice(0, MAX)。
+  // （源码另有 pendingMarqueeTarget = normalized.slice(0, MAX) 的单行跑马灯文本，
+  //   它复用同一个 MAX 常量，不是第三处不同上限；旧断言按位置取 2 个会误判。）
+  const excerptToken =
+    thinking.match(/normalized\.slice\(0,\s*([A-Za-z_0-9]+)\)/)?.[1] ?? "";
+  const maxToken = thinking.match(/text\.slice\(0,\s*([A-Za-z_0-9]+)\)/)?.[1] ?? "";
+  const tokens = [excerptToken, maxToken];
   const caps = tokens.map((t) => resolveCap(thinking, t));
 
   expect
