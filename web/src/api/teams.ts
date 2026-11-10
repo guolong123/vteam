@@ -162,8 +162,18 @@ export const teamsApi = {
   update(id: string, payload: UpdateTeamPayload): Promise<TeamDto> {
     return api.patch<TeamDto>(`/teams/${id}`, payload);
   },
-  remove(id: string): Promise<{ deleted: boolean; id: string }> {
-    return api.delete<{ deleted: boolean; id: string }>(`/teams/${id}`);
+  /**
+   * 删除团队（级联删除关联任务）。
+   * 默认拦截执行中任务（in_progress/blocked）并返回 409 `TEAM_TASK_RUNNING`
+   * （details.requiresForce=true）；用户二次确认后带 `force` 重放即可强制删除。
+   */
+  remove(
+    id: string,
+    options?: { force?: boolean },
+  ): Promise<{ deleted: boolean; id: string }> {
+    return api.delete<{ deleted: boolean; id: string }>(`/teams/${id}`, {
+      query: options?.force ? { force: "true" } : undefined,
+    });
   },
   addMember(teamId: string, payload: AddMemberPayload): Promise<TeamDto> {
     return api.post<TeamDto>(`/teams/${teamId}/members`, payload);

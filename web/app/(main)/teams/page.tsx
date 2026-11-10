@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { isApiError } from "@/lib/errors";
-import { AgentAvatar, EmptyState, PageWindow, Pagination } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog, EmptyState, PageWindow, Pagination } from "@/src/components/ui";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -43,6 +43,10 @@ export default function TeamsPage() {
   const [selected, setSelected] = useState<TeamDto | null>(null);
   const [form, setForm] = useState({ name: "", description: "", reuseSession: true, mainAgentMemberId: "" });
   const [error, setError] = useState<string | null>(null);
+  /** 待确认删除的团队（普通删除确认框）。 */
+  const [deleteTarget, setDeleteTarget] = useState<TeamDto | null>(null);
+  /** 有执行中任务 → 二次确认强制删除的目标团队。 */
+  const [forceTarget, setForceTarget] = useState<TeamDto | null>(null);
 
   const teamsQuery = useQuery({
     queryKey: ["teams", "list", page, search],
@@ -66,6 +70,34 @@ export default function TeamsPage() {
       setSelected(null);
     },
     onError: (err) => setError(isApiError(err) ? err.message : "保存失败"),
+  });
+
+  /**
+   * 删除团队：202 语义两段式。
+   * 1) 先不带 force 调用；若团队有执行中任务（in_progress/blocked）服务端回 409
+   *    TEAM_TASK_RUNNING + details.requiresForce，此时改为弹「强制删除」二次确认；
+   * 2) 用户确认后带 force=true 重放。
+   * 无执行中任务时一次删掉，直接关抽屉。
+   */
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
+      teamsApi.remove(id, { force }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teams"] });
+      setDeleteTarget(null);
+      setForceTarget(null);
+      setSelected(null);
+    },
+    onError: (err) => {
+      // 执行中任务 → 转成强制删除二次确认（而不是把错误抛给用户）
+      if (isApiError(err) && err.code === "TEAM_TASK_RUNNING") {
+        setForceTarget(deleteTarget);
+        return;
+      }
+      setError(isApiError(err) ? err.message : "删除失败");
+      setDeleteTarget(null);
+      setForceTarget(null);
+    },
   });
 
   const openTeam = (team: TeamDto) => {
@@ -125,9 +157,17 @@ export default function TeamsPage() {
                 <span style={{ textAlign: "center", fontSize: fontSize.xs, color: team.activeTaskCount ? "#0F766E" : neutral[400] }}>{team.activeTaskCount ?? 0}</span>
                 <span style={{ textAlign: "center", fontSize: fontSize.xs, color: team.reuseSession ? "#059669" : neutral[400] }}>{team.reuseSession ? "开启" : "关闭"}</span>
                 <span style={{ fontSize: 10, color: neutral[400] }}>{new Date(team.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
                   <button type="button" onClick={(e) => { e.stopPropagation(); router.push(`/chat?c=${encodeURIComponent(`group:${team.id}`)}`); }} style={{ border: "none", background: "none", color: "#0F766E", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>会话</button>
                   <button type="button" onClick={(e) => { e.stopPropagation(); openTeam(team); }} style={{ border: "none", background: "none", color: "#0F766E", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>编辑</button>
+                  <button
+                    type="button"
+                    data-testid="team-row-delete"
+                    onClick={(e) => { e.stopPropagation(); setError(null); setDeleteTarget(team); }}
+                    style={{ border: "none", background: "none", color: "#B91C1C", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}
+                  >
+                    删除
+                  </button>
                 </div>
               </div>
             );
@@ -194,6 +234,44 @@ export default function TeamsPage() {
           </div>
         </div>
       )}
+
+      {/* 删除团队：普通确认（无执行中任务时一次删掉；有执行中任务则由 onError 转强制确认框） */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        testid="team-delete-confirm"
+        title="删除团队"
+        description={(() => {
+          if (!deleteTarget) return "";
+          const taskName = deleteTarget.currentTaskTitle ?? deleteTarget.currentTaskId;
+          const taskPart = taskName ? `该团队的关联任务「${taskName}」及其产出物、消息会一并删除。` : "该团队暂无关联任务。";
+          return `确认删除团队「${deleteTarget.name}」？${taskPart}此操作不可恢复。`;
+        })()}
+        confirmLabel="删除"
+        submitting={deleteMutation.isPending}
+        onConfirm={() => {
+          if (deleteTarget) deleteMutation.mutate({ id: deleteTarget.id });
+        }}
+        onClose={() => setDeleteTarget(null)}
+      />
+
+      {/* 强制删除：团队有执行中任务时，二次确认后带 force=true 重放 */}
+      <ConfirmDialog
+        open={!!forceTarget}
+        testid="team-force-delete-confirm"
+        title="团队有执行中的任务"
+        description={(() => {
+          if (!forceTarget) return "";
+          const taskName = forceTarget.currentTaskTitle ?? forceTarget.currentTaskId ?? "未知任务";
+          return `团队「${forceTarget.name}」有正在执行的任务「${taskName}」。强制删除会连同该任务一起删除，正在执行的 Agent 输出将丢失且无法恢复。确认强制删除？`;
+        })()}
+        confirmLabel="强制删除"
+        pendingLabel="删除中…"
+        submitting={deleteMutation.isPending}
+        onConfirm={() => {
+          if (forceTarget) deleteMutation.mutate({ id: forceTarget.id, force: true });
+        }}
+        onClose={() => setForceTarget(null)}
+      />
     </PageWindow>
   );
 }

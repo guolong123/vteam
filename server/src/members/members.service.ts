@@ -478,21 +478,79 @@ export class MembersService implements OnModuleInit {
     return this.findOne(id);
   }
 
-  /** DELETE /members/:id：仍有席位 → 409 MEMBER_IN_USE（建议先停用）。 */
-  async remove(id: string) {
+  /**
+   * DELETE /members/:id —— 删除平台成员。
+   *
+   * `cascadeSeats` 语义（产品确认 2026-11-10）：
+   * - 默认（false）：仍有席位 → 409 MEMBER_IN_USE，提示先移出群聊（保留设计文档 D9 的
+   *   保守语义，供 API 调用方按需使用）。
+   * - `cascadeSeats: true`：先把该成员在**所有群聊**里的席位移出（与 `removeMember`
+   *   同口径解绑：清 mainAgent、解绑会话/频道/任务实例，席位对象删除），再删成员。
+   *   席位清理与成员删除在同一事务内完成，任一步失败整体回滚——不会出现「席位删了、
+   *   成员还在」的半成品状态。
+   *
+   * 返回附带被移出的群聊信息，供前端在结果提示里说明影响面。
+   */
+  async remove(id: string, options: { cascadeSeats?: boolean } = {}) {
     const existing = await this.prisma.member.findUnique({ where: { id } });
     if (!existing) this.throwNotFound(id);
-    const seats = await this.prisma.teamMember.count({
+
+    const seats = await this.prisma.teamMember.findMany({
       where: { memberId: id },
+      select: {
+        id: true,
+        teamId: true,
+        team: { select: { id: true, name: true } },
+      },
     });
-    if (seats > 0) {
+    if (seats.length > 0 && !options.cascadeSeats) {
       throw new ConflictException({
         code: MEMBERS_ERRORS.MEMBER_IN_USE,
-        message: `成员仍属于 ${seats} 个群聊，请先移出席位或停用`,
+        message: `成员仍属于 ${seats.length} 个群聊，请先移出席位或停用`,
+        details: {
+          seatCount: seats.length,
+          teams: seats.map((s) => ({
+            id: s.teamId,
+            name: s.team?.name ?? null,
+          })),
+          // 前端据此提示「可一键移出这些群聊后删除」
+          canCascade: true,
+        },
       });
     }
-    await this.prisma.member.delete({ where: { id } });
-    return { deleted: true, id };
+
+    const removedSeats = seats.map((s) => ({
+      teamId: s.teamId,
+      teamName: s.team?.name ?? null,
+    }));
+
+    await this.prisma.$transaction(async (tx) => {
+      if (seats.length > 0) {
+        // 先清「把席位当主 Agent」的团队指针，避免留下悬空 mainAgentMemberId
+        await tx.team.updateMany({
+          where: { mainAgentMemberId: { in: seats.map((s) => s.id) } },
+          data: { mainAgentMemberId: null },
+        });
+        const seatIds = seats.map((s) => s.id);
+        // 与 TeamsService.removeMember 同口径：解绑会话/频道/任务实例后再删席位
+        await tx.session.updateMany({
+          where: { teamMemberId: { in: seatIds } },
+          data: { teamMemberId: null },
+        });
+        await tx.chatChannel.updateMany({
+          where: { teamMemberId: { in: seatIds } },
+          data: { teamMemberId: null },
+        });
+        await tx.taskGroupInstance.updateMany({
+          where: { teamMemberId: { in: seatIds } },
+          data: { teamMemberId: null },
+        });
+        await tx.teamMember.deleteMany({ where: { id: { in: seatIds } } });
+      }
+      await tx.member.delete({ where: { id } });
+    });
+
+    return { deleted: true, id, removedSeats };
   }
 
   /** GET /members/:id/teams：所在群聊（席位）列表。 */

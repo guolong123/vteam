@@ -28,6 +28,7 @@ function createService() {
       count: jest.fn(),
       findMany: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     session: {
       findUnique: jest.fn().mockResolvedValue(null),
@@ -142,26 +143,92 @@ describe('MembersService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('remove：仍有席位 → 409 MEMBER_IN_USE，且不删除', async () => {
+  it('remove：仍有席位且未带 cascadeSeats → 409 MEMBER_IN_USE（details 带可级联提示），且不删除', async () => {
     const { service, prisma } = createService();
     prisma.member.findUnique.mockResolvedValue({ id: 'mbr_1' });
-    prisma.teamMember.count.mockResolvedValue(2);
+    prisma.teamMember.findMany.mockResolvedValue([
+      { id: 'tmm_1', teamId: 'tm_1', team: { id: 'tm_1', name: '群A' } },
+      { id: 'tmm_2', teamId: 'tm_2', team: { id: 'tm_2', name: '群B' } },
+    ]);
 
     await expect(service.remove('mbr_1')).rejects.toMatchObject({
-      response: { code: 'MEMBER_IN_USE' },
+      response: {
+        code: 'MEMBER_IN_USE',
+        details: {
+          seatCount: 2,
+          canCascade: true,
+          teams: [
+            { id: 'tm_1', name: '群A' },
+            { id: 'tm_2', name: '群B' },
+          ],
+        },
+      },
     });
     expect(prisma.member.delete).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('remove：无席位 → 删除', async () => {
+  it('remove：无席位 → 直接删除，removedSeats 为空', async () => {
     const { service, prisma } = createService();
     prisma.member.findUnique.mockResolvedValue({ id: 'mbr_1' });
-    prisma.teamMember.count.mockResolvedValue(0);
+    prisma.teamMember.findMany.mockResolvedValue([]);
     prisma.member.delete.mockResolvedValue({ id: 'mbr_1' });
+    prisma.$transaction.mockImplementation(async (fn: any) => fn(prisma));
 
     await expect(service.remove('mbr_1')).resolves.toEqual({
       deleted: true,
       id: 'mbr_1',
+      removedSeats: [],
+    });
+  });
+
+  it('remove：cascadeSeats=true → 同事务内先移出全部席位再删成员，并回报移出的群聊', async () => {
+    const { service, prisma } = createService();
+    prisma.member.findUnique.mockResolvedValue({ id: 'mbr_1' });
+    prisma.teamMember.findMany.mockResolvedValue([
+      { id: 'tmm_1', teamId: 'tm_1', team: { id: 'tm_1', name: '群A' } },
+      { id: 'tmm_2', teamId: 'tm_2', team: { id: 'tm_2', name: '群B' } },
+    ]);
+    prisma.teamMember.deleteMany.mockResolvedValue({ count: 2 });
+    prisma.member.delete.mockResolvedValue({ id: 'mbr_1' });
+    prisma.team = {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    };
+    prisma.chatChannel = {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    };
+    prisma.taskGroupInstance = {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    };
+    prisma.session.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    prisma.$transaction.mockImplementation(async (fn: any) => fn(prisma));
+
+    const result = await service.remove('mbr_1', { cascadeSeats: true });
+
+    expect(result).toEqual({
+      deleted: true,
+      id: 'mbr_1',
+      removedSeats: [
+        { teamId: 'tm_1', teamName: '群A' },
+        { teamId: 'tm_2', teamName: '群B' },
+      ],
+    });
+    // 席位解绑（与 TeamsService.removeMember 同口径）先于删成员
+    expect(prisma.session.updateMany).toHaveBeenCalledWith({
+      where: { teamMemberId: { in: ['tmm_1', 'tmm_2'] } },
+      data: { teamMemberId: null },
+    });
+    expect(prisma.chatChannel.updateMany).toHaveBeenCalled();
+    expect(prisma.taskGroupInstance.updateMany).toHaveBeenCalled();
+    expect(prisma.team.updateMany).toHaveBeenCalledWith({
+      where: { mainAgentMemberId: { in: ['tmm_1', 'tmm_2'] } },
+      data: { mainAgentMemberId: null },
+    });
+    expect(prisma.teamMember.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['tmm_1', 'tmm_2'] } },
+    });
+    expect(prisma.member.delete).toHaveBeenCalledWith({
+      where: { id: 'mbr_1' },
     });
   });
 

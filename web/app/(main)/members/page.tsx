@@ -98,6 +98,11 @@ export default function MembersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [channelIds, setChannelIds] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<MemberDto | null>(null);
+  /** 成员仍在群聊 → 二次确认「连带移出这些群聊后删除」。 */
+  const [cascadeTarget, setCascadeTarget] = useState<{
+    member: MemberDto;
+    teams: Array<{ id: string; name: string | null }>;
+  } | null>(null);
   const [resetTarget, setResetTarget] = useState<MemberDto | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -289,16 +294,40 @@ export default function MembersPage() {
     },
   });
 
+  /**
+   * 删除成员（产品确认 2026-11-10：允许级联）。
+   * 默认不带 cascadeSeats；若成员仍在群聊里，服务端回 409 `MEMBER_IN_USE`
+   * （details.teams 列出所在群聊），此时改用「连带移出群聊」的二次确认，
+   * 用户确认后带 cascadeSeats=true 重放——服务端在同一事务里先移出席位再删成员。
+   */
   const deleteMutation = useMutation({
-    mutationFn: (member: MemberDto) => membersApi.remove(member.id),
-    onSuccess: (_res, member) => {
+    mutationFn: ({ member, cascadeSeats }: { member: MemberDto; cascadeSeats?: boolean }) =>
+      membersApi.remove(member.id, { cascadeSeats }),
+    onSuccess: (res, { member }) => {
       queryClient.invalidateQueries({ queryKey: ["members"] });
-      setNotice(`已删除成员「${member.name}」`);
+      queryClient.invalidateQueries({ queryKey: ["teams"] });
+      const seats = res.removedSeats?.length ?? 0;
+      setNotice(
+        seats > 0
+          ? `已删除成员「${member.name}」，并移出 ${seats} 个群聊`
+          : `已删除成员「${member.name}」`,
+      );
       setDeleteTarget(null);
+      setCascadeTarget(null);
     },
-    onError: (err) => {
+    onError: (err, { member }) => {
+      // 仍在群聊 → 转成「连带移出群聊」的二次确认，而不是把 409 当失败报给用户
+      if (isApiError(err) && err.code === "MEMBER_IN_USE") {
+        const details = err.details as
+          | { teams?: Array<{ id: string; name: string | null }> }
+          | undefined;
+        setCascadeTarget({ member, teams: details?.teams ?? [] });
+        setDeleteTarget(null);
+        return;
+      }
       setNotice(errorText(err));
       setDeleteTarget(null);
+      setCascadeTarget(null);
     },
   });
 
@@ -526,8 +555,20 @@ export default function MembersPage() {
                   {canEdit && (
                     <button type="button" onClick={() => setResetTarget(member)} style={linkButtonStyle}>重置会话</button>
                   )}
-                  {canDelete && member.groupCount === 0 && (
-                    <button type="button" onClick={() => setDeleteTarget(member)} style={{ ...linkButtonStyle, color: "#B91C1C" }}>删除</button>
+                  {canDelete && (
+                    <button
+                      type="button"
+                      data-testid="member-delete"
+                      onClick={() => setDeleteTarget(member)}
+                      title={
+                        member.groupCount > 0
+                          ? `该成员在 ${member.groupCount} 个群聊中，删除时会一并移出`
+                          : "删除成员"
+                      }
+                      style={{ ...linkButtonStyle, color: "#B91C1C" }}
+                    >
+                      删除
+                    </button>
                   )}
                 </div>
               </div>
@@ -736,11 +777,40 @@ export default function MembersPage() {
       {deleteTarget && (
         <ConfirmDialog
           open
+          testid="member-delete-confirm"
           onClose={() => setDeleteTarget(null)}
-          onConfirm={() => deleteMutation.mutate(deleteTarget)}
+          onConfirm={() => deleteMutation.mutate({ member: deleteTarget })}
           title="删除成员"
-          description={`确认删除成员「${deleteTarget.name}」？该成员当前未加入任何群聊。`}
+          description={`确认删除成员「${deleteTarget.name}」？${deleteTarget.groupCount > 0 ? `该成员在 ${deleteTarget.groupCount} 个群聊中，删除时会一并移出。` : "该成员当前未加入任何群聊。"}此操作不可恢复。`}
           confirmLabel="删除"
+          submitting={deleteMutation.isPending}
+        />
+      )}
+
+      {/* 成员仍在群聊 → 二次确认连带移出全部席位后删除 */}
+      {cascadeTarget && (
+        <ConfirmDialog
+          open
+          testid="member-cascade-delete-confirm"
+          onClose={() => setCascadeTarget(null)}
+          onConfirm={() =>
+            deleteMutation.mutate({ member: cascadeTarget.member, cascadeSeats: true })
+          }
+          title="成员仍在群聊中"
+          description={(() => {
+            const names = cascadeTarget.teams
+              .map((t) => t.name ?? t.id)
+              .slice(0, 5)
+              .join("、");
+            const more = cascadeTarget.teams.length > 5 ? "…" : "";
+            const seatPart = cascadeTarget.teams.length > 0
+              ? `将同时移出以下 ${cascadeTarget.teams.length} 个群聊：${names}${more}。`
+              : `将同时移出该成员所在的 ${cascadeTarget.member.groupCount} 个群聊。`;
+            return `成员「${cascadeTarget.member.name}」仍在群聊中。${seatPart}该成员的群内消息与会话历史会保留，但不再归属该成员。确认删除？`;
+          })()}
+          confirmLabel="移出并删除"
+          pendingLabel="删除中…"
+          submitting={deleteMutation.isPending}
         />
       )}
     </PageWindow>

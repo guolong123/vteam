@@ -133,8 +133,23 @@ export const membersApi = {
   update(id: string, payload: UpdateMemberPayload): Promise<MemberDetailDto> {
     return api.patch<MemberDetailDto>(`/members/${id}`, payload);
   },
-  remove(id: string): Promise<{ deleted: boolean; id: string }> {
-    return api.delete<{ deleted: boolean; id: string }>(`/members/${id}`);
+  /**
+   * 删除成员。
+   * 默认仍有席位 → 409 `MEMBER_IN_USE`（details.canCascade/teams 供前端提示）；
+   * 用户确认「连同群聊席位一起删除」后带 `cascadeSeats` 重放，服务端在同一事务里
+   * 先移出全部席位再删成员，返回里带上被移出的群聊。
+   */
+  remove(
+    id: string,
+    options?: { cascadeSeats?: boolean },
+  ): Promise<{
+    deleted: boolean;
+    id: string;
+    removedSeats?: Array<{ teamId: string; teamName: string | null }>;
+  }> {
+    return api.delete(`/members/${id}`, {
+      query: options?.cascadeSeats ? { cascadeSeats: "true" } : undefined,
+    });
   },
   listTeams(id: string): Promise<{ items: MemberGroupRef[]; total: number }> {
     return api.get<{ items: MemberGroupRef[]; total: number }>(
