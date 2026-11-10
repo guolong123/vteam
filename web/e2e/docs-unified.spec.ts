@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 
@@ -210,12 +211,16 @@ test.beforeAll("T12 fixture seeding（创建临时团队/任务→直写 10 行�
         "utf8",
       ),
     );
+    // 真实可解析的 docx（含 `<w:trPr><w:cnfStyle w:firstRow="1"/></w:trPr>` 表格行）：
+    // 此前 fixture 是 22 字节空 zip，docx-preview 必然抛错 → 走下载卡，于是
+    // 「docx→下载卡」断言恒绿，把 docx-preview 0.3.x 的崩溃（真实报告渲染白屏）锁死成
+    // 期望行为。换成有效文档后，该断言才能真正守住 office 预览链路。
     const docxUrl = await uploadSample(
       api,
       auth,
       "t12qa-ops.docx",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      Buffer.concat([Buffer.from("PK\x05\x06", "binary"), Buffer.alloc(18)]),
+      fs.readFileSync(path.resolve(process.cwd(), "e2e/fixtures/t12qa-docx.docx")),
     );
 
     const create = async (body: Record<string, string>) => {
@@ -500,7 +505,7 @@ test.describe("prototypes：徽标→tab→深链→团队级聚合（T16）", (
   });
 });
 
-test.describe("edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost", () => {
+test.describe("edge：txt/csv/json 预览 + pdf 沙箱 + docx 富渲染 + ghost", () => {
   test("txt→<pre> 预览 + 下载兜底", async ({ page }) => {
     await page.goto(TASK_URL);
     await selectRow(page, `${P}design-txt`);
@@ -532,17 +537,24 @@ test.describe("edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost"
     });
   });
 
-  test("docx→下载卡 + 零 iframe", async ({ page }) => {
+  test("docx→docx-preview 富渲染（零 iframe）", async ({ page }) => {
     await page.goto(TASK_URL);
     await selectRow(page, `${P}ops-docx`);
     const viewer = page.getByTestId("artifact-viewer");
+    // 有效 docx 必须走 docx-preview 渲染，而不是回退下载卡：
+    // 回退（data-render="file-card"）意味着解析抛错，用户在文档站看到的是「下载」按钮
+    // 而不是报告正文——这正是 docx-preview 0.3.x 在含 cnfStyle 表格的真实报告上的表现。
     await expect(
-      viewer.locator(
-        '[data-testid="docs-content-view"][data-render="file-card"]',
-      ),
+      viewer.locator('[data-testid="docs-content-view"][data-render="office"]'),
     ).toBeVisible();
+    const body = viewer.getByTestId("docs-docx-body");
+    await expect(body).toBeVisible();
+    // 渲染出的正文可读（fixture 首段），且表格行不导致解析崩���
+    await expect(body).toContainText("t12qa docx preview fixture");
+    await expect(body).toContainText("表头单元格");
     await expect(viewer.locator("iframe")).toHaveCount(0);
-    await expect(viewer.getByTestId("docs-file-download")).toBeVisible();
+    // 预览取代下载卡后仍保留「下载原文件」入口
+    await expect(viewer.getByTestId("docs-office-download")).toBeVisible();
   });
 
   test("ghost 不可访问引用→降级", async ({ page }) => {

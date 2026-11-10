@@ -70,6 +70,12 @@ const PDF_LOAD_TIMEOUT_MS = 15000;
  * - xlsx/xls/xlsm → `xlsx`（SheetJS，Apache-2.0）解析后由 React 渲成表格。
  * 老二进制 `.doc`（Word 97）不在支持范围 → 回退下载卡。
  * 两个库都**动态 import**：不打进首屏 bundle，只在真的打开 office 文件时才加载。
+ *
+ * ⚠️ `docx-preview` 版本下限是 **0.4.0**，不可降级：0.3.x 的 `classNameOfCnfStyle`
+ * 直接读 `attr("val")[i]`，遇到真实 Word 产出的 `<w:cnfStyle w:firstRow="1"/>`
+ * （只有布尔属性、无 `w:val`）就抛 `TypeError: Cannot read properties of null`，
+ * 整篇解析失败 → 静默回退下载卡（表现为「有些 docx 能渲染、有些只给下载」）。
+ * 0.4.0 起该函数在 `val` 缺省时改读布尔属性，修复此崩溃。
  */
 const DOCX_PREVIEW_EXTS = new Set(["docx"]);
 const SHEET_PREVIEW_EXTS = new Set(["xlsx", "xls", "xlsm"]);
@@ -563,6 +569,8 @@ function OfficeShell({
 /**
  * Word 预览：`docx-preview.renderAsync` 把 docx 渲染成 DOM（分页样式近似 Word）。
  * 失败（非 docx / 加密 / 解析异常）→ 回退下载卡，不阻塞阅读。
+ * 回退是**兜底**而非期望路径：解析器崩溃（如 0.3.x 的 cnfStyle 缺陷）也走这里，
+ * 所以「文档站里 docx 只显示下载按钮」应视为 bug 而非正常降级。
  */
 function DocxFilePreview({
   version,
