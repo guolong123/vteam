@@ -82,13 +82,21 @@ RUN apt-get update && \
 
 # agent-browser 浏览器本体 + Chrome
 # x64: Chrome for Testing 有预编译包，直接 `agent-browser install`（系统库已在上层装好）
-# ARM64: Chrome for Testing 无 Linux ARM64 包，回退 apt chromium（debian 包名 chromium）
+# ARM64: Chrome for Testing 无 Linux ARM64 包，直接 apt chromium（不尝试下载 x64 Chrome：
+#   既省 ~194MB 下载/重试时间，也避免 arm64 构建期误执行 x64 二进制）。
 RUN set -e; \
-    if agent-browser install; then \
-      echo "agent-browser: Chrome for Testing installed"; \
+    ARCH="$(uname -m)"; \
+    if [ "$ARCH" = "x86_64" ]; then \
+      if agent-browser install; then \
+        echo "agent-browser: Chrome for Testing installed"; \
+      else \
+        echo "agent-browser: Chrome for Testing failed, fallback to apt chromium"; \
+        apt-get update && ( apt-get install -y --no-install-recommends chromium chromium-driver 2>/dev/null || apt-get install -y --no-install-recommends chromium-browser chromium-chromedriver 2>/dev/null || apt-get install -y --no-install-recommends chromium 2>/dev/null || true ); \
+        rm -rf /var/lib/apt/lists/*; \
+      fi; \
     else \
-      echo "agent-browser: Chrome for Testing failed (likely ARM64), fallback to apt chromium"; \
-      apt-get update && apt-get install -y --no-install-recommends chromium chromium-driver 2>/dev/null || apt-get install -y --no-install-recommends chromium-browser chromium-chromedriver 2>/dev/null || apt-get install -y --no-install-recommends chromium 2>/dev/null || true; \
+      echo "agent-browser: $ARCH has no Chrome for Testing build; install apt chromium"; \
+      apt-get update && ( apt-get install -y --no-install-recommends chromium chromium-driver 2>/dev/null || apt-get install -y --no-install-recommends chromium-browser chromium-chromedriver 2>/dev/null || apt-get install -y --no-install-recommends chromium 2>/dev/null || true ); \
       rm -rf /var/lib/apt/lists/*; \
     fi; \
     # 兼容系统 chromium 路径：优先 /usr/bin/chromium，其次 /usr/bin/chromium-browser
