@@ -460,6 +460,10 @@ export class TeamsService implements OnModuleInit {
     const currentWorkerMap = await this.currentWorkerByMember(
       rows.map((t) => t.id),
     );
+    // 席级会话运行状态（黄点/绿点数据源）：不依赖 memberId，老席位同样覆盖。
+    const sessionStatusMap = await this.sessionStatusBySeat(
+      rows.map((t) => t.id),
+    );
     return {
       items: rows.map((t) =>
         this.toTeamDto(
@@ -467,6 +471,7 @@ export class TeamsService implements OnModuleInit {
           activeCounts.get(t.id) ?? 0,
           lastActivity.get(t.id) ?? null,
           currentWorkerMap,
+          sessionStatusMap,
         ),
       ),
       total,
@@ -560,11 +565,13 @@ export class TeamsService implements OnModuleInit {
     const activeCounts = await this.activeTaskCounts([team]);
     // 成员「当前运行节点」：团队会话行（Session.taskId 为空）的 workerId。
     const currentWorkerMap = await this.currentWorkerByMember([team.id]);
+    const sessionStatusMap = await this.sessionStatusBySeat([team.id]);
     return this.toTeamDto(
       team,
       activeCounts.get(id) ?? 0,
       null,
       currentWorkerMap,
+      sessionStatusMap,
     );
   }
 
@@ -1888,11 +1895,100 @@ export class TeamsService implements OnModuleInit {
     return map;
   }
 
+  /**
+   * 席位 → 会话运行状态（成员头像黄点/绿点的数据源）。
+   *
+   * 为什么不能只看成员库 `member.session.busyState`：老席位（`team_members.member_id`
+   * 为 null，成员库解耦前建的数据）根本没有 member 行，`memberId` 取不到就没状态，
+   * 表现就是「成员明明在干活、头像却没有状态点」。
+   * 这里按 `session.team_member_id`（席位 id）取，**不依赖 memberId**，新老席位都能覆盖；
+   * 同一席位有多条会话时优先取 `busy_state='running'` 的那条。
+   */
+  private async sessionStatusBySeat(teamIds: string[]): Promise<
+    Map<
+      string,
+      {
+        busyState: string;
+        busySince: Date | null;
+        lastTurnOutcome: string | null;
+        lastActivityAt: Date | null;
+        updatedAt: Date;
+      }
+    >
+  > {
+    const map = new Map<
+      string,
+      {
+        busyState: string;
+        busySince: Date | null;
+        lastTurnOutcome: string | null;
+        lastActivityAt: Date | null;
+        updatedAt: Date;
+      }
+    >();
+    const ids = (teamIds ?? []).filter(
+      (id): id is string => typeof id === 'string' && id.length > 0,
+    );
+    if (ids.length === 0) return map;
+    const rows = (await this.prisma.session.findMany({
+      where: { teamId: { in: ids }, teamMemberId: { not: null } },
+      select: {
+        teamMemberId: true,
+        busyState: true,
+        busySince: true,
+        lastTurnOutcome: true,
+        lastActivityAt: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+    })) as
+      | {
+          teamMemberId: string | null;
+          busyState: string;
+          busySince: Date | null;
+          lastTurnOutcome: string | null;
+          lastActivityAt: Date | null;
+          updatedAt: Date;
+        }[]
+      | null;
+    for (const r of rows ?? []) {
+      if (!r?.teamMemberId) continue;
+      // 防御：只认带 busyState 的完整行（部分旧调用/测试 mock 可能只投影 workerId），
+      // 否则会产出 { busyState: undefined } 的假状态，前端当成「有会话但状态未知」。
+      if (typeof r.busyState !== 'string') continue;
+      const prev = map.get(r.teamMemberId);
+      // running 优先（一个席位可能既有团队级会话又有任务级会话）
+      if (
+        !prev ||
+        (prev.busyState !== 'running' && r.busyState === 'running')
+      ) {
+        map.set(r.teamMemberId, {
+          busyState: r.busyState,
+          busySince: r.busySince ?? null,
+          lastTurnOutcome: r.lastTurnOutcome ?? null,
+          lastActivityAt: r.lastActivityAt ?? null,
+          updatedAt: r.updatedAt,
+        });
+      }
+    }
+    return map;
+  }
+
   private toTeamDto(
     team: any,
     activeTaskCount = 0,
     lastActivityAt: Date | null = null,
     currentWorkerMap?: Map<string, string | null>,
+    sessionStatusMap?: Map<
+      string,
+      {
+        busyState: string;
+        busySince: Date | null;
+        lastTurnOutcome: string | null;
+        lastActivityAt: Date | null;
+        updatedAt: Date;
+      }
+    >,
   ) {
     const members = (team.members ?? []).map((m: any) => ({
       id: m.id,
@@ -1923,6 +2019,24 @@ export class TeamsService implements OnModuleInit {
       // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
       // ⚠️ 恒返回（拿不到就 null），不得条件省略——否则另一侧投影的 null 会把它覆盖掉。
       currentWorkerId: currentWorkerMap?.get(m.id) ?? null,
+      /**
+       * 席级会话运行状态（成员头像状态点数据源）。
+       * running → 前端黄点「执行中」；idle 且 lastTurnOutcome 存在 → 绿点「有新输出」；
+       * null → 无会话（不显示状态点）。恒返回（拿不到就 null），避免另一侧投影覆盖。
+       */
+      sessionStatus: (() => {
+        const st = sessionStatusMap?.get(m.id);
+        if (!st) return null;
+        return {
+          busyState: st.busyState,
+          busySince: st.busySince ? st.busySince.toISOString() : null,
+          lastTurnOutcome: st.lastTurnOutcome ?? null,
+          // 最近活动时间：空闲态下用它判断「刚出的输出」是否还算新鲜（前端做时间窗）
+          lastActivityAt:
+            (st.lastActivityAt ?? st.updatedAt ?? null)?.toISOString?.() ??
+            null,
+        };
+      })(),
       // opencode 原生 agent 选择（null = 用 opencode 默认 agent）——前端成员面板据此
       // 渲染/高亮当前选择；缺此字段会导致「切换后回显丢失」。
       opencodeAgentName: m.opencodeAgentName,
