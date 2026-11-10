@@ -29,6 +29,7 @@ import { externalUsersApi } from "@/src/api/external-users";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
+import { stripExternalChannelPrefix } from "@/lib/strip-external-channel";
 import { resolveMemberPresence, PRESENCE_COLOR } from "@/lib/member-presence";
 import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
 import {
@@ -125,6 +126,11 @@ function ChatPageContent() {
     [externalUsersQuery.data],
   );
   const externalTotal = externalUsersQuery.data?.total ?? 0;
+  /** 外部用户目录 id→最新姓名：群聊身份行按 externalUserId 取，避免显示入站时的旧展示名。 */
+  const externalUserNameById = useMemo(
+    () => Object.fromEntries(externalUsers.map((u) => [u.id, u.name])),
+    [externalUsers],
+  );
 
   // 无选中会话时自动落到第一条（仅替换 URL，不新增历史栈）。
   useEffect(() => {
@@ -719,7 +725,7 @@ function ChatPageContent() {
                 （tmm_…）的「会话运行中」——那条状态属于别的群，不该在这里展示。
                 加 key 后切群即重挂载，状态随组件一起销毁。
               */}
-              <TeamSessionView key={teamId} teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} />
+              <TeamSessionView key={teamId} teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} externalUserNameById={externalUserNameById} />
             </div>
           </div>
 
@@ -1063,6 +1069,14 @@ function groupAvatarPalette(title: string): {
   };
 }
 
+/** 会话列表预览：外部渠道正文剥掉 `[WeCom:...]` 传输前缀，避免改名后旧展示名残留在预览里。 */
+function conversationPreviewText(item: ConversationItemDto): string {
+  const text = stripInjectedContext(item.lastMessage?.text ?? "暂无消息");
+  return item.lastMessage?.senderType === "external"
+    ? stripExternalChannelPrefix(text)
+    : text;
+}
+
 function ConversationRow({
   item,
   active,
@@ -1125,7 +1139,7 @@ function ConversationRow({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.xs, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {stripInjectedContext(item.lastMessage?.text ?? "暂无消息")}
+            {conversationPreviewText(item)}
           </span>
           {item.unreadCount > 0 && (
             <span style={{ marginLeft: "auto", minWidth: 18, height: 18, borderRadius: 9, backgroundColor: "#DC2626", color: "#FFF", fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>

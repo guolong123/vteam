@@ -4,7 +4,7 @@
 # agent-browser = Vercel / vercel-labs/agent-browser（Rust + Chrome CDP，给 opencode Agent 补浏览器能力）。
 #
 # 基座说明：原 node:22-alpine (musl) 跑不了 Chrome(glibc)，切到 debian bookworm-slim；
-# Chrome 依赖由 `agent-browser install --with-deps` 自动补齐（apt）。
+# Chrome 系统依赖由独立 apt 层显式安装（`--with-deps` 在无 sudo 的构建环境不可靠，见下）。
 
 # 基础镜像可覆盖：CI 在拉不到内网镜像源时传 --build-arg NODE_IMAGE=docker.io/library/node:22-bookworm-slim
 ARG NODE_IMAGE=docker.ketaops.cc/library/node:22-bookworm-slim
@@ -50,8 +50,9 @@ RUN npm i -g "${OPENCODE_CLI_SPEC}" "${AGENT_BROWSER_SPEC}" "${BUN_SPEC}" && \
 # curl（HTTP 请求）、jq（JSON 处理）、bash（Agent 脚本常依赖 bash）、wget（下载）、
 # ca-certificates（HTTPS）；unzip/zip/xz-utils（多附件放宽格式后，用户可发压缩包，
 # Agent 需能在执行目录自行解压——zip/tar.gz/xz 均有命令行工具可用，python3 亦可兜底）。
-# Chrome 的 30+ lib 由下一步 `agent-browser install --with-deps` 补齐，
-# 此处只装 worker 本身需要的最小集，避免重复。
+# Chrome 的 30+ 运行库在下一个独立层显式安装（不用 `agent-browser install --with-deps`：
+# 它内部走 `sudo apt-get`，镜像里没有 sudo ⇒ 构建期只下载 Chrome、不装系统库，
+# 运行期表现为 `error while loading shared libraries`；2026-11-10 线上实测缺 24 个库）。
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       git openssh-client \
@@ -66,11 +67,24 @@ RUN apt-get update && \
         fonts-noto-cjk fonts-noto-color-emoji fonts-liberation fontconfig 2>/dev/null || true && \
     rm -rf /var/lib/apt/lists/* && fc-cache -f || true
 
+# Chrome for Testing 运行库（显式安装，见上：不能依赖 `--with-deps`）。
+# 包清单来自 agent-browser 的依赖列表 + ldd 实测缺失项；Debian bookworm 包名。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libglib2.0-0 libxcb-shm0 libx11-xcb1 libx11-6 libxcb1 libxext6 \
+      libxrandr2 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 \
+      libgtk-3-0 libpangocairo-1.0-0 libpango-1.0-0 libatk1.0-0 \
+      libcairo-gobject2 libcairo2 libgdk-pixbuf-2.0-0 libxrender1 \
+      libasound2 libfreetype6 libfontconfig1 libdbus-1-3 libnss3 libnspr4 \
+      libatk-bridge2.0-0 libdrm2 libxkbcommon0 libatspi2.0-0 libcups2 \
+      libxshmfence1 libgbm1 && \
+    rm -rf /var/lib/apt/lists/*
+
 # agent-browser 浏览器本体 + Chrome
-# x64: Chrome for Testing 有预编译包，直接用 --with-deps
-# ARM64: Chrome for Testing 无 Linux ARM64 包，需改用系统 chromium（debian 包名 chromium）
+# x64: Chrome for Testing 有预编译包，直接 `agent-browser install`（系统库已在上层装好）
+# ARM64: Chrome for Testing 无 Linux ARM64 包，回退 apt chromium（debian 包名 chromium）
 RUN set -e; \
-    if agent-browser install --with-deps; then \
+    if agent-browser install; then \
       echo "agent-browser: Chrome for Testing installed"; \
     else \
       echo "agent-browser: Chrome for Testing failed (likely ARM64), fallback to apt chromium"; \
@@ -80,11 +94,21 @@ RUN set -e; \
     # 兼容系统 chromium 路径：优先 /usr/bin/chromium，其次 /usr/bin/chromium-browser
     if [ -x /usr/bin/chromium ]; then echo "chromium found at /usr/bin/chromium"; \
     elif [ -x /usr/bin/chromium-browser ]; then ln -sf /usr/bin/chromium-browser /usr/bin/chromium && echo "linked chromium-browser -> chromium"; \
+    fi; \
+    # 把 Chrome 移出 /root：k8s 的 worker-home PVC 挂在 /root，会遮住镜像里的浏览器；
+    # 运行时由 worker-entrypoint.sh 把 /opt 下的 browsers 链回 /root/.agent-browser。
+    if [ -d /root/.agent-browser/browsers ]; then \
+      mkdir -p /opt/agent-browser && mv /root/.agent-browser/browsers /opt/agent-browser/browsers && \
+      chmod -R a+rX /opt/agent-browser; \
     fi
 
-# 验证安装（doctor 会检查 Chrome/daemon/config，失败不阻断构建，仅告警）
-RUN agent-browser --version && agent-browser doctor --offline --quick || true; \
-    if [ -x /usr/bin/chromium ]; then chromium --version || chromium-browser --version || true; fi
+# 构建期验收：Chrome/Chromium 必须真的能执行（缺系统库会在这里失败，而不是上线后才由 Agent 发现）。
+RUN set -e; \
+    agent-browser --version; \
+    CHROME="$(ls -d /opt/agent-browser/browsers/chrome-*/chrome 2>/dev/null | head -1)"; \
+    if [ -n "$CHROME" ]; then echo "verifying $CHROME"; "$CHROME" --version; \
+    elif [ -x /usr/bin/chromium ]; then echo "verifying /usr/bin/chromium"; /usr/bin/chromium --version; \
+    else echo "ERROR: no Chrome/Chromium binary installed" >&2; exit 1; fi
 
 # 顺序说明：**易变的小步骤放最后**。OMO 走 `@latest` 的历史版本会频繁发版，若排在上面
 # 的 apt / Chrome 大层之前，每次发版都会把 GB 级层一起作废 ⇒ 集群全量重拉。
@@ -175,6 +199,11 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends tini && \
     rm -rf /var/lib/apt/lists/*
 
+# 启动脚本：/root 被 k8s PVC 覆盖时把 /opt 下的 Chrome 链回 agent-browser 的 state dir，
+# 然后 exec node（保持 tini 为 PID1，node 仍是唯一主进程）。
+COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/worker-entrypoint.sh
+
 # 注意：ENTRYPOINT 只加 tini，命令仍是 CMD，`docker run <image> <cmd>` 仍可覆盖命令。
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "dist/index.js"]
+CMD ["/usr/local/bin/worker-entrypoint.sh"]

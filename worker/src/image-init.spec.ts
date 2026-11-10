@@ -18,20 +18,43 @@ describe('worker 镜像 PID1 reaper 契约', () => {
   const readWorkerFile = (file: string): string =>
     readFileSync(resolve(workerDir, file), 'utf8');
 
-  it.each(['Dockerfile', 'Dockerfile.dsh'])(
-    '%s：安装 tini，且以 tini 作为 ENTRYPOINT（CMD 保留为 node dist/index.js）',
-    (file) => {
+  it.each([
+    // opencode worker：CMD 是启动脚本（同步 /opt 下的 Chrome 到 PVC 的 /root，再 exec node）。
+    ['Dockerfile', '"/usr/local/bin/worker-entrypoint.sh"'],
+    // dsh worker 不装 agent-browser/Chrome，CMD 保持直跑 node。
+    ['Dockerfile.dsh', '"node", "dist/index.js"'],
+  ])(
+    '%s：安装 tini，且以 tini 作为 ENTRYPOINT（CMD 保留为 %s）',
+    (file, expectedCmd) => {
       const text = readWorkerFile(file);
       // tini 必须真的装进镜像（apt 包），否则 ENTRYPOINT 会启动失败。
       expect(text).toMatch(/apt-get install[\s\S]*?\btini\b/);
       expect(text).toContain('ENTRYPOINT ["/usr/bin/tini", "--"]');
-      expect(text).toContain('CMD ["node", "dist/index.js"]');
+      expect(text).toContain(`CMD [${expectedCmd}]`);
       // ENTRYPOINT 必须在 CMD 之前，否则 CMD 被当作 ENTRYPOINT 参数语义错位。
       expect(text.indexOf('ENTRYPOINT ["/usr/bin/tini"')).toBeLessThan(
-        text.indexOf('CMD ["node"'),
+        text.indexOf('CMD ["'),
       );
     },
   );
+
+  it('worker 镜像显式安装 Chrome 运行库，不依赖无 sudo 环境下的 --with-deps', () => {
+    const text = readWorkerFile('Dockerfile');
+    // 2026-11-10 线上回归：--with-deps 内部 sudo apt 失败但仍 exit 0 ⇒ 只下 Chrome 不装库，
+    // 运行期 Chrome 报 libglib-2.0.so.0 等 24 个库缺失。必须显式 apt 安装 + 构建期验收可执行。
+    expect(text).toContain('libglib2.0-0');
+    expect(text).toContain('libnss3');
+    expect(text).not.toMatch(/^\s*if agent-browser install --with-deps;/m);
+    // Chrome 放在 /opt（镜像层），避免被 k8s 的 /root PVC 遮住；启动脚本负责链回 state dir。
+    expect(text).toContain('/opt/agent-browser');
+  });
+
+  it('worker-entrypoint.sh：把 /opt 下的浏览器链回 /root/.agent-browser 后 exec node', () => {
+    const text = readWorkerFile('docker/worker-entrypoint.sh');
+    expect(text).toContain('BROWSERS_DIR="/opt/agent-browser/browsers"');
+    expect(text).toContain('/root/.agent-browser/browsers');
+    expect(text).toContain('exec node dist/index.js');
+  });
 
   it('docker-compose 的 worker 服务显式 init: true（旧镜像/自定义 entrypoint 双保险）', () => {
     const compose = readFileSync(

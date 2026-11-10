@@ -25,6 +25,7 @@ import {
   externalUserInitial,
   formatExternalUserTime,
 } from "./ExternalUserList";
+import { stripExternalChannelPrefix } from "@/lib/strip-external-channel";
 import {
   neutral,
   space,
@@ -48,15 +49,6 @@ function sourceLabel(source: string | null | undefined): string {
   return SOURCE_LABELS[source] ?? source;
 }
 
-/**
- * 剥离入站正文的渠道传输前缀：企微/通用 webhook 链路落库的正文形如
- * `[WeCom:<展示名>|from 群聊|私聊] 正文`，这个标记是给 Agent 判断回复场景的，
- * 回看视图里展示名已在头部/元信息出现，再显示一遍既冗余又像乱码。
- * 只剥行首标记（正文中间用户自己写的同形文本不动），并保留其后的正文。
- */
-function stripChannelPrefix(text: string): string {
-  return text.replace(/^\s*\[WeCom:[^\]]*\]\s*/, "");
-}
 
 /** 从附件 URL 推断扩展名（后端 ext 可能为空，ChatBubble 依赖它区分图片/文件）。 */
 function extOfUrl(url: string): string {
@@ -298,7 +290,7 @@ export function ExternalUserConversation({ userId }: { userId: string }) {
                   {messageMeta(message)}
                 </span>
                 <ChatBubble
-                  text={stripChannelPrefix(message.text ?? "")}
+                  text={stripExternalChannelPrefix(message.text ?? "")}
                   type="user"
                   attachments={toBubbleAttachments(message.attachments)}
                   style={{ alignSelf: "flex-start", maxWidth: "100%" }}
