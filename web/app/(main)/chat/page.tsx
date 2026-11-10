@@ -28,6 +28,7 @@ import { membersApi, type MemberDetailDto, type MemberDto } from "@/src/api/memb
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
+import { resolveMemberPresence, PRESENCE_COLOR } from "@/lib/member-presence";
 import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
 import {
   type RoleKey,
@@ -412,10 +413,14 @@ function ChatPageContent() {
   );
   const groupCount = items.filter((i) => i.type === "group").length;
   const dmCount = items.filter((i) => i.type === "dm").length;
-  const busySeats = (team?.members ?? []).filter(
-    (seat) =>
-      memberById.get(seat.memberId ?? "")?.session?.busyState === "running",
-  );
+  /** 正在执行的席位（席级状态优先，成员库补充；老席位 memberId 为 null 也能命中）。 */
+  const busySeats = (team?.members ?? []).filter((seat) => {
+    const presence = resolveMemberPresence(
+      seat.sessionStatus,
+      memberById.get(seat.memberId ?? "")?.session ?? null,
+    );
+    return presence.running;
+  });
   /** DM 已发消息但还没等到对方回复：给用户「进行中」反馈（超 2 分钟不再显示）。 */
   const lastDmMessage = active?.lastMessage ?? null;
   const dmWaiting =
@@ -431,6 +436,16 @@ function ChatPageContent() {
   const busyTeamName = (memberId: string): string | null => {
     const currentTeamId = memberById.get(memberId)?.session?.currentTeamId ?? null;
     return currentTeamId ? (teamNameById.get(currentTeamId) ?? null) : null;
+  };
+  /**
+   * 席位正在执行时的**归属描述**：区分「本群」与「其他群」。
+   * 原先一律写「正在其他群处理消息」——本群自己在跑也这么说，读起来像跑错了地方。
+   * 归属团队优先取席级状态（老席位 memberId 为 null 时成员库查不到 currentTeamId）。
+   */
+  const runningWhere = (seat: { memberId?: string | null }): string => {
+    const otherTeam = busyTeamName(seat.memberId ?? "");
+    if (otherTeam && otherTeam !== team?.name) return `正在「${otherTeam}」处理消息`;
+    return "正在本群处理消息";
   };
 
   return (
@@ -536,12 +551,30 @@ function ChatPageContent() {
                 <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>群聊 · {team?.members.length ?? active?.memberCount ?? 0} 个成员 · 仅被 @ 的成员会收到消息</div>
               </div>
               <span style={{ flex: 1 }} />
-              <div style={{ display: "flex", alignItems: "center", gap: -4, marginRight: space.sm }}>
-                {(team?.members ?? []).slice(0, 5).map((seat) => (
-                  <span key={seat.id} style={{ marginLeft: -6 }} title={seat.member?.name ?? seat.alias}>
-                    <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
-                  </span>
-                ))}
+              <div data-testid="group-header-avatars" style={{ display: "flex", alignItems: "center", gap: -4, marginRight: space.sm }}>
+                {(team?.members ?? []).slice(0, 5).map((seat) => {
+                  const presence = resolveMemberPresence(
+                    seat.sessionStatus,
+                    memberById.get(seat.memberId ?? "")?.session ?? null,
+                  );
+                  return (
+                    <span key={seat.id} style={{ marginLeft: -6, position: "relative", display: "inline-flex" }} title={`${seat.member?.name ?? seat.alias} · ${presence.label}`}>
+                      <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
+                      {presence.tone !== "idle" && (
+                        <span
+                          data-testid={`group-header-presence-${presence.tone}`}
+                          aria-label={presence.label}
+                          style={{
+                            position: "absolute", right: -1, top: -1,
+                            width: 8, height: 8, borderRadius: "50%",
+                            backgroundColor: PRESENCE_COLOR[presence.tone],
+                            border: "1.5px solid #FFF",
+                          }}
+                        />
+                      )}
+                    </span>
+                  );
+                })}
               </div>
               <button type="button" onClick={() => setRightPanelMode((v) => (v === "full" ? "compact" : "full"))} style={{ fontSize: fontSize.xs, color: neutral[600], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>{rightPanelMode === "full" ? "精简面板" : "完整面板"}</button>
               <button type="button" data-testid="group-settings-button" onClick={() => setShowMembersDrawer(true)} style={{ fontSize: fontSize.xs, color: "#0F766E", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>群设置</button>
@@ -556,19 +589,44 @@ function ChatPageContent() {
               {(team?.members ?? []).map((seat) => {
                 const memberId = seat.memberId ?? "";
                 const roleKey = toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null);
-                const busy = memberById.get(memberId)?.session?.busyState === "running";
+                const memberSession = memberById.get(memberId)?.session ?? null;
+                // 席位维度状态是主来源（老席位 memberId 为 null，成员库查不到也能显示）；
+                // 成员库状态作为补充（跨群忙碌提示）。
+                const presence = resolveMemberPresence(
+                  seat.sessionStatus,
+                  memberSession,
+                  memberSession?.currentTeamId && memberSession.currentTeamId !== team?.id
+                    ? "正在其他群执行"
+                    : "正在执行",
+                );
                 const selected = filterMemberId === seat.id;
                 return (
-                  <button key={seat.id} type="button" data-testid="group-member-chip" onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
+                  <button key={seat.id} type="button" data-testid="group-member-chip" data-presence={presence.tone} title={`${seat.member?.name ?? seat.alias} · ${presence.label}`} onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
                     <span style={{ position: "relative" }}>
                       <AgentAvatar role={roleKey} size="sm" />
-                      {busy && <span title="在其他群处理中（消息照常送达）" style={{ position: "absolute", right: -1, top: -1, width: 8, height: 8, borderRadius: "50%", backgroundColor: "#F59E0B", border: "1.5px solid #FFF" }} />}
+                      {presence.tone !== "idle" && (
+                        <span
+                          data-testid={`group-member-presence-${presence.tone}`}
+                          aria-label={presence.label}
+                          title={presence.label}
+                          style={{
+                            position: "absolute", right: -1, top: -1,
+                            width: 8, height: 8, borderRadius: "50%",
+                            backgroundColor: PRESENCE_COLOR[presence.tone],
+                            border: "1.5px solid #FFF",
+                            boxShadow: presence.tone === "running" ? `0 0 0 2px ${PRESENCE_COLOR.running}44` : undefined,
+                          }}
+                        />
+                      )}
                     </span>
                     <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 56, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</span>
                   </button>
                 );
               })}
-              <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400], whiteSpace: "nowrap" }}>⊙ 橙标=忙碌于其他群（照常送达）</span>
+              <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400], whiteSpace: "nowrap" }}>
+                <span style={{ color: PRESENCE_COLOR.running }}>●</span> 执行中 ·{" "}
+                <span style={{ color: PRESENCE_COLOR.done }}>●</span> 有新输出
+              </span>
             </div>
 
             {busySeats.length > 0 && (
@@ -577,8 +635,7 @@ function ChatPageContent() {
                 <span style={{ fontWeight: 600 }}>
                   {busySeats.map((s) => {
                     const name = memberById.get(s.memberId ?? "")?.name ?? s.alias;
-                    const group = busyTeamName(s.memberId ?? "");
-                    return group ? `${name} 正在「${group}」处理消息` : `${name} 正在其他群处理消息`;
+                    return `${name} ${runningWhere(s)}`;
                   }).join("；")}
                 </span>
                 <span style={{ color: "#B45309" }}>消息照常送达，不拦截，成员自行安排先后</span>

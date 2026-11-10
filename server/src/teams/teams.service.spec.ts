@@ -775,8 +775,11 @@ describe('TeamsService', () => {
 
       expect(result.items[0].members[0].currentWorkerId).toBe('w_0000000001');
       expect(result.items[1].members[0].currentWorkerId).toBe('w_0000000002');
-      // 整页只查一次会话（不是每团队一次，也不是每成员一次）
-      expect(prisma.session.findMany).toHaveBeenCalledTimes(1);
+      // 整页只查一次会话（不是每团队一次，也不是每成员一次）。
+      // 注：会话表现在被两处整页批量查询共用——worker 投影 + 席级运行状态
+      // （sessionStatus，头像状态点），所以是「每类查询各一次」共 2 次，
+      // 但仍与团队数/成员数无关（不是 N+1）。逐条断言两个 where 以锁住这一点。
+      expect(prisma.session.findMany).toHaveBeenCalledTimes(2);
       expect(prisma.session.findMany).toHaveBeenCalledWith({
         where: {
           teamId: { in: ['tm_0000000001', 'tm_0000000002'] },
@@ -784,6 +787,14 @@ describe('TeamsService', () => {
         },
         select: { teamMemberId: true, workerId: true },
       });
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            teamId: { in: ['tm_0000000001', 'tm_0000000002'] },
+            teamMemberId: { not: null },
+          },
+        }),
+      );
     });
   });
 
@@ -2268,6 +2279,179 @@ describe('TeamsService', () => {
 
       expect(result.members[0].preferredWorkerId).toBe('w_0000000009');
       expect(result.members[0].currentWorkerId).toBe('w_0000000002');
+    });
+
+    /**
+     * 席级会话状态（成员头像状态点数据源）。
+     * 回归锁：状态必须按 **team_member_id（席位）** 取，不能依赖 memberId ——
+     * 老席位 memberId 为 null，只查成员库会拿不到状态，表现为「成员在干活却没状态点」。
+     */
+    describe('sessionStatus（席级状态 → 头像状态点）', () => {
+      /** 按 where 分派：currentWorkerByMember 查 taskId:null，sessionStatusBySeat 查 teamMemberId not null */
+      function mockSessionFindManyByQuery(
+        byWorker: unknown[],
+        bySeat: unknown[],
+      ) {
+        prisma.session.findMany.mockImplementation(
+          async (args: { where?: Record<string, unknown> }) => {
+            if (args?.where && 'teamMemberId' in args.where) return bySeat;
+            return byWorker;
+          },
+        );
+      }
+
+      it('running → sessionStatus.busyState=running（成员在干活，黄点）', async () => {
+        prisma.team.findUnique.mockResolvedValue(
+          teamRow({ members: [teamMemberRow()] }),
+        );
+        mockSessionFindManyByQuery(
+          [],
+          [
+            {
+              teamMemberId: 'tmm_0000000001',
+              busyState: 'running',
+              busySince: new Date('2026-11-10T10:00:00Z'),
+              lastTurnOutcome: null,
+              lastActivityAt: new Date('2026-11-10T10:00:00Z'),
+              updatedAt: new Date('2026-11-10T10:00:00Z'),
+            },
+          ],
+        );
+
+        const result: any = await service.findOne('tm_0000000001');
+
+        expect(result.members[0].sessionStatus).toMatchObject({
+          busyState: 'running',
+          busySince: '2026-11-10T10:00:00.000Z',
+          lastTurnOutcome: null,
+        });
+      });
+
+      it('老席位 memberId=null 也能拿到状态（不依赖成员库）', async () => {
+        prisma.team.findUnique.mockResolvedValue(
+          teamRow({ members: [teamMemberRow({ memberId: null })] }),
+        );
+        mockSessionFindManyByQuery(
+          [],
+          [
+            {
+              teamMemberId: 'tmm_0000000001',
+              busyState: 'running',
+              busySince: new Date('2026-11-10T10:00:00Z'),
+              lastTurnOutcome: null,
+              lastActivityAt: new Date('2026-11-10T10:00:00Z'),
+              updatedAt: new Date('2026-11-10T10:00:00Z'),
+            },
+          ],
+        );
+
+        const result: any = await service.findOne('tm_0000000001');
+
+        expect(result.members[0].memberId).toBeNull();
+        expect(result.members[0].sessionStatus.busyState).toBe('running');
+      });
+
+      it('空闲 + 有产出 → lastTurnOutcome 透出（前端据此显示绿点）', async () => {
+        prisma.team.findUnique.mockResolvedValue(
+          teamRow({ members: [teamMemberRow()] }),
+        );
+        mockSessionFindManyByQuery(
+          [],
+          [
+            {
+              teamMemberId: 'tmm_0000000001',
+              busyState: 'idle',
+              busySince: null,
+              lastTurnOutcome: 'ok',
+              lastActivityAt: new Date('2026-11-10T09:58:00Z'),
+              updatedAt: new Date('2026-11-10T09:58:00Z'),
+            },
+          ],
+        );
+
+        const result: any = await service.findOne('tm_0000000001');
+
+        expect(result.members[0].sessionStatus).toMatchObject({
+          busyState: 'idle',
+          lastTurnOutcome: 'ok',
+        });
+        expect(result.members[0].sessionStatus.lastActivityAt).toBe(
+          '2026-11-10T09:58:00.000Z',
+        );
+      });
+
+      it('无会话 → sessionStatus=null（字段恒存在，不省略）', async () => {
+        prisma.team.findUnique.mockResolvedValue(
+          teamRow({ members: [teamMemberRow()] }),
+        );
+        mockSessionFindManyByQuery([], []);
+
+        const result: any = await service.findOne('tm_0000000001');
+
+        expect(result.members[0]).toHaveProperty('sessionStatus', null);
+        expect(Object.keys(result.members[0])).toContain('sessionStatus');
+      });
+
+      it('同席位多条会话 → running 优先（团队级 + 任务级并存时不丢执行态）', async () => {
+        prisma.team.findUnique.mockResolvedValue(
+          teamRow({ members: [teamMemberRow()] }),
+        );
+        mockSessionFindManyByQuery(
+          [],
+          [
+            {
+              teamMemberId: 'tmm_0000000001',
+              busyState: 'idle',
+              busySince: null,
+              lastTurnOutcome: 'ok',
+              lastActivityAt: new Date('2026-11-10T09:00:00Z'),
+              updatedAt: new Date('2026-11-10T09:00:00Z'),
+            },
+            {
+              teamMemberId: 'tmm_0000000001',
+              busyState: 'running',
+              busySince: new Date('2026-11-10T10:00:00Z'),
+              lastTurnOutcome: null,
+              lastActivityAt: new Date('2026-11-10T10:00:00Z'),
+              updatedAt: new Date('2026-11-10T10:00:00Z'),
+            },
+          ],
+        );
+
+        const result: any = await service.findOne('tm_0000000001');
+
+        expect(result.members[0].sessionStatus.busyState).toBe('running');
+      });
+
+      it('列表页同样下发 sessionStatus（整页一次查询，不按成员 N+1）', async () => {
+        prisma.$transaction.mockResolvedValue([
+          1,
+          [teamRow({ members: [teamMemberRow()] })],
+        ]);
+        prisma.session.groupBy = jest.fn().mockResolvedValue([]);
+        mockSessionFindManyByQuery(
+          [],
+          [
+            {
+              teamMemberId: 'tmm_0000000001',
+              busyState: 'running',
+              busySince: new Date('2026-11-10T10:00:00Z'),
+              lastTurnOutcome: null,
+              lastActivityAt: new Date('2026-11-10T10:00:00Z'),
+              updatedAt: new Date('2026-11-10T10:00:00Z'),
+            },
+          ],
+        );
+
+        const result: any = await service.findAll({
+          page: 1,
+          pageSize: 10,
+        } as any);
+
+        expect(result.items[0].members[0].sessionStatus.busyState).toBe(
+          'running',
+        );
+      });
     });
 
     it('空更新 → 直接返回 findOne，不进事务', async () => {

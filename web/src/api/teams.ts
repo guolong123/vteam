@@ -28,6 +28,19 @@ export interface TeamMemberDto {
   overrideModelId?: string | null;
   /** 成员级首选 worker id（null = 跟随团队级选择）。 */
   preferredWorkerId?: string | null;
+  /**
+   * 席级会话运行状态（成员头像状态点数据源；null = 无会话）。
+   * - `busyState === "running"` → 正在执行（黄点）
+   * - `busyState === "idle"` 且最近一轮有产出 → 有新输出且已空闲（绿点）
+   * 注意：这是**席位维度**，不依赖 `memberId`——老席位（memberId 为 null）同样有值。
+   */
+  sessionStatus?: {
+    busyState: string;
+    busySince: string | null;
+    lastTurnOutcome: string | null;
+    /** 最近活动时间（ISO）；空闲态下用于判断「刚出的输出」是否还新鲜。 */
+    lastActivityAt?: string | null;
+  } | null;
   /** 成员会话当前实际绑定的 worker id（null = 尚无会话 / 未绑定任何节点）。
    *  与 preferredWorkerId 可能不一致：服务端在下一次派发时才把会话迁到首选节点，
    *  且仅当目标节点当前可用。 */
