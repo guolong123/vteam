@@ -112,6 +112,7 @@ import type {
   WorkerModelRef,
 } from '../protocol/worker-protocol';
 import { collectFileArtifacts } from './artifact-extract';
+import { capMessageParts } from './message-part-cap';
 import { SensitiveCommandError, runSensitiveCommand } from './sensitive-command';
 import type { SensitiveCommandErrorCode } from './sensitive-command';
 
@@ -492,7 +493,7 @@ function readInterruptedFlag(result: unknown): boolean {
 }
 
 /**
- * 解析消息端点的分页 query（limit / order / cursor）。
+ * 解析消息端点的分页/截断 query（limit / order / cursor / maxPartChars）。
  *
  * 非法参数返回 null（调用方回 400）——不静默丢弃：调用方传了个错的 limit 却拿到
  * 全量结果，会误判「消息只有这么几条」。
@@ -517,6 +518,16 @@ function parseMessagesQuery(url: URL): SessionMessagesQuery | null {
   const rawCursor = url.searchParams.get('cursor');
   if (rawCursor !== null && rawCursor !== '') {
     query.cursor = rawCursor;
+  }
+  // perf（session-history）：part 截断阈值，让超大 tool/思考载荷在 worker 出口就截断，
+  // 不再把 80MB 原始 parts 传回控制面后丢弃。合法值 = 正整数（与 limit 同规格）。
+  const rawMaxPartChars = url.searchParams.get('maxPartChars');
+  if (rawMaxPartChars !== null && rawMaxPartChars !== '') {
+    const maxPartChars = Number(rawMaxPartChars);
+    if (!Number.isInteger(maxPartChars) || maxPartChars <= 0) {
+      return null;
+    }
+    query.maxPartChars = maxPartChars;
   }
   return query;
 }
@@ -1958,7 +1969,8 @@ export class ExecServer {
     const query = parseMessagesQuery(url);
     if (query === null) {
       sendJson(res, 400, {
-        error: '分页参数非法：limit 必须是正整数，order 必须是 asc|desc',
+        error:
+          '分页参数非法：limit/maxPartChars 必须是正整数，order 必须是 asc|desc',
       });
       return;
     }
@@ -1967,7 +1979,12 @@ export class ExecServer {
       const body: SessionMessagesResponsePayload = { sessionId, messages };
       sendJson(res, 200, body);
       this.logger.info(
-        `[exec] session messages -> ${messages.length} 条 (session=${sessionId})`,
+        `[exec] session messages -> ${messages.length} 条` +
+          ` (session=${sessionId}` +
+          (query.maxPartChars !== undefined
+            ? `, maxPartChars=${query.maxPartChars}`
+            : '') +
+          ')',
       );
     } catch (err) {
       this.sendDriverError(res, err, 'session messages');
@@ -2065,7 +2082,23 @@ export class ExecServer {
     sessionId: string,
     query: SessionMessagesQuery,
   ): Promise<DriverMessage[]> {
-    return this.driver.getMessages(sessionId, query);
+    // maxPartChars 是 worker 出口的截断参数，**不下发**给驱动（驱动只认分页三参）；
+    // 未传时把原 query 原样透传，保持既有行为逐字节不变。
+    const driverQuery =
+      query.maxPartChars === undefined
+        ? query
+        : {
+            ...(query.limit !== undefined ? { limit: query.limit } : {}),
+            ...(query.order ? { order: query.order } : {}),
+            ...(query.cursor ? { cursor: query.cursor } : {}),
+          };
+    const messages = await this.driver.getMessages(sessionId, driverQuery);
+    if (query.maxPartChars === undefined) {
+      // 未传参数：完整返回（worker-dispatcher 轮询等调用方依赖完整内容）
+      return messages;
+    }
+    // 在 worker 出口做与服务端 capPartPayloads 同口径的截断（纯函数，不 mutate 驱动结果）
+    return capMessageParts(messages, { maxChars: query.maxPartChars });
   }
 
   /**

@@ -161,4 +161,20 @@ ENV AGENT_BROWSER_ARGS=--no-sandbox,--disable-gpu
 # 可选：stream/dashboard 端口（默认 OS 随机，此处不固定，避免多实例冲突）
 # ENV AGENT_BROWSER_STREAM_PORT=9223
 
+# ── PID1 reaper（僵尸进程修复，2026-11-10）──────────────────────────────────
+# 症状（实测）：容器 PID1 = node dist/index.js 时，agent-browser/Chrome 的子进程
+# 在父进程退出后会被 reparent 到 PID1；它们随后退出时 node 不会 wait()，形成
+# `Z`（defunct）僵尸（PPID=1）。一次「打开→截图→关闭」稳定留下约 20 个，
+# 且不会随 daemon 关闭而消失（RSS=0 但 PID 表占位，最终打满容器 pid cgroup）。
+#
+# 修复：用 tini 作为 PID1（--init 语义的镜像内等价物，不依赖编排层传 --init）：
+# tini 会回收所有 reparent 到它的孤儿进程，僵尸被立即 reaped。compose 另加
+# `init: true` 双保险；k8s/裸 docker run 只依赖本 ENTRYPOINT。
+# 安装放**最后**（独立小层）：不弄脏前面 apt/chrome/OMO 大层缓存。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tini && \
+    rm -rf /var/lib/apt/lists/*
+
+# 注意：ENTRYPOINT 只加 tini，命令仍是 CMD，`docker run <image> <cmd>` 仍可覆盖命令。
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "dist/index.js"]

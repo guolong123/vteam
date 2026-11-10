@@ -48,8 +48,9 @@ export interface PlatformMcpToolContext {
  * 已知启发式局限：同一 worker 并发多会话时最近会话回填可能误归属（与 `channel_send`
  * 既有取舍一致）；显式传参恒优先。
  * delivery-family 工具（doclib、task_context、submit_artifact、issue 系列、
- * task_transition、team_view、my_profile 等）保持 taskId 必填，不用此语义
- * （question_confirm 为双作用域：taskId/teamId 双可选，见其 schema）.
+ * task_transition、my_profile 等）保持 taskId 必填，不用此语义
+ * （question_confirm 为双作用域：taskId/teamId 双可选，见其 schema；
+ * team_view 同为双作用域：taskId/teamId 至少一个，见其 schema）。
  */
 const OPTIONAL_TASK_ID_DESC =
   '任务 ID（可选；缺省时服务端按 worker 最近会话回填，taskId 优先，无 taskId 时用 teamId 定位团队会话；回填不到 → 403）';
@@ -556,8 +557,24 @@ export const memoryMergeSchema = z.object({
 
 type MemoryMergeArgs = z.infer<typeof memoryMergeSchema>;
 
+/**
+ * team_view 入参（task-4 扩展）：任务/团队双作用域 + 可选外部用户关键字。
+ *
+ * - taskId 与 teamId **至少传一个**：任务内传 taskId（团队由任务归属推导）；
+ *   团队直聊传 teamId；两者同传时 taskId 优先（团队取任务归属）。
+ * - 双空时 controller 仍按「worker 最近会话」回填（全局双空语义）；回填不到 →
+ *   上层 fail-closed，直接到 service 时由 service 抛 400 并提示该传哪个参数。
+ * - externalUserName 只过滤返回的 externalUsers，不影响 members。
+ */
 export const teamViewSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  externalUserName: z
+    .string()
+    .optional()
+    .describe(
+      '外部渠道用户姓名/展示名关键字（模糊过滤返回的 externalUsers；可选，不传返回最近活跃的全部外部用户）',
+    ),
 });
 
 type TeamViewArgs = z.infer<typeof teamViewSchema>;
@@ -1433,7 +1450,7 @@ function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
     {
       name: 'team_view',
       description:
-        '查询任务团队的实时视图（只读，无需 selfInstanceId）：成员列表（实例 id/agent id/别名/角色/序号/主标注 + 会话实时状态 sessionStatus/sessionId）。返回 {taskId, members: [{id, agentId, alias, role, seq, main, sessionStatus, sessionId}]}。',
+        '查询团队实时视图（只读，无需 selfInstanceId）：成员列表（实例 id/agent id/别名/角色/序号/主标注 + 会话实时状态 sessionStatus/sessionId）+ 外部渠道用户档案 externalUsers（id/name/displayName/position/company/contact/source/externalId/messageCount/lastMessageAt；只含在该团队群聊发过消息的用户，最近发言倒序，上限 50）。传参：任务内传 taskId（团队由任务归属推导），团队直聊传 teamId，至少传一个（同传时 taskId 优先）；externalUserName 可按姓名/展示名模糊过滤 externalUsers。需要了解外部渠道用户（企微等）的姓名/岗位/所属公司/联系方式时调用本工具查看 externalUsers，不要凭展示名猜测。返回 {taskId, teamId, pendingReceipts, members, externalUsers}。',
       inputSchema: teamViewSchema,
       handler: (ctx, args) => service.teamView(ctx, args as TeamViewArgs),
     },

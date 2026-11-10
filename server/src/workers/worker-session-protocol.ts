@@ -260,6 +260,14 @@ export interface SessionMessagesQuery {
   order?: 'asc' | 'desc';
   /** 游标（缺省 = 从头翻）。 */
   cursor?: string;
+  /**
+   * part 大载荷截断阈值（字符，正整数；缺省 = 不截断，返回完整 parts）。
+   *
+   * perf（session-history）：服务端最终响应本来就会 capPartPayloads 截断到
+   * 2KB/字符串，把这个阈值前移给 worker 出口可避免跨节点传输 80MB 后丢弃 99.7%；
+   * 不传时行为逐字节不变（worker-dispatcher 轮询需要完整内容）。
+   */
+  maxPartChars?: number;
 }
 
 /** GET /sessions/:id/messages 响应体（读会话消息）。 */

@@ -1385,7 +1385,8 @@ describe('ChatService', () => {
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: { baseUrl: 'http://worker' } },
         'ses_abc',
-        { limit: 100, order: 'desc' },
+        // perf：首屏把 part 截断阈值下发给 worker（与 ChatService.MAX_PART_STRING_CHARS 同源）
+        { limit: 100, order: 'desc', maxPartChars: 2048 },
       );
       expect(result.source).toBe('session');
       expect(result.nextCursor).toBeNull();
@@ -1745,7 +1746,8 @@ describe('ChatService', () => {
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: {} },
         'ses_abc',
-        { limit: 100, order: 'desc' },
+        // perf：首屏把 part 截断阈值下发给 worker（与 ChatService.MAX_PART_STRING_CHARS 同源）
+        { limit: 100, order: 'desc', maxPartChars: 2048 },
       );
       expect(result.source).toBe('session');
       expect(
@@ -1808,7 +1810,8 @@ describe('ChatService', () => {
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         expect.anything(),
         'ses_abc',
-        { limit: 100, order: 'desc' },
+        // perf：首屏把 part 截断阈值下发给 worker（与 ChatService.MAX_PART_STRING_CHARS 同源）
+        { limit: 100, order: 'desc', maxPartChars: 2048 },
       );
       expect(result.source).toBe('session');
     });
@@ -2081,7 +2084,7 @@ describe('ChatService', () => {
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: {} },
         'ses_abc',
-        { limit: 20, order: 'desc' },
+        { limit: 20, order: 'desc', maxPartChars: 2048 },
       );
     });
 

@@ -25,11 +25,17 @@ import {
   type ConversationItemDto,
 } from "@/src/api/conversations";
 import { membersApi, type MemberDetailDto, type MemberDto } from "@/src/api/members";
+import { externalUsersApi } from "@/src/api/external-users";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
 import { resolveMemberPresence, PRESENCE_COLOR } from "@/lib/member-presence";
 import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
+import {
+  ExternalUserConversation,
+  ExternalUserList,
+  ExternalUserProfilePanel,
+} from "@/src/features/external-users";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -75,8 +81,15 @@ function ChatPageContent() {
   const [showDmPicker, setShowDmPicker] = useState(false);
   const [dmSearch, setDmSearch] = useState("");
   const [search, setSearch] = useState("");
-  const [convFilter, setConvFilter] = useState<"all" | "group" | "dm">(() =>
-    selected.startsWith("dm:") ? "dm" : "group",
+  // 外部用户是第 4 个 Tab：直接打开 ?c=external:<id> 时初始就落在该 Tab。
+  const [convFilter, setConvFilter] = useState<
+    "all" | "group" | "dm" | "external"
+  >(() =>
+    selected.startsWith("dm:")
+      ? "dm"
+      : selected.startsWith("external:")
+        ? "external"
+        : "group",
   );
   const [filterMemberId, setFilterMemberId] = useState<string | null>(null);
   /** 右栏视图：full = 旧完整任务面板（默认，保留全部既有功能）；compact = 原型三 Tab。 */
@@ -99,9 +112,28 @@ function ChatPageContent() {
     [conversationsQuery.data],
   );
 
+  // 外部用户目录（契约 3.3.4）：左侧「外部用户」Tab 的数据源；
+  // 入站消息会自动新增/推进目录，10s 轮询足够跟手。
+  const externalUsersQuery = useQuery({
+    queryKey: ["external-users", "chat"],
+    queryFn: () => externalUsersApi.list({ page: 1, pageSize: 100 }),
+    enabled: !!user?.id,
+    refetchInterval: 10000,
+  });
+  const externalUsers = useMemo(
+    () => externalUsersQuery.data?.items ?? [],
+    [externalUsersQuery.data],
+  );
+  const externalTotal = externalUsersQuery.data?.total ?? 0;
+
   // 无选中会话时自动落到第一条（仅替换 URL，不新增历史栈）。
   useEffect(() => {
     if (selected || items.length === 0) return;
+    // 用户已经切到「外部用户」Tab 时不要再强选会话：目录和会话是两个浏览面，
+    // 自动选中会经下方 URL→Tab 同步 effect 把 Tab 弹回「群聊」，外部用户列表
+    // 随之卸载（e2e 实测：点行瞬间元素被 detach、点了没反应）。切回群聊/成员
+    // Tab 时 convFilter 变化会重新触发本 effect，自动选中照旧。
+    if (convFilter === "external") return;
     // 默认落在群聊（成员多时「全部」列表过长）；没有群时再退第一条。
     const first =
       convFilter === "group"
@@ -120,10 +152,18 @@ function ChatPageContent() {
     if (!selected || prev === selected) return;
     if (selected.startsWith("dm:")) setConvFilter("dm");
     else if (selected.startsWith("group:")) setConvFilter("group");
+    else if (selected.startsWith("external:")) setConvFilter("external");
   }, [selected]);
 
-  const active =
-    items.find((item) => item.id === selected) ?? items[0] ?? null;
+  /** 外部用户选中态：?c=external:<id>（"external:" 共 9 个字符）。 */
+  const externalUserId = selected.startsWith("external:")
+    ? selected.slice("external:".length)
+    : "";
+  // external 选中时 active 必须显式置空：否则会回落到 items[0]，
+  // 中间区被误渲染成群聊/私聊，外部用户消息流根本轮不到。
+  const active = externalUserId
+    ? null
+    : items.find((item) => item.id === selected) ?? items[0] ?? null;
   const isGroup = active?.type === "group";
   const teamId = isGroup ? active?.id.replace("group:", "") ?? "" : "";
   const memberId = !isGroup ? active?.id.replace("dm:", "") ?? "" : "";
@@ -405,6 +445,15 @@ function ChatPageContent() {
       (item.lastMessage?.text ?? "").toLowerCase().includes(keyword)
     );
   });
+  /** 外部用户搜索（契约 3.3.4）：客户端按姓名/渠道名/公司/岗位/联系方式过滤。 */
+  const filteredExternalUsers = useMemo(() => {
+    if (!keyword) return externalUsers;
+    return externalUsers.filter((item) =>
+      [item.name, item.displayName, item.company, item.position, item.contact]
+        .filter((value): value is string => !!value)
+        .some((value) => value.toLowerCase().includes(keyword)),
+    );
+  }, [externalUsers, keyword]);
   const pinnedItems = filteredItems.filter(
     (item) => item.type === "group" && item.pinned,
   );
@@ -467,7 +516,7 @@ function ChatPageContent() {
             data-testid="conversation-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索群聊 / 成员"
+            placeholder="搜索群聊 / 成员 / 外部用户"
             style={{ width: "100%", boxSizing: "border-box", padding: `6px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, fontFamily: fontFamily.body, outline: "none", backgroundColor: neutral[50] }}
           />
           <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
@@ -475,6 +524,7 @@ function ChatPageContent() {
               { key: "all", label: "全部", count: items.length },
               { key: "group", label: "群聊", count: groupCount },
               { key: "dm", label: "成员", count: dmCount },
+              { key: "external", label: "外部用户", count: externalTotal },
             ] as const).map((tab) => (
               <button
                 key={tab.key}
@@ -489,7 +539,26 @@ function ChatPageContent() {
           </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `0 8px ${space.md}px` }}>
-          {conversationsQuery.isPending ? (
+          {convFilter === "external" ? (
+            externalUsersQuery.isPending ? (
+              <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
+            ) : filteredExternalUsers.length === 0 ? (
+              <div data-testid="external-user-empty" style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm, lineHeight: 1.7 }}>
+                {externalUsers.length === 0
+                  ? "暂无外部用户：外部渠道（企微等）用户发消息后会自动汇总到这里。"
+                  : "没有匹配的外部用户"}
+              </div>
+            ) : (
+              <ExternalUserList
+                items={filteredExternalUsers}
+                activeId={externalUserId || null}
+                onSelect={(id) => {
+                  setSendError(null);
+                  router.replace(`/chat?c=${encodeURIComponent(`external:${id}`)}`);
+                }}
+              />
+            )
+          ) : conversationsQuery.isPending ? (
             <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
           ) : filteredItems.length === 0 ? (
             <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>
@@ -703,6 +772,12 @@ function ChatPageContent() {
             onReset={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }}
             resetting={resetSessionMutation.isPending}
           />
+        </div>
+      ) : externalUserId ? (
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
+          {/* 外部用户：中间只读消息回看，右侧资料维护（布局同私聊分支） */}
+          <ExternalUserConversation userId={externalUserId} />
+          <ExternalUserProfilePanel userId={externalUserId} />
         </div>
       ) : (
       <>

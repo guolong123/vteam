@@ -118,6 +118,12 @@ type MessageRow = {
   createdAt: Date;
 };
 
+/**
+ * session-history 分段耗时告警阈值（ms）：正常 debug 记录 worker 拉取/DB 合并/total，
+ * 超过该值升 warn（线上定位「慢在跨节点传输还是 DB 合并」）。
+ */
+const SESSION_HISTORY_SLOW_MS = 1500;
+
 const TEAM_MEMBER_SELECT = {
   id: true,
   agentId: true,
@@ -546,13 +552,30 @@ export class ChatService {
        * ⇒ 只取「最近窗口」即可（补取的量按 limit 的 4 倍留余量，避免合并后被截断）。
        * 翻更老页（beforeId 非空）**完全不碰 worker**：历史真源是平台 messages 表。
        */
+      const startedAt = Date.now();
       let sessionItems: Array<Record<string, unknown>> = [];
+      let workerFetchMs = 0;
+      let workerMessageCount = 0;
       if (!beforeId) {
+        const workerStartedAt = Date.now();
         const raw = await this.workerClient.getMessages(
           worker,
           session.instanceRef,
-          { limit: Math.min(limit * 2, 200), order: 'desc' },
+          {
+            limit: Math.min(limit * 2, 200),
+            order: 'desc',
+            /**
+             * perf（2026-11-10 线上实测 14.23s / 619KB）：worker 原样返回 80MB 级
+             * parts（v2 驱动映射后约 2× 膨胀），服务端 `capPartPayloads` 收到后才
+             * 截断到 2KB/字符串——99.7% 传输字节被丢弃，跨节点时传输/JSON parse
+             * 就是 10s+。把同一阈值下发给 worker，在出口就截断（text 正文不截断），
+             * 服务端 cap 保留为兜底。
+             */
+            maxPartChars: ChatService.MAX_PART_STRING_CHARS,
+          },
         );
+        workerFetchMs = Date.now() - workerStartedAt;
+        workerMessageCount = raw.length;
         // 群聊频道：本条历史的「频道」语义换成该成员的席位——
         // 作者归属（senderInstanceId）必须落在被查看的成员上，而不是群聊频道本身
         // （群聊频道没有 teamMemberId，原样传入会让所有 agent 消息的 senderInstanceId
@@ -566,14 +589,29 @@ export class ChatService {
           session,
         );
       }
-      return {
-        ...(await this.mergeSessionWithPlatform(channelId, sessionItems, {
-          limit,
-          beforeId,
-        })),
-        source:
-          sessionItems.length > 0 ? ('session' as const) : ('db' as const),
-      };
+      const mergeStartedAt = Date.now();
+      const merged = await this.mergeSessionWithPlatform(
+        channelId,
+        sessionItems,
+        { limit, beforeId },
+      );
+      const dbMergeMs = Date.now() - mergeStartedAt;
+      const totalMs = Date.now() - startedAt;
+      const source =
+        sessionItems.length > 0 ? ('session' as const) : ('db' as const);
+      // 分段耗时：worker 拉取（含跨节点传输/JSON parse）与 DB 合并分开记，
+      // 线上可直接判断慢在传输还是合并；>1500ms 升 warn 便于检索。
+      const timingLog =
+        `[session-history] channel=${channelId} teamMember=${teamMemberId}` +
+        ` limit=${limit} source=${source} workerMs=${workerFetchMs}` +
+        ` workerMessages=${workerMessageCount} dbMergeMs=${dbMergeMs}` +
+        ` totalMs=${totalMs}`;
+      if (totalMs > SESSION_HISTORY_SLOW_MS) {
+        this.logger.warn(`${timingLog} (slow)`);
+      } else {
+        this.logger.debug(timingLog);
+      }
+      return { ...merged, source };
     } catch (err) {
       // worker 不可达/serve 异常 → 回退平台表（历史主数据源降级，不发错误阻塞读历史）
       this.logger.warn(
@@ -825,9 +863,14 @@ export class ChatService {
    * 既慢又占内存。列表页只需要「能看出这步干了什么」，完整内容可以按需拉。
    * 截断标记写进文本本身（`…（已截断）`），前端无需改渲染即可让用户看到"这里被截了"。
    */
-  /** 单个字符串字段上限（字符）。前端工具卡本身也只展示前 2000 字符（TOOL_IO_MAX_CHARS），
-   *  列表页没必要为看不到的内容付流量。 */
-  private static readonly MAX_PART_STRING_CHARS = 2 * 1024;
+  /**
+   * 单个字符串字段上限（字符）。前端工具卡本身也只展示前 2000 字符（TOOL_IO_MAX_CHARS），
+   * 列表页没必要为看不到的内容付流量。
+   *
+   * public：`getSessionHistory` 首屏把它作为 `maxPartChars` 下发给 worker，让截断
+   * 前移到 worker 出口（同一阈值，避免 80MB 原始 parts 跨节点传输后丢弃 99.7%）。
+   */
+  static readonly MAX_PART_STRING_CHARS = 2 * 1024;
   /** 数组型载荷（如 tool 的 `state.content` 结果块）最多保留多少项。 */
   private static readonly MAX_PART_ARRAY_ITEMS = 20;
   /** 递归深度上限（防异常深对象）。 */
@@ -1117,7 +1160,16 @@ export class ChatService {
     channelId: string,
     userId: string,
     dto: CreateMessageDto,
-    actor?: { senderType: string; senderId: string | null },
+    actor?: {
+      senderType: string;
+      senderId: string | null;
+      /**
+       * 外部渠道用户目录指针（external-users 契约 §2.5）：入站层 resolveInboundIdentity
+       * 得到 eu_ 主键后经 actor 传入，落库到 messages.external_user_id。DTO 形状不变
+       * （响应仍走 toMessageDto，不暴露该列）
+       */
+      externalUserId?: string | null;
+    },
   ) {
     const senderType = actor?.senderType ?? SENDER_TYPE.user;
     const senderId = actor?.senderId !== undefined ? actor.senderId : userId;
@@ -1386,6 +1438,10 @@ export class ChatService {
         mentions: mentionsStored as Prisma.InputJsonValue,
         status: MESSAGE_STATUS.sent,
         ...(dto.externalChatId ? { externalChatId: dto.externalChatId } : {}),
+        // 外部渠道用户目录指针（仅入站 external 消息有值；其余 actor 不随带该字段）
+        ...(actor?.externalUserId
+          ? { externalUserId: actor.externalUserId }
+          : {}),
         ...(storedAttachments ? { attachments: storedAttachments } : {}),
         ...legacyAttachmentFields(attachments),
       },

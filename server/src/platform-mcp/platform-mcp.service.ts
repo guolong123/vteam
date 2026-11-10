@@ -24,6 +24,10 @@ import { IdGeneratorService } from '../common/id-generator';
 import { WECOM_OPERATOR_TTL_MS } from '../message-channels/adapters/wecom-aibot.adapter';
 import { roleKeyOf } from '../common/agent-role-label';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  ExternalUserDirectoryItem,
+  listTeamExternalUsers,
+} from '../external-users/external-users.directory';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
   DispatchExecutionKind,
@@ -5182,19 +5186,27 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * team_view：任务团队实时视图（只读，vteam-team-collaboration Todo 3）。
-   * 与 task_context 的差异增量：会话实时状态（sessionStatus/sessionId，复用 toTaskDto
-   * instances 构造逻辑）+ 全量角色视图。
-   * 1. 归属校验（无 selfInstanceId，仅校验 worker 有该任务会话——对齐 memoryList 只读先例）。
-   * 2. task 行校验存在（404）。
-   * 3. 并行查：task_agents（未 removed，含 agent 关联 + 各自 sessions）。
-   * 4. members：{id, agentId, alias, role, seq, main, sessionStatus, sessionId}。
+   * team_view：团队实时视图（只读；task-4 扩展为任务/团队双作用域 + 外部用户档案）。
+   *
+   * 与 task_context 的差异增量：会话实时状态（sessionStatus/sessionId，复用
+   * toTaskDto instances 构造逻辑）+ 全量角色视图 + 外部渠道用户档案 externalUsers。
+   *
+   * 1. 上下文（双作用域）：taskId 优先（团队由任务归属推导）；无 taskId 时 teamId
+   *    走团队维度；两者都缺 → 400（明确提示「任务内传 taskId / 团队直聊传 teamId」）。
+   *    tm_/t_ 前缀误传、跨任务/跨团队、冒充校验沿用 resolveExecContext
+   *    （内部 assertWorkerTask / assertWorkerTeam），与 team-free 工具同一套语义。
+   * 2. 团队可见性：任务未归属团队（teamId=null）→ members/externalUsers 均为空。
+   * 3. 并行查：团队主成员标注、未删除席位（含角色）、团队外部用户目录摘要
+   *    （listTeamExternalUsers：只含有消息的外部用户，最近发言倒序 ≤50）。
+   * 4. 返回 {taskId, teamId, pendingReceipts, members, externalUsers}；team 模式
+   *    pendingReceipts 恒零（无任务账本）。
    */
   async teamView(
     ctx: PlatformMcpContext,
-    args: { taskId: string },
+    args: { taskId?: string; teamId?: string; externalUserName?: string },
   ): Promise<{
-    taskId: string;
+    taskId: string | null;
+    teamId: string | null;
     pendingReceipts: { pending: number; total: number };
     members: Array<{
       id: string;
@@ -5206,29 +5218,49 @@ export class PlatformMcpService implements OnModuleInit {
       sessionStatus: string | null;
       sessionId: string | null;
     }>;
+    /** 外部渠道用户档案（只含该团队群聊里发过消息的用户；最近发言倒序 ≤50）。 */
+    externalUsers: ExternalUserDirectoryItem[];
   }> {
-    await this.assertWorkerTask(ctx, args.taskId);
-    const task = await this.prisma.task.findUnique({
-      where: { id: args.taskId },
-      select: { id: true, teamId: true },
-    });
-    if (!task) {
-      throw new NotFoundException({
-        code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
-        message: '任务不存在',
-      });
+    const hasTaskId = typeof args.taskId === 'string' && args.taskId.length > 0;
+    const hasTeamId = typeof args.teamId === 'string' && args.teamId.length > 0;
+    if (!hasTaskId && !hasTeamId) {
+      // 双空：controller 的双空回填若也没解析出上下文，才会走到这里——
+      // 报错必须告诉模型「该补哪个参数」，而不是笼统的「需要任务上下文」。
+      throw new BadRequestException(
+        '该工具需要任务或团队上下文：任务内请传 taskId，团队直聊请传 teamId（至少传一个）',
+      );
     }
-    const viewTeamId = (task as { teamId?: string | null }).teamId ?? null;
-    const viewTeam = viewTeamId
-      ? await this.prisma.team.findUnique({
-          where: { id: viewTeamId },
-          select: { mainAgentMemberId: true },
-        })
-      : null;
-    const viewMainId =
-      (viewTeam as { mainAgentMemberId?: string | null } | null)
-        ?.mainAgentMemberId ?? null;
-    const [agentRows] = await Promise.all([
+    // 任务/团队双作用域解析：tm_/t_ 前缀误传 400 + taskId 优先 + 归属/防冒充校验。
+    const exec = await this.resolveExecContext(ctx, {
+      ...(hasTaskId ? { taskId: args.taskId } : {}),
+      ...(hasTeamId ? { teamId: args.teamId } : {}),
+    });
+    let taskId: string | null = null;
+    let viewTeamId: string | null = null;
+    if (exec.kind === 'task') {
+      const task = await this.prisma.task.findUnique({
+        where: { id: exec.taskId },
+        select: { id: true, teamId: true },
+      });
+      if (!task) {
+        // assertWorkerTask 内 teamIdOfTask 已对不存在任务抛 404；此处防并发删除窗口。
+        throw new NotFoundException({
+          code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+          message: '任务不存在',
+        });
+      }
+      taskId = exec.taskId;
+      viewTeamId = (task as { teamId?: string | null }).teamId ?? null;
+    } else {
+      viewTeamId = exec.teamId;
+    }
+    const [viewTeam, agentRows, externalUsers] = await Promise.all([
+      viewTeamId
+        ? this.prisma.team.findUnique({
+            where: { id: viewTeamId },
+            select: { mainAgentMemberId: true },
+          })
+        : Promise.resolve(null),
       viewTeamId
         ? this.prisma.teamMember.findMany({
             where: { teamId: viewTeamId },
@@ -5243,7 +5275,16 @@ export class PlatformMcpService implements OnModuleInit {
             },
           })
         : Promise.resolve([]),
+      viewTeamId
+        ? listTeamExternalUsers(this.prisma, viewTeamId, {
+            keyword: args.externalUserName ?? null,
+            limit: 50,
+          })
+        : Promise.resolve([] as ExternalUserDirectoryItem[]),
     ]);
+    const viewMainId =
+      (viewTeam as { mainAgentMemberId?: string | null } | null)
+        ?.mainAgentMemberId ?? null;
     const viewSessions =
       agentRows.length > 0
         ? await this.prisma.session.findMany({
@@ -5258,9 +5299,13 @@ export class PlatformMcpService implements OnModuleInit {
       (viewSessions ?? []).map((x: any) => [x.teamMemberId, x]),
     );
     return {
-      taskId: task.id,
-      // todo5 待回执看板口径（31 篇 §3.4）：n/N 计数，仅计数不做分析页。
-      pendingReceipts: await this.pendingReceiptCounts(task.id),
+      taskId,
+      teamId: viewTeamId,
+      // todo5 待回执看板口径（31 篇 §3.4）：n/N 计数，仅计数不做分析页；
+      // team 模式无任务账本 → 恒零。
+      pendingReceipts: taskId
+        ? await this.pendingReceiptCounts(taskId)
+        : { pending: 0, total: 0 },
       members: agentRows.map((r) => {
         const vs = viewSessionByMember.get(r.id) as
           { id: string; status: string } | undefined;
@@ -5276,6 +5321,7 @@ export class PlatformMcpService implements OnModuleInit {
           sessionId: vs?.id ?? null,
         };
       }),
+      externalUsers,
     };
   }
 

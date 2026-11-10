@@ -29,6 +29,7 @@ import { MessageChannelsModule } from './message-channels/message-channels.modul
 import { NotificationChannelsModule } from './notifications/notification-channels.module';
 import { ConversationsModule } from './conversations/conversations.module';
 import { MembersModule } from './members/members.module';
+import { ExternalUsersModule } from './external-users/external-users.module';
 import { TeamsModule } from './teams/teams.module';
 import { TimersModule } from './timers/timers.module';
 import { UsageModule } from './usage/usage.module';
@@ -54,6 +55,7 @@ import { StatsModule } from './stats/stats.module';
     UsersModule,
     AgentsModule,
     MembersModule,
+    ExternalUsersModule,
     ConversationsModule,
     AgentRolesModule,
     TasksModule,

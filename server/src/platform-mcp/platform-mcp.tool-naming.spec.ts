@@ -133,7 +133,8 @@ describe('platform-mcp tool naming contract', () => {
         teamId: OPTIONAL,
         taskId: OPTIONAL,
       },
-      team_view: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: REQUIRED },
+      // task-4：team_view 改为任务/团队双作用域（至少一个，service 层校验）
+      team_view: { selfInstanceId: ABSENT, teamId: OPTIONAL, taskId: OPTIONAL },
       my_profile: {
         selfInstanceId: REQUIRED,
         teamId: ABSENT,

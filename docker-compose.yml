@@ -136,6 +136,10 @@ services:
     build: ./worker
     container_name: vteam-compose-worker
     restart: unless-stopped
+    # PID1 reaper 双保险：镜像内已有 tini ENTRYPOINT（k8s/裸 docker run 路径靠它），
+    # compose 再显式开 init（docker-init），防有人用旧镜像/自定义 entrypoint 时复发
+    # 「agent-browser 每次操作留下 ~20 个 Z 僵尸（PPID=1）」。
+    init: true
     environment:
       X_WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
       SERVER_URL: http://server:3000

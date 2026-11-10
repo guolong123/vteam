@@ -141,5 +141,13 @@ export default defineConfig({
       testMatch: /member-history\.spec\.ts/,
       use: { storageState: ".auth/user.json" },
     },
+    {
+      // 外部渠道用户管理（external-users 契约 §4）：纯 API 造数（webhook 入站）→
+      // 真后端 + 真 MySQL 端到端；与 pages 同属数据型 E2E，复用 setup 登录态。
+      name: "external-users",
+      testMatch: /external-users\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+      dependencies: ["setup"],
+    },
   ],
 });

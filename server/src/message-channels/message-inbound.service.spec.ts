@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MessageDeliveryService } from './message-delivery.service';
 import { ChatService } from '../chat/chat.service';
 import { QuestionsService } from '../questions/questions.service';
+import { ExternalUsersService } from '../external-users/external-users.service';
 import { MessageRegistryService } from './message-registry.service';
 import { SENDER_TYPE, CHANNEL_TYPE } from '../common/constants/event.constants';
 import { QUESTION_PENDING_TTL_MS } from '../questions/questions.constants';
@@ -24,6 +25,11 @@ describe('MessageInboundService', () => {
   };
   let chatService: { createMessage: jest.Mock };
   let questionsService: { reply: jest.Mock };
+  /** 外部用户目录 mock（默认 resolve 返回 null：既有用例的 actor 形状保持不变）。 */
+  let externalUsers: {
+    resolveInboundIdentity: jest.Mock;
+    touchActivity: jest.Mock;
+  };
   let registry: {
     bindInboundDelegate: jest.Mock;
     get: jest.Mock;
@@ -77,6 +83,12 @@ describe('MessageInboundService', () => {
       requestStop: jest.fn().mockResolvedValue(undefined),
       updateChannelRuntime: jest.fn().mockResolvedValue(undefined),
     };
+    // 默认 null：入站沉淀未命中（无身份）——既有 post_message 用例的
+    // createMessage actor 形状因此保持两字段，不被新依赖改变。
+    externalUsers = {
+      resolveInboundIdentity: jest.fn().mockResolvedValue(null),
+      touchActivity: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -86,6 +98,7 @@ describe('MessageInboundService', () => {
         { provide: ChatService, useValue: chatService },
         { provide: QuestionsService, useValue: questionsService },
         { provide: MessageRegistryService, useValue: registry },
+        { provide: ExternalUsersService, useValue: externalUsers },
       ],
     }).compile();
 
@@ -598,6 +611,145 @@ describe('MessageInboundService', () => {
         'rejected',
         expect.objectContaining({ error: expect.stringContaining('unknown') }),
       );
+    });
+  });
+
+  describe('submitInbound post_message 外部用户沉淀（external-users 契约 §2.5）', () => {
+    const baseChannel = {
+      id: channelId,
+      name: 'ch',
+      type: 'generic_webhook',
+      config: {},
+      secrets: {},
+      enabled: true,
+    };
+
+    it('落库前 resolveInboundIdentity，把 externalUserId 透传给 createMessage，成功后 touchActivity', async () => {
+      prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: groupChannelId,
+        type: 'team_group',
+        teamId,
+      });
+      externalUsers.resolveInboundIdentity.mockResolvedValue({
+        id: 'eu_0000000001',
+        externalId: 'id:GuoLong',
+      });
+
+      const res = await service.submitInbound(channelId, [
+        {
+          kind: 'post_message',
+          text: 'hello',
+          dedupKey: 'k1',
+          senderExternalId: 'GuoLong',
+          senderName: '企微用户-Song',
+        } as any,
+      ]);
+
+      // 渠道原始身份 → 目录身份（source 取 message_channels.type）
+      expect(externalUsers.resolveInboundIdentity).toHaveBeenCalledWith({
+        externalId: 'GuoLong',
+        displayName: '企微用户-Song',
+        source: 'generic_webhook',
+      });
+      // createMessage 的 actor 新增 externalUserId（DTO 形状不变）
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        groupChannelId,
+        '__external__',
+        expect.objectContaining({ text: expect.any(String) }),
+        expect.objectContaining({
+          senderType: SENDER_TYPE.external,
+          senderId: '企微用户-Song',
+          externalUserId: 'eu_0000000001',
+        }),
+      );
+      // 一次入站只 touch 一次
+      expect(externalUsers.touchActivity).toHaveBeenCalledTimes(1);
+      expect(externalUsers.touchActivity).toHaveBeenCalledWith('eu_0000000001');
+      expect(res.results[0].ok).toBe(true);
+    });
+
+    it('目录沉淀异常不阻断入站：消息照常落库、actor 不带 externalUserId、不 touch', async () => {
+      prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: groupChannelId,
+        type: 'team_group',
+        teamId,
+      });
+      externalUsers.resolveInboundIdentity.mockRejectedValue(
+        new Error('db down'),
+      );
+
+      const res = await service.submitInbound(channelId, [
+        {
+          kind: 'post_message',
+          text: 'hello',
+          dedupKey: 'k2',
+          senderExternalId: 'GuoLong',
+        } as any,
+      ]);
+
+      expect(externalUsers.resolveInboundIdentity).toHaveBeenCalledTimes(1);
+      expect(chatService.createMessage).toHaveBeenCalledTimes(1);
+      const actor = chatService.createMessage.mock.calls[0][3];
+      expect(actor).not.toHaveProperty('externalUserId');
+      expect(externalUsers.touchActivity).not.toHaveBeenCalled();
+      expect(res.results[0].ok).toBe(true);
+    });
+
+    it('无身份（resolve 返回 null）不 touch，消息 actor 形状不变', async () => {
+      prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: groupChannelId,
+        type: 'team_group',
+        teamId,
+      });
+      // 默认 mock 即返回 null
+
+      await service.submitInbound(channelId, [
+        { kind: 'post_message', text: 'hi' } as any,
+      ]);
+
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        groupChannelId,
+        '__external__',
+        { text: 'hi' },
+        { senderType: SENDER_TYPE.external, senderId: null },
+      );
+      expect(externalUsers.touchActivity).not.toHaveBeenCalled();
+    });
+
+    it('fan-out 到多个团队：身份只 resolve 一次，touch 只一次', async () => {
+      prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([
+        { teamId: 'tm_1' },
+        { teamId: 'tm_2' },
+      ]);
+      let seq = 0;
+      prisma.chatChannel.findFirst.mockImplementation(async () => ({
+        id: `c_${++seq}`,
+        type: 'team_group',
+      }));
+      externalUsers.resolveInboundIdentity.mockResolvedValue({
+        id: 'eu_0000000001',
+        externalId: 'id:GuoLong',
+      });
+
+      await service.submitInbound(channelId, [
+        {
+          kind: 'post_message',
+          text: 'hello',
+          dedupKey: 'k3',
+          senderExternalId: 'GuoLong',
+        } as any,
+      ]);
+
+      expect(externalUsers.resolveInboundIdentity).toHaveBeenCalledTimes(1);
+      expect(chatService.createMessage).toHaveBeenCalledTimes(2);
+      expect(externalUsers.touchActivity).toHaveBeenCalledTimes(1);
     });
   });
 

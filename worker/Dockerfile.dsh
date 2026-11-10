@@ -81,5 +81,14 @@ RUN mkdir -p /data/vteam-worker /data/dsh-home
 ARG CODE_VERSION=container-unstamped
 ENV WORKER_CODE_VERSION=${CODE_VERSION}
 
+# ── PID1 reaper（僵尸进程修复，2026-11-10）──────────────────────────────────
+# dsh worker 里 bwrap/bash/子进程同样会产生 reparent 到 PID1 的孤儿；node 作为
+# PID1 不 wait() ⇒ 僵尸累积（k8s 无法传 --init，只能由镜像 ENTRYPOINT 保证）。
+# 独立小层安装，避免弄脏前面 apt/dsh/SDK vendor 的缓存层。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tini && \
+    rm -rf /var/lib/apt/lists/*
+
 EXPOSE 4198
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "dist/index.js"]
