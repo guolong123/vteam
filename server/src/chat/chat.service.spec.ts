@@ -1661,11 +1661,16 @@ describe('ChatService', () => {
      * text + 已落库 parts。此分支复用私聊的 serve 拉取链路，按席位定位成员会话。
      */
     it('群聊 + teamMemberId → 按该席位定位会话并返回含 reasoning/tool 的历史', async () => {
-      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group, teamMemberId: null }));
+      allowAccess(
+        channelRow({ type: CHANNEL_TYPE.team_group, teamMemberId: null }),
+      );
       (prisma.session as any).findMany = jest
         .fn()
         .mockResolvedValue([boundSession({ agentId: 'a_tester' })]);
-      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
       workerClient.getMessages.mockResolvedValue(serveMessages());
       prisma.message.findMany.mockResolvedValue([]);
       (prisma as any).message.findUnique = jest.fn().mockResolvedValue(null);
