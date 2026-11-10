@@ -1306,6 +1306,27 @@ describe('ChatService', () => {
       expect(empty.items).toEqual([]);
       expect(empty.nextCursor).toBeNull();
     });
+
+    it('外部渠道消息：DTO 透出 externalUserId，供前端按目录取改名后的最新姓名', async () => {
+      allowAccess();
+      const row = messageRow({
+        id: 'm_0000000001',
+        senderType: SENDER_TYPE.external,
+        senderId: '企微用户-Yang', // 入站时的展示名快照（外部用户改名后仍是旧值）
+        externalUserId: 'eu_bk_7b3585041df6969e',
+      });
+      // 两段式查询：先 id 列表，再整行。
+      prisma.message.findMany
+        .mockResolvedValueOnce([{ id: 'm_0000000001' }])
+        .mockResolvedValueOnce([row]);
+
+      const result = await service.findMessages(channelId, userId, {} as any);
+
+      expect(result.items).toHaveLength(1);
+      // UI 身份行用该 id 查 external_users.name（新姓名），senderId 仅作兜底。
+      expect(result.items[0].externalUserId).toBe('eu_bk_7b3585041df6969e');
+      expect(result.items[0].senderId).toBe('企微用户-Yang');
+    });
   });
 
   describe('getSessionHistory（私聊历史 = serve 会话完整历史，含思考/工具）', () => {

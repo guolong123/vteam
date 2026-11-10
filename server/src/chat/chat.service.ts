@@ -107,6 +107,8 @@ type MessageRow = {
   channelId: string;
   senderType: string;
   senderId: string | null;
+  /** 外部渠道消息关联的 external_users.id；非外部消息为 null/缺省。 */
+  externalUserId?: string | null;
   senderInstanceId?: string | null;
   content: Prisma.JsonValue;
   mentions: Prisma.JsonValue | null;
@@ -2481,6 +2483,8 @@ export class ChatService {
       channelId: row.channelId,
       senderType: row.senderType,
       senderId: row.senderId,
+      /** 外部渠道消息：senderId 只是入站时展示名快照，前端按该 id 查目录取改名后的姓名。 */
+      externalUserId: row.externalUserId ?? null,
       senderInstanceId: row.senderInstanceId ?? null,
       content: this.sanitizeInjectedAgentContent(row.senderType, row.content),
       mentions: row.mentions ?? [],

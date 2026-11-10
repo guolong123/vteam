@@ -59,6 +59,9 @@ export interface RealtimeChatMessage {
   channelId: string;
   senderType: RealtimeSenderType;
   senderId: string | null;
+  /** 外部渠道消息：关联的 external_users.id（eeu_/eu_ 前缀）；非外部消息为 null。
+   *  senderId 是入站当时的展示名快照，外部用户改名后应以该 id 查目录取最新姓名。 */
+  externalUserId?: string | null;
   /** T6 实例语义：消息归属实例 id（ta_ 前缀；agent 回复精确归属，同 agent 多实例区分） */
   senderInstanceId?: string | null;
   content: RealtimeMessageContent;

@@ -39,6 +39,7 @@ import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem, type A
 import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
 import { TeamSwitcher } from "@/src/components/teams/TeamSwitcher";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
+import { stripExternalChannelPrefix } from "@/lib/strip-external-channel";
 import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRightPanel";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
 import type {
@@ -234,6 +235,9 @@ export function TeamSessionView({
   privateMemberId = null,
   /** 隐藏消息区底部「操作中…停止」内联状态条（/chat 改为头像黄点表示进行中）。 */
   hideInlineStatus = false,
+  /** 外部用户目录 id→最新姓名：外部渠道消息的 senderId 只是入站时展示名快照，
+   *  改名后应显示目录里的最新姓名（群聊身份行）。缺省时退回 senderId。 */
+  externalUserNameById = {},
 }: {
   teamId?: string;
   embedded?: boolean;
@@ -241,6 +245,7 @@ export function TeamSessionView({
   filterMemberId?: string | null;
   privateMemberId?: string | null;
   hideInlineStatus?: boolean;
+  externalUserNameById?: Record<string, string>;
 } = {}) {
   const params = useParams<{ id: string }>();
   const teamId = teamIdProp ?? params?.id ?? "";
@@ -1649,11 +1654,17 @@ export function TeamSessionView({
       "developer";
     // B5/B9：三路业务映射先解析出展示名，裸 sender/成员/实例 id 一律被过滤，
     // 全部落空时不传 author（由 MessageIdentity/ChatBubble 回落角色标签）。
+    // 外部渠道消息优先用目录里的最新姓名：senderId 是入站当时的展示名快照，
+    // 用户把外部用户改名后应显示新姓名，而不是历史快照（用户反馈的核心问题）。
+    const externalUserId = (msg as unknown as { externalUserId?: string | null }).externalUserId;
+    const externalDisplayName = isExternal
+      ? (externalUserId ? externalUserNameById[externalUserId] : undefined) ?? msg.senderId
+      : undefined;
     // 顺序：具体席位(tmm) > 任务实例 > 外部发送者 > Agent 模板名 > senderId 成员。
     const author = resolveDisplayAuthor([
       senderInstanceMember?.name,
       senderInstanceId ? instanceNameById.get(senderInstanceId) : undefined,
-      isExternal ? msg.senderId : undefined,
+      externalDisplayName,
       agent?.name,
       memberHit?.name,
     ]);
@@ -1983,7 +1994,7 @@ export function TeamSessionView({
                 return withSeparator(
                   <ChatBubble
                     key={msg.id}
-                    text={stripInjectedContext((msg.content?.text ?? "") as string)}
+                    text={stripExternalChannelPrefix(stripInjectedContext((msg.content?.text ?? "") as string))}
                     type="agent"
                     author={author}
                     role={undefined}
