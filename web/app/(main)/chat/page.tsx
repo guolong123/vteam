@@ -26,11 +26,15 @@ import {
 } from "@/src/api/conversations";
 import { membersApi, type MemberDetailDto, type MemberDto } from "@/src/api/members";
 import { externalUsersApi } from "@/src/api/external-users";
-import { teamsApi, type TeamDto } from "@/src/api/teams";
+import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
 import { stripExternalChannelPrefix } from "@/lib/strip-external-channel";
-import { resolveMemberPresence, PRESENCE_COLOR } from "@/lib/member-presence";
+import {
+  resolveMemberPresence,
+  PRESENCE_COLOR,
+  type MemberPresence,
+} from "@/lib/member-presence";
 import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
 import {
   ExternalUserConversation,
@@ -40,6 +44,7 @@ import {
 import {
   type RoleKey,
   ROLE_KEYS,
+  roles,
   neutral,
   space,
   radius,
@@ -63,6 +68,19 @@ function toRoleKey(key: string | null | undefined): RoleKey {
   return key && (ROLE_KEYS as readonly string[]).includes(key)
     ? (key as RoleKey)
     : "developer";
+}
+
+/**
+ * 顶部头像组的展示优先级：执行中(0) < 有新输出(1) < 空闲(2)。
+ * 让「谁在干活」尽量排在可见的前 5 位（见 group-header-avatars 注释）。
+ */
+function headerPresenceRank(seat: {
+  sessionStatus?: { busyState?: string; lastTurnOutcome?: string | null } | null;
+}): number {
+  const status = seat.sessionStatus;
+  if (!status) return 2;
+  if (status.busyState === "running") return 0;
+  return status.lastTurnOutcome ? 1 : 2;
 }
 
 function formatTime(iso: string): string {
@@ -178,6 +196,14 @@ function ChatPageContent() {
     queryKey: ["team", teamId],
     queryFn: () => teamsApi.get(teamId),
     enabled: !!user?.id && isGroup && !!teamId,
+    /**
+     * 席级 sessionStatus（轮流状态点数据源）必须**轮询**才能反映「正在执行」。
+     *
+     * 此前只在挂载/切换群时拉一次 ⇒ 成员开始执行后 `seat.sessionStatus` 冻结在
+     * idle，头像状态角标永远不变黄（用户反馈「成员正在工作中，头像要显示状态角标」）。
+     * directoryQuery 本就 5s 轮询，这里与之对齐；只对当前打开的群生效，开销可控。
+     */
+    refetchInterval: 5000,
   });
   const memberQuery = useQuery({
     queryKey: ["member", memberId],
@@ -425,6 +451,32 @@ function ChatPageContent() {
 
   const memberRole = toRoleKey(memberQuery.data?.role?.key ?? null);
   const team = teamQuery.data;
+
+  /**
+   * 群聊「成员视角」选中的席位：filterMemberId 是**席位 id**（tmm_）。
+   * 选中后右栏改为该成员信息面板（见 GroupMemberContextPanel），
+   * 并把 TeamSessionView 的内部团队/任务右栏让出来。
+   */
+  const selectedSeat: TeamMemberDto | null = useMemo(() => {
+    if (!filterMemberId) return null;
+    return (team?.members ?? []).find((m) => m.id === filterMemberId) ?? null;
+  }, [filterMemberId, team]);
+  /** 选中席位的状态（与成员切换条 chip 的角标同一判定来源，避免两处口径漂移）。 */
+  const selectedSeatPresence: MemberPresence | null = useMemo(() => {
+    if (!selectedSeat) return null;
+    const seatMemberSession = memberById.get(selectedSeat.memberId ?? "")?.session ?? null;
+    return resolveMemberPresence(
+      selectedSeat.sessionStatus,
+      seatMemberSession,
+      seatMemberSession?.currentTeamId && seatMemberSession.currentTeamId !== team?.id
+        ? "正在其他群执行"
+        : "正在执行",
+    );
+  }, [selectedSeat, memberById, team?.id]);
+  /** 选中席位的角色 key（复用 roleKeyById 的解析口径）。 */
+  const selectedSeatRoleKey: RoleKey = selectedSeat
+    ? toRoleKey(roleKeyById.get(selectedSeat.roleId ?? "") ?? null)
+    : "developer";
   const member = memberQuery.data;
 
   const title = active?.title ?? "会话";
@@ -627,7 +679,15 @@ function ChatPageContent() {
               </div>
               <span style={{ flex: 1 }} />
               <div data-testid="group-header-avatars" style={{ display: "flex", alignItems: "center", gap: -4, marginRight: space.sm }}>
-                {(team?.members ?? []).slice(0, 5).map((seat) => {
+                {/*
+                  只展示前 5 个席位，但**按工作状态优先排序**：否则正在执行的成员一旦排在
+                  第 6 位以后就不会出现在顶部头像组，用户看不到他头像上的黄点。
+                  （成员切换条仍完整列出全部成员。）
+                */}
+                {[...(team?.members ?? [])]
+                  .sort((a, b) => headerPresenceRank(a) - headerPresenceRank(b))
+                  .slice(0, 5)
+                  .map((seat) => {
                   const presence = resolveMemberPresence(
                     seat.sessionStatus,
                     memberById.get(seat.memberId ?? "")?.session ?? null,
@@ -725,20 +785,39 @@ function ChatPageContent() {
                 （tmm_…）的「会话运行中」——那条状态属于别的群，不该在这里展示。
                 加 key 后切群即重挂载，状态随组件一起销毁。
               */}
-              <TeamSessionView key={teamId} teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} externalUserNameById={externalUserNameById} />
+              {/*
+                成员视角下 hideRightPanel 恒为 true：右栏改由 GroupMemberContextPanel
+                承载「这个成员是谁」，团队/任务面板不再占位（否则两块信息打架）。
+              */}
+              <TeamSessionView key={teamId} teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full" || !!selectedSeat} filterMemberId={filterMemberId} externalUserNameById={externalUserNameById} />
             </div>
           </div>
 
-          {rightPanelMode === "compact" && <GroupContextPanel
-            team={team}
-            active={active}
-            tasks={teamTasks}
-            tasksLoading={teamTasksQuery.isPending}
-            roleKeyById={roleKeyById}
-            memberById={memberById}
-            filterMemberId={filterMemberId}
-            onFilterMember={(seatId: string | null) => setFilterMemberId(seatId)}
-          />}
+          {/*
+            右栏优先级：选中成员 → 成员信息面板（成员视角）；否则按面板密度显示
+            团队面板（compact）或由 TeamSessionView 内部渲染团队/任务 Tab（full）。
+          */}
+          {selectedSeat && selectedSeatPresence ? (
+            <GroupMemberContextPanel
+              seat={selectedSeat}
+              presence={selectedSeatPresence}
+              isMainAgent={team?.mainAgentMemberId === selectedSeat.id}
+              roleKey={selectedSeatRoleKey}
+              messageCount={messages.length}
+              onClose={() => setFilterMemberId(null)}
+            />
+          ) : (
+            rightPanelMode === "compact" && <GroupContextPanel
+              team={team}
+              active={active}
+              tasks={teamTasks}
+              tasksLoading={teamTasksQuery.isPending}
+              roleKeyById={roleKeyById}
+              memberById={memberById}
+              filterMemberId={filterMemberId}
+              onFilterMember={(seatId: string | null) => setFilterMemberId(seatId)}
+            />
+          )}
         </div>
       ) : memberId && dmTeamId ? (
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
@@ -1295,6 +1374,174 @@ function GroupContextPanel({
         <div style={{ fontSize: fontSize.xs, fontWeight: 700, color: neutral[700] }}>查看 Agent 会话</div>
         <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>Agent 内部推理过程不广播到群聊，仅最终回复展示。</div>
         <a href={`/chat?c=${encodeURIComponent(`dm:${(team?.members ?? [])[0]?.memberId ?? ""}`)}`} style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}>打开成员会话 →</a>
+      </div>
+    </aside>
+  );
+}
+
+/**
+ * 群聊「成员视角」右栏：选中某成员后显示**成员信息**（而非团队面板）。
+ * =============================================
+ * 产品语义（2026-11-10 用户反馈）：点上方成员头像 = 进入该成员视角，
+ * 右侧应回答「这个人是谁、在干什么」，而不是继续展示团队/任务信息。
+ *
+ * 为什么以**席位**（tmm_）为主键而不能只按成员库 id：成员库解耦前建的席位
+ * `memberId` 为 null（seed 数据即如此），按 memberId 查会整块空白；
+ * 因此这里以 seat 为真源，member/agent 仅作展示补充。
+ */
+function GroupMemberContextPanel({
+  seat,
+  presence,
+  isMainAgent,
+  roleKey,
+  messageCount,
+  onClose,
+}: {
+  seat: TeamMemberDto;
+  presence: MemberPresence;
+  isMainAgent: boolean;
+  roleKey: RoleKey;
+  messageCount: number;
+  onClose: () => void;
+}) {
+  const name = seat.member?.name ?? seat.alias ?? "成员";
+  const roleLabel = roles[roleKey]?.label ?? "成员";
+  const agentName = seat.agent?.name ?? seat.agentId ?? "—";
+  const lastActive = seat.sessionStatus?.lastActivityAt ?? null;
+  const infoRow = (label: string, value: string, testid?: string) => (
+    <div
+      key={label}
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: space.sm,
+        padding: `${space.sm}px 0`,
+        borderTop: `1px solid ${neutral[100]}`,
+      }}
+    >
+      <span style={{ fontSize: fontSize.xs, color: neutral[400], width: 58, flexShrink: 0 }}>
+        {label}
+      </span>
+      <span
+        data-testid={testid}
+        style={{ fontSize: fontSize.xs, color: neutral[700], minWidth: 0, wordBreak: "break-all" }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+
+  return (
+    <aside
+      data-testid="group-member-context-panel"
+      style={{
+        width: 300,
+        flexShrink: 0,
+        minHeight: 0,
+        overflow: "auto",
+        backgroundColor: "var(--color-surface)",
+        borderLeft: `1px solid ${neutral[200]}`,
+        padding: space.lg,
+        display: "flex",
+        flexDirection: "column",
+        gap: space.md,
+      }}
+    >
+      {/* 头部：头像 + 名字 + 角色 + 退出成员视角 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.sm,
+          padding: space.md,
+          borderRadius: radius.lg,
+          backgroundColor: neutral[50],
+          border: `1px solid ${neutral[200]}`,
+        }}
+      >
+        <AgentAvatar role={roleKey} size="md" />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div
+            data-testid="group-member-context-name"
+            style={{
+              fontSize: fontSize.md,
+              fontWeight: 700,
+              color: neutral[900],
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {name}
+          </div>
+          <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+            {roleLabel}
+            {isMainAgent ? " · 主 Agent" : ""}
+          </div>
+        </div>
+        <button
+          type="button"
+          data-testid="group-member-context-close"
+          onClick={onClose}
+          title="退出成员视角，回到团队面板"
+          style={{
+            border: `1px solid ${neutral[200]}`,
+            background: "var(--color-surface)",
+            color: neutral[500],
+            borderRadius: radius.md,
+            padding: "3px 8px",
+            fontSize: fontSize.xs,
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+            flexShrink: 0,
+          }}
+        >
+          返回团队
+        </button>
+      </div>
+
+      {/* 当前工作状态：与头像状态角标同一判定来源 */}
+      <div
+        data-testid="group-member-context-status"
+        data-presence={presence.tone}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.sm,
+          padding: `${space.sm}px ${space.md}px`,
+          borderRadius: radius.md,
+          backgroundColor: presence.tone === "idle" ? neutral[50] : `${PRESENCE_COLOR[presence.tone]}14`,
+          border: `1px solid ${presence.tone === "idle" ? neutral[200] : `${PRESENCE_COLOR[presence.tone]}44`}`,
+        }}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            flexShrink: 0,
+            backgroundColor: presence.tone === "idle" ? neutral[300] : PRESENCE_COLOR[presence.tone],
+          }}
+        />
+        <span style={{ fontSize: fontSize.xs, color: neutral[700] }}>{presence.label}</span>
+        {lastActive && (
+          <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400], flexShrink: 0 }}>
+            {formatTime(lastActive)}
+          </span>
+        )}
+      </div>
+
+      {/* 席位/身份信息 */}
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {infoRow("Agent", agentName, "group-member-context-agent")}
+        {infoRow("席位 ID", seat.id, "group-member-context-seat")}
+        {seat.workDir ? infoRow("工作目录", seat.workDir) : null}
+        {infoRow("视角内消息", `${messageCount} 条`, "group-member-context-count")}
+      </div>
+
+      <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>
+        当前列表只显示该成员的完整会话（含思考与工具调用）。
+        点「返回团队」回到团队消息视图。
       </div>
     </aside>
   );
