@@ -571,7 +571,7 @@ export const NON_MAIN_AGENT_NOTE =
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
-  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名|from 群聊/私聊] 标记，来源部分说明该消息来自群聊还是私聊）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到团队群聊，确保用户在企微端收到回复。回复场景请与来源一致：私聊来的消息直接答复该用户；群聊来的消息在群内答复并 @ 该用户。若多名用户短时间内先后发言，回复时务必在 vteam_wecom_reply 传 replyToUser=<该用户显示名>，以精确回复到目标用户（否则默认取最近一条企微消息的发送者，可能@错人）。';
+  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名|from 群聊/私聊] 标记，来源部分说明该消息来自群聊还是私聊）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到团队群聊，确保用户在企微端收到回复。回复场景请与来源一致：私聊来的消息直接答复该用户；群聊来的消息在群内答复并 @ 该用户。若多名用户短时间内先后发言，回复时务必在 vteam_wecom_reply 传 replyToUser=<该用户显示名>，以精确回复到目标用户（否则默认取最近一条企微消息的发送者，可能@错人）。需要了解该外部用户的姓名/岗位/所属公司/联系方式时，调用 vteam_team_view 查看 externalUsers（任务内传 taskId，团队直聊传 teamId），不要凭展示名猜测；这是按需查询工具，身份资料不会自动注入。';
 
 /**
  * 平台级共享块（agent-role-entity 计划 todo 3）：原在 seed 的 7 个 prompt 内各抄一份，
@@ -1018,7 +1018,8 @@ export const IN_FLIGHT_INJECT_NOTICE =
  * 团队直聊群聊触发指令（仅 dispatchForTeamTarget 的 team_group 频道注入）：
  * 团队维度传参（group_post、notify_agent、chat_history 均传 teamId；selfInstanceId
  * 为 system 身份段中的团队成员 id，tmm_ 前缀）；团队直聊无 taskId，禁传 taskId；
- * 需任务上下文的工具在团队直聊下不可用（先 task_create 建任务）。
+ * team_view 支持团队维度（传 teamId 查成员 + 外部渠道用户档案）；
+ * 其余需任务上下文的工具在团队直聊下不可用（先 task_create 建任务）。
  */
 export const TEAM_GROUP_TRIGGER_INSTRUCTION =
   '【群聊回复要求】本条消息来自团队直聊（无任务），你被 @ 定向分发。请在群聊中公开回复你的结论' +
@@ -1028,12 +1029,15 @@ export const TEAM_GROUP_TRIGGER_INSTRUCTION =
   '需要群聊历史时调用 vteam_chat_history（传 teamId）。' +
   '收到企业微信消息时调用 vteam_wecom_reply 并传 teamId（多名用户短时间内先后发言时传 replyToUser=<该用户显示名> 以精确回复）；' +
   '团队直聊没有 taskId，其他团队工具不要传 taskId。' +
-  'vteam_my_profile、vteam_team_view、vteam_doclib、vteam_issue_*、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。' +
+  'vteam_team_view 在团队直聊下传 teamId 即可查看团队成员与外部渠道用户档案（externalUsers：需要了解外部用户的姓名/岗位/公司/联系方式时按需查看，不要凭展示名猜测）；' +
+  'vteam_my_profile、vteam_doclib、vteam_issue_*、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。' +
   '如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件。';
 
 export const WECOM_TRIGGER_INSTRUCTION =
   '【企微消息】此消息来自企业微信用户 via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。' +
   '回复会同时同步到团队群聊。' +
+  '需要了解该外部用户的姓名/岗位/所属公司/联系方式时，调用 vteam_team_view 查看 externalUsers' +
+  '（任务内传 taskId，团队直聊传 teamId），不要凭展示名猜测；这是按需查询工具，身份资料不会自动注入。' +
   '（互斥优先级：wecom 优先——已注入本指令时不再注入 GROUP_TRIGGER_INSTRUCTION，见 dispatch 组装处。）';
 
 /**
@@ -1055,7 +1059,9 @@ export const TEAM_SYSTEM_RECEPTION_INSTRUCTION =
   '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。' +
   '参数规则：vteam_chat_history、vteam_group_post、vteam_notify_agent、vteam_wecom_reply、vteam_memory_save、vteam_memory_list 这 6 个工具在团队直聊下传 teamId，绝不传 taskId' +
   '（团队直聊没有 taskId，传了必 403）；selfInstanceId 填写 system 身份段中的团队成员 id（tmm_ 前缀）；' +
-  'vteam_my_profile、vteam_team_view 与 delivery 相关工具需要任务上下文，团队直聊下不可用（如需任务，先 vteam_task_create 建任务）。';
+  'vteam_team_view 在团队直聊下传 teamId 即可查看团队成员与外部渠道用户档案' +
+  '（需要了解外部用户的姓名/岗位/公司/联系方式时按需查看 externalUsers，不要凭展示名猜测）；' +
+  'vteam_my_profile 与 delivery 相关工具需要任务上下文，团队直聊下不可用（如需任务，先 vteam_task_create 建任务）。';
 
 /**
  * 分派后等待回流的默认超时（D8 总超时；F3 MINOR-3：架构师 5 轮 tool 调用实测 72s > 60s，
@@ -3090,8 +3096,14 @@ export class WorkerDispatcher
               .replace(/^from\s*/i, '')
           : '';
       const sourceNote = sourceRaw ? `（来源：${sourceRaw}）` : '';
+      // team_view 参数随会话模式不同：任务内传 taskId（团队由任务归属推导），
+      // 团队直聊传 teamId。只给「怎么查」的工具指引，不注入任何身份数据。
+      const teamViewHint = taskIdForPrompt
+        ? '调用 vteam_team_view（传 taskId）查看 externalUsers'
+        : '调用 vteam_team_view（团队直聊传 teamId）查看 externalUsers';
+      const identityHint = `需要了解该外部用户的姓名/岗位/所属公司/联系方式时，${teamViewHint}，不要凭展示名猜测；这是按需查询工具，身份资料不会自动注入。`;
       const tailored = wecomUserLabel
-        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel}${sourceNote} via WeCom，请务必使用 vteam_wecom_reply 工具回复（并传 replyToUser="${wecomUserLabel}" 精确回复该用户），不要使用 vteam_group_post，以确保用户在企微端收到@回复。`
+        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel}${sourceNote} via WeCom，请务必使用 vteam_wecom_reply 工具回复（并传 replyToUser="${wecomUserLabel}" 精确回复该用户），不要使用 vteam_group_post，以确保用户在企微端收到@回复。${identityHint}`
         : WECOM_TRIGGER_INSTRUCTION;
       promptBlocks.push(tailored);
     }

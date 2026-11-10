@@ -2425,6 +2425,22 @@ describe('WorkerDispatcher', () => {
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('仅主实例可调用');
       expect(WECOM_SYSTEM_INSTRUCTION).toContain('同步到团队群聊');
       expect(WECOM_SYSTEM_INSTRUCTION).not.toContain('同步到任务群聊');
+      // task-4：外部用户身份「按需查询」工具指引（team_view），不注入身份数据
+      expect(WECOM_SYSTEM_INSTRUCTION).toContain('vteam_team_view');
+      expect(WECOM_SYSTEM_INSTRUCTION).toContain('externalUsers');
+      expect(WECOM_SYSTEM_INSTRUCTION).not.toContain('身份资料会自动注入');
+      expect(WECOM_TRIGGER_INSTRUCTION).toContain('vteam_team_view');
+      expect(WECOM_TRIGGER_INSTRUCTION).toContain('externalUsers');
+      // team_view 已支持团队直聊（teamId），不再列为「需要任务上下文不可用」
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_team_view');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('externalUsers');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).not.toContain(
+        'vteam_team_view、vteam_doclib',
+      );
+      expect(TEAM_SYSTEM_RECEPTION_INSTRUCTION).toContain('vteam_team_view');
+      expect(TEAM_SYSTEM_RECEPTION_INSTRUCTION).not.toContain(
+        'vteam_team_view 与 delivery',
+      );
       expect(WECOM_TRIGGER_INSTRUCTION).toContain('同步到团队群聊');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_wecom_reply');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('传 teamId');

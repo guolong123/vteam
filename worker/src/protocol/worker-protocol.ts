@@ -905,6 +905,14 @@ export interface SessionMessagesQuery {
   order?: 'asc' | 'desc';
   /** 游标（缺省 = 从头翻）。 */
   cursor?: string;
+  /**
+   * part 大载荷截断阈值（字符，正整数；缺省 = 不截断，返回完整 parts）。
+   *
+   * perf（session-history）：控制面首屏只展示截断后的 parts（与服务端
+   * capPartPayloads 同口径），在 worker 出口就截断可避免 80MB 级无效传输；
+   * 不传时行为逐字节不变（worker-dispatcher 轮询需要完整内容）。
+   */
+  maxPartChars?: number;
 }
 
 /** GET /sessions/:id/messages 响应体（读会话消息）。 */

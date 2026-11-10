@@ -1293,6 +1293,11 @@ export class WorkerClient {
     if (query?.cursor) {
       params.set('cursor', query.cursor);
     }
+    // perf（session-history）：把 part 截断阈值下发到 worker 出口，避免拉回 80MB 原始
+    // parts 后服务端再丢弃；未传时不带该 query 参数（行为与历史逐字节一致）。
+    if (query?.maxPartChars !== undefined) {
+      params.set('maxPartChars', String(query.maxPartChars));
+    }
     const qs = params.toString();
     const res = await this.requestExec(
       worker,

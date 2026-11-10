@@ -491,9 +491,18 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(memoryUpdate.inputSchema.properties.tags).toEqual({
         type: 'array',
       });
-      // team_view：仅 taskId 必填（只读，无 selfInstanceId）
+      // team_view（task-4）：taskId/teamId 双可选（至少一个，service 校验）+ externalUserName 可选
       const teamView = tools.find((t) => t.name === 'team_view')!;
-      expect(teamView.inputSchema.required).toEqual(['taskId']);
+      expect(teamView.inputSchema.required).toEqual([]);
+      expect(teamView.inputSchema.properties.taskId).toEqual({
+        type: 'string',
+      });
+      expect(teamView.inputSchema.properties.teamId).toEqual({
+        type: 'string',
+      });
+      expect(teamView.inputSchema.properties.externalUserName).toEqual({
+        type: 'string',
+      });
       // my_profile：taskId/selfInstanceId 全必填
       const myProfile = tools.find((t) => t.name === 'my_profile')!;
       expect(myProfile.inputSchema.required).toEqual([

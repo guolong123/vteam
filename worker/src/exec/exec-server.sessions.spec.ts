@@ -509,6 +509,109 @@ describe('T10 会话/模型端点（决策 D3：控制面不再直连 opencode�
       }
     });
 
+    it('maxPartChars 非法（0/负数/小数/非数字）→ 400 且不调驱动', async () => {
+      const { driver, getMessages } = mockDriver();
+      const { port, stop } = await startExec(driver);
+      try {
+        for (const bad of ['0', '-1', '1.5', 'abc']) {
+          const res = await request(
+            port,
+            'GET',
+            `/sessions/ses_1/messages?maxPartChars=${bad}`,
+            { token: WORKER_TOKEN },
+          );
+          expect(res.status).toBe(400);
+        }
+        expect(getMessages).not.toHaveBeenCalled();
+      } finally {
+        await stop();
+      }
+    });
+
+    it('perf：传 maxPartChars=2048 → worker 出口截断 parts（text 正文不截断），payload 体积显著下降', async () => {
+      const { driver, getMessages } = mockDriver();
+      // 模拟线上真实形状：tool 输出远大于正文（v2 驱动映射后还会约 2× 膨胀）
+      const bigText = 't'.repeat(50_000);
+      const bigOutput = 'o'.repeat(400_000);
+      const messages: DriverMessage[] = [
+        {
+          info: { id: 'msg_1', role: 'assistant' },
+          parts: [
+            { id: 'prt_text', type: 'text', text: bigText },
+            {
+              id: 'prt_tool',
+              callID: 'call_1',
+              type: 'tool',
+              tool: 'bash',
+              state: {
+                status: 'completed',
+                output: bigOutput,
+                content: [{ type: 'text', text: bigOutput }],
+              },
+              time: { start: 1, end: 2 },
+            },
+          ],
+        },
+      ];
+      getMessages.mockResolvedValue(messages);
+      const { port, stop } = await startExec(driver);
+      try {
+        // ① 不传 maxPartChars：完整返回（行为逐字节不变，其它调用方依赖）
+        const full = await request(port, 'GET', '/sessions/ses_1/messages', {
+          token: WORKER_TOKEN,
+        });
+        expect(full.status).toBe(200);
+        expect(full.body.messages).toEqual(messages);
+
+        // ② 传 maxPartChars=2048：worker 出口即截断
+        const capped = await request(
+          port,
+          'GET',
+          '/sessions/ses_1/messages?limit=20&order=desc&maxPartChars=2048',
+          { token: WORKER_TOKEN },
+        );
+        expect(capped.status).toBe(200);
+        const cappedBody = capped.body as {
+          messages: Array<{ parts: any[] }>;
+        };
+        const cappedParts = cappedBody.messages[0].parts;
+        // text part 正文不截断（服务端 content.text 由 text parts 拼接）
+        expect(cappedParts[0].text).toBe(bigText);
+        // tool state 内容截断；结构/身份键保留
+        expect(cappedParts[1].id).toBe('prt_tool');
+        expect(cappedParts[1].callID).toBe('call_1');
+        expect(cappedParts[1].tool).toBe('bash');
+        expect(cappedParts[1].time).toEqual({ start: 1, end: 2 });
+        expect(cappedParts[1].state.output.length).toBeLessThan(2100);
+        expect(cappedParts[1].state.output.endsWith('已截断）')).toBe(true);
+        expect(cappedParts[1].state.content[0].text.length).toBeLessThan(2100);
+
+        // ③ payload 体积前后对比（单条 50KB 文本 + 2×50KB tool 输出）
+        const beforeBytes = Buffer.byteLength(
+          JSON.stringify(full.body),
+          'utf8',
+        );
+        const afterBytes = Buffer.byteLength(
+          JSON.stringify(capped.body),
+          'utf8',
+        );
+        expect(afterBytes).toBeLessThan(beforeBytes / 10);
+        // 体积对比写入测试日志，便于验收报告引用
+        // eslint-disable-next-line no-console
+        console.info(
+          `[perf] worker messages payload: before=${beforeBytes}B after=${afterBytes}B`,
+        );
+
+        // maxPartChars 不下发驱动（驱动只认分页三参）
+        expect(getMessages).toHaveBeenCalledWith('ses_1', {
+          limit: 20,
+          order: 'desc',
+        });
+      } finally {
+        await stop();
+      }
+    });
+
     it('缺 / 错 X-Worker-Token → 401', async () => {
       const { driver, getMessages } = mockDriver();
       const { port, stop } = await startExec(driver);

@@ -12,10 +12,17 @@ import { MessageChannelsController } from './message-channels.controller';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ChatModule } from '../chat/chat.module';
+import { ExternalUsersModule } from '../external-users/external-users.module';
 import { QuestionsModule } from '../questions/questions.module';
 
 @Module({
-  imports: [RealtimeModule, forwardRef(() => ChatModule), QuestionsModule],
+  imports: [
+    RealtimeModule,
+    forwardRef(() => ChatModule),
+    QuestionsModule,
+    // 入站沉淀外部用户目录（MessageInboundService @Optional 注入 ExternalUsersService）
+    ExternalUsersModule,
+  ],
   controllers: [MessageChannelsController],
   providers: [
     PermissionGuard,

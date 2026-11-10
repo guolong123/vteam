@@ -83,14 +83,20 @@ describe('PlatformMcpService', () => {
       update: jest.Mock;
       updateMany: jest.Mock;
     };
-    chatChannel: { findFirst: jest.Mock; create: jest.Mock };
+    chatChannel: {
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      create: jest.Mock;
+    };
     message: {
       findMany: jest.Mock;
       findFirst: jest.Mock;
+      groupBy: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       count: jest.Mock;
     };
+    externalUser: { findMany: jest.Mock };
     teamMessageChannel: { findMany: jest.Mock };
     messageChannel: { findUnique: jest.Mock };
     artifact: {
@@ -239,15 +245,20 @@ describe('PlatformMcpService', () => {
       },
       chatChannel: {
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockRejectedValue(new Error('not configured')),
       },
       message: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
+        // team_view 外部用户目录聚合（task-4）：默认无 external 消息
+        groupBy: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         update: jest.fn(),
         count: jest.fn(),
       },
+      // team_view externalUsers：默认无外部用户实体
+      externalUser: { findMany: jest.fn().mockResolvedValue([]) },
       teamMessageChannel: { findMany: jest.fn() },
       messageChannel: { findUnique: jest.fn() },
       artifact: {
@@ -6009,7 +6020,22 @@ describe('PlatformMcpService', () => {
     const mainInstanceId = 'tmm_main';
 
     describe('team_view', () => {
-      it('返回成员列表（含会话实时状态 sessionStatus/sessionId）', async () => {
+      const directoryUser = {
+        id: 'eu_0000000001',
+        externalId: 'id:GuoLong',
+        displayName: '企微用户-Song',
+        name: '宋工',
+        position: '前端负责人',
+        company: '宁德时代',
+        contact: 'song@example.com',
+        source: 'wecom_aibot',
+        firstMessageAt: null,
+        lastMessageAt: new Date('2026-11-10T07:42:00.000Z'),
+        createdAt: new Date('2026-11-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-11-10T07:42:00.000Z'),
+      };
+
+      it('taskId 模式：返回成员列表（含会话实时状态）+ teamId + 外部用户档案', async () => {
         allowWorker();
         prisma.task.findUnique.mockResolvedValue({
           id: taskId,
@@ -6039,8 +6065,20 @@ describe('PlatformMcpService', () => {
         prisma.session.findMany.mockResolvedValue([
           { id: 's_1', status: 'running', teamMemberId: mainInstanceId },
         ]);
+        // 外部用户目录：team_group 频道 + external 消息聚合 + 实体
+        prisma.chatChannel.findMany.mockResolvedValue([{ id: channelId }]);
+        prisma.message.groupBy.mockResolvedValue([
+          {
+            externalUserId: 'eu_0000000001',
+            _count: { _all: 3 },
+            _max: { createdAt: new Date('2026-11-10T07:42:00.000Z') },
+          },
+        ]);
+        prisma.externalUser.findMany.mockResolvedValue([directoryUser]);
+
         const out = await service.teamView(ctx, { taskId });
 
+        // 任务维度归属校验沿用 assertWorkerTask（tm_ 前缀误传由 resolveExecContext 拦截）
         expect(prisma.session.findFirst).toHaveBeenCalledWith(
           expect.objectContaining({
             where: { teamId: 'tm_1', workerId },
@@ -6057,8 +6095,24 @@ describe('PlatformMcpService', () => {
             },
           }),
         );
+        // 外部用户口径：该团队 team_group 未删除频道 + external 消息聚合
+        expect(prisma.chatChannel.findMany).toHaveBeenCalledWith({
+          where: { teamId: 'tm_1', type: 'team_group', deletedAt: null },
+          select: { id: true },
+        });
+        expect(prisma.message.groupBy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            by: ['externalUserId'],
+            where: expect.objectContaining({
+              channelId: { in: [channelId] },
+              senderType: 'external',
+              externalUserId: { not: null },
+            }),
+          }),
+        );
         expect(out).toEqual({
           taskId,
+          teamId: 'tm_1',
           pendingReceipts: { pending: 0, total: 0 },
           members: [
             {
@@ -6082,20 +6136,148 @@ describe('PlatformMcpService', () => {
               sessionId: null,
             },
           ],
+          externalUsers: [
+            {
+              id: 'eu_0000000001',
+              name: '宋工',
+              displayName: '企微用户-Song',
+              position: '前端负责人',
+              company: '宁德时代',
+              contact: 'song@example.com',
+              source: 'wecom_aibot',
+              externalId: 'id:GuoLong',
+              messageCount: 3,
+              lastMessageAt: '2026-11-10T07:42:00.000Z',
+            },
+          ],
         });
       });
 
-      it('无团队成员 → members 为空数组', async () => {
+      it('taskId 模式：无团队成员 → members 为空数组；任务无团队 → externalUsers 为空', async () => {
         allowWorker();
-        prisma.task.findUnique.mockResolvedValue({
-          id: taskId,
-          teamId: 'tm_1',
-        });
-        prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
+        // 第 1 次：assertWorkerTask 的 teamIdOfTask（有团队才能过归属校验）；
+        // 第 2 次：teamView 取视图任务（防御历史 teamId=null 行）
+        prisma.task.findUnique
+          .mockResolvedValueOnce({ teamId: 'tm_1' } as any)
+          .mockResolvedValueOnce({ id: taskId, teamId: null } as any);
         prisma.teamMember.findMany.mockResolvedValue([]);
         const out = await service.teamView(ctx, { taskId });
 
         expect(out.members).toEqual([]);
+        expect(out.externalUsers).toEqual([]);
+        expect(out.teamId).toBeNull();
+        expect(prisma.chatChannel.findMany).not.toHaveBeenCalled();
+      });
+
+      it('teamId 模式：经 assertWorkerTeam 校验后返回 teamId + 成员 + 外部用户（pendingReceipts 恒零）', async () => {
+        // 团队维度归属：worker 有该团队会话（绑定成员）
+        prisma.session.findFirst.mockResolvedValue({
+          id: 's_team',
+          teamMemberId: senderInstanceId,
+        } as any);
+        prisma.team.findUnique.mockResolvedValue({
+          mainAgentMemberId: senderInstanceId,
+        } as any);
+        prisma.teamMember.findMany.mockResolvedValue([
+          {
+            id: senderInstanceId,
+            agentId: senderAgentId,
+            alias: '开发者-1',
+            seq: 1,
+            agent: { name: '开发者' },
+            role: { key: 'developer', name: '开发者' },
+          },
+        ]);
+        prisma.chatChannel.findMany.mockResolvedValue([{ id: channelId }]);
+        prisma.message.groupBy.mockResolvedValue([
+          {
+            externalUserId: 'eu_0000000001',
+            _count: { _all: 2 },
+            _max: { createdAt: new Date('2026-11-10T07:42:00.000Z') },
+          },
+        ]);
+        prisma.externalUser.findMany.mockResolvedValue([directoryUser]);
+
+        const out = await service.teamView(ctx, { teamId: 'tm_1' });
+
+        // team 维度校验：assertWorkerTeam（teamId + workerId 会话归属）
+        expect(prisma.session.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { teamId: 'tm_1', workerId },
+          }),
+        );
+        // 不再读任务、不计回执
+        expect(prisma.task.findUnique).not.toHaveBeenCalled();
+        expect(receiptsService.countPending).not.toHaveBeenCalled();
+        expect(out.taskId).toBeNull();
+        expect(out.teamId).toBe('tm_1');
+        expect(out.pendingReceipts).toEqual({ pending: 0, total: 0 });
+        expect(out.members).toHaveLength(1);
+        expect(out.members[0]).toMatchObject({
+          id: senderInstanceId,
+          main: true,
+          sessionStatus: null,
+          sessionId: null,
+        });
+        expect(out.externalUsers).toEqual([
+          expect.objectContaining({
+            id: 'eu_0000000001',
+            name: '宋工',
+            messageCount: 2,
+          }),
+        ]);
+      });
+
+      it('externalUserName 透传目录关键字过滤（name/displayName 模糊匹配）', async () => {
+        prisma.session.findFirst.mockResolvedValue({
+          id: 's_team',
+          teamMemberId: senderInstanceId,
+        } as any);
+        prisma.team.findUnique.mockResolvedValue({
+          mainAgentMemberId: senderInstanceId,
+        } as any);
+        prisma.teamMember.findMany.mockResolvedValue([]);
+        prisma.chatChannel.findMany.mockResolvedValue([{ id: channelId }]);
+        prisma.message.groupBy.mockResolvedValue([
+          {
+            externalUserId: 'eu_0000000001',
+            _count: { _all: 1 },
+            _max: { createdAt: new Date('2026-11-10T07:42:00.000Z') },
+          },
+        ]);
+        prisma.externalUser.findMany.mockResolvedValue([directoryUser]);
+
+        await service.teamView(ctx, {
+          teamId: 'tm_1',
+          externalUserName: '  宋工  ',
+        });
+
+        expect(prisma.externalUser.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              OR: [
+                { name: { contains: '宋工' } },
+                { displayName: { contains: '宋工' } },
+              ],
+            }),
+          }),
+        );
+      });
+
+      it('taskId 与 teamId 都缺 → 400（提示团队直聊传 teamId、任务内传 taskId）', async () => {
+        await expect(service.teamView(ctx, {})).rejects.toMatchObject({
+          status: 400,
+        });
+        expect(prisma.session.findFirst).not.toHaveBeenCalled();
+      });
+
+      it('tm_ 误传到 taskId / t_ 误传到 teamId → 400 前缀校验', async () => {
+        await expect(
+          service.teamView(ctx, { taskId: 'tm_0000000001' }),
+        ).rejects.toMatchObject({ status: 400 });
+        await expect(
+          service.teamView(ctx, { teamId: 't_0000000001' }),
+        ).rejects.toMatchObject({ status: 400 });
       });
 
       it('任务不存在 → 404 PLATFORM_MCP_TASK_NOT_FOUND', async () => {
@@ -6109,13 +6291,23 @@ describe('PlatformMcpService', () => {
         expect(prisma.teamMember.findMany).not.toHaveBeenCalled();
       });
 
-      it('只读归属校验：无 Session → 403 PLATFORM_MCP_FORBIDDEN', async () => {
+      it('taskId 只读归属校验：无 Session → 403 PLATFORM_MCP_FORBIDDEN', async () => {
         denyWorker();
         await expectCode(
           service.teamView(ctx, { taskId }),
           ForbiddenException,
           PLATFORM_MCP_ERRORS.FORBIDDEN,
         );
+      });
+
+      it('teamId 只读归属校验：无团队 Session → 403 PLATFORM_MCP_FORBIDDEN（防越权）', async () => {
+        prisma.session.findFirst.mockResolvedValue(null);
+        await expectCode(
+          service.teamView(ctx, { teamId: 'tm_999' }),
+          ForbiddenException,
+          PLATFORM_MCP_ERRORS.FORBIDDEN,
+        );
+        expect(prisma.teamMember.findMany).not.toHaveBeenCalled();
       });
     });
 

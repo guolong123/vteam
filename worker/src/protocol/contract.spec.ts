@@ -569,14 +569,20 @@ describe('T10 会话/模型端点契约（worker 侧；server 侧副本见 T18�
     expect(parsed.interrupted).toBe(false);
   });
 
-  it('GET /sessions/:id/messages：分页 query round-trip（limit/order/cursor）', () => {
-    const query: SessionMessagesQuery = { limit: 20, order: 'desc', cursor: 'cur_1' };
+  it('GET /sessions/:id/messages：分页 query round-trip（limit/order/cursor/maxPartChars）', () => {
+    const query: SessionMessagesQuery = {
+      limit: 20,
+      order: 'desc',
+      cursor: 'cur_1',
+      maxPartChars: 2048,
+    };
 
     const parsed = JSON.parse(JSON.stringify(query)) as SessionMessagesQuery;
 
     expect(parsed.limit).toBe(20);
     expect(parsed.order).toBe('desc');
     expect(parsed.cursor).toBe('cur_1');
+    expect(parsed.maxPartChars).toBe(2048);
   });
 
   it('GET /sessions/:id/messages：响应体 round-trip 含 vteam 渲染模型形状的消息', () => {
@@ -792,7 +798,7 @@ const PROTOCOL_MANIFEST = {
   },
   SessionMessagesQuery: {
     required: [],
-    optional: ['limit', 'order', 'cursor'],
+    optional: ['limit', 'order', 'cursor', 'maxPartChars'],
   },
   SessionMessagesResponsePayload: {
     required: ['sessionId', 'messages'],
@@ -861,6 +867,7 @@ type _M6 = Expect<
       limit?: number;
       order?: 'asc' | 'desc';
       cursor?: string;
+      maxPartChars?: number;
     }
   >
 >;
@@ -942,7 +949,9 @@ type _O3 = Expect<
     : false
 >;
 type _O4 = Expect<
-  [OptionalKeys<SessionMessagesQuery>] extends ['limit' | 'order' | 'cursor']
+  [OptionalKeys<SessionMessagesQuery>] extends [
+    'limit' | 'order' | 'cursor' | 'maxPartChars',
+  ]
     ? true
     : false
 >;

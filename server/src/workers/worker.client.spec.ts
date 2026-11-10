@@ -1327,6 +1327,39 @@ describe('WorkerClient', () => {
       );
     });
 
+    it('maxPartChars → 作为 query 下发（worker 出口截断阈值，perf session-history）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ sessionId: 'ses_1', messages: [] }) }),
+      );
+
+      await client.getMessages(worker, 'ses_1', {
+        limit: 100,
+        order: 'desc',
+        maxPartChars: 2048,
+      });
+
+      const [url] = mockFetch.mock.calls[0] as [string];
+      expect(decodeURIComponent(url)).toBe(
+        `http://localhost:${DEFAULT_EXEC_PORT}/sessions/ses_1/messages?limit=100&order=desc&maxPartChars=2048`,
+      );
+    });
+
+    it('未传 maxPartChars → URL 不带该参数（其它调用方行为逐字节不变）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ sessionId: 'ses_1', messages: [] }) }),
+      );
+
+      await client.getMessages(worker, 'ses_1', { limit: 100, order: 'desc' });
+
+      const [url] = mockFetch.mock.calls[0] as [string];
+      expect(url).toBe(
+        `http://localhost:${DEFAULT_EXEC_PORT}/sessions/ses_1/messages?limit=100&order=desc`,
+      );
+      expect(url).not.toContain('maxPartChars');
+    });
+
     it('fetch 抛错 → WorkerUnavailableException', async () => {
       const client = makeClient();
       mockFetch.mockRejectedValue(new TypeError('socket hang up'));

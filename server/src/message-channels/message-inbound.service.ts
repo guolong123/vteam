@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional, Inject } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChatService } from '../chat/chat.service';
 import { QuestionsService } from '../questions/questions.service';
+import { ExternalUsersService } from '../external-users/external-users.service';
 import { MessageDeliveryService } from './message-delivery.service';
 import { MessageRegistryService } from './message-registry.service';
 import {
@@ -34,6 +35,14 @@ export class MessageInboundService implements MessageHost {
     @Optional()
     @Inject(MessageRegistryService)
     private readonly registry?: MessageRegistryService,
+    /**
+     * 外部渠道用户目录（external-users 契约 §2.5）：post_message 落库前把外部发送者
+     * 沉淀成 external_users 实体，并把 eu_ 指针经 createMessage 的 actor 带进消息行。
+     * @Optional 保证既有单测/精简装配（未导入 ExternalUsersModule）不因新依赖炸；
+     * MessageChannelsModule imports ExternalUsersModule（生产装配恒有实例）。
+     */
+    @Optional()
+    private readonly externalUsers?: ExternalUsersService,
   ) {
     if (
       this.registry &&
@@ -231,6 +240,32 @@ export class MessageInboundService implements MessageHost {
         let anyOk = false;
         let lastInternalId: string | undefined;
 
+        // 外部发送者的渠道原始身份（fan-out 到多个团队时只解析一次，同一入站
+        // 消息在不同群里是同一个外部人；展示名/稳定 userid 全命令一致）。
+        const cmdAny = cmd as any;
+        const wecomUserId: string | undefined =
+          cmdAny.wecomUserId ?? cmdAny.senderExternalId;
+        const wecomUserName: string | undefined =
+          cmdAny.wecomUserName ?? cmdAny.senderName;
+        const displayLabel = wecomUserName || wecomUserId || '';
+        // 目录沉淀（external-users）：解析/创建 external_users 实体。失败不阻断
+        // 入站——消息是业务事实，directory 只是增强（external_user_id 留空，
+        // 历史可回填）；否则一次目录异常会把整条外部消息吞掉。
+        let externalUser: { id: string } | null = null;
+        if (this.externalUsers) {
+          try {
+            externalUser = await this.externalUsers.resolveInboundIdentity({
+              externalId: wecomUserId ?? null,
+              displayName: displayLabel || null,
+              source: (channelRow as any).type ?? null,
+            });
+          } catch (e) {
+            this.logger.warn(
+              `resolveInboundIdentity failed channel=${channelId}: ${(e as Error).message}`,
+            );
+          }
+        }
+
         for (const teamId of boundTeamIds) {
           const groupChannel = await (this.prisma as any).chatChannel.findFirst(
             {
@@ -297,13 +332,7 @@ export class MessageInboundService implements MessageHost {
           }
 
           try {
-            const cmdAny = cmd as any;
-            const wecomUserId: string | undefined =
-              cmdAny.wecomUserId ?? cmdAny.senderExternalId;
-            const wecomUserName: string | undefined =
-              cmdAny.wecomUserName ?? cmdAny.senderName;
             const chattype: string | undefined = cmdAny.chattype;
-            const displayLabel = wecomUserName || wecomUserId || '';
             const rawText: string = String(cmdAny.text ?? '');
             // 前缀携带会话来源（协议 chattype：group/single），供 agent 判断回复场景；
             // 解析方（worker-dispatcher）按 | 切分，展示名可能含 |，故取最后一个 |。
@@ -346,6 +375,8 @@ export class MessageInboundService implements MessageHost {
               {
                 senderType: SENDER_TYPE.external,
                 senderId: displayLabel || null,
+                // 外部用户目录指针：目录未沉淀成功时不下发（列留 NULL，消息照常落库）
+                ...(externalUser ? { externalUserId: externalUser.id } : {}),
               },
             );
             const internalMessageId = (res as { message?: { id?: string } })
@@ -400,6 +431,18 @@ export class MessageInboundService implements MessageHost {
                 },
               );
             }
+          }
+        }
+
+        // 活跃时间刷新：一次入站（可能 fan-out 多个团队）成功后只 touch 一次；
+        // 失败静默（消息已落库，目录时间字段刷新失败不影响投递结果，下次入站自愈）。
+        if (anyOk && externalUser && this.externalUsers) {
+          try {
+            await this.externalUsers.touchActivity(externalUser.id);
+          } catch (e) {
+            this.logger.warn(
+              `touchActivity failed externalUser=${externalUser.id}: ${(e as Error).message}`,
+            );
           }
         }
 

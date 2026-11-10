@@ -521,6 +521,43 @@ model ChatChannel {
   @@map("chat_channels")
 }
 
+// ==================================================================
+// 外部渠道用户目录域（external-users：入站消息自动沉淀 + 人工维护资料）
+//
+// 外部渠道（企微/通用 webhook 等）的发送者在平台里原本只是消息行上的
+// sender_type='external' + sender_id=展示名，无法管理。本表把「外部发送者」
+// 提升为独立实体：入站 post_message 时按稳定标识 resolve/创建，消息行补
+// external_user_id 指针；管理端只读回看其消息、维护姓名/岗位/公司/联系方式。
+//
+// 主键 eu_ 前缀由 IdGeneratorService 生成；迁移回填的历史行用
+// `eu_bk_<hash>`（非数字尾段，resyncIdPrefix 会跳过，不影响新 id 续号）。
+// ==================================================================
+
+/// 外部渠道用户（企微/通用 webhook 等入站消息的外部发送者，人工维护资料）
+model ExternalUser {
+  id            String   @id // eu_ 前缀，IdGeneratorService 生成
+  /// 外部平台用户稳定标识：`id:<企微 userid>`；无 userid 时回退 `name:<展示名>`
+  externalId    String   @unique @map("external_id") @db.VarChar(191)
+  /// 渠道展示名（企微用户名/昵称，入站可更新；「姓名」未填写时作为展示名）
+  displayName   String   @map("display_name") @db.VarChar(191)
+  /// 管理字段（人工维护，name 优先于 displayName 展示）
+  name          String?  @db.VarChar(64)
+  position      String?  @db.VarChar(64)
+  company       String?  @db.VarChar(128)
+  contact       String?  @db.VarChar(191)
+  /// 来源渠道类型：wecom_aibot / generic_webhook / ...
+  source        String   @default("wecom_aibot") @db.VarChar(32)
+  firstMessageAt DateTime? @map("first_message_at")
+  lastMessageAt  DateTime? @map("last_message_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  messages      Message[]
+
+  @@index([displayName], map: "idx_external_users_display_name")
+  @@index([lastMessageAt], map: "idx_external_users_last_message_at")
+  @@map("external_users")
+}
+
 model Message {
   id               String   @id
   channelId        String   @map("channel_id")
@@ -532,6 +569,9 @@ model Message {
   // 出站按它锚定目标会话，避免多群共用 bot 时被渠道级 lastChatid（每条入站覆盖）
   // 带偏到别的群；取不到才回退 lastChatid。详见 20261009000000 迁移说明。
   externalChatId  String?  @map("external_chat_id")
+  /// 外部渠道用户目录指针（仅 sender_type=external 且入站沉淀成功时有值）：
+  /// sender_id 仍是展示名（群聊渲染依赖），本列才是「同一外部人」的稳定关联。
+  externalUserId  String?  @map("external_user_id")
   content          Json
   /// 正文 text 的生成列（DB 侧 GENERATED，仅读）：会话列表预览/未读统计直接读它，
   /// 避免把含大量工具输出的 content JSON 整包取回解析。
@@ -550,10 +590,12 @@ model Message {
 
   channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   task    Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  externalUser ExternalUser? @relation(fields: [externalUserId], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
   @@index([channelId, id], map: "idx_messages_channel_id")
   @@index([taskId, createdAt], map: "idx_messages_task_created")
   @@index([channelId, taskId], map: "idx_messages_channel_task")
+  @@index([externalUserId, id], map: "idx_messages_external_user_id")
   @@map("messages")
 }
 
