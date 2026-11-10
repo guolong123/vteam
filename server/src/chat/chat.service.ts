@@ -469,10 +469,19 @@ export class ChatService {
     query: QueryMessagesDto = {},
   ) {
     const { channel } = await this.resolveChannelAccess(channelId, userId);
-    if (channel.type !== CHANNEL_TYPE.private) {
+    const isGroupChannel = channel.type !== CHANNEL_TYPE.private;
+    /**
+     * 群聊频道：支持按 `?teamMemberId=` 查看**某个成员**的完整会话历史。
+     *
+     * 此前群聊一律 400「仅私聊频道支持会话历史」，导致会话页点成员头像只能对群聊
+     * 消息做一次客户端筛选 —— 而群聊消息是平台消息表投影，拿不到该成员完整的
+     * 思考（reasoning）/ 工具调用（tool）过程，观感与私聊页不一致（2026-11-10 反馈）。
+     * 群聊频道下 `teamMemberId` 必填；缺省仍 400，保持原语义不放松越权读整团数据。
+     */
+    if (isGroupChannel && !query.teamMemberId) {
       throw new BadRequestException({
         code: CHAT_ERRORS.SESSION_HISTORY_NOT_SUPPORTED,
-        message: '仅私聊频道支持会话历史（群聊保持平台消息表）',
+        message: '群聊频道需指定 teamMemberId 查看单个成员的会话历史',
       });
     }
     const limit = this.normalizeLimit(query.limit);
@@ -490,9 +499,13 @@ export class ChatService {
       agentId: string;
       createdAt: Date;
     } | null = null;
-    // team-only：私聊会话按 teamMemberId 定位团队会话（单成员单会话）；
+    // 会话定位维度：
+    // - 私聊频道：按频道自身的 teamMemberId（单成员单会话）；
+    // - 群聊频道：按入参 teamMemberId（点哪个成员看哪个成员的会话）。
     // 无成员维度（存量任务锚定频道）→ 平台表回退，任务锚定分支已删。
-    const teamMemberId = (channel as any).teamMemberId as string | null;
+    const teamMemberId = isGroupChannel
+      ? (query.teamMemberId ?? null)
+      : (((channel as any).teamMemberId as string | null) ?? null);
     if (!teamMemberId) {
       return fallback();
     }
@@ -540,7 +553,18 @@ export class ChatService {
           session.instanceRef,
           { limit: Math.min(limit * 2, 200), order: 'desc' },
         );
-        sessionItems = this.convertSessionMessages(raw, channel, session);
+        // 群聊频道：本条历史的「频道」语义换成该成员的席位——
+        // 作者归属（senderInstanceId）必须落在被查看的成员上，而不是群聊频道本身
+        // （群聊频道没有 teamMemberId，原样传入会让所有 agent 消息的 senderInstanceId
+        // 变成 null，前端因此无法把消息归到该成员头像/名字下）。
+        const convertChannel = isGroupChannel
+          ? { ...channel, teamMemberId, agentId: session.agentId }
+          : channel;
+        sessionItems = this.convertSessionMessages(
+          raw,
+          convertChannel,
+          session,
+        );
       }
       return {
         ...(await this.mergeSessionWithPlatform(channelId, sessionItems, {
