@@ -142,6 +142,12 @@ export default defineConfig({
       use: { storageState: ".auth/user.json" },
     },
     {
+      // 群聊成员状态角标（轮询）+ 成员视角右栏（成员信息替代团队面板）：全 route-mock。
+      name: "group-member-panel",
+      testMatch: /group-member-panel\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+    },
+    {
       // 外部渠道用户管理（external-users 契约 §4）：纯 API 造数（webhook 入站）→
       // 真后端 + 真 MySQL 端到端；与 pages 同属数据型 E2E，复用 setup 登录态。
       name: "external-users",
