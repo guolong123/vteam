@@ -13,6 +13,22 @@ export const MEMBER_STATUS = {
 
 export type MemberStatus = (typeof MEMBER_STATUS)[keyof typeof MEMBER_STATUS];
 
+/**
+ * 成员提示词与 Agent 提示词的关系（members.prompt_mode）。
+ *
+ * - `append`：在 Agent 岗位职责提示词之上追加【成员专属要求】（默认）；
+ * - `override`：用成员专属提示词覆盖 Agent 的提示词段。
+ *
+ * 同 persona/status：字符串列 + 应用层常量（双库兼容，不声明 Prisma enum）。
+ */
+export const MEMBER_PROMPT_MODE = {
+  append: 'append',
+  override: 'override',
+} as const;
+
+export type MemberPromptMode =
+  (typeof MEMBER_PROMPT_MODE)[keyof typeof MEMBER_PROMPT_MODE];
+
 export const MEMBERS_ERRORS = {
   MEMBER_NOT_FOUND: 'MEMBER_NOT_FOUND',
   MEMBER_NAME_CONFLICT: 'MEMBER_NAME_CONFLICT',

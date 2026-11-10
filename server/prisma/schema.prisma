@@ -270,6 +270,17 @@ model Member {
   preferredWorkerId String?  @map("preferred_worker_id")
   /// 成员私有工作目录（会话默认 cwd；团队目录按轮授权切换）
   privateWorkDir    String?  @map("private_work_dir") @db.VarChar(255)
+  /// 成员性格（`persona.constants.ts` 的 PERSONA_LIBRARY key；可空）。
+  /// **成员级属性**：同一 Agent/岗位的不同成员可有不同表达与协作风格；
+  /// 非空时优先于 `agents.persona`（Agent 列降级为存量兼容回退，UI 已迁到成员）。
+  persona           String?  @db.VarChar(32)
+  /// 成员专属提示词：成员级**特殊行为描述**（如多个开发者成员各自负责范围不同）。
+  /// 与 `Agent.prompt`（岗位职责范围）组合，关系由 `promptMode` 决定；TEXT 承载长文本。
+  prompt            String?  @db.Text
+  /// 成员提示词与 Agent 提示词的关系：
+  /// `append`（默认，在 Agent 岗位职责之上追加【成员专属要求】）/ `override`（覆盖 Agent 提示词段）。
+  /// 字符串列 + 应用层常量（双库兼容，不引 Prisma enum）。
+  promptMode        String   @default("append") @map("prompt_mode") @db.VarChar(16)
   /// active / disabled（停用后不可加群、不可派发）
   status            String   @default("active") @db.VarChar(16)
   description       String?  @db.Text

@@ -9,7 +9,7 @@
  */
 export { NavDock, NAV_ITEMS } from "./nav-dock";
 export type { NavDockProps, NavItem } from "./nav-dock";
-export { NavTopBar } from "./nav-top-bar";
+export { NavTopBar, NAV_TOPBAR_HEIGHT } from "./nav-top-bar";
 export type { NavTopBarProps } from "./nav-top-bar";
 export {
   CmdKPanel,

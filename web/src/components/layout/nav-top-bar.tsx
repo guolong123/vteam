@@ -8,6 +8,13 @@
 import type { CSSProperties, ReactNode } from "react";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 
+/**
+ * 顶栏固定高度（文档流内高度）。
+ * AppShell 内容区从该高度之下开始；`position: fixed` 的抽屉/浮层要用它做 top 避让，
+ * 避免各处散落 `60` 魔数（改顶栏高度时一处生效）。
+ */
+export const NAV_TOPBAR_HEIGHT = 60;
+
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 export interface NavTopBarProps {
@@ -45,7 +52,7 @@ export function NavTopBar({
       data-testid="topbar"
       className={className}
       style={{
-        height: 60,
+        height: NAV_TOPBAR_HEIGHT,
         flexShrink: 0,
         display: "flex",
         alignItems: "center",

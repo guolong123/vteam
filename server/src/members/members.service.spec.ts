@@ -65,6 +65,10 @@ const detailRow = {
   status: 'active',
   description: null,
   privateWorkDir: '~/work/laozhou',
+  // 成员级性格 / 专属提示词 / 提示词关系（37 篇：成员平台化后的三列）
+  persona: 'steady',
+  prompt: '只负责架构评审',
+  promptMode: 'append',
   defaultRoleId: 'ar_architect',
   agentId: 'a_architect',
   defaultModelId: null,
@@ -367,6 +371,134 @@ describe('MembersService', () => {
     await service.bindNotificationChannels('mbr_1', ['nc_1'], true);
     expect(prisma.teamNotificationChannel.deleteMany).toHaveBeenCalledWith({
       where: { notificationChannelId: { in: ['nc_1'] } },
+    });
+  });
+
+  it('create：persona/prompt/promptMode 落库（prompt trim、promptMode 默认 append）并投影返回', async () => {
+    const { service, prisma } = createService();
+    prisma.agentRole.findUnique.mockResolvedValue({
+      id: 'ar_architect',
+      defaultAgentId: 'a_architect',
+    });
+    prisma.agent.findUnique.mockResolvedValue({ id: 'a_architect' });
+    prisma.member.create.mockResolvedValue({ id: 'mbr_0000000001' });
+    prisma.member.findUnique.mockResolvedValue(detailRow);
+
+    const result: any = await service.create('u_1', {
+      name: '架构师-老周',
+      roleId: 'ar_architect',
+      persona: 'steady',
+      prompt: '  只负责架构评审  ',
+    });
+
+    expect(prisma.member.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        persona: 'steady',
+        prompt: '只负责架构评审',
+        promptMode: 'append',
+      }),
+    });
+    expect(result).toMatchObject({
+      persona: 'steady',
+      prompt: '只负责架构评审',
+      promptMode: 'append',
+    });
+  });
+
+  it('create：persona/prompt 缺省落 null，显式 promptMode=override 原样落库', async () => {
+    const { service, prisma } = createService();
+    prisma.agentRole.findUnique.mockResolvedValue({
+      id: 'ar_architect',
+      defaultAgentId: 'a_architect',
+    });
+    prisma.agent.findUnique.mockResolvedValue({ id: 'a_architect' });
+    prisma.member.create.mockResolvedValue({ id: 'mbr_0000000001' });
+    prisma.member.findUnique.mockResolvedValue(detailRow);
+
+    await service.create('u_1', {
+      name: '架构师-老周',
+      roleId: 'ar_architect',
+      promptMode: 'override',
+    });
+
+    expect(prisma.member.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        persona: null,
+        prompt: null,
+        promptMode: 'override',
+      }),
+    });
+  });
+
+  it('update：persona/prompt 传 null 表示清除，promptMode 可切到 override', async () => {
+    const { service, prisma } = createService();
+    prisma.member.findUnique
+      .mockResolvedValueOnce({
+        id: 'mbr_1',
+        name: '架构师-老周',
+        persona: 'strict',
+        prompt: '旧提示词',
+        promptMode: 'append',
+      })
+      // findOne 回读：已清除且 override 生效
+      .mockResolvedValueOnce({
+        ...detailRow,
+        persona: null,
+        prompt: null,
+        promptMode: 'override',
+      });
+    prisma.member.update.mockResolvedValue({});
+
+    const result: any = await service.update('mbr_1', {
+      persona: null,
+      prompt: null,
+      promptMode: 'override',
+    });
+
+    // 精确匹配 data：未传字段（name/roleId/...）不应被写入
+    expect(prisma.member.update).toHaveBeenCalledWith({
+      where: { id: 'mbr_1' },
+      data: { persona: null, prompt: null, promptMode: 'override' },
+    });
+    expect(result).toMatchObject({
+      persona: null,
+      prompt: null,
+      promptMode: 'override',
+    });
+  });
+
+  it('clone：复制 persona/prompt/promptMode 三列', async () => {
+    const { service, prisma } = createService();
+    prisma.member.findUnique
+      .mockResolvedValueOnce({
+        id: 'mbr_1',
+        name: '架构师-老周',
+        defaultRoleId: 'ar_architect',
+        agentId: 'a_architect',
+        defaultModelId: null,
+        preferredWorkerId: null,
+        privateWorkDir: null,
+        persona: 'strict',
+        prompt: '只负责支付模块',
+        promptMode: 'override',
+        description: null,
+      })
+      // nextAvailableName：「架构师-老周-副本」未被占用
+      .mockResolvedValueOnce(null)
+      // findOne 回读新成员
+      .mockResolvedValueOnce(detailRow);
+    prisma.member.create.mockResolvedValue({});
+
+    await service.clone('u_1', 'mbr_1');
+
+    expect(prisma.member.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: 'mbr_0000000001',
+        name: '架构师-老周-副本',
+        persona: 'strict',
+        prompt: '只负责支付模块',
+        promptMode: 'override',
+      }),
     });
   });
 });
