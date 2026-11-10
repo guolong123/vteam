@@ -379,9 +379,12 @@ export default function WorkerInstallPage() {
   const curlCommand = isDsh
     ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh --worker-id ${workerId} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`
     : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
+  // `--init`：容器 PID1 必须当 reaper。node 直接当 PID1 时不回收 reparent 到 PID1 的
+  // 孤儿孙进程 ⇒ agent-browser/Chrome 每次浏览器操作留下 ~20 个 Z 僵尸（PPID=1）。
+  // 镜像内已有 tini ENTRYPOINT 双保险；这里显式加 --init，旧镜像/自定义 entrypoint 也不复发。
   const dockerCommand = isDsh
-    ? `docker run -d --name dsh-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
-    : `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
+    ? `docker run -d --init --name dsh-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
+    : `docker run -d --init --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
