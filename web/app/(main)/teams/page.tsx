@@ -112,14 +112,14 @@ export default function TeamsPage() {
   };
 
   return (
-    <PageWindow maxWidth={1200} gap={space.md} style={{ position: "relative" }}>
+    <PageWindow testId="teams-list-root" maxWidth={1200} gap={space.md} style={{ position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
         <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
           <button type="button" data-testid="unified-tab-teams" style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "var(--color-surface)", color: "#0F766E", fontSize: fontSize.sm, fontWeight: 700, cursor: "pointer", fontFamily: fontFamily.body, boxShadow: shadow.sm }}>团队</button>
           <button type="button" data-testid="unified-tab-members" onClick={() => router.push("/members")} style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "transparent", color: neutral[500], fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>成员</button>
         </div>
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={() => router.push("/teams/new")} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 新建团队</button>
+        <button type="button" data-testid="create-team-button" onClick={() => router.push("/teams/new")} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 新建团队</button>
       </div>
 
       <div>

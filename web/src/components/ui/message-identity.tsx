@@ -53,9 +53,15 @@ export function MessageIdentity({
   style,
   className,
 }: MessageIdentityProps) {
-  const roleTheme = role ? roles[role] : null;
-  // 同 ChatBubble：`role` 缺省不回落 developer（外部渠道消息无平台角色，回落会让
-  // 「GuoLong」旁并排挂假「开发者」标签）。
+  // 两种「没有合法角色」的场景要分开处理（2026-11-10 修正）：
+  // - `role` **缺省**（外部渠道消息无平台角色）→ 不回落 developer，否则「GuoLong」旁
+  //   会并排挂一个假「开发者」标签（见 50257f99）；
+  // - `role` **非法/未知**（脏数据，运行时可能拿到不在 ROLE_KEYS 的字符串）→ 回落到
+  //   developer。此时 AgentAvatar 已按 `roles[safeRole] ?? roles.developer` 回落成开发者
+  //   头像，若这里不回落就会出现「头像是开发者色、旁边却没有角色标签」的割裂，
+  //   且 `roleText[role]` 会取到 undefined（颜色不属于任何主题）。
+  const roleTheme = role ? (roles[role] ?? roles.developer) : null;
+  const roleColor = role ? (roleText[role] ?? roleText.developer) : neutral[400];
   const display = authorRoleDisplay(author, roleTheme ? roleTheme.label : "");
   return (
     <div
@@ -85,7 +91,7 @@ export function MessageIdentity({
           data-testid="chat-bubble-author"
           style={{
             fontSize: messageFontSize.identity,
-            color: roleTheme ? roleText[role!] : neutral[400],
+            color: roleColor,
             fontWeight: messageFontWeight.identity,
             display: "inline-flex",
             alignItems: "center",

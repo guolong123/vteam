@@ -97,11 +97,11 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
   }
 
-  test("2/17 team-list /teams（项目列表已拆除，主工作台）", async ({ page }) => {
+  test("2/17 team-list /teams（团队列表表格行）", async ({ page }) => {
     await page.goto("/teams");
     await expectNavShell(page);
     await expect(page.getByTestId("teams-list-root")).toBeVisible();
-    await expect(page.getByTestId("team-card").first()).toBeVisible();
+    await expect(page.getByTestId("team-row").first()).toBeVisible();
     await expect(page.getByTestId("create-team-button")).toBeVisible();
   });
 
@@ -157,25 +157,125 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
     await expect(page.getByTestId("clone-template-button")).toBeVisible();
     await expect(page.getByTestId("model-select").first()).toBeVisible();
-    await expect(page.getByTestId("persona-select").first()).toBeVisible();
-    await expect(page.getByTestId("persona-select").first()).toBeEnabled();
+    // 性格配置已从 Agent 页移除（迁到成员库「编辑成员」面板，见 5b 用例）
   });
 
-  test("7b/17 team-session /teams/<resolved>/session（团队唯一聊天入口）", async ({ page }) => {
-    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
+  test("5b/17 member-library /members（成员性格 + 提示词配置：保存后 reload 回读一致）", async ({
+    page,
+    request,
+  }) => {
+    // 成员库是平台级资源，seed 不预置平台成员 → 自建一个成员夹具，用例结束删除。
+    const headers = await seedAdminHeaders(request);
+    const rolesResponse = await request.get("/api/v1/agent-roles?page=1&pageSize=100", { headers });
+    expect(rolesResponse.ok()).toBeTruthy();
+    const roles = ((await rolesResponse.json()) as {
+      items?: Array<{ id: string; type?: string; defaultAgentId?: string | null }>;
+    }).items ?? [];
+    const role = roles.find((item) => item.type === "builtin") ?? roles[0];
+    expect(role?.id).toBeTruthy();
+    let agentId = role?.defaultAgentId ?? null;
+    if (!agentId) {
+      const agentsResponse = await request.get("/api/v1/agents?page=1&pageSize=100", { headers });
+      expect(agentsResponse.ok()).toBeTruthy();
+      const agents = ((await agentsResponse.json()) as { items?: Array<{ id: string }> }).items ?? [];
+      agentId = agents[0]?.id ?? null;
+    }
+    expect(agentId).toBeTruthy();
+    const memberName = `e2e-成员性格-${Date.now().toString(36)}`;
+    const createResponse = await request.post("/api/v1/members", {
+      headers,
+      data: { name: memberName, roleId: role?.id, agentId },
+    });
+    expect(createResponse.status()).toBe(201);
+    const created = (await createResponse.json()) as { id: string };
+    expect(created.id).toBeTruthy();
+
+    const memberRow = page.locator(`[data-member-id="${created.id}"]`);
+    const personaSelect = page.getByTestId("member-persona-select");
+    const personaPreview = page.getByTestId("member-persona-preview");
+    const promptInput = page.getByTestId("member-prompt-input");
+    const modeAppend = page.getByTestId("member-prompt-mode-append");
+    const modeOverride = page.getByTestId("member-prompt-mode-override");
+    const memberPrompt = "你只负责登录与鉴权模块，接口按 REST 规范输出。";
+
+    try {
+      // 成员库按 createdAt 升序分页，库里已有历史成员 → 用搜索收敛到本用例新建的成员
+      await page.goto("/members");
+      await expectNavShell(page);
+      const search = page.getByTestId("members-search");
+      await search.fill(memberName);
+      await expect(memberRow).toBeVisible();
+      await memberRow.getByRole("button", { name: "编辑", exact: true }).click();
+
+      // 右侧编辑抽屉固定于内容区（回归：曾 absolute 挂可滚动容器，列表下滚后抽屉被裁半截、
+      // 底部悬空，表现为「侧栏与页面高度不一致」）。滚到底后抽屉仍钉在原位、高度占满内容区。
+      const drawer = page.getByTestId("member-edit-drawer");
+      const drawerBefore = await drawer.boundingBox();
+      await page.evaluate(() => {
+        const main = document.getElementById("app-main-content");
+        if (main) main.scrollTop = main.scrollHeight;
+      });
+      const drawerAfter = await drawer.boundingBox();
+      expect(drawerBefore).not.toBeNull();
+      expect(drawerAfter).not.toBeNull();
+      expect(Math.round(drawerAfter!.y)).toBe(Math.round(drawerBefore!.y));
+      expect(drawerAfter!.height).toBeGreaterThan(400);
+      await page.evaluate(() => {
+        const main = document.getElementById("app-main-content");
+        if (main) main.scrollTop = 0;
+      });
+
+      // 性格配置：可见、可选、选中后展示 preview 文案
+      await expect(personaSelect).toBeVisible();
+      await expect(personaSelect).toBeEnabled();
+      await expect(modeAppend).toHaveAttribute("aria-pressed", "true");
+      await personaSelect.selectOption("steady");
+      await expect(personaPreview).toBeVisible();
+      await expect(personaPreview).toContainText("先复核信息再下结论");
+
+      // 提示词配置：textarea 可填、模式可切换
+      await promptInput.fill(memberPrompt);
+      await modeOverride.click();
+      await expect(modeOverride).toHaveAttribute("aria-pressed", "true");
+      await expect(modeAppend).toHaveAttribute("aria-pressed", "false");
+      await page.getByRole("button", { name: "保存修改", exact: true }).click();
+      await expect(page.getByTestId("members-notice")).toContainText("已保存成员");
+
+      // reload 后重新打开编辑：persona / prompt / promptMode 回读一致
+      await page.reload();
+      await search.fill(memberName);
+      await expect(memberRow).toBeVisible();
+      await memberRow.getByRole("button", { name: "编辑", exact: true }).click();
+      await expect(personaSelect).toHaveValue("steady");
+      await expect(promptInput).toHaveValue(memberPrompt);
+      await expect(modeOverride).toHaveAttribute("aria-pressed", "true");
+      await expect(modeAppend).toHaveAttribute("aria-pressed", "false");
+      await expect(personaPreview).toContainText("先复核信息再下结论");
+    } finally {
+      const removed = await request.delete(`/api/v1/members/${created.id}`, { headers });
+      expect(removed.ok()).toBeTruthy();
+    }
+
+    // Agent 页不再有性格配置（迁到成员级）；提示词编辑器保留
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-config-panel")).toBeVisible();
+    await expect(page.getByTestId("persona-select")).toHaveCount(0);
+    await expect(page.getByTestId("prompt-editor")).toBeVisible();
+  });
+
+  test("7b/17 team-session /chat?c=group:<team>（团队唯一聊天入口）", async ({ page }) => {
+    // 旧 `/teams/:id/session` 已合并重定向到 `/chat`；团队唯一聊天入口就是 /chat 群聊态。
+    // 成员面板（members-panel）随旧页拆除，/chat 用「左侧会话列表 + 顶部成员切换条」承载同一职责。
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${PAGES_TEAM_ID}`)}`);
     await expectNavShell(page);
     await expect(page.getByTestId("team-session-root")).toBeVisible();
-    await expect(page.getByTestId("members-panel")).toBeVisible();
-    await expect(page.getByTestId("dm-tabs")).toBeVisible();
-    await expect(page.getByTestId("dm-tab-group")).toBeVisible();
+    await expect(page.getByTestId("group-member-switcher")).toBeVisible();
+    await expect(page.getByTestId("conversation-item").first()).toBeVisible();
     await expect(page.getByTestId("chat-message-list")).toBeVisible();
-    // 私聊 Tab：点击成员私聊按钮进入 private: 频道
-    const privates = page.locator('[data-testid^="dm-tab-private-"]');
-    if ((await privates.count()) > 0) {
-      await privates.first().click();
-      await expect(page.getByTestId("chat-message-list")).toBeVisible();
-      await page.getByTestId("dm-tab-group").click();
-    }
+    // 私聊入口：/chat 用左侧会话列表承载（旧页的 dm-tabs 在 embedded 模式下 display:none，
+    // 因为 /chat 自己就是外层壳，不再需要内嵌那一排私聊 Tab）。
+    await expect(page.getByTestId("new-dm-button")).toBeVisible();
+    await expect(page.getByTestId("conversation-filter-dm")).toBeVisible();
     // 右栏新结构（Phase 7 改版）：一级 团队/任务 + 任务四子页（默认落任务见下方 T24 站内进入用例）
     const panel = page.getByTestId("task-panel");
     await expect(panel.getByRole("button", { name: "团队", exact: true })).toBeVisible();
@@ -226,7 +326,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     expect(created.ok()).toBeTruthy();
     const teamId = ((await created.json()) as { id: string }).id;
     expect(teamId).toBeTruthy();
-    await page.goto(`/teams/${teamId}/session`);
+    // 旧 `/teams/:id/session` 已合并重定向到 `/chat`（团队唯一聊天入口），直接走新路由
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${teamId}`)}`);
     await expectNavShell(page);
     await expect(page.getByTestId("team-session-root")).toBeVisible();
     await expect(page.getByTestId("team-session-empty")).toHaveCount(0);
@@ -240,7 +341,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await page.getByTestId("message-input").fill(sent);
     await page.getByTestId("message-input-send").click();
     await expect(page.getByTestId("chat-message-list").getByText(sent)).toBeVisible();
-    expect(page.url()).toContain(`/teams/${teamId}/session`);
+    // URL 断言对齐新路由：/chat?c=group:<teamId>（route 会做 percent-encoding）
+    expect(decodeURIComponent(page.url())).toContain(`c=group:${teamId}`);
     await expect(page.getByTestId("team-session-send-error")).toHaveCount(0);
     await expect(page.getByTestId("team-session-current-task")).toHaveCount(0);
     const after = await request.get(`/api/v1/teams/${teamId}`, { headers });
@@ -324,11 +426,13 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       .filter((l) => l !== "新建任务")
       .sort();
     expect(cmdkNavLabels).toEqual(navLabels);
-    // Todo 14 起 memories 已移出 NAV_ITEMS：导航组共 8 项、以「系统管理」收尾，
-    // 「用户管理 / 角色权限 / 记忆管理」收敛至 /system 二级导航。
+    // Todo 14 起 memories 已移出 NAV_ITEMS；stats-dashboard 起新增「统计看板」⇒ 导航组共 10 项、
+    // 仍以「系统管理」收尾，「用户管理 / 角色权限 / 记忆管理」收敛至 /system 二级导航。
     // 搜「系统」必须命中「系统管理」；搜「记忆」不再命中任何「记忆管理」项。
+    // 顺序即 NAV_ITEMS 声明序（与 cmdk「导航」组同源）。
     const navLabelsOrdered = (await page.getByTestId("nav-item").allInnerTexts()).map(stripIcon);
-    expect(navLabelsOrdered).toHaveLength(8);
+    expect(navLabelsOrdered).toHaveLength(10);
+    expect(navLabelsOrdered).toContain("统计看板");
     expect(navLabelsOrdered[navLabelsOrdered.length - 1]).toBe("系统管理");
     await page.getByTestId("cmdk-search").locator("input").fill("系统");
     await expect(page.getByTestId("cmdk-item").first()).toBeVisible();
@@ -578,7 +682,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   });
 
   test("T24 状态卡三层 + 团队任务列表（团队当前任务）", async ({ page, request }) => {
-    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${PAGES_TEAM_ID}`)}`);
     await expectNavShell(page);
     const scroll = page.getByTestId("task-subtab-scroll");
     await page.getByTestId("task-panel").getByRole("button", { name: "任务", exact: true }).click();
@@ -642,7 +746,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${PAGES_TEAM_ID}`)}`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
     await panel.getByTestId("task-subtab-triggers").click();
@@ -696,7 +800,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${PAGES_TEAM_ID}`)}`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await panel.getByTestId("task-subtab-triggers").click();
     const row = page.getByTestId("trigger-row").first();
@@ -783,7 +887,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${PAGES_TEAM_ID}`)}`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
     await panel.getByRole("button", { name: "计划" }).click();
@@ -815,7 +919,9 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(artModal).toContainText("e2e计划产出");
     await expect(artModal.getByTestId("artifact-doc-modal-version")).toHaveText("v3");
     await expect(artModal.locator("h1")).toHaveText("artifact md");
-    expect(new URL(page.url()).pathname).toBe(`/teams/${PAGES_TEAM_ID}/session`);
+    // 「打开产出物弹窗不跳走路由」：新路由是 /chat，且 c 参数仍指向同一团队
+    expect(new URL(page.url()).pathname).toBe("/chat");
+    expect(decodeURIComponent(page.url())).toContain(`c=group:${PAGES_TEAM_ID}`);
     await artModal.getByTestId("artifact-doc-modal-close").click();
     await expect(artModal).toHaveCount(0);
   });
@@ -836,7 +942,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${PAGES_TEAM_ID}`)}`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
     await panel.getByRole("button", { name: "计划" }).click();
@@ -866,7 +972,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     });
     const panel = page.getByTestId("task-panel");
     const scroll = page.getByTestId("task-subtab-scroll");
-    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${PAGES_TEAM_ID}`)}`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(scroll).toBeVisible();
     await panel.getByRole("button", { name: "产出" }).click();
@@ -996,11 +1102,13 @@ test.describe("任务历史摘要与会话任务参数（自建团队）", () =>
   });
 
   test("session task parameter selects a non-head task and guards invalid input", async ({ page }) => {
-    await page.goto(`/teams/${HIST_TEAM_ID}/session?task=${HIST_NON_HEAD_TASK_ID}`);
-    const selectedTask = page.getByTestId("team-session-current-task");
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${HIST_TEAM_ID}`)}&task=${HIST_NON_HEAD_TASK_ID}`);
+    // `/chat` 用 embedded 模式，旧顶栏「当前任务胶囊」（team-session-current-task）不渲染；
+    // 聚焦任务改由右栏状态卡承载（panel-task-title 带同口径 data-task-id）。
+    const selectedTask = page.getByTestId("panel-task-title");
     await expect(selectedTask).toHaveAttribute("data-task-id", HIST_NON_HEAD_TASK_ID);
 
-    await page.goto(`/teams/${HIST_TEAM_ID}/session?task=invalid-task`);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${HIST_TEAM_ID}`)}&task=invalid-task`);
     await expect(page.getByTestId("session-task-param-error")).toContainText("任务参数无效");
   });
 });

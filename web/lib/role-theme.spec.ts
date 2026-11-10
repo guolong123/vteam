@@ -110,6 +110,14 @@ function App() {
       ))}
       {/* 未知角色：必须安全回落 developer（头像/标签），不得抛异常 */}
       <Row role="__unknown_role__" />
+      {/*
+        role **缺省**（外部渠道消息，如企微用户 GuoLong）：与「未知值」是两回事——
+        缺省时不得回落 developer，否则会在外部用户名旁挂一个假「开发者」标签（50257f99）。
+        保留此 fixture 以锁住该语义，防止「未知值回落」的修复顺带把缺省也回落了。
+      */}
+      <div data-fixture-role="absent">
+        <MessageIdentity author="GuoLong" time="12:01" senderType="external" />
+      </div>
       <div data-fixture-role="external">
         <MessageIdentity author="外部作者" role="developer" time="12:02" senderType="external" />
       </div>
@@ -383,6 +391,12 @@ test("B10 未知角色安全回落 developer，external/mention 徽标保持", a
       page.locator('[data-fixture-role="__unknown_role__"] [data-testid="message-identity-role"]'),
     ).toContainText(EXPECTED_LABELS.developer);
     expect(unknown.identityColor).toMatch(/^(rgb|rgba)\(/);
+
+    // 对照：role **缺省**时不得渲染角色标签（50257f99：外部渠道消息不挂假「开发者」）。
+    // 这条与上面的「未知值回落」成对出现——两种「没有合法角色」的场景语义不同，不可合并。
+    await expect(
+      page.locator('[data-fixture-role="absent"] [data-testid="message-identity-role"]'),
+    ).toHaveCount(0);
 
     // external 徽标仍在，且背景跟随中性变量
     await expect(page.locator('[data-fixture-role="external"] [data-testid="external-channel-badge"]')).toHaveCount(1);

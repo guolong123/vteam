@@ -101,7 +101,68 @@ function issuesJson(taskId: string) {
 }
 
 async function mockSessionApis(page: import("@playwright/test").Page) {
+  // ⚠️ 兜底 route 必须**最先**注册：Playwright 后者优先，故它最后才匹配，
+  // 只兜住下面未显式 mock 的接口。原因：未 mock 的请求会 route.fallback() 打到
+  // 真实后端，而本 spec 用的是假 token（e2e-member-token）⇒ 401 ⇒ 前端 api 层
+  // 全局登出并跳落地页 /teams，页面整体错位（表现为 team-session-root 找不到）。
+  await page.route("**/api/v1/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100 }),
+    }),
+  );
+  // ⚠️ 必须注册在**兜底之后**：Playwright 后注册优先，放前面会被兜底抢先匹配，
+  // 于是 `/workers` 拿到 `{items:[]}`（对象）→ 前端 `(data ?? []).map` 崩页。
+  await page.route((url) => url.pathname === "/api/v1/workers", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+  );
   await page.route("**/api/v1/events*", (route) => route.abort());
+  // `/chat` 壳依赖 GET /conversations 判定当前选中群聊（active/isGroup）；
+  // 旧 `/teams/:id/session` 已合并重定向到 `/chat`，此处必须同样 mock，
+  // 否则列表为空 → 页面落「还没有会话」空态，team-session-root 不渲染。
+  // `/chat` 右栏 teamTasksQuery + 成员目录/群聊壳还会请求这两个列表；
+  // 不 mock 会 fallback 到真实后端（mock 环境无登录态 ⇒ 页面整体渲染失败，
+  // 表现为 team-session-root 找不到）。形状按各自 DTO 给最小可用值。
+  await page.route((url) => url.pathname === "/api/v1/tasks", (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [taskJson(scenario.taskId)], total: 1, page: 1, pageSize: 20 }),
+    });
+  });
+  await page.route((url) => url.pathname === "/api/v1/members", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100 }),
+    }),
+  );
+  await page.route((url) => url.pathname === "/api/v1/conversations", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          {
+            id: "group:tm_0000000001",
+            type: "group",
+            title: "E2E 团队",
+            badge: "群",
+            channelId: "ch_0000000001",
+            contextTeamId: "tm_0000000001",
+            memberCount: 1,
+            unreadCount: 0,
+            pinned: false,
+            processing: false,
+            lastMessage: null,
+          },
+        ],
+        total: 1,
+      }),
+    }),
+  );
   await page.route((url) => url.pathname === "/api/v1/teams", (route) =>
     route.fulfill({
       status: 200,
@@ -207,7 +268,7 @@ async function seedMemberAuth(page: import("@playwright/test").Page) {
 
 /** 进入会话页 → 切到任务 Tab → 计划子 Tab，返回计划状态块定位器。 */
 async function openPlanTab(page: import("@playwright/test").Page) {
-  await page.goto("/teams/tm_0000000001/session");
+  await page.goto(`/chat?c=${encodeURIComponent("group:tm_0000000001")}`);
   await expect(page.getByTestId("team-session-root")).toBeVisible();
   await page.getByRole("button", { name: "任务", exact: true }).click();
   await page.getByRole("button", { name: "计划", exact: true }).click();

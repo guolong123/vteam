@@ -4,6 +4,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
+import { LANDING_ADMIN } from "@/lib/landing";
 import { waitForWorkerCatalogSettled } from "./worker-readiness";
 
 /**
@@ -61,7 +62,7 @@ async function loginAsAdmin(page: Page) {
   await page.getByTestId("username").fill("admin");
   await page.getByTestId("password").fill("admin123");
   await page.getByTestId("login-button").click();
-  await expect(page).toHaveURL(/\/teams/, { timeout: 15_000 });
+  await expect(page).toHaveURL(new RegExp(`${LANDING_ADMIN}$`), { timeout: 15_000 });
 }
 
 async function adminToken(request: APIRequestContext): Promise<string> {
