@@ -423,6 +423,37 @@ export function TeamSessionView({
     enabled: !!channelId && !!user?.id && isGroupTab,
     refetchInterval: 30_000,
   });
+  /**
+   * 群聊态选中某成员时，切换数据源到「该成员的完整会话历史」（含 reasoning/tool），
+   * 与私聊页同源同渲染；未选中则保持群聊消息列表。
+   */
+  const isMemberView = isGroupTab && !!filterMemberId;
+
+  /**
+   * 「点成员看其完整过程」数据源（群聊态 + 已选中某个成员）。
+   *
+   * 为什么不能复用群聊消息：群聊 `/channels/:id/messages` 是平台消息表投影，
+   * 只有 text + 已落库 parts，**拿不到该成员完整的 reasoning / tool 调用过程**；
+   * 私聊页之所以能看到思考与工具卡片，是因为它走 `/session-history`（直读 serve 会话）。
+   * 因此选中成员时改为向同一端点要「该席位的会话历史」，与私聊完全同源同渲染。
+   *
+   * 取消选中（回到「全部」）→ 自动退回群聊消息列表。
+   */
+  const memberHistoryQuery = useQuery({
+    queryKey: ["channel", channelId, "member-history", filterMemberId],
+    queryFn: async () => {
+      if (!channelId || !filterMemberId) {
+        return { items: [], nextCursor: null } as MessagesResponse;
+      }
+      const res = await api.get<{ items: RealtimeChatMessage[]; nextCursor: string | null }>(
+        `/channels/${channelId}/session-history`,
+        { query: { limit: 50, teamMemberId: filterMemberId } },
+      );
+      return { items: res.items, nextCursor: res.nextCursor ?? null } as MessagesResponse;
+    },
+    enabled: !!channelId && !!filterMemberId && !!user?.id && isGroupTab,
+    refetchInterval: 30_000,
+  });
   const privateMessagesQuery = useQuery({
     queryKey: ["channel", activePrivateId, "messages"],
     queryFn: async () => {
@@ -1352,6 +1383,31 @@ export function TeamSessionView({
 
   /* ---------- 加载更多（群聊/私聊各自独立游标） ---------- */
   const handleLoadMore = useCallback(async () => {
+    // 成员视角的数据源是该成员会话历史（可能与群聊同频道、不同 query key）
+    if (isMemberView) {
+      if (!channelId || !memberHistoryQuery.data?.nextCursor || loadingMore) return;
+      setLoadingMore(true);
+      try {
+        const next = await api.get<MessagesResponse>(`/channels/${channelId}/messages`, {
+          query: { cursor: memberHistoryQuery.data.nextCursor, limit: 50 },
+        });
+        queryClient.setQueryData<MessagesResponse>(
+          ["channel", channelId, "member-history", filterMemberId],
+          (old: MessagesResponse | undefined) =>
+            old
+              ? {
+                  items: [...next.items.filter((n) => !old.items.some((o) => o.id === n.id)), ...old.items],
+                  nextCursor: next.nextCursor,
+                }
+              : next,
+        );
+      } catch (e) {
+        console.error("[TeamSession] load more member history failed", { teamId, channelId, error: e });
+      } finally {
+        setLoadingMore(false);
+      }
+      return;
+    }
     const q = isGroupTab ? messagesQuery : privateMessagesQuery;
     const cid = isGroupTab ? channelId : activePrivateId;
     if (!cid || !q.data?.nextCursor || loadingMore) return;
@@ -1373,7 +1429,7 @@ export function TeamSessionView({
     } finally {
       setLoadingMore(false);
     }
-  }, [isGroupTab, messagesQuery, privateMessagesQuery, channelId, activePrivateId, loadingMore, queryClient, teamId]);
+  }, [isGroupTab, messagesQuery, privateMessagesQuery, channelId, activePrivateId, loadingMore, queryClient, teamId, isMemberView, memberHistoryQuery, filterMemberId]);
 
   /* ---------- 成员管理（挂聚焦任务实例维度；无聚焦任务时只读） ---------- */
   const hasPanelTask = !!effectivePanelTaskId;
@@ -1553,16 +1609,20 @@ export function TeamSessionView({
     );
   }
 
-  const allMessages: RealtimeChatMessage[] = isGroupTab
-    ? (messagesQuery.data?.items ?? [])
-    : (privateMessagesQuery.data?.items ?? []);
+  const allMessages: RealtimeChatMessage[] = isMemberView
+    ? (memberHistoryQuery.data?.items ?? [])
+    : isGroupTab
+      ? (messagesQuery.data?.items ?? [])
+      : (privateMessagesQuery.data?.items ?? []);
   // in-flight（status=processing）agent 消息不再抽出独立渲染：私聊与终态消息共用同一条
   // MsgParts variant="line" 渲染路径（服务端 mergeSessionWithPlatform 已把 processing 行
   // 并入会话末尾）。群聊 Tab 渲染路径逐字节不变。
   const messages: RealtimeChatMessage[] = allMessages;
-  const nextCursor = isGroupTab
-    ? (messagesQuery.data?.nextCursor ?? null)
-    : (privateMessagesQuery.data?.nextCursor ?? null);
+  const nextCursor = isMemberView
+    ? (memberHistoryQuery.data?.nextCursor ?? null)
+    : isGroupTab
+      ? (messagesQuery.data?.nextCursor ?? null)
+      : (privateMessagesQuery.data?.nextCursor ?? null);
   const dateSeparatorFlagsByIndex = dateSeparatorFlags(messages);
 
   /** 单条消息展示解析（角色/作者/缩写/parts/附件/@我/发送实例）：历史 map 与置底 live 行共用。 */
@@ -1600,17 +1660,21 @@ export function TeamSessionView({
     // B8：头像缩写只从已解析的人名/别名生成（裸 id 已在 resolveDisplayAuthor 被丢弃），
     // 解析不到名字 → undefined → AgentAvatar 回落角色字母，同角色不同成员因此不撞字母
     const initials = messageInitials(author);
-    // 过程片段：群聊（平台表，只有 group_post 发布的结论）仅保留 text；
-    // 私聊（session-history，serve 完整会话）全量透传 reasoning/thinking/tool，
-    // 与旧 messages/[id] 私聊页一致，后端已做 synthetic/过程 part 策展
+    // 过程片段裁剪规则（按**数据源**而非 Tab 判定，2026-11-10 修正）：
+    // - 群聊「全部」视角：数据源是平台消息表（只有 group_post 发布的结论），保留 text；
+    // - **群聊「成员」视角**：数据源已切到该成员的 session-history，与私聊同源，
+    //   必须全量透传 reasoning/thinking/tool —— 此前按 isGroupTab 一刀切只留 text，
+    //   导致点了成员也看不到思考与工具卡片（用户反馈的核心问题）；
+    // - 私聊：session-history，全量透传（后端已做 synthetic/过程 part 策展）。
+    const richSource = !isGroupTab || isMemberView;
     const rawParts = (msg as unknown as { content?: { parts?: unknown } })?.content?.parts;
     const parts = Array.isArray(rawParts)
-      ? isGroupTab
-        ? (rawParts as unknown[]).filter(
+      ? richSource
+        ? (rawParts as unknown[])
+        : (rawParts as unknown[]).filter(
             (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
               && !(p as { type?: string; synthetic?: boolean }).synthetic,
           )
-        : (rawParts as unknown[])
       : [];
     const isMentionMe = Array.isArray((msg as unknown as { mentions?: unknown }).mentions) &&
       (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) ||
@@ -1864,7 +1928,13 @@ export function TeamSessionView({
           <div data-testid="chat-message-list" ref={listRef} onScroll={(e) => { const el = e.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120; }} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.xl}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
             <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
               <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
-              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{isGroupTab ? "团队会话 · 历史跨任务可见" : "私聊 · 仅你与该成员可见"}</span>
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                {isMemberView
+                  ? `成员过程 · ${nameByStateKey.get(filterMemberId ?? "") ?? "该成员"}的完整会话（含思考与工具）`
+                  : isGroupTab
+                    ? "团队会话 · 历史跨任务可见"
+                    : "私聊 · 仅你与该成员可见"}
+              </span>
               <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
             </div>
             {nextCursor && (
@@ -1873,15 +1943,8 @@ export function TeamSessionView({
               </div>
             )}
             {messages.map((msg, index) => {
-              // 成员切换条：按目标成员过滤展示（仅视角过滤，不改数据源/归属）。
-              if (
-                filterMemberId &&
-                (msg as unknown as { senderInstanceId?: string | null })
-                  .senderInstanceId !== filterMemberId &&
-                msg.senderId !== filterMemberId
-              ) {
-                return null;
-              }
+              // 成员视角已切换数据源到该成员的会话历史（含其思考/工具过程），
+              // 不再需要按 sender 做客户端过滤——那样只会得到群聊消息的子集。
               // B2 连续分组：仅与上一条比较，不重排、不过滤数据源
               const grouped = isGroupedWithPrevious(index > 0 ? messages[index - 1] : undefined, msg);
               // B3 跨天分隔：只在本地日键变化的那一条之前插入，消息顺序与数据源不动
@@ -1938,8 +2001,9 @@ export function TeamSessionView({
                   <MsgParts
                     key={msg.id}
                     parts={parts}
-                    // 私聊按全局设置选 native(bubble) / dsh 变体；群聊保持 bubble。
-                    variant={isGroupTab ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"}
+                    // 私聊 / 群聊「成员视角」按全局设置选 native(bubble) / dsh 变体；
+                    // 群聊「全部」视角保持 bubble（数据源不同，见 richSource 注释）。
+                    variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"}
                     messageStatus={msg.status}
                     secretAwaiting={secretAwaiting}
                     bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)}

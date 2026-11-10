@@ -1640,7 +1640,7 @@ describe('ChatService', () => {
       expect(result.items).toHaveLength(2);
     });
 
-    it('非 private（team_group）→ 400 SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）', async () => {
+    it('非 private（team_group）且未指定 teamMemberId → 400 SESSION_HISTORY_NOT_SUPPORTED', async () => {
       allowAccess();
 
       try {
@@ -1652,6 +1652,50 @@ describe('ChatService', () => {
         });
       }
       expect(prisma.session.findMany).not.toHaveBeenCalled();
+      expect(workerClient.getMessages).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 群聊 + teamMemberId（2026-11-10）：
+     * 会话页点成员头像要看「该成员完整过程（含思考/工具）」，而群聊 `/messages` 只有
+     * text + 已落库 parts。此分支复用私聊的 serve 拉取链路，按席位定位成员会话。
+     */
+    it('群聊 + teamMemberId → 按该席位定位会话并返回含 reasoning/tool 的历史', async () => {
+      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group, teamMemberId: null }));
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession({ agentId: 'a_tester' })]);
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
+      workerClient.getMessages.mockResolvedValue(serveMessages());
+      prisma.message.findMany.mockResolvedValue([]);
+      (prisma as any).message.findUnique = jest.fn().mockResolvedValue(null);
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        teamMemberId: 'tmm_9',
+      });
+
+      // 按入参席位（而非频道自身）定位会话
+      expect((prisma.session as any).findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { teamMemberId: 'tmm_9' } }),
+      );
+      // 作者归属落在被查看的成员上（否则前端无法把消息归到该成员名下）
+      const agentItem = result.items.find(
+        (i: any) => i.senderType === 'agent',
+      ) as any;
+      expect(agentItem?.senderInstanceId).toBe('tmm_9');
+      expect(result.source).toBe('session');
+    });
+
+    it('群聊 + teamMemberId 但该席位无会话 → 回退平台表（不报错）', async () => {
+      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        teamMemberId: 'tmm_none',
+      });
+
+      expect(result.source).toBe('db');
       expect(workerClient.getMessages).not.toHaveBeenCalled();
     });
 

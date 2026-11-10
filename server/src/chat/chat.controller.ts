@@ -187,10 +187,13 @@ export class ChatController {
   }
 
   /**
-   * 私聊会话历史（DM 需求：完整历史直接读 opencode serve 会话，含 agent 思考/工具调用）。
+   * 会话历史（完整历史直接读 opencode serve 会话，含 agent 思考/工具调用）。
    * GET /api/v1/channels/:id/session-history → {items, nextCursor, source: 'session'|'db'}
    * - private 频道且会话已绑定 worker → serve 全量会话消息转换（source='session'，无游标）；
-   * - 未绑定/worker 不可用 → 回退平台消息表（source='db'）；群聊频道 → 400。
+   * - **群聊频道 + `?teamMemberId=tmm_…`** → 同上，但按该席位的会话取（用于「点成员看其
+   *   完整过程」，替代此前只能对群聊消息做客户端筛选、拿不到 reasoning/tool 的做法）；
+   *   群聊缺 teamMemberId → 400（不放松越权读整团会话）；
+   * - 未绑定/worker 不可用 → 回退平台消息表（source='db'）。
    */
   @Get('channels/:id/session-history')
   @UseGuards(PermissionGuard)
