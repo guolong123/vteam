@@ -134,5 +134,12 @@ export default defineConfig({
       use: { storageState: ".auth/user.json" },
       dependencies: ["setup"],
     },
+    {
+      // 群聊「点成员看完整会话（含思考/工具）」：全 route-mock，零后端接触。
+      // 不依赖 setup 登录态文件之外的任何真实数据，但仍沿用 storageState（页面守卫需登录）。
+      name: "member-history",
+      testMatch: /member-history\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+    },
   ],
 });
