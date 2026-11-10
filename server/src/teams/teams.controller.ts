@@ -72,9 +72,14 @@ export class TeamsController {
   @Delete(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('teams.delete')
-  @ApiOperation({ summary: '删除团队（执行中任务除外，其余关联任务级联删除）' })
-  remove(@Param('id') id: string) {
-    return this.teamsService.remove(id);
+  @ApiOperation({
+    summary:
+      '删除团队（级联删除关联任务）。默认拦截执行中任务；force=true 强制连同执行中任务一起删',
+  })
+  remove(@Param('id') id: string, @Query('force') force?: string) {
+    return this.teamsService.remove(id, {
+      force: force === 'true' || force === '1',
+    });
   }
 
   @Post(':id/members')

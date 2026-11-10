@@ -1059,7 +1059,7 @@ describe('TeamsService', () => {
       );
     });
 
-    it('执行中任务（in_progress）→ 409 TEAM_TASK_RUNNING，不进事务', async () => {
+    it('执行中任务（in_progress）未带 force → 409 TEAM_TASK_RUNNING 且 requiresForce，不进事务', async () => {
       prisma.team.findUnique.mockResolvedValue(
         teamRow({
           currentTaskId: 't_0000000001',
@@ -1076,18 +1076,33 @@ describe('TeamsService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('待评审任务（pending_review）→ 409 TEAM_TASK_RUNNING', async () => {
+    it('执行中任务带 force=true → 放行并级联删除', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({ currentTaskId: 't_0000000001' }),
+      );
+      prisma.task.findFirst.mockResolvedValue({
+        id: 't_0000000001',
+        status: 'in_progress',
+      });
+      prisma.task.findMany.mockResolvedValue([{ id: 't_0000000001' }]);
+      mockCascadeTx();
+      prisma.team.delete = jest.fn().mockResolvedValue(teamRow());
+      const result = await service.remove('tm_0000000001', { force: true });
+      expect(result.deleted).toBe(true);
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('待验收任务（pending_review）默认可删，不需要 force（agent 已执行完、不占执行资源）', async () => {
       prisma.team.findUnique.mockResolvedValue(
         teamRow({ currentTaskId: null }),
       );
-      prisma.task.findFirst.mockResolvedValue({
-        id: 't_0000000002',
-        status: 'pending_review',
-      });
-      await expect(service.remove('tm_0000000001')).rejects.toThrow(
-        ConflictException,
-      );
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      // remove() 只把 in_progress/blocked 视为运行中；pending_review 不在其中
+      prisma.task.findFirst.mockResolvedValue(null);
+      prisma.task.findMany.mockResolvedValue([]);
+      mockCascadeTx();
+      prisma.team.delete = jest.fn().mockResolvedValue(teamRow());
+      const result = await service.remove('tm_0000000001');
+      expect(result.deleted).toBe(true);
     });
 
     it('未开始任务随团队级联删除（任务子表按序清，返回任务 id）', async () => {

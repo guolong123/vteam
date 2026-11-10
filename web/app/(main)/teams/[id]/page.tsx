@@ -150,6 +150,8 @@ export default function TeamDetailPage() {
   const [addAlias, setAddAlias] = useState("");
   const [addWorkDir, setAddWorkDir] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  /** 有执行中任务 → 二次确认强制删除（服务端 409 TEAM_TASK_RUNNING 后弹出）。 */
+  const [forceDeleteConfirm, setForceDeleteConfirm] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState<TeamMemberDto | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -234,10 +236,12 @@ export default function TeamDetailPage() {
     if (team) { setEditName(team.name); setEditDesc(team.description ?? ""); }
   }, [team]);
 
-  const RUNNING_TASK_STATUS = ["in_progress", "blocked", "pending_review"];
+  // 只有真正占用执行资源的任务会触发「强制删除」二次确认（pending_review 已执行完，不拦）
+  const RUNNING_TASK_STATUS = ["in_progress", "blocked"];
   const hasRunningTask = !!team && RUNNING_TASK_STATUS.includes(team.currentTaskStatus ?? "");
   const hasTasks = !!team && !!team.currentTaskId;
-  const deletable = !!team && !hasRunningTask;
+  // 删除恒可用（产品确认 2026-11-10）：有执行中任务时走二次确认强制删除，而不是禁用按钮
+  const deletable = !!team;
 
   const patchMutation = useMutation({
     mutationFn: (payload: { name?: string; description?: string | null; reuseSession?: boolean; mainAgentMemberId?: string | null; preferredWorkerId?: string | null }) =>
@@ -338,7 +342,24 @@ export default function TeamDetailPage() {
     mutationFn: (memberId: string) => teamsApi.removeMember(id, memberId),
   });
 
-  const deleteMutation = useMutation({ mutationFn: () => teamsApi.remove(id) });
+  /**
+   * 删除团队（两段式）：先不带 force；若服务端回 409 `TEAM_TASK_RUNNING`（有 in_progress/
+   * blocked 任务），转成「强制删除」二次确认，用户确认后带 force 重放。
+   */
+  const deleteMutation = useMutation({
+    mutationFn: (force?: boolean) => teamsApi.remove(id, { force }),
+    onSuccess: () => router.push("/teams"),
+    onError: (err) => {
+      if (isApiError(err) && err.code === "TEAM_TASK_RUNNING") {
+        setForceDeleteConfirm(true);
+        setDeleteConfirm(false);
+        return;
+      }
+      setActionError(isApiError(err) ? err.message : "删除失败");
+      setDeleteConfirm(false);
+      setForceDeleteConfirm(false);
+    },
+  });
 
   if (teamQuery.isPending) return <div data-testid="team-detail-loading" style={{ padding: space.xl, color: neutral[400], ...baseFont }}>加载中…</div>;
   if (teamQuery.isError) return (
@@ -391,7 +412,7 @@ export default function TeamDetailPage() {
             data-testid="delete-team-button"
             disabled={!deletable || deleteMutation.isPending}
             onClick={() => setDeleteConfirm(true)}
-            title={hasRunningTask ? "有执行中的任务，请等待完成后再删除" : "删除团队（含关联任务）"}
+            title={hasRunningTask ? "删除团队（有执行中任务，将二次确认强制删除）" : "删除团队（含关联任务）"}
             style={{
               padding: `6px ${space.md}px`, borderRadius: radius.sm, border: "none",
               backgroundColor: "transparent", color: !deletable ? neutral[300] : "#DC2626",
@@ -408,7 +429,11 @@ export default function TeamDetailPage() {
           <span>{new Date(team.updatedAt).toLocaleString()}</span>
           <span style={{ color: "#0D9488", fontWeight: 600 }}>{team.members.length} 成员</span>
           <span style={{ color: (team.activeTaskCount ?? 0) > 0 ? "#D97706" : neutral[400], fontWeight: 600 }}>{team.activeTaskCount ?? 0} 进行中</span>
-          {hasRunningTask && <span data-testid="delete-disabled-hint" style={{ color: neutral[400] }}>· 有执行中的任务，不可删除</span>}
+          {hasRunningTask && (
+            <span data-testid="delete-force-hint" style={{ color: "#D97706" }}>
+              · 有执行中的任务，删除需二次确认强制删除
+            </span>
+          )}
           {!hasRunningTask && hasTasks && <span data-testid="delete-cascade-hint" style={{ color: "#D97706" }}>· 删除将一并删除关联任务</span>}
         </div>
         <div data-testid="reuse-section" style={{ display: "flex", alignItems: "center", gap: space.md, paddingTop: space.md, borderTop: `1px dashed ${neutral[200]}` }}>
@@ -655,6 +680,7 @@ export default function TeamDetailPage() {
 
       <ConfirmDialog
         open={deleteConfirm}
+        testid="team-delete-confirm"
         title="删除团队"
         description={(() => {
           const taskNames: string[] = [];
@@ -664,11 +690,26 @@ export default function TeamDetailPage() {
             : "无关联任务。";
           return `确认删除团队「${team.name}」？${taskPart}此操作不可恢复。`;
         })()}
+        confirmLabel="删除"
         submitting={deleteMutation.isPending}
-        onConfirm={async () => {
-          try { await deleteMutation.mutateAsync(); router.push("/teams"); } catch (err) { setActionError(isApiError(err) ? err.message : "删除失败"); setDeleteConfirm(false); }
-        }}
+        onConfirm={() => deleteMutation.mutate(false)}
         onClose={() => setDeleteConfirm(false)}
+      />
+
+      {/* 强制删除：服务端 409 TEAM_TASK_RUNNING（有 in_progress/blocked 任务）后弹出 */}
+      <ConfirmDialog
+        open={forceDeleteConfirm}
+        testid="team-force-delete-confirm"
+        title="团队有执行中的任务"
+        description={(() => {
+          const taskName = team.currentTaskTitle ?? team.currentTaskId ?? "未知任务";
+          return `团队「${team.name}」有正在执行的任务「${taskName}」。强制删除会连同该任务一起删除，正在执行的 Agent 输出将丢失且无法恢复。确认强制删除？`;
+        })()}
+        confirmLabel="强制删除"
+        pendingLabel="删除中…"
+        submitting={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate(true)}
+        onClose={() => setForceDeleteConfirm(false)}
       />
 
       <ConfirmDialog

@@ -86,11 +86,17 @@ describe('TeamsController', () => {
     expect(result).toEqual({ id: 'tm_1', name: 'new' });
   });
 
-  it('DELETE /teams/:id 转发到 remove', async () => {
+  it('DELETE /teams/:id 转发到 remove（默认不带 force）', async () => {
     service.remove.mockResolvedValue({ deleted: true });
     const result = await controller.remove('tm_1');
-    expect(service.remove).toHaveBeenCalledWith('tm_1');
+    expect(service.remove).toHaveBeenCalledWith('tm_1', { force: false });
     expect(result).toEqual({ deleted: true });
+  });
+
+  it('DELETE /teams/:id?force=true 转发 force 强制删除', async () => {
+    service.remove.mockResolvedValue({ deleted: true });
+    await controller.remove('tm_1', 'true');
+    expect(service.remove).toHaveBeenCalledWith('tm_1', { force: true });
   });
 
   it('POST /teams/:id/members 转发到 addMember', async () => {

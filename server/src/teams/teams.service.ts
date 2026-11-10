@@ -677,7 +677,18 @@ export class TeamsService implements OnModuleInit {
     return full;
   }
 
-  async remove(id: string) {
+  /**
+   * 删除团队（级联删除归属该团队的全部任务）。
+   *
+   * `force` 语义（产品确认 2026-11-10）：默认拦截**真正占用执行资源**的任务
+   * （`in_progress` / `blocked`）；前端在用户二次确认「连同执行中任务一起删除」后带
+   * `force=true` 重放，此时不再拦截，任务随团队一起级联删除。
+   *
+   * 注：`pending_review`（待验收）意味着 agent 已执行完毕、只是等人点验收，不占用
+   * worker 执行资源，因此**默认可删**，无需 force。
+   */
+  async remove(id: string, options: { force?: boolean } = {}) {
+    const force = options.force === true;
     const team = await this.prisma.team.findUnique({
       where: { id },
       include: {
@@ -690,22 +701,28 @@ export class TeamsService implements OnModuleInit {
         message: '团队不存在',
       });
     }
-    // 执行中的任务不可随删（worker 侧执行会变孤儿）：仅放行未开始/已终态任务的级联删除。
+    // 真正占用执行资源的任务（pending_review 已执行完，不拦）：仅这些需要 force 才可删。
+    const runningStatuses = ['in_progress', 'blocked'];
     const runningTask = await this.prisma.task.findFirst({
       where: {
         teamId: id,
-        status: { in: ['in_progress', 'pending_review'] },
+        status: { in: runningStatuses },
       },
       select: { id: true, status: true },
     });
-    if (runningTask) {
+    if (runningTask && !force) {
       throw new ConflictException({
         code: TEAM_ERRORS.TEAM_TASK_RUNNING,
-        message: '团队有执行中的任务，请等待完成后再删除',
-        details: { taskId: runningTask.id, status: runningTask.status },
+        message: '团队有执行中的任务，请等待完成或二次确认后强制删除',
+        details: {
+          taskId: runningTask.id,
+          status: runningTask.status,
+          // 前端据此决定是否弹出「强制删除」二次确认
+          requiresForce: true,
+        },
       });
     }
-    // 待删任务：当前任务 + 归属该团队的其余任务（执行中已在上方拦截，此处均为可删态）。
+    // 待删任务：当前任务 + 归属该团队的其余任务（force 时含执行中任务）。
     const ownedTasks = await this.prisma.task.findMany({
       where: { teamId: id },
       select: { id: true },

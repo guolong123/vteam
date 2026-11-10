@@ -70,9 +70,17 @@ export class MembersController {
   @Delete(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('members.delete')
-  @ApiOperation({ summary: '删除成员（仍有席位 → 409 MEMBER_IN_USE）' })
-  remove(@Param('id') id: string) {
-    return this.membersService.remove(id);
+  @ApiOperation({
+    summary:
+      '删除成员。默认仍有席位 → 409 MEMBER_IN_USE；cascadeSeats=true 时先移出全部群聊再删除',
+  })
+  remove(
+    @Param('id') id: string,
+    @Query('cascadeSeats') cascadeSeats?: string,
+  ) {
+    return this.membersService.remove(id, {
+      cascadeSeats: cascadeSeats === 'true' || cascadeSeats === '1',
+    });
   }
 
   @Get(':id/teams')
