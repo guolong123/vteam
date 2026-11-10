@@ -1,5 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { PERSONA_LIBRARY } from '../../agents/persona.constants';
+import { MEMBER_PROMPT_MODE, MemberPromptMode } from '../members.constants';
 
 /**
  * POST /members 请求体（37 篇 §5.1）。
@@ -58,4 +66,39 @@ export class CreateMemberDto {
   @IsString()
   @MaxLength(500)
   description?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '成员性格（PERSONA_LIBRARY 预设 key：steady/strict/aggressive/conservative/innovative）；' +
+      '同一 Agent/岗位的不同成员可有不同表达与协作风格，不改变权限/工具边界；' +
+      '非空时优先于 Agent 性格（Agent 列仅作存量回退）',
+    enum: Object.keys(PERSONA_LIBRARY),
+    example: 'steady',
+  })
+  @IsOptional()
+  @IsIn(Object.keys(PERSONA_LIBRARY))
+  persona?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '成员专属提示词（成员级特殊行为描述，如多个开发者成员各自负责范围不同）；' +
+      '与 Agent 岗位职责提示词的组合方式由 promptMode 决定，最长 8000 字',
+    maxLength: 8000,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(8000)
+  prompt?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '成员提示词与 Agent 提示词的关系：' +
+      'append=在 Agent 岗位职责之上追加【成员专属要求】（默认）；' +
+      'override=覆盖 Agent 提示词段',
+    enum: Object.values(MEMBER_PROMPT_MODE),
+    example: MEMBER_PROMPT_MODE.append,
+  })
+  @IsOptional()
+  @IsIn(Object.values(MEMBER_PROMPT_MODE))
+  promptMode?: MemberPromptMode;
 }

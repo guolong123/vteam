@@ -15,6 +15,7 @@ import { QueryMembersDto } from './dto/query-members.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
 import {
   MEMBER_ID_PREFIX,
+  MEMBER_PROMPT_MODE,
   MEMBER_STATUS,
   MEMBERS_ERRORS,
   NOTIFICATION_CHANNEL_ERRORS,
@@ -405,6 +406,9 @@ export class MembersService implements OnModuleInit {
           defaultModelId: dto.defaultModelId ?? null,
           preferredWorkerId: dto.preferredWorkerId ?? null,
           privateWorkDir: dto.privateWorkDir?.trim() || null,
+          persona: dto.persona ?? null,
+          prompt: dto.prompt?.trim() || null,
+          promptMode: dto.promptMode ?? MEMBER_PROMPT_MODE.append,
           status: MEMBER_STATUS.active,
           description: dto.description?.trim() || null,
           createdBy: userId,
@@ -454,6 +458,10 @@ export class MembersService implements OnModuleInit {
     if (dto.description !== undefined) {
       data.description = dto.description.trim() || null;
     }
+    // persona/prompt 传 null = 清除（列可空）；promptMode 列 NOT NULL，DTO 已拦 null。
+    if (dto.persona !== undefined) data.persona = dto.persona ?? null;
+    if (dto.prompt !== undefined) data.prompt = dto.prompt?.trim() || null;
+    if (dto.promptMode !== undefined) data.promptMode = dto.promptMode;
     if (dto.status !== undefined) data.status = dto.status;
 
     const previousName = existing.name;
@@ -599,6 +607,9 @@ export class MembersService implements OnModuleInit {
         defaultModelId: source.defaultModelId,
         preferredWorkerId: source.preferredWorkerId,
         privateWorkDir: source.privateWorkDir,
+        persona: source.persona,
+        prompt: source.prompt,
+        promptMode: source.promptMode,
         status: MEMBER_STATUS.active,
         description: source.description,
         createdBy: userId,
@@ -618,6 +629,9 @@ export class MembersService implements OnModuleInit {
       status: row.status,
       description: row.description ?? null,
       privateWorkDir: row.privateWorkDir ?? null,
+      persona: row.persona ?? null,
+      prompt: row.prompt ?? null,
+      promptMode: row.promptMode ?? MEMBER_PROMPT_MODE.append,
       defaultRoleId: row.defaultRoleId,
       agentId: row.agentId,
       defaultModelId: row.defaultModelId ?? null,

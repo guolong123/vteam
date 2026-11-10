@@ -103,7 +103,7 @@ interface AgentItem {
   skillIds: string[];
   /** 生效权限（唯一事实来源；null=未绑定执行策略） */
   effectivePermission: EffectivePermission | null;
-  /** Agent 性格 key（steady/strict/aggressive/conservative/innovative；null=未配置） */
+  /** 存量 Agent 性格 key（已迁到成员级；仅后端回退兼容，UI 不再展示/提交） */
   persona: string | null;
   createdAt: string;
   updatedAt: string;
@@ -121,7 +121,7 @@ interface AgentsResponse {
 interface UpdateAgentPayload {
   prompt?: string;
   defaultModelId?: string;
-  /** Agent 性格（显式 null 清除） */
+  /** 存量 Agent 性格（API 兼容保留；性格已迁到成员级，UI 不再提交该字段） */
   persona?: string | null;
 }
 
@@ -183,16 +183,6 @@ function providerOf(modelRef: string): string {
   const slash = modelRef.indexOf("/");
   return slash > 0 ? modelRef.slice(0, slash) : modelRef;
 }
-
-/** 性格 key → 中文名 + 预览文案（对齐 server persona.constants.ts PERSONA_LIBRARY）。 */
-const PERSONA_OPTIONS = [
-  { key: null, label: "未配置", preview: "" },
-  { key: "steady", label: "沉稳", preview: "先复核信息再下结论，不确定时明确标注置信度，不贸然承诺超出把握的事项。" },
-  { key: "strict", label: "苛刻", preview: "以高标准验收，主动挑出真实问题（只拦实质问题，不纠缠表达风格）；每条批评须附改进建议。" },
-  { key: "aggressive", label: "激进", preview: "以快速推进为先，先跑通主路径再逐步优化；关键步骤仍保留验证，不跳过验收环节。" },
-  { key: "conservative", label: "保守", preview: "稳扎稳打，优先复用既有模式与已验证方案；做出变更前先说明影响与风险。" },
-  { key: "innovative", label: "创新", preview: "乐于探索新路径，主动提出替代方案；提出新方案时必须说明其权衡（收益/成本/风险）。" },
-] as const;
 
 /* ------------------------------ 页面内扩展 token（仿原型 :156-170，不写 tokens.ts） ------------------------------ */
 
@@ -1517,7 +1507,6 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
 
   // 草稿：挂载时从 agent 初始化（父级 key=agent.id 保证切换重挂载）
   const [promptDraft, setPromptDraft] = useState(agent.prompt ?? "");
-  const [personaDraft, setPersonaDraft] = useState<string | null>(agent.persona ?? null);
   const [modelDraft, setModelDraft] = useState<string | null>(agent.defaultModelId ?? null);
 
   // token 输入（POST /models/:mdId/credentials，type=password）
@@ -1536,11 +1525,11 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
 
   const handleSave = () => {
     // is_0000000030：内置（template）agent 设置也可修改（后端已放开，agentId/type 不可改）；
-    // 提交可编辑设置字段（prompt/模型/性格）；层②权限矩阵经执行策略独立提交
+    // 提交可编辑设置字段（prompt/模型）；层②权限矩阵经执行策略独立提交。
+    // 性格已迁到成员级（成员库编辑面板），这里不再发 persona（Agent.persona 仅作后端存量回退）。
     const payload: UpdateAgentPayload = {
       prompt: promptDraft.trim(),
       defaultModelId: modelDraft ?? undefined,
-      persona: personaDraft,
     };
     onSave(payload);
   };
@@ -1787,64 +1776,6 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
 
           }}
         />
-      </div>
-
-      {/* ①c 性格配置（tc-persona：第五维性格，与角色提示词正交） */}
-      <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
-            性格配置
-          </span>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            影响 Agent 表达与协作风格
-          </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
-          <select
-            data-testid="persona-select"
-            value={personaDraft ?? ""}
-            onChange={(e) => setPersonaDraft(e.target.value || null)}
-            style={{
-              fontFamily: fontFamily.body,
-              fontSize: fontSize.sm,
-              color: neutral[800],
-              backgroundColor: "var(--color-surface)",
-              border: `1px solid ${neutral[300]}`,
-              borderRadius: radius.md,
-              padding: `${space.xs}px ${space.sm}px`,
-              cursor: "pointer",
-              width: 200,
-              flexShrink: 0,
-            }}
-          >
-            {PERSONA_OPTIONS.map((opt) => (
-              <option key={opt.key ?? ""} value={opt.key ?? ""}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        {personaDraft && (
-          <div
-            style={{
-              fontSize: fontSize.xs,
-              color: neutral[500],
-              lineHeight: 1.6,
-              padding: `${space.sm}px ${space.md}px`,
-              backgroundColor: neutral[50],
-              borderRadius: radius.sm,
-              border: `1px solid ${neutral[100]}`,
-            }}
-          >
-            {PERSONA_OPTIONS.find((o) => o.key === personaDraft)?.preview}
-          </div>
-        )}
       </div>
 
       {/* ② 默认模型配置（FR-47） */}
@@ -2118,13 +2049,12 @@ interface CreateAgentModalProps {
   /** 岗位选项（AgentRole 行；value 即 agentRoleId，能力模板经其 defaultAgentId 解析）。 */
   roleOptions: { id: string; label: string }[];
   onClose: () => void;
-  onSubmit: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string; agentRoleId?: string }) => void;
+  onSubmit: (payload: { name: string; prompt?: string; agentKey: string; agentRoleId?: string }) => void;
 }
 
 function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSubmit }: CreateAgentModalProps) {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [persona, setPersona] = useState<string | null>(null);
   const [agentRoleId, setAgentRoleId] = useState<string | null>(null);
   const [agentKey, setAgentKey] = useState("");
   const [touchedKey, setTouchedKey] = useState(false);
@@ -2144,7 +2074,6 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
     if (open) {
       setName("");
       setPrompt("");
-      setPersona(null);
       setAgentRoleId(null);
       setAgentKey("");
       setTouchedKey(false);
@@ -2164,7 +2093,6 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
     onSubmit({
       name: name.trim(),
       prompt: prompt.trim() ? prompt.trim() : undefined,
-      persona: persona,
       // 「无岗位」发 undefined（不是 ''）→ 后端 `?? null` → 骨架策略。绝不发 `role`：
       // `Agent.role` 写路径已移除，whitelist 管道会静默剥离该键 → 新 Agent 静默落骨架。
       agentRoleId: agentRoleId ?? undefined,
@@ -2328,25 +2256,6 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
               disabled={submitting}
               style={{ ...inputBase, resize: "vertical", lineHeight: 1.6 }}
             />
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-            <label htmlFor="agent-persona" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
-              性格
-            </label>
-            <select
-              id="agent-persona"
-              data-testid="create-agent-persona"
-              value={persona ?? ""}
-              onChange={(e) => setPersona(e.target.value || null)}
-              disabled={submitting}
-              style={{ ...inputBase, cursor: "pointer" }}
-            >
-              {PERSONA_OPTIONS.map((opt) => (
-                <option key={opt.key ?? ""} value={opt.key ?? ""}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
             <label htmlFor="agent-role" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
@@ -2879,7 +2788,7 @@ export default function AgentConfigPage() {
 
   // 新建：POST /agents（type=custom，必填 agentKey；agentRoleId → 深拷贝岗位默认 Agent 的策略模板）→ 刷新列表并选中新建
   const createMutation = useMutation({
-    mutationFn: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string; agentRoleId?: string }) =>
+    mutationFn: (payload: { name: string; prompt?: string; agentKey: string; agentRoleId?: string }) =>
       api.post<AgentItem>("/agents", { ...payload, type: "custom" }),
     onSuccess: (created) => {
       setCreateOpen(false);

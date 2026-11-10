@@ -822,6 +822,64 @@ describe('WorkerDispatcher', () => {
       );
     });
 
+    it('成员级性格/专属提示词接线：席位→Member 带回 persona/prompt/promptMode，system 注入【成员专属要求】且成员性格优先', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        agentKey: 'product',
+        prompt: '负责需求拆解。',
+        // 存量 Agent 性格：成员有性格时不得生效（成员优先，Agent 仅回退）
+        persona: 'steady',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        {
+          id: 'tmm_0000000001',
+          agentId: 'a_product',
+          alias: '产品经理-1',
+          seq: 1,
+          agent: {
+            id: 'a_product',
+            name: '产品经理',
+            agentKey: 'product',
+          },
+          role: null,
+          member: {
+            persona: 'strict',
+            prompt: '你只负责登录模块',
+            promptMode: 'append',
+          },
+        },
+      ]);
+      (prisma as any).team.findUnique = jest
+        .fn()
+        .mockResolvedValue({ mainAgentMemberId: null });
+      const d = createDispatcher();
+      await d.dispatch(request);
+
+      // 装配接线：成员查询显式带出 member 三列（一次查询供性格/专属提示词/模式使用）
+      expect((prisma as any).teamMember.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.objectContaining({
+            member: {
+              select: { persona: true, prompt: true, promptMode: true },
+            },
+          }),
+        }),
+      );
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).toContain('【成员专属要求】你只负责登录模块');
+      expect(system).toContain('【职责】负责需求拆解。');
+      expect(system.indexOf('【职责】负责需求拆解。')).toBeLessThan(
+        system.indexOf('【成员专属要求】你只负责登录模块'),
+      );
+      // 成员性格（strict）优先于 Agent 存量性格（steady）
+      expect(system).toContain('【性格】');
+      expect(system).toContain('以高标准验收');
+      expect(system).not.toContain('先复核信息再下结论');
+    });
+
     it('todo 5：成员行未绑角色（role=null）→ 无【岗位职责】，agent 段照常，不抛错', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_product',
@@ -2807,6 +2865,87 @@ describe('WorkerDispatcher', () => {
       const s = buildSystemInstructions({ ...agent, persona: 'unknown-key' });
       expect(s).not.toContain('【性格】');
       expect(s).toContain('【职责】负责需求拆解与文档化。');
+    });
+
+    // ------------------------------------------------------------------
+    // 成员级性格/专属提示词（Member.persona / Member.prompt / Member.promptMode）：
+    // 成员是平台级实例 → 性格与专属提示词主来源在成员，Agent 维度保留为存量回退。
+    // 断言沿用哨兵式 toContain/not.toContain，不锁整串字节（既有用例已锁缺省字节）。
+    // ------------------------------------------------------------------
+
+    it('成员专属提示词 append（mode 缺省）：保留 Agent【职责】原文并追加【成员专属要求】，后置且早于【性格】', () => {
+      const s = buildSystemInstructions(agent, {
+        memberPrompt: '你只负责登录模块',
+        memberPersona: 'steady',
+      });
+      expect(s).toContain('【职责】负责需求拆解与文档化。');
+      expect(s).toContain('【成员专属要求】你只负责登录模块');
+      // 位置：职责之后、性格之前
+      expect(s.indexOf('【职责】负责需求拆解与文档化。')).toBeLessThan(
+        s.indexOf('【成员专属要求】你只负责登录模块'),
+      );
+      expect(s.indexOf('【成员专属要求】你只负责登录模块')).toBeLessThan(
+        s.indexOf('【性格】'),
+      );
+    });
+
+    it('成员专属提示词 override：用【职责】成员提示词取代 Agent 提示词段（原文不再注入），岗位职责不受影响', () => {
+      const s = buildSystemInstructions(agent, {
+        memberPrompt: '你只负责登录模块',
+        memberPromptMode: 'override',
+        rolePrompt: '岗位框架：产品经理职责。',
+      });
+      expect(s).toContain('【职责】你只负责登录模块');
+      expect(s).not.toContain('负责需求拆解与文档化。');
+      expect(s).not.toContain('【成员专属要求】');
+      // override 只覆盖 Agent 提示词段，岗位职责段仍独立注入
+      expect(s).toContain('【岗位职责】岗位框架：产品经理职责。');
+    });
+
+    it('成员性格优先于 Agent 性格：memberPersona 非空覆盖 agent.persona，成员空/缺省回退 agent.persona', () => {
+      const base: AgentIdentityInfo = { ...agent, persona: 'steady' };
+      // 成员有性格 → 成员胜出，Agent 存量性格不生效
+      const s = buildSystemInstructions(base, { memberPersona: 'strict' });
+      expect(s).toContain('【性格】');
+      expect(s).toContain('以高标准验收');
+      expect(s).not.toContain('先复核信息再下结论');
+      // 成员无性格（null / 空白串视为未配置）→ 回退 agent.persona
+      for (const memberPersona of [null, '', '   '] as const) {
+        const fallback = buildSystemInstructions(base, { memberPersona });
+        expect(fallback).toContain('先复核信息再下结论');
+        expect(fallback).not.toContain('以高标准验收');
+      }
+    });
+
+    it('agent.prompt 为空 + append：只注入【成员专属要求】，不造空【职责】段', () => {
+      const s = buildSystemInstructions(
+        { ...agent, prompt: null },
+        { memberPrompt: '你只负责登录模块' },
+      );
+      expect(s).toContain('【成员专属要求】你只负责登录模块');
+      expect(s).not.toContain('【职责】');
+    });
+
+    it('缺省/空成员字段：不传 member* 与显式全 null、空白 memberPrompt 输出逐字节一致（存量兼容）', () => {
+      const baseline = buildSystemInstructions(agent);
+      expect(
+        buildSystemInstructions(agent, {
+          memberPersona: null,
+          memberPrompt: null,
+          memberPromptMode: null,
+        }),
+      ).toBe(baseline);
+      // 空白成员提示词视为未配置（不注入空【成员专属要求】）
+      expect(buildSystemInstructions(agent, { memberPrompt: '   ' })).toBe(
+        baseline,
+      );
+      // 无成员提示词时 mode=override 无覆盖对象 → 仍走 Agent 原文
+      expect(
+        buildSystemInstructions(agent, {
+          memberPrompt: null,
+          memberPromptMode: 'override',
+        }),
+      ).toBe(baseline);
     });
 
     it('计划指令已下线：buildSystemInstructions 任何调用都不含计划段（平台不再代控计划模式）', () => {

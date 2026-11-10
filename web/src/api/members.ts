@@ -30,6 +30,9 @@ export interface MemberWorkerRef {
   status: string;
 }
 
+/** 成员提示词与 Agent 提示词的关系（对齐后端 promptMode）。 */
+export type MemberPromptMode = "append" | "override";
+
 export interface MemberDto {
   id: string;
   name: string;
@@ -38,6 +41,12 @@ export interface MemberDto {
   privateWorkDir: string | null;
   defaultRoleId: string;
   agentId: string;
+  /** 成员性格（PERSONA_LIBRARY key；null=未配置；非空时优先于 Agent 性格）。 */
+  persona: string | null;
+  /** 成员专属提示词（成员级特殊行为描述；null=未配置）。 */
+  prompt: string | null;
+  /** 与 Agent 岗位职责提示词的关系：append=追加（默认）/ override=覆盖【职责】段。 */
+  promptMode: MemberPromptMode;
   defaultModelId: string | null;
   preferredWorkerId: string | null;
   role: MemberRoleRef | null;
@@ -106,6 +115,12 @@ export interface CreateMemberPayload {
   preferredWorkerId?: string;
   privateWorkDir?: string;
   description?: string;
+  /** 成员性格 key（steady/strict/aggressive/conservative/innovative）；null=清除。 */
+  persona?: string | null;
+  /** 成员专属提示词；null=清除。 */
+  prompt?: string | null;
+  /** 成员提示词组合方式（缺省 append）。 */
+  promptMode?: MemberPromptMode;
 }
 
 export type UpdateMemberPayload = Partial<CreateMemberPayload> & {

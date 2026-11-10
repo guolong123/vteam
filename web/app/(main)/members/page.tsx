@@ -16,13 +16,16 @@ import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { AgentAvatar, ConfirmDialog, EmptyState, PageWindow, SearchableSelect } from "@/src/components/ui";
+import { NAV_TOPBAR_HEIGHT } from "@/src/components/layout";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   membersApi,
   type CreateMemberPayload,
   type MemberDto,
+  type MemberPromptMode,
   type UpdateMemberPayload,
 } from "@/src/api/members";
+import { PERSONA_OPTIONS, personaPreview } from "@/src/lib/persona";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -67,6 +70,12 @@ interface MemberFormState {
   preferredWorkerId: string;
   privateWorkDir: string;
   description: string;
+  /** 成员性格 key；"" = 未配置（提交时转 null）。 */
+  persona: string;
+  /** 成员专属提示词（成员级特殊行为描述）。 */
+  prompt: string;
+  /** 成员提示词组合方式：append=追加在 Agent 提示词之后 / override=覆盖 Agent 提示词。 */
+  promptMode: MemberPromptMode;
 }
 
 const EMPTY_FORM: MemberFormState = {
@@ -77,6 +86,9 @@ const EMPTY_FORM: MemberFormState = {
   preferredWorkerId: "",
   privateWorkDir: "",
   description: "",
+  persona: "",
+  prompt: "",
+  promptMode: "append",
 };
 
 export default function MembersPage() {
@@ -237,6 +249,9 @@ export default function MembersPage() {
       preferredWorkerId: member.preferredWorkerId ?? "",
       privateWorkDir: member.privateWorkDir ?? "",
       description: member.description ?? "",
+      persona: member.persona ?? "",
+      prompt: member.prompt ?? "",
+      promptMode: member.promptMode ?? "append",
     });
     setFormError(null);
     setEditing(member);
@@ -348,6 +363,9 @@ export default function MembersPage() {
         preferredWorkerId: form.preferredWorkerId || undefined,
         privateWorkDir: form.privateWorkDir.trim() || undefined,
         description: form.description.trim() || undefined,
+        persona: form.persona || null,
+        prompt: form.prompt.trim() || null,
+        promptMode: form.promptMode,
       });
       return;
     }
@@ -363,6 +381,9 @@ export default function MembersPage() {
             preferredWorkerId: form.preferredWorkerId || undefined,
             privateWorkDir: form.privateWorkDir.trim() || undefined,
             description: form.description.trim() || undefined,
+            persona: form.persona || null,
+            prompt: form.prompt.trim() || null,
+            promptMode: form.promptMode,
           },
         });
         try {
@@ -586,8 +607,29 @@ export default function MembersPage() {
       )}
 
       {editing && (
-        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.32)", display: "flex", justifyContent: "flex-end", zIndex: 40 }}>
-          <form onSubmit={submitForm} style={{ width: 560, height: "100%", display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", boxShadow: shadow.lg }}>
+        // 编辑抽屉（右侧栏）：
+        // fixed 钉住视口（top 让开顶栏），不随成员列表滚动而上下漂移 —— 之前用 absolute
+        // 挂在可滚动的 page-window 上，列表滚到中段时抽屉会被顶栏裁掉上半截、底部悬空，
+        // 看起来像"侧栏和页面高度不一致"。fixed 后抽屉恒定占满内容区高度，内部表单自行滚动。
+        <div
+          data-testid="member-edit-overlay"
+          style={{
+            position: "fixed",
+            top: NAV_TOPBAR_HEIGHT,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            backgroundColor: "rgba(15,23,42,0.32)",
+            display: "flex",
+            justifyContent: "flex-end",
+            zIndex: 40,
+          }}
+        >
+          <form
+            data-testid="member-edit-drawer"
+            onSubmit={submitForm}
+            style={{ width: "min(560px, 100%)", height: "100%", display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[100]}`, boxShadow: shadow.lg }}
+          >
             <div style={{ flexShrink: 0, padding: `${space.lg}px ${space.xl}px ${space.md}px`, borderBottom: `1px solid ${neutral[100]}` }}>
               <div style={{ display: "flex", alignItems: "flex-start" }}>
                 <div>
@@ -624,6 +666,71 @@ export default function MembersPage() {
                     );
                   })}
                 </div>
+              </div>
+
+              {/* 性格配置（成员级：同一岗位的不同成员可有不同表达/协作风格） */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>性格配置</span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>影响该成员表达与协作风格（成员级，优先于 Agent 配置）</span>
+                <select
+                  data-testid="member-persona-select"
+                  value={form.persona}
+                  onChange={(e) => setForm({ ...form, persona: e.target.value })}
+                  style={{ ...inputStyle, cursor: "pointer" }}
+                >
+                  {PERSONA_OPTIONS.map((option) => (
+                    <option key={option.key ?? ""} value={option.key ?? ""}>{option.label}</option>
+                  ))}
+                </select>
+                {form.persona && (
+                  <div
+                    data-testid="member-persona-preview"
+                    style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.6, padding: `${space.sm}px ${space.md}px`, backgroundColor: neutral[50], borderRadius: radius.sm, border: `1px solid ${neutral[100]}` }}
+                  >
+                    {personaPreview(form.persona)}
+                  </div>
+                )}
+              </div>
+
+              {/* 提示词配置（成员专属行为要求；Agent 提示词=岗位职责范围） */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>提示词配置</span>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>成员级 · 与 Agent 岗位职责组合生效</span>
+                </div>
+                <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
+                  {([
+                    { mode: "append", label: "追加在 Agent 提示词之后" },
+                    { mode: "override", label: "覆盖 Agent 提示词" },
+                  ] as const).map((item) => {
+                    const active = form.promptMode === item.mode;
+                    return (
+                      <button
+                        key={item.mode}
+                        type="button"
+                        data-testid={`member-prompt-mode-${item.mode}`}
+                        aria-pressed={active}
+                        onClick={() => setForm({ ...form, promptMode: item.mode })}
+                        style={{ flex: 1, padding: "5px 10px", border: "none", borderRadius: radius.sm, backgroundColor: active ? "var(--color-surface)" : "transparent", color: active ? "#0F766E" : neutral[500], fontSize: fontSize.xs, fontWeight: active ? 700 : 500, cursor: "pointer", fontFamily: fontFamily.body, boxShadow: active ? shadow.sm : "none" }}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <textarea
+                  data-testid="member-prompt-input"
+                  rows={5}
+                  value={form.prompt}
+                  onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+                  placeholder="例如：你只负责登录与鉴权模块，接口按 REST 规范输出。"
+                  style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }}
+                />
+                <span style={{ fontSize: 10, color: neutral[400], lineHeight: 1.7 }}>
+                  Agent 提示词描述岗位职责范围；成员提示词用于该成员的特殊行为要求（同岗位多个成员分工不同时使用）。追加=在岗位职责后补充；覆盖=用成员提示词替代 Agent 提示词（岗位职责【岗位职责】不受影响）。
+                  <br />
+                  提示词在建立会话时注入并锁定：保存后需在下方「全局会话」处重置该成员会话，才对下一轮生效。
+                </span>
               </div>
 
               {editing !== "new" && (

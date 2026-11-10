@@ -810,6 +810,31 @@ export interface BuildSystemInstructionsOptions {
    * 输出逐字节不变）。
    */
   rolePrompt?: string | null;
+  /**
+   * 成员级性格 key（`PERSONA_LIBRARY` 预设 key；来源 `Member.persona`）。
+   *
+   * 成员（Member）是平台级实例：同一 Agent/岗位的不同成员可有不同表达风格，故性格主
+   * 来源是成员；**非空时优先于 `agent.persona`**（存量 Agent 性格列降级为回退，兼容
+   * 未回填的老数据）。非空才注入【性格】段，位置仍在【职责】之后（不变）。
+   * 缺省/null/空串 → 走 agent.persona，输出与引入本字段前逐字节一致。
+   */
+  memberPersona?: string | null;
+  /**
+   * 成员专属提示词（`Member.prompt`，成员级**特殊行为描述**，如多个开发者成员各自
+   * 负责不同模块）。先 trim，空串视为未配置；与 `agent.prompt`（岗位职责范围）的
+   * 组合关系由 `memberPromptMode` 决定。
+   */
+  memberPrompt?: string | null;
+  /**
+   * 成员提示词与 Agent 提示词的关系（`Member.promptMode`）：
+   * - `'append'`（默认）：在 Agent【职责】段之上追加【成员专属要求】段
+   *   （位置：职责之后、性格之前）；
+   * - `'override'`：用【职责】成员提示词**覆盖** Agent 提示词段
+   *   （`【职责】${agent.prompt}` 不再注入）；**岗位职责【岗位职责】rolePrompt 不受影响**
+   *   （岗位=平台权威，成员只能收窄自己的职责描述，不能抹掉岗位框架）。
+   * 缺省/null → 按 'append' 处理。
+   */
+  memberPromptMode?: 'append' | 'override' | null;
 }
 
 /**
@@ -869,6 +894,24 @@ export function buildSystemInstructions(
   const globalText = suppressMemory
     ? GLOBAL_BASE_LINES.join('\n\n')
     : GLOBAL_SYSTEM_INSTRUCTIONS;
+  // 成员级性格/专属提示词推导（members.persona / members.prompt / members.prompt_mode）：
+  // 成员是平台级实例，性格与专属提示词主来源在成员；Agent 维度保留为存量兼容回退。
+  // 三条推导在不传 member* 时结果与引入前完全一致（personaKey === agent.persona、
+  // memberPrompt === null ⇒ 不新增/不替换任何段），故输出逐字节不变。
+  /** 成员性格（trim 后非空才生效）；空串/空白视为未配置，回落 agent.persona。 */
+  const memberPersona = opts?.memberPersona?.trim() || null;
+  /** 实际生效的性格 key：成员优先，Agent 存量回退。 */
+  const personaKey = memberPersona || agent.persona;
+  /** 成员专属提示词（trim 后非空才生效）；空串视为未配置。 */
+  const memberPrompt = opts?.memberPrompt?.trim() || null;
+  /** 关系模式：缺省 append（append 是「在岗位职责之上追加」的安全默认）。 */
+  const memberPromptMode = opts?.memberPromptMode ?? 'append';
+  /**
+   * override 只覆盖【职责】agent.prompt 段——【岗位职责】rolePrompt 是平台岗位权威，
+   * 不受成员提示词模式影响；无成员提示词时 override 无对象可覆盖，退回原路径。
+   */
+  const overrideAgentPrompt =
+    memberPromptMode === 'override' && memberPrompt !== null;
   const blocks = [
     globalText,
     identityLine,
@@ -876,8 +919,20 @@ export function buildSystemInstructions(
     // 后者只是标签 key，供策略候选）。仅 rolePrompt 非空时注入；空串被下方
     // filter 剔除 → 无空【岗位职责】标题。顺序：岗位=框架，agent=细节，框架先行。
     opts?.rolePrompt ? `【岗位职责】${opts.rolePrompt}` : '',
-    agent.prompt ? `【职责】${agent.prompt}` : '',
-    agent.persona ? renderPersonaSection(agent.persona) : '',
+    // 职责段：override 用成员提示词替换 Agent 提示词；否则原样注入 agent.prompt
+    //（缺省路径不变：agent.prompt 为空 → 空串被 filter 剔除，不造空【职责】）。
+    overrideAgentPrompt
+      ? `【职责】${memberPrompt}`
+      : agent.prompt
+        ? `【职责】${agent.prompt}`
+        : '',
+    // append：在【职责】之后、【性格】之前追加【成员专属要求】段；override 已并入职责段
+    // 不再追加（成员提示词为空 → 空串被 filter 剔除，存量输出不变）。
+    !overrideAgentPrompt && memberPrompt !== null
+      ? `【成员专属要求】${memberPrompt}`
+      : '',
+    // 性格段位置不变（仍在职责之后）；key 由成员优先、Agent 回退产生。
+    personaKey ? renderPersonaSection(personaKey) : '',
     // P0 条件注入：主 Agent 追加【任务状态】+【托管模式】工具段；非主成员仅给协作指引
     // （不再教非主成员调用必 403 的 vteam_task_transition / vteam_question_confirm）。
     opts?.isMainAgent
@@ -3143,6 +3198,12 @@ export class WorkerDispatcher
                 rolePrompt: true,
               },
             },
+            // 成员级性格/专属提示词（成员是平台级实例，persona/prompt 已从 Agent 迁到
+            // Member）：与 role 同一次查询带出，供系统提示装配使用。memberId 为空的历史
+            // 席位 → member 为 null，装配处降级为空（不阻断分派）。
+            member: {
+              select: { persona: true, prompt: true, promptMode: true },
+            },
           },
         })) ?? [];
     } catch (lookupErr: unknown) {
@@ -3168,8 +3229,12 @@ export class WorkerDispatcher
     // 主门与 task_create 团队维度门一致：session 团队成员 == team.mainAgentMemberId
     const isMainAgent =
       mainAgentMemberId !== null && teamMemberId === mainAgentMemberId;
-    const selfAlias =
-      team.find((m) => m.instanceId === teamMemberId)?.alias ?? null;
+    // 目标席位行（一次查找复用）：别名 + 岗位权威（role）+ 成员级性格/提示词（member）。
+    // teamMemberId 可能为空（历史/未绑实例）→ selfSeat 为 undefined，各消费点降级。
+    const selfSeat: any = teamMemberRows.find(
+      (m: any) => m.id === teamMemberId,
+    );
+    const selfAlias = selfSeat?.alias ?? null;
     // 目标成员的岗位权威（与上方名册同一行，一次查找三用）：岗位职责段（rolePrompt）+
     // 能力矩阵（capabilities，驱动工具屏蔽）+ 常量回退键（key）。成员行缺失/未绑角色
     // → null ⇒ 回退 `agentKey` 常量派生，绝不阻断分派。
@@ -3178,8 +3243,7 @@ export class WorkerDispatcher
       key?: string | null;
       capabilities?: Record<string, boolean> | null;
       rolePrompt?: string | null;
-    } | null =
-      teamMemberRows.find((m: any) => m.id === teamMemberId)?.role ?? null;
+    } | null = selfSeat?.role ?? null;
     const selfRoleAuthority: MemberRoleAuthority | null = selfRoleRow
       ? {
           id: selfRoleRow.id ?? null,
@@ -3284,6 +3348,12 @@ export class WorkerDispatcher
       // 与岗位策略解析同一次查询）。行缺失/未绑角色/rolePrompt 空 → null（不注入
       // 【岗位职责】，不抛错）。agent.role 是标签 key，不是此段来源。
       rolePrompt: selfRoleRow?.rolePrompt ?? null,
+      // 成员级性格/专属提示词（members.*）：与 role 同一次成员查询带回。席位未绑成员
+      // （memberId 为空的历史数据）→ member 为 null ⇒ 三项全传 null，装配处回退
+      // Agent 维度（persona）且不注入【成员专属要求】，绝不阻断分派。
+      memberPersona: selfSeat?.member?.persona ?? null,
+      memberPrompt: selfSeat?.member?.prompt ?? null,
+      memberPromptMode: selfSeat?.member?.promptMode ?? null,
       // Todo 9：平台内部派发（记忆整理）→ 团队直聊时不注入【团队接待】人格段。
       internal: request.internal === true,
     };
