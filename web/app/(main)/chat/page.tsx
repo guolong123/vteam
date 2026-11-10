@@ -643,7 +643,14 @@ function ChatPageContent() {
             )}
 
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <TeamSessionView teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} />
+              {/*
+                key 必须带 teamId：/chat 切群只改 query 参数，路由不变 ⇒ React 复用同一实例，
+                TeamSessionView 的内部状态（sessionByAgent / agentIdBySessionRef / loadingByAgent /
+                unreadByInstance …）会跨群残留。实测后果：A 群会话页底部出现 B 群席位
+                （tmm_…）的「会话运行中」——那条状态属于别的群，不该在这里展示。
+                加 key 后切群即重挂载，状态随组件一起销毁。
+              */}
+              <TeamSessionView key={teamId} teamId={teamId} embedded hideRightPanel={rightPanelMode !== "full"} filterMemberId={filterMemberId} />
             </div>
           </div>
 

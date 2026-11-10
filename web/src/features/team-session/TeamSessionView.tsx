@@ -846,14 +846,30 @@ export function TeamSessionView({
     (key: string) => nameByStateKey.get(key) ?? key,
     [nameByStateKey],
   );
+  /**
+   * 本团队已知的状态键集合（实例 id tmm_/ta_ + agentId）。
+   * 只用于**过滤**展示：sessionByAgent / loadingByAgent 里任何不属于本团队的键都不许
+   * 出现在文案里（2026-11-10 缺陷：A 群页脚出现 B 群席位 tmm_… 的「会话运行中」）。
+   */
+  const knownStateKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const a of teamAgentMembers) {
+      keys.add(a.instanceId ?? a.id);
+      keys.add(a.id);
+    }
+    for (const m of team?.members ?? []) keys.add(m.id);
+    return keys;
+  }, [teamAgentMembers, team]);
+
   const loadingAgentIds = useMemo(() => new Set(Object.keys(loadingByAgent)), [loadingByAgent]);
   const loadingLabel = useMemo(() => {
-    const entries = Object.entries(loadingByAgent);
+    // 同一道团队边界：只展示本团队的状态键（见 knownStateKeys 注释）
+    const entries = Object.entries(loadingByAgent).filter(([key]) => knownStateKeys.has(key));
     if (entries.length === 0) return null;
     const [agentId, phase] = entries[0];
     const name = stateName(agentId);
     return phase === "operating" ? `${name} 操作中` : `${name} 思考中`;
-  }, [loadingByAgent, stateName]);
+  }, [loadingByAgent, stateName, knownStateKeys]);
   const errorLabel = useMemo<{ kind: "retry" | "quota" | "failed"; detail: string } | null>(() => {
     const entries = Object.entries(errorByAgent);
     if (entries.length === 0) return null;
@@ -868,13 +884,22 @@ export function TeamSessionView({
           : "failed";
     return { kind, detail: `${name} 处理失败：${detail}` };
   }, [errorByAgent, errorTypeByAgent, stateName]);
+  /**
+   * 本团队已知的状态键集合（实例 id tmm_/ta_ + agentId）。
+   * 只用于**过滤**展示：sessionByAgent 里任何不属于本团队的键都不许出现在文案里
+   * （2026-11-10 缺陷：A 群页脚出现 B 群席位 tmm_… 的「会话运行中」）。
+   */
   const sessionLabel = useMemo(() => {
     const entries = Object.entries(sessionByAgent).filter(
-      ([agentId, status]) => (status === "active" || status === "running") && !(agentId in loadingByAgent),
+      ([agentId, status]) =>
+        (status === "active" || status === "running") &&
+        !(agentId in loadingByAgent) &&
+        // 团队边界：不属于本团队的席位/agent 键一律不展示
+        knownStateKeys.has(agentId),
     );
     if (entries.length === 0) return null;
     return `${stateName(entries[0][0])} 会话运行中`;
-  }, [sessionByAgent, loadingByAgent, stateName]);
+  }, [sessionByAgent, loadingByAgent, stateName, knownStateKeys]);
 
   /* ---------- 会话状态初始快照 ---------- */
   const sessionSeedRef = useRef(false);
@@ -973,6 +998,37 @@ export function TeamSessionView({
     deltaRefetchChannelRef.current = null;
   }, [activePrivateId]);
 
+  /**
+   * SSE 团队边界守卫（防御性）：本组件的状态（sessionByAgent / loadingByAgent /
+   * unreadByInstance …）只应承载**当前团队**的事件。
+   *
+   * 背景（2026-11-10 实测缺陷）：`/chat` 切群只改 query 参数、路由不变，React 会复用
+   * TeamSessionView 实例 ⇒ 上一条群遗留的 tmm_ 状态会显示到另一个群。调用方已用
+   * `key={teamId}` 强制重挂载，这里再加一道「事件归属校验」，避免上游载荷形态变化
+   * （如 payload.taskId 为空、或 worker 上送伪 scope）时再次串群。
+   *
+   * 判定依据（服务端实际载荷，见 worker-event.ingress）：
+   * - 团队级会话：`taskId` 恒为 `team:<teamId>` 伪 scope；
+   * - 任务级会话：`taskId` 为真实 `t_…`，归属经 `payload.teamId`（若带）判定；
+   * - 两者都缺失 → 无法判定归属，放行（保持向后兼容，不静默丢事件）。
+   */
+  const belongsToThisTeam = useCallback(
+    (payload: { taskId?: string | null; teamId?: string | null } | null | undefined): boolean => {
+      const taskId = payload?.taskId ?? null;
+      if (taskId && taskId.startsWith("team:")) {
+        return taskId === `team:${teamId}`;
+      }
+      if (payload?.teamId) return payload.teamId === teamId;
+      // 真实任务 id：确认该任务属于本团队（缓存里已有则直接判定）
+      if (taskId) {
+        const cached = queryClient.getQueryData<{ teamId?: string | null }>(["task", taskId]);
+        if (cached?.teamId) return cached.teamId === teamId;
+      }
+      return true;
+    },
+    [teamId, queryClient],
+  );
+
   useRealtimeEvents({
     // 会话统一团队域：只订阅 team: + channel:（群聊/私聊） + global，不再订阅 task:。
     // 回流载荷 taskId 恒 team scope 串/归因透传（LANE-A），守卫一律 team 域放行（见各回调）。
@@ -1032,6 +1088,8 @@ export function TeamSessionView({
       }
     },
     onAgentLoading: (payload) => {
+      // 团队边界守卫：别的群的 loading 不得进入本群状态表（详见 belongsToThisTeam 注释）
+      if (!belongsToThisTeam(payload)) return;
       const sessionId = (payload as { sessionId?: string | null }).sessionId;
       if (sessionId) {
         agentIdBySessionRef.current[sessionId] = payload.agentId;
@@ -1043,6 +1101,7 @@ export function TeamSessionView({
       clearUnreadForStateKey(key);
     },
     onAgentError: (payload) => {
+      if (!belongsToThisTeam(payload)) return;
       const p = payload as { sessionId?: string | null; error?: unknown; message?: unknown; errorType?: unknown };
       if (p.sessionId) {
         agentIdBySessionRef.current[p.sessionId] = payload.agentId;
@@ -1059,7 +1118,7 @@ export function TeamSessionView({
     onAgentStatus: (payload: AgentStatusEvent) => {
       // team 域放行：taskId 为归因/ team: scope 串，不再按当前任务过滤；
       // 仅当事件明确归属另一团队时丢弃（任务分区群消息的过滤由服务端分区 + 历史接口承担）。
-      if (payload.taskId && payload.taskId.startsWith("team:") && payload.taskId !== `team:${teamId}`) return;
+      if (!belongsToThisTeam(payload)) return;
       const agentId = payload.agentId;
       if (!agentId) return;
       if (payload.sessionId) {
