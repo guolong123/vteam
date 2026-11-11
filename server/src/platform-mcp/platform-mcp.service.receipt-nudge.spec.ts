@@ -413,7 +413,11 @@ describe('PlatformMcpService wakeMainAgent 投递频道分流', () => {
 
   beforeEach(async () => {
     prisma = {
-      team: { findUnique: jest.fn().mockResolvedValue({ mainAgentMemberId: mainMemberId }) },
+      team: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ mainAgentMemberId: mainMemberId }),
+      },
       chatChannel: {
         findFirst: jest.fn(async (args: { where: { type?: string } }) =>
           args.where.type === CHANNEL_TYPE.team_group
@@ -422,7 +426,9 @@ describe('PlatformMcpService wakeMainAgent 投递频道分流', () => {
         ),
       },
     };
-    dispatcher = { dispatchAgentMention: jest.fn().mockResolvedValue(undefined) };
+    dispatcher = {
+      dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -448,9 +454,11 @@ describe('PlatformMcpService wakeMainAgent 投递频道分流', () => {
   });
 
   it('完工汇总（fan-out 完成）→ 投递群聊频道（主 Agent 在群聊上下文汇总）', async () => {
-    await (service as unknown as {
-      wakeMainAgent: (i: Record<string, unknown>) => Promise<void>;
-    }).wakeMainAgent({
+    await (
+      service as unknown as {
+        wakeMainAgent: (i: Record<string, unknown>) => Promise<void>;
+      }
+    ).wakeMainAgent({
       isTeam: true,
       taskId: null,
       teamId,
@@ -465,9 +473,11 @@ describe('PlatformMcpService wakeMainAgent 投递频道分流', () => {
   });
 
   it('提问（question）→ 保持私聊优先（紧急介入、回退群聊）', async () => {
-    await (service as unknown as {
-      wakeMainAgent: (i: Record<string, unknown>) => Promise<void>;
-    }).wakeMainAgent({
+    await (
+      service as unknown as {
+        wakeMainAgent: (i: Record<string, unknown>) => Promise<void>;
+      }
+    ).wakeMainAgent({
       isTeam: true,
       taskId: null,
       teamId,
