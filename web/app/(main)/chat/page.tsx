@@ -715,8 +715,13 @@ function ChatPageContent() {
               <button type="button" data-testid="group-settings-button" onClick={() => setShowMembersDrawer(true)} style={{ fontSize: fontSize.xs, color: "#0F766E", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>群设置</button>
             </header>
 
-            <div data-testid="group-member-switcher" style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.lg}px`, borderBottom: `1px solid ${neutral[100]}`, backgroundColor: "var(--color-surface)", overflowX: "auto" }}>
-              <span style={{ fontSize: 10, color: neutral[400], whiteSpace: "nowrap" }}>成员切换</span>
+            {/*
+              成员切换条间距：原来 gap=12 / 上下 padding=8，头像+名字挤在一起（用户反馈
+              「太拥挤，右边还有很多空间」）。改为 gap=22 且加大上下留白，名字列也放宽，
+              让每个成员成为一个呼吸感更强的最小单元；仍保留横向滚动以容纳多成员。
+            */}
+            <div data-testid="group-member-switcher" style={{ display: "flex", alignItems: "flex-start", gap: 22, padding: `${space.md}px ${space.xl}px`, borderBottom: `1px solid ${neutral[100]}`, backgroundColor: "var(--color-surface)", overflowX: "auto" }}>
+              <span style={{ fontSize: 10, color: neutral[400], whiteSpace: "nowrap", alignSelf: "center", letterSpacing: "0.02em" }}>成员切换</span>
               <button type="button" onClick={() => setFilterMemberId(null)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body }}>
                 <span style={{ width: 28, height: 28, borderRadius: "50%", backgroundColor: !filterMemberId ? "#0D9488" : neutral[100], color: !filterMemberId ? "#FFF" : neutral[500], display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>全</span>
                 <span style={{ fontSize: 10, color: !filterMemberId ? "#0F766E" : neutral[500], fontWeight: !filterMemberId ? 700 : 400 }}>全部</span>
@@ -754,7 +759,7 @@ function ChatPageContent() {
                         />
                       )}
                     </span>
-                    <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 56, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</span>
+                    <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</span>
                   </button>
                 );
               })}
