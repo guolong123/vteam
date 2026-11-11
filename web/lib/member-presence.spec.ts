@@ -22,6 +22,31 @@ const fresh = new Date(NOW - 60_000).toISOString(); // 1 分钟前
 const stale = new Date(NOW - DONE_FRESH_WINDOW_MS - 60_000).toISOString(); // 窗口外
 
 test.describe("resolveMemberPresence", () => {
+  /**
+   * 回归锁（2026-11-11 线上实测）：**团队直聊（team-mode，无 task）不写轮次台账**，
+   * `busy_state` 恒为 idle，只有 `session.status='running'`。若只看 busyState，
+   * 直聊中干活的成员头像永远不亮 —— 用户反馈「成员正在工作中，头像没有进行中提示」。
+   */
+  test("席级 status=running + busyState=idle → 仍判黄点（团队直聊路径）", () => {
+    const p = resolveMemberPresence(
+      { busyState: "idle", status: "running" },
+      null,
+      "正在执行",
+      NOW,
+    );
+    expect(p).toMatchObject({ tone: "running", running: true, done: false });
+  });
+
+  test("status=idle 不误判为执行中（两种来源都 idle → 空闲）", () => {
+    const p = resolveMemberPresence(
+      { busyState: "idle", status: "idle" },
+      null,
+      "正在执行",
+      NOW,
+    );
+    expect(p).toMatchObject({ tone: "idle", running: false });
+  });
+
   test("席级 running → 黄点（老席位 memberId=null 也能判定）", () => {
     const p = resolveMemberPresence({ busyState: "running" }, null, "正在执行", NOW);
     expect(p).toMatchObject({ tone: "running", running: true, done: false });

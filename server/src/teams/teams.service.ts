@@ -1909,6 +1909,7 @@ export class TeamsService implements OnModuleInit {
       string,
       {
         busyState: string;
+        status: string;
         busySince: Date | null;
         lastTurnOutcome: string | null;
         lastActivityAt: Date | null;
@@ -1920,6 +1921,7 @@ export class TeamsService implements OnModuleInit {
       string,
       {
         busyState: string;
+        status: string;
         busySince: Date | null;
         lastTurnOutcome: string | null;
         lastActivityAt: Date | null;
@@ -1935,6 +1937,13 @@ export class TeamsService implements OnModuleInit {
       select: {
         teamMemberId: true,
         busyState: true,
+        // session.status：会话生命周期态（created/running/idle/frozen）。
+        // ⚠️ 为什么必须一并读：busy_state 只在 **轮次台账路径**（session_turns.claimNext）
+        // 被写成 running，而**团队直聊（team-mode，无 task）不写轮次台账** ⇒ busy_state
+        // 恒为 idle，前端头像的状态点因此永远不亮（线上实测 tmm_0000000025 正在执行、
+        // status=running，busy_state 却是 idle）。status 在两个路径都会被置 running，
+        // 且僵尸态由 scanIdleSessions 兜底收敛，是更可靠的「正在执行」信号。
+        status: true,
         busySince: true,
         lastTurnOutcome: true,
         lastActivityAt: true,
@@ -1945,6 +1954,7 @@ export class TeamsService implements OnModuleInit {
       | {
           teamMemberId: string | null;
           busyState: string;
+          status?: string | null;
           busySince: Date | null;
           lastTurnOutcome: string | null;
           lastActivityAt: Date | null;
@@ -1957,13 +1967,14 @@ export class TeamsService implements OnModuleInit {
       // 否则会产出 { busyState: undefined } 的假状态，前端当成「有会话但状态未知」。
       if (typeof r.busyState !== 'string') continue;
       const prev = map.get(r.teamMemberId);
+      const isRunning = r.busyState === 'running' || r.status === 'running';
+      const prevRunning =
+        !!prev && (prev.busyState === 'running' || prev.status === 'running');
       // running 优先（一个席位可能既有团队级会话又有任务级会话）
-      if (
-        !prev ||
-        (prev.busyState !== 'running' && r.busyState === 'running')
-      ) {
+      if (!prev || (!prevRunning && isRunning)) {
         map.set(r.teamMemberId, {
           busyState: r.busyState,
+          status: typeof r.status === 'string' ? r.status : '',
           busySince: r.busySince ?? null,
           lastTurnOutcome: r.lastTurnOutcome ?? null,
           lastActivityAt: r.lastActivityAt ?? null,
@@ -1983,6 +1994,7 @@ export class TeamsService implements OnModuleInit {
       string,
       {
         busyState: string;
+        status?: string;
         busySince: Date | null;
         lastTurnOutcome: string | null;
         lastActivityAt: Date | null;
@@ -2029,6 +2041,9 @@ export class TeamsService implements OnModuleInit {
         if (!st) return null;
         return {
           busyState: st.busyState,
+          // 会话生命周期态：前端 presence 在 busyState=idle 但 status=running 时
+          // 仍判为「执行中」（团队直聊不写 busy_state，见 sessionStatusBySeat 注释）。
+          status: st.status ?? null,
           busySince: st.busySince ? st.busySince.toISOString() : null,
           lastTurnOutcome: st.lastTurnOutcome ?? null,
           // 最近活动时间：空闲态下用它判断「刚出的输出」是否还算新鲜（前端做时间窗）
