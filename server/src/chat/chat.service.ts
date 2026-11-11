@@ -622,7 +622,14 @@ export class ChatService {
       const merged = await this.mergeSessionWithPlatform(
         channelId,
         sessionItems,
-        { limit, beforeId },
+        {
+          limit,
+          beforeId,
+          // 群聊成员视角：只合并该席位在平台表的行（见方法注释）
+          ...(isGroupChannel && teamMemberId
+            ? { senderInstanceId: teamMemberId }
+            : {}),
+        },
       );
       const dbMergeMs = Date.now() - mergeStartedAt;
       const totalMs = Date.now() - startedAt;
@@ -783,7 +790,18 @@ export class ChatService {
   private async mergeSessionWithPlatform(
     channelId: string,
     sessionItems: Array<Record<string, unknown>>,
-    page: { limit: number; beforeId?: string } = { limit: 500 },
+    page: {
+      limit: number;
+      beforeId?: string;
+      /**
+       * 只合并该席位在平台表里的消息（**群聊成员视角必传**）。
+       *
+       * 本方法原为私聊设计：私聊频道只含双方消息，合并「频道全量 DB 行」无歧义。
+       * 但群聊频道是**全团队共享**的，若不加过滤，成员视角会把整群所有人的发言
+       * 一并合并进来（用户实测：选中文一知，列表里出现苏一产/林一架/秦一测…）。
+       */
+      senderInstanceId?: string;
+    } = { limit: 500 },
   ): Promise<{
     items: Array<Record<string, unknown>>;
     nextCursor: string | null;
@@ -799,6 +817,9 @@ export class ChatService {
       take,
       // hasMore 语义由调用处按「本页装下的 DB 行数」重算，这里取满 take 即可
       limit: take,
+      ...(page.senderInstanceId
+        ? { senderInstanceId: page.senderInstanceId }
+        : {}),
     });
     const rows = await this.loadMessageRowsInIdOrder(pageIds.ids);
     const dbItems = [...rows]
