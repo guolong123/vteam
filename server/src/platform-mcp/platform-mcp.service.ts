@@ -2832,16 +2832,43 @@ export class PlatformMcpService implements OnModuleInit {
     if (!mainMemberId) {
       return;
     }
+    /**
+     * 唤醒投递频道：**按 reason 分流**（2026-11-11 用户反馈修正）。
+     *
+     * 原实现一律「主 Agent 私聊频道优先，找不到才回退群聊」。后果：成员完工回执
+     * （fan-out 完成）投递到私聊 ⇒ 主 Agent 在**私聊上下文**被唤醒，按
+     * 「私聊默认不公开，需公开结论时调 vteam_group_post」的规则只做私聊回复，
+     * **不会在群里汇总**（用户实测：「项目经理收到成员完成消息后，不在群里总结，
+     * 而是私聊回复」）。
+     *
+     * 分流策略：
+     * - 完工汇总（非 question/help）→ **群聊优先**：主 Agent 直接在群聊上下文被触发，
+     *   天然把汇总发到群里（这正是它该做的事：验收/收尾对全员可见）。
+     * - 提问 / 求助 → 私聊优先（立即介入、可能涉及具体上下文细节），回退群聊。
+     */
+    const isBlocking = input.reason === 'question' || input.reason === 'help';
     let channel: { id: string } | null = null;
-    channel = await this.prisma.chatChannel.findFirst({
-      where: {
-        teamId: input.teamId,
-        teamMemberId: mainMemberId,
-        deletedAt: null,
-      },
-      select: { id: true },
-    });
+    if (!isBlocking) {
+      channel = await this.prisma.chatChannel.findFirst({
+        where: {
+          teamId: input.teamId,
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+    }
     if (!channel) {
+      channel = await this.prisma.chatChannel.findFirst({
+        where: {
+          teamId: input.teamId,
+          teamMemberId: mainMemberId,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+    }
+    if (!channel && isBlocking) {
       channel = await this.prisma.chatChannel.findFirst({
         where: {
           teamId: input.teamId,

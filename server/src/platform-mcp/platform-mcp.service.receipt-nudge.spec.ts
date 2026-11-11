@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
+  CHANNEL_TYPE,
   MESSAGE_STATUS,
   SENDER_TYPE,
 } from '../common/constants/event.constants';
@@ -388,5 +389,95 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
     expect(prisma.message.create).not.toHaveBeenCalled();
     expect(prisma.messageReceipt.create).not.toHaveBeenCalled();
     expect(timers.schedule).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 主 Agent 唤醒**投递频道**分流（2026-11-11 用户反馈）。
+ *
+ * 背景：成员完工回执原先一律投递到「主 Agent 私聊频道」，主 Agent 在私聊上下文被
+ * 唤醒后按「私聊默认不公开」只做私聊回复，**不在群里汇总**（用户实测：
+ * 「项目经理收到成员完成消息后，不总结到群里，而是私聊回复」）。
+ * 现改为：完工汇总（非 question/help）→ 群聊优先；提问/求助 → 私聊优先。
+ */
+describe('PlatformMcpService wakeMainAgent 投递频道分流', () => {
+  let service: PlatformMcpService;
+  let prisma: {
+    team: { findUnique: jest.Mock };
+    chatChannel: { findFirst: jest.Mock };
+  };
+  let dispatcher: { dispatchAgentMention: jest.Mock };
+
+  const teamId = 'tm_0000000001';
+  const mainMemberId = 'tmm_main';
+
+  beforeEach(async () => {
+    prisma = {
+      team: { findUnique: jest.fn().mockResolvedValue({ mainAgentMemberId: mainMemberId }) },
+      chatChannel: {
+        findFirst: jest.fn(async (args: { where: { type?: string } }) =>
+          args.where.type === CHANNEL_TYPE.team_group
+            ? { id: 'c_group' }
+            : { id: 'c_dm' },
+        ),
+      },
+    };
+    dispatcher = { dispatchAgentMention: jest.fn().mockResolvedValue(undefined) };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        PlatformMcpService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: RealtimeService, useValue: {} },
+        { provide: WorkerDispatcher, useValue: dispatcher },
+        { provide: IdGeneratorService, useValue: { nextId: jest.fn() } },
+        { provide: TriggerService, useValue: { schedule: jest.fn() } },
+        { provide: ArtifactsService, useValue: {} },
+        { provide: WorkerClient, useValue: {} },
+        { provide: IssuesService, useValue: {} },
+        { provide: TasksService, useValue: {} },
+        { provide: QuestionsService, useValue: {} },
+        { provide: NotificationDispatcherService, useValue: {} },
+        { provide: ExecutionPolicyService, useValue: {} },
+        { provide: SkillsService, useValue: {} },
+        { provide: GitReposService, useValue: {} },
+        { provide: PlanLifecycleService, useValue: {} },
+      ],
+    }).compile();
+    service = module.get(PlatformMcpService);
+  });
+
+  it('完工汇总（fan-out 完成）→ 投递群聊频道（主 Agent 在群聊上下文汇总）', async () => {
+    await (service as unknown as {
+      wakeMainAgent: (i: Record<string, unknown>) => Promise<void>;
+    }).wakeMainAgent({
+      isTeam: true,
+      taskId: null,
+      teamId,
+      callerInstanceId: 'tmm_dev',
+      reason: 'fan-out',
+      text: '已完成',
+    });
+
+    expect(dispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: 'c_group' }),
+    );
+  });
+
+  it('提问（question）→ 保持私聊优先（紧急介入、回退群聊）', async () => {
+    await (service as unknown as {
+      wakeMainAgent: (i: Record<string, unknown>) => Promise<void>;
+    }).wakeMainAgent({
+      isTeam: true,
+      taskId: null,
+      teamId,
+      callerInstanceId: 'tmm_dev',
+      reason: 'question',
+      text: '需要决策',
+    });
+
+    expect(dispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: 'c_dm' }),
+    );
   });
 });
