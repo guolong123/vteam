@@ -1646,6 +1646,36 @@ export function TeamSessionView({
   // MsgParts variant="line" 渲染路径（服务端 mergeSessionWithPlatform 已把 processing 行
   // 并入会话末尾）。群聊 Tab 渲染路径逐字节不变。
   const messages: RealtimeChatMessage[] = allMessages;
+
+  /**
+   * 成员视角的过程规模统计（用于**折叠历史过程**）。
+   *
+   * 为什么需要：成员视角展示该成员**完整会话历史**，而每个历史轮次都带一组
+   * `reasoning/tool` 片段 ⇒ 列表里出现满屏重复的「过程 · 1 次工具调用 · 1 段思考」
+   * （用户实测反馈：缩略信息没有实际意义、把正文全挤没了）。
+   * 处理策略：历史轮次只保留**正文**，最新一轮保留可展开过程，并在顶部给一条汇总。
+   */
+  // 用普通计算而非 useMemo：本处位于若干提前 return 之后，useMemo 会触发
+  // rules-of-hooks（hook 顺序可能不一致）；messages 规模在数十条量级，成本可忽略。
+  const memberProcessStats = (() => {
+    if (!isMemberView) return null;
+    let turns = 0;
+    let tools = 0;
+    let thinks = 0;
+    for (const m of messages) {
+      const cs = (m as unknown as { content?: { parts?: unknown } }).content;
+      const ps = Array.isArray(cs?.parts) ? (cs!.parts as Array<{ type?: string }>) : [];
+      const toolCount = ps.filter((x) => x?.type === "tool").length;
+      const thinkCount = ps.filter(
+        (x) => x?.type === "reasoning" || x?.type === "thinking",
+      ).length;
+      if (toolCount === 0 && thinkCount === 0) continue;
+      turns += 1;
+      tools += toolCount;
+      thinks += thinkCount;
+    }
+    return turns > 0 ? { turns, tools, thinks } : null;
+  })();
   const nextCursor = isMemberView
     ? (memberHistoryQuery.data?.nextCursor ?? null)
     : isGroupTab
@@ -1971,6 +2001,36 @@ export function TeamSessionView({
               </span>
               <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
             </div>
+            {/*
+              成员视角的过程折叠说明：历史轮次的过程片段不逐条渲染（见 memberProcessStats
+              注释），这里显式告知「折叠了多少」，避免用户以为过程丢了。
+            */}
+            {isMemberView && memberProcessStats && memberProcessStats.turns > 1 && (
+              <div
+                data-testid="member-process-summary"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: space.xs,
+                  alignSelf: "center",
+                  maxWidth: 640,
+                  padding: `${space.xs}px ${space.md}px`,
+                  borderRadius: radius.pill,
+                  backgroundColor: neutral[50],
+                  border: `1px solid ${neutral[200]}`,
+                  fontSize: fontSize.xs,
+                  color: neutral[500],
+                  ...baseFont,
+                }}
+              >
+                <span aria-hidden style={{ color: neutral[400] }}>▸</span>
+                已折叠 {memberProcessStats.turns - 1} 轮历史过程
+                <span style={{ color: neutral[400] }}>
+                  （{memberProcessStats.tools} 次工具调用 · {memberProcessStats.thinks} 段思考）
+                </span>
+                ，仅显示正文；最新一轮过程保留在末尾可展开
+              </div>
+            )}
             {nextCursor && (
               <div style={{ display: "flex", justifyContent: "center" }}>
                 <button type="button" data-testid="chat-load-more" disabled={loadingMore} onClick={handleLoadMore} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, cursor: loadingMore ? "default" : "pointer", opacity: loadingMore ? 0.6 : 1 }}> {loadingMore ? "加载中…" : "加载更多历史消息"}</button>
@@ -2031,10 +2091,24 @@ export function TeamSessionView({
               // Agent 消息：过程片段 + 正文置底（MsgParts）；status=processing 为流式中间态
               if (msg.senderType === "agent") {
                 const secretAwaiting = secretAwaitingFor(msg.senderId, senderInstanceId);
+                /**
+                 * 成员视角的**历史轮次**只渲染正文，剥离 reasoning/tool：
+                 * 否则每个历史轮次都挂一条「过程 · 1 次工具调用 · 1 段思考」折叠行，
+                 * 满屏重复的缩略信息把正文挤没（用户实测反馈）。
+                 * 最新一条保留完整 parts（过程可展开），历史过程规模由顶部
+                 * `member-process-summary` 汇总提示说明。
+                 */
+                const isLatestMessage = index === messages.length - 1;
+                const renderedParts =
+                  isMemberView && !isLatestMessage
+                    ? parts.filter(
+                        (x) => (x as { type?: string })?.type === "text",
+                      )
+                    : parts;
                 return withSeparator(
                   <MsgParts
                     key={msg.id}
-                    parts={parts}
+                    parts={renderedParts}
                     // 私聊 / 群聊「成员视角」按全局设置选 native(bubble) / dsh 变体；
                     // 群聊「全部」视角保持 bubble（数据源不同，见 richSource 注释）。
                     variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"}
