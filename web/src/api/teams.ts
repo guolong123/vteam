@@ -36,6 +36,11 @@ export interface TeamMemberDto {
    */
   sessionStatus?: {
     busyState: string;
+    /**
+     * 会话生命周期态（created / running / idle / frozen）。
+     * 团队直聊（无 task）不写轮次台账 ⇒ busyState 恒 idle，需靠它识别执行中。
+     */
+    status?: string | null;
     busySince: string | null;
     lastTurnOutcome: string | null;
     /** 最近活动时间（ISO）；空闲态下用于判断「刚出的输出」是否还新鲜。 */

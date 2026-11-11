@@ -34,6 +34,17 @@ export interface MemberPresence {
 /** 团队 DTO 的席级会话状态（结构对齐 `TeamMemberDto.sessionStatus`）。 */
 export interface SeatSessionStatus {
   busyState: string;
+  /**
+   * 会话生命周期态（created / running / idle / frozen）。
+   *
+   * 为什么「执行中」要同时认它：`busy_state` 只在**轮次台账路径**
+   * （`session_turns.claimNext`）被写成 running，而**团队直聊（team-mode，无 task）
+   * 不写轮次台账** ⇒ busy_state 恒 idle，头像状态点永远不亮。
+   * 线上实测：tmm_0000000025 正在执行、`session.status='running'`，`busy_state='idle'`
+   * ⇒ 用户反馈「成员正在工作中，头像没有进行中提示」。status 在两条路径都会置
+   * running，僵尸态另有 watchdog（scanIdleSessions）兜底收敛，故作为并列信号。
+   */
+  status?: string | null;
   busySince?: string | null;
   lastTurnOutcome?: string | null;
   lastActivityAt?: string | null;
@@ -85,8 +96,12 @@ export function resolveMemberPresence(
 ): MemberPresence {
   // 黄点：任一路来源是 running 即视为执行中（席级优先，但两路都要认，
   // 否则成员库回填后席级缺值时黄点会闪没）。
+  //
+  // 席级多看一个 `status`：团队直聊不写 busy_state（见 SeatSessionStatus.status
+  // 注释），只认 busyState 会让直聊执行中的成员永远不亮黄点。
   const running =
     seatStatus?.busyState === "running" ||
+    seatStatus?.status === "running" ||
     memberSession?.busyState === "running";
 
   if (running) {
