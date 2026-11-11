@@ -67,6 +67,24 @@ export interface MemberSessionLike {
  */
 export const DONE_FRESH_WINDOW_MS = 30 * 60 * 1000;
 
+/**
+ * 「status=running 仍算执行中」的**时效窗口**（毫秒，默认 5 分钟）。
+ *
+ * 为什么需要：`session.status` 的收敛依赖成功完成路径或 watchdog，而
+ * `AGENT_IDLE_TIMEOUT_MS` **默认 0 = 关闭**（docker-compose / 部分部署显式设 0），
+ * 一旦某个会话异常退出（worker 崩溃/进程重启/超时未收口），`status` 会永久停在
+ * `running` —— 只按 status 判「执行中」会让头像**永远亮黄点**（用户实测：
+ * 「现在已经没在工作了，状态还一直显示」）。
+ *
+ * 因此 status=running 必须叠加「最近活动足够新」才作数：
+ * - 真在跑的会话会有 delta / agent.status / session.updated 事件持续滑动
+ *   `lastActivityAt`，间隔通常在秒级，5 分钟窗口留足长推理/慢模型的余量；
+ * - 僵尸会话没有新活动，超过窗口即自动熄灭，无需人工干预。
+ *
+ * 注意与 `DONE_FRESH_WINDOW_MS`（30 分钟，绿点语义）区分：两者语义不同，不要合并。
+ */
+export const RUNNING_FRESH_WINDOW_MS = 5 * 60 * 1000;
+
 /** 取「最近活动时间」时间戳（毫秒）；两路来源都看，取较新者；无效返回 NaN。 */
 function latestActivityMs(
   seatStatus: SeatSessionStatus | null | undefined,
@@ -99,10 +117,18 @@ export function resolveMemberPresence(
   //
   // 席级多看一个 `status`：团队直聊不写 busy_state（见 SeatSessionStatus.status
   // 注释），只认 busyState 会让直聊执行中的成员永远不亮黄点。
-  const running =
-    seatStatus?.busyState === "running" ||
-    seatStatus?.status === "running" ||
-    memberSession?.busyState === "running";
+  // busy_state 是轮次台账写的（权威且只在真执行时置位），无需时效；
+  // status 是生命周期态且可能僵尸不收敛，必须叠加「最近活动新鲜」才作数。
+  const seatBusy = seatStatus?.busyState === "running";
+  const memberBusy = memberSession?.busyState === "running";
+  let seatStatusRunning = false;
+  if (seatStatus?.status === "running") {
+    const activity = latestActivityMs(seatStatus, memberSession);
+    // 活动时间缺失 → 保守不判执行中（宁可漏一个黄点，也不要永久误亮）
+    seatStatusRunning =
+      Number.isFinite(activity) && nowMs - activity <= RUNNING_FRESH_WINDOW_MS;
+  }
+  const running = seatBusy || memberBusy || seatStatusRunning;
 
   if (running) {
     return { tone: "running", running: true, done: false, label: runningLabel };
