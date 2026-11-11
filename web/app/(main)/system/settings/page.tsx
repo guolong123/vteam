@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * /system/settings —— 全局设置（当前：聊天流式输出样式）。
+ * /system/settings —— 全局设置（聊天流式输出样式 + 页面特效）。
  *
  * 私聊消息渲染保留两套实现：
  * - 原生：现有气泡 + 过程折叠（MsgParts variant="bubble"）
@@ -10,6 +10,7 @@
  */
 import { useChatPrefsStore, type ChatStreamStyle } from "@/lib/stores/chat-prefs-store";
 import { fontSize, fontFamily, neutral, space, radius } from "@/src/theme/tokens";
+import { CanvasUIEffectPicker } from "@/src/components/canvasui/effect-picker";
 
 const OPTIONS: Array<{
   value: ChatStreamStyle;
@@ -91,6 +92,33 @@ export default function GlobalSettingsPage() {
             );
           })}
         </div>
+      </section>
+
+      {/*
+        页面特效（CanvasUI）：原先藏在 AppShell 顶栏右上角、且只有演示模式
+        （?fx=on / localStorage 开关）才可见 —— 配置项不该由 URL 参数控制。
+        用户反馈「挪到全局设置」，故在此常驻展示。
+      */}
+      <section
+        data-testid="global-settings-effects"
+        style={{
+          padding: space.lg,
+          borderRadius: radius.md,
+          border: `1px solid ${neutral[200]}`,
+          backgroundColor: "var(--color-surface)",
+          display: "flex",
+          flexDirection: "column",
+          gap: space.md,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>页面特效</div>
+          <div style={{ marginTop: 4, fontSize: fontSize.xs, color: neutral[400] }}>
+            在全站内容区叠加视觉效果，仅影响当前浏览器。特效会降低信息密度页面的可读性，
+            建议按需开启、用完关闭。
+          </div>
+        </div>
+        <CanvasUIEffectPicker />
       </section>
     </div>
   );

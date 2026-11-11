@@ -19,77 +19,7 @@ import { neutral, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 import { NavDock, NavTopBar, CmdKPanel, NAV_ITEMS, DEFAULT_CMDK_ITEMS } from "./index";
 import type { CmdKItem } from "./index";
 import { hasPermission, isPlatformAdmin, type RolePermissions } from "@/lib/permissions";
-import {
-  useCanvasUIStore,
-  type CanvasUIEffectKey,
-} from "@/src/components/canvasui/store";
 import { ThemeToggle } from "@/src/theme/theme-toggle";
-
-/**
- * 演示模式开关（UX-04）：页面效果下拉默认隐藏，仅当 URL ?fx=on 或
- * localStorage 键值开启演示模式时显示；CanvasUI 效果应用逻辑不变。
- */
-const FX_DEMO_STORAGE_KEY = "canvasui.demo-mode";
-
-/** 全局 Canvas UI 效果下拉分组（与 store 的效果键对应）。 */
-const CANVASUI_GROUPS: {
-  label: string;
-  items: { key: CanvasUIEffectKey; label: string }[];
-}[] = [
-  {
-    label: "光学与玻璃",
-    items: [
-      { key: "glass", label: "玻璃球" },
-      { key: "frost", label: "霜冻" },
-      { key: "magnify", label: "放大镜" },
-      { key: "bend", label: "弯曲" },
-      { key: "peel", label: "剥落" },
-      { key: "bubble", label: "气泡" },
-      { key: "displacement", label: "位移" },
-    ],
-  },
-  {
-    label: "流体与天气",
-    items: [
-      { key: "droplets", label: "雨滴" },
-      { key: "liquid", label: "流体" },
-      { key: "ripple", label: "涟漪" },
-      { key: "cloth", label: "布料" },
-      { key: "clouds", label: "云层" },
-    ],
-  },
-  {
-    label: "火与能量",
-    items: [
-      { key: "blaze", label: "火焰" },
-      { key: "flamewrap", label: "火焰环绕" },
-      { key: "forcefield", label: "力场" },
-      { key: "laser", label: "激光" },
-    ],
-  },
-  {
-    label: "复古与特效",
-    items: [
-      { key: "glitch", label: "故障" },
-      { key: "vhs", label: "磁带" },
-      { key: "retrodither", label: "复古点阵" },
-      { key: "asciify", label: "字符化" },
-      { key: "decryptreveal", label: "解密揭示" },
-      { key: "glyphrain", label: "字符雨" },
-    ],
-  },
-  {
-    label: "粒子与结构",
-    items: [
-      { key: "canvas", label: "画布" },
-      { key: "particlereveal", label: "粒子揭示" },
-      { key: "particlescroll", label: "粒子滚动" },
-      { key: "shatter", label: "碎裂" },
-      { key: "grid", label: "网格" },
-      { key: "hexfloat", label: "六边形" },
-    ],
-  },
-];
 
 const baseFont = { fontFamily: fontFamily.body } as const;
 
@@ -259,19 +189,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
-  const effect = useCanvasUIStore((s) => s.effect);
-  const setEffect = useCanvasUIStore((s) => s.setEffect);
   const [cmdkOpen, setCmdkOpen] = useState(false);
-  // UX-04：页面效果下拉默认隐藏，仅演示模式（?fx=on 或 localStorage 开关）显示
-  const [fxDemo, setFxDemo] = useState(false);
-
-  useEffect(() => {
-    const search = new URLSearchParams(window.location.search);
-    const urlOn = search.get("fx") === "on";
-    const lsOn = window.localStorage.getItem(FX_DEMO_STORAGE_KEY) === "1";
-    if (urlOn) window.localStorage.setItem(FX_DEMO_STORAGE_KEY, "1");
-    setFxDemo(urlOn || lsOn);
-  }, []);
 
   const activeKey = pathToKey(pathname);
   const page = resolvePageTitle(pathname);
@@ -415,38 +333,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       >
         {/* 主题切换（常驻） */}
         <ThemeToggle />
-        {/* 全局效果下拉（头像右侧插槽，与登出按钮并排）— UX-04：仅演示模式显示 */}
-        {fxDemo && (
-          <select
-            data-testid="canvasui-select"
-            aria-label="页面效果"
-            value={effect}
-            onChange={(e) => setEffect(e.target.value as CanvasUIEffectKey)}
-            style={{
-              maxWidth: 120,
-              padding: "6px 8px",
-              borderRadius: radius.md,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: "var(--color-surface)",
-              color: neutral[600],
-              fontSize: fontSize.sm,
-              fontWeight: 500,
-              cursor: "pointer",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            {CANVASUI_GROUPS.map((group) => (
-              <optgroup key={group.label} label={group.label}>
-                {group.items.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-            <option value="none">关闭</option>
-          </select>
-        )}
         {/* 登出按钮（头像右侧插槽）：清空认证态并回到登录页 */}
         <button
           type="button"

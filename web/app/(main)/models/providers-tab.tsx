@@ -3518,9 +3518,13 @@ export default function ProvidersTab() {
               >
                 <span style={{ width: 220, flexShrink: 0 }}>PROVIDER</span>
                 <span style={{ width: 100, flexShrink: 0 }}>模型数</span>
-                <span style={{ flex: 1, minWidth: 0 }}>凭据状态</span>
-                <span style={{ width: 220, flexShrink: 0 }}>FINGERPRINT</span>
-                <span style={{ width: 240, flexShrink: 0, textAlign: "right" }}>操作</span>
+                {/*
+                  凭据态与指纹原本是两列：指纹独占 220px 却只有一个脱敏串（信息量极低），
+                  而「已配置」药丸被挤成 flex 弹性列后紧贴指纹，观感糊在一起。
+                  改为同列上下排布（药丸在上、指纹小字在下），把 220px 还给操作列。
+                */}
+                <span style={{ flex: 1, minWidth: 0 }}>凭据 / 指纹</span>
+                <span style={{ width: 320, flexShrink: 0, textAlign: "right" }}>操作</span>
               </div>
 
               {/* Provider 行（Level 1）+ 模型下钻面板（Level 2，行内展开） */}
@@ -3668,29 +3672,27 @@ export default function ProvidersTab() {
                       )}
                     </span>
 
-                    {/* 凭据状态徽章 */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
+                    {/* 凭据状态 + 脱敏指纹（同列上下排布：药丸在上、指纹小字在下） */}
+                    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
                       <CredentialBadge status={status} />
+                      <span
+                        data-testid="provider-fingerprint"
+                        data-provider={p.providerID}
+                        title={status === "configured" ? (fingerprint ?? "") : ""}
+                        style={{
+                          maxWidth: "100%",
+                          fontSize: fontSize.xs,
+                          fontFamily: fontFamily.mono,
+                          color: status === "configured" ? neutral[500] : neutral[300],
+                          letterSpacing: "0.02em",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {status === "configured" ? (fingerprint ?? "—") : "—"}
+                      </span>
                     </div>
-
-                    {/* fingerprint（已配置时显示，脱敏） */}
-                    <span
-                      data-testid="provider-fingerprint"
-                      data-provider={p.providerID}
-                      style={{
-                        width: 220,
-                        flexShrink: 0,
-                        fontSize: fontSize.sm,
-                        fontFamily: fontFamily.mono,
-                        color: status === "configured" ? neutral[600] : neutral[300],
-                        letterSpacing: "0.02em",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {status === "configured" ? (fingerprint ?? "—") : "—"}
-                    </span>
 
                     {/* 操作：编辑配置 / 配置凭据 / 删除凭据 / 删除 Provider（admin 专属；成员只读无操作）
                         集成行只放「配置/更新凭据」——无模型行可编辑/删除，凭据走 provider 粒度端点 */}

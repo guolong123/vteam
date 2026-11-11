@@ -47,7 +47,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentBadge, ConfirmDialog, Pagination, SegmentedTabs } from "@/src/components/ui";
+import { AgentBadge, ConfirmDialog, Markdown, Pagination, SegmentedTabs } from "@/src/components/ui";
 import {
   type RoleKey,
   neutral,
@@ -539,13 +539,53 @@ function McpMenuItem({
   );
 }
 /** 技能行卡片：图标 + 名称/版本/描述（左），角色 + 来源 + 状态 + 操作（右） */
+/**
+ * 拆 SKILL.md 的 YAML frontmatter 与正文。
+ *
+ * 为什么查看要剥离：`---\nname: …\nversion: …\nallowed-tools:\n  - …\n---` 这些行
+ * 交给 markdown 渲染会被当成段落 + `---` 水平线铺在正文最前面（实测弹窗顶部出现
+ * 「name: prototype-designer description: … allowed-tools:」一大坨），既难看又与
+ * 顶部元信息重复。查看场景只渲染正文，frontmatter 字段并入元信息区展示。
+ *
+ * 解析失败（无 frontmatter）→ 原样返回正文，保持容错。
+ */
+function parseSkillDoc(raw: string): {
+  body: string;
+  frontmatter: Record<string, string | string[]>;
+} {
+  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!m) return { body: raw, frontmatter: {} };
+  const frontmatter: Record<string, string | string[]> = {};
+  let currentKey: string | null = null;
+  for (const line of (m[1] ?? "").split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (kv) {
+      currentKey = kv[1] ?? null;
+      const v = (kv[2] ?? "").trim();
+      frontmatter[currentKey ?? ""] = v ? v : [];
+      continue;
+    }
+    const item = line.match(/^\s+-\s*(.+)$/);
+    if (item && currentKey) {
+      const arr = Array.isArray(frontmatter[currentKey])
+        ? (frontmatter[currentKey] as string[])
+        : [];
+      arr.push((item[1] ?? "").trim());
+      frontmatter[currentKey] = arr;
+    }
+  }
+  return { body: raw.slice(m[0].length), frontmatter };
+}
+
 function SkillItemRow({
   s,
+  onView,
   onEdit,
   onToggle,
   canManage,
 }: {
   s: SkillItem;
+  onView: () => void;
   onEdit: () => void;
   onToggle: () => void;
   canManage: boolean;
@@ -634,22 +674,21 @@ function SkillItemRow({
         status={s.enabled}
       />
 
-      {/* 操作（[admin] 专属；成员只读不渲染） */}
-      {canManage && (
-        <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
-          <ActionButton
-            label="编辑"
-            onClick={onEdit}
-            testid="skill-edit-button"
-          />
-          <ActionButton
-            label={s.enabled === "启用" ? "停用" : "启用"}
-            danger={s.enabled === "启用"}
-            onClick={onToggle}
-            testid="skill-toggle-button"
-          />
-        </div>
-      )}
+      {/* 操作：查看对所有人可见（只读，渲染 SKILL.md）；编辑/启停仍是 [admin] 专属 */}
+      <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+        <ActionButton label="查看" onClick={onView} testid="skill-view-button" />
+        {canManage && (
+          <>
+            <ActionButton label="编辑" onClick={onEdit} testid="skill-edit-button" />
+            <ActionButton
+              label={s.enabled === "启用" ? "停用" : "启用"}
+              danger={s.enabled === "启用"}
+              onClick={onToggle}
+              testid="skill-toggle-button"
+            />
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -2657,6 +2696,11 @@ export default function SkillToolManagePage() {
 
   /* 编辑弹窗 state：editingSkill=目标行；editContent 打开时经 GET /skills/:id/content 拉取
    * （列表接口不含 content 字段），editLoading 期间禁用保存 */
+  /* 查看弹窗 state：列表不含 content，打开时 GET /skills/:id/content 拉全文后渲染 markdown。 */
+  const [viewingSkill, setViewingSkill] = useState<SkillItem | null>(null);
+  const [viewContent, setViewContent] = useState("");
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewError, setViewError] = useState<string | null>(null);
   const [editingSkill, setEditingSkill] = useState<SkillItem | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -2712,6 +2756,19 @@ export default function SkillToolManagePage() {
     if (!csName.trim() && !csDescription.trim() && !csBody.trim()) return null;
     return buildSkillMarkdown(csName, csDescription, csVersion, csBody);
   }, [csName, csDescription, csVersion, csBody]);
+
+  /* 打开「查看」：拉 SKILL.md 全文，只读渲染 markdown（不进入编辑态）。 */
+  const handleOpenView = (s: SkillItem) => {
+    setViewingSkill(s);
+    setViewContent("");
+    setViewError(null);
+    setViewLoading(true);
+    api
+      .get<{ id: string; name: string; content: string }>(`/skills/${s.id}/content`)
+      .then((res) => setViewContent(res.content))
+      .catch((err) => setViewError(isApiError(err) ? err.message : "加载技能内容失败"))
+      .finally(() => setViewLoading(false));
+  };
 
   /* 打开编辑弹窗：重置错误态 + 预填 name/description + 拉取 SKILL.md 全文填充 content */
   const handleOpenEdit = (s: SkillItem) => {
@@ -3111,6 +3168,7 @@ export default function SkillToolManagePage() {
                 <SkillItemRow
                   key={s.id}
                   s={s}
+                  onView={() => handleOpenView(s)}
                   onEdit={() => handleOpenEdit(s)}
                   onToggle={() => handleToggleEnabled("skill", s.id, s.enabled === "启用")}
                   canManage={isAdmin}
@@ -3384,6 +3442,118 @@ export default function SkillToolManagePage() {
           MCP 工具经 v2 connect/disconnect 控制连接（07 篇 10.3 / 10.4 / 4 章）
         </div>
       </div>
+
+      {/*
+        查看技能弹窗（只读）：渲染 SKILL.md 的 markdown 正文，并把元信息（版本/来源/
+        启用态/绑定角色）集中展示在顶部 —— 此前只有「编辑」入口，编辑态用 textarea
+        展示原文，既不方便阅读也容易误改。
+      */}
+      {viewingSkill && (() => {
+        const doc = parseSkillDoc(viewContent);
+        const fmVersion = typeof doc.frontmatter.version === "string" ? doc.frontmatter.version : null;
+        const fmTools = Array.isArray(doc.frontmatter["allowed-tools"]) ? (doc.frontmatter["allowed-tools"] as string[]) : [];
+        return (
+        <div
+          data-testid="view-skill-modal-root"
+          style={{ position: "absolute", inset: 0, zIndex: 40, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "6%" }}
+        >
+          <div aria-hidden onClick={() => setViewingSkill(null)} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
+          <div
+            style={{
+              position: "relative",
+              width: 820,
+              maxWidth: "calc(100% - 48px)",
+              maxHeight: "82vh",
+              display: "flex",
+              flexDirection: "column",
+              gap: space.lg,
+              padding: space.xl,
+              borderRadius: radius.lg,
+              backgroundColor: "var(--color-surface)",
+              border: `1px solid ${neutral[200]}`,
+              boxShadow: shadow.lg,
+              ...baseFont,
+            }}
+          >
+            {/* 头部：技能名 + 版本 */}
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: space.sm }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: fontSize.xl, fontWeight: 700, color: neutral[900] }}>{viewingSkill.name}</span>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[500], padding: "1px 8px", borderRadius: radius.pill, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>{viewingSkill.version}</span>
+                </div>
+                <div style={{ marginTop: 6, fontSize: fontSize.sm, color: neutral[500] }}>{viewingSkill.desc}</div>
+              </div>
+              <button
+                type="button"
+                data-testid="view-skill-modal-close"
+                aria-label="关闭"
+                onClick={() => setViewingSkill(null)}
+                style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, flexShrink: 0, borderRadius: "50%", border: "none", cursor: "pointer", backgroundColor: "transparent", color: neutral[400], fontSize: fontSize.lg, lineHeight: 1 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 元信息：一眼看清技能是什么、从哪来、给谁用、当前是否生效 */}
+            <div
+              data-testid="view-skill-meta"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: space.lg,
+                flexWrap: "wrap",
+                padding: `${space.md}px ${space.lg}px`,
+                borderRadius: radius.md,
+                backgroundColor: neutral[50],
+                border: `1px solid ${neutral[200]}`,
+                fontSize: fontSize.xs,
+                color: neutral[500],
+              }}
+            >
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                来源 <PillBadge theme={sourceColors[viewingSkill.source]} label={viewingSkill.source} testid="view-skill-source" status={viewingSkill.source} />
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                状态 <PillBadge theme={enableColors[viewingSkill.enabled]} label={viewingSkill.enabled} testid="view-skill-status" status={viewingSkill.enabled} />
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                绑定角色{" "}
+                {viewingSkill.roles.length === 0 ? (
+                  <span style={{ color: neutral[400] }}>未绑定</span>
+                ) : (
+                  viewingSkill.roles.map((r) => <AgentBadge key={r} role={r} />)
+                )}
+              </span>
+              {fmVersion && (
+                <span data-testid="view-skill-fm-version">
+                  声明版本 <span style={{ fontFamily: fontFamily.mono, color: neutral[700] }}>{fmVersion}</span>
+                </span>
+              )}
+              {fmTools.length > 0 && (
+                <span data-testid="view-skill-fm-tools">允许工具 {fmTools.join(" · ")}</span>
+              )}
+            </div>
+
+            {/* 正文：markdown 渲染（含表格/代码块），独立滚动区 */}
+            <div
+              data-testid="view-skill-content"
+              style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: space.xs, borderTop: `1px solid ${neutral[100]}`, paddingTop: space.md }}
+            >
+              {viewLoading ? (
+                <div style={{ fontSize: fontSize.sm, color: neutral[400], padding: space.lg }}>加载技能内容…</div>
+              ) : viewError ? (
+                <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", padding: space.lg }}>{viewError}</div>
+              ) : doc.body.trim() ? (
+                <Markdown>{doc.body}</Markdown>
+              ) : (
+                <div style={{ fontSize: fontSize.sm, color: neutral[400], padding: space.lg }}>该技能没有正文内容</div>
+              )}
+            </div>
+          </div>
+        </div>
+        );
+      })()}
 
       {/* 编辑技能弹窗（UX-15）：name/description 输入 + SKILL.md 全文 textarea，PATCH /skills/:id。
        * 列表接口不含 content → 打开时 GET /skills/:id/content 拉取原文预填。 */}
