@@ -395,6 +395,12 @@ export class ChatService {
     channelId: string,
     userId: string,
     query: QueryMessagesDto,
+    /**
+     * 可选：只取某个**席位**（`sender_instance_id`）产出的消息。
+     * 仅 `getSessionHistory` 的群聊降级路径使用（见该处注释），不对外暴露成
+     * 查询参数——群聊「全部视角」必须仍能读到全员消息。
+     */
+    opts?: { senderInstanceId?: string | null },
   ) {
     await this.resolveChannelAccess(channelId, userId);
     const limit = this.normalizeLimit(query.limit);
@@ -403,6 +409,9 @@ export class ChatService {
       beforeId: query.cursor,
       take: limit + 1,
       limit,
+      ...(opts?.senderInstanceId
+        ? { senderInstanceId: opts.senderInstanceId }
+        : {}),
     });
     const rows = await this.loadMessageRowsInIdOrder(pageIds.ids);
     return {
@@ -428,11 +437,16 @@ export class ChatService {
     beforeId?: string;
     take: number;
     limit: number;
+    /** 仅取该席位产出的消息（成员视角降级路径用）。 */
+    senderInstanceId?: string;
   }): Promise<{ ids: string[]; hasMore: boolean }> {
     const idRows = await this.prisma.message.findMany({
       where: {
         channelId: opts.channelId,
         ...(opts.beforeId ? { id: { lt: opts.beforeId } } : {}),
+        ...(opts.senderInstanceId
+          ? { senderInstanceId: opts.senderInstanceId }
+          : {}),
       },
       orderBy: { id: 'desc' },
       take: opts.take,
@@ -495,10 +509,23 @@ export class ChatService {
     const limit = this.normalizeLimit(query.limit);
     const beforeId = query.cursor;
     const fallback = async () => {
-      const page = await this.findMessages(channelId, userId, {
-        limit,
-        ...(beforeId ? { cursor: beforeId } : {}),
-      });
+      /**
+       * 群聊降级必须**按席位过滤**：`generate` 失败/该席位没有 worker 会话时
+       * 原先直接返回整个频道消息 ⇒ 成员视角里出现**所有成员**的发言
+       * （用户实测：选中文一知，列表里却是苏一产/林一架/秦一测…全群消息）。
+       * 私聊频道本身只含双方消息，无需过滤。
+       */
+      const page = await this.findMessages(
+        channelId,
+        userId,
+        {
+          limit,
+          ...(beforeId ? { cursor: beforeId } : {}),
+        },
+        isGroupChannel && query.teamMemberId
+          ? { senderInstanceId: query.teamMemberId }
+          : undefined,
+      );
       return { ...page, source: 'db' as const };
     };
     let session: {

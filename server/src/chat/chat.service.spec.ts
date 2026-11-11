@@ -1713,6 +1713,25 @@ describe('ChatService', () => {
       expect(result.source).toBe('session');
     });
 
+    it('群聊 + teamMemberId 降级回退 → 只取该席位消息（不得混入全群消息）', async () => {
+      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      await service.getSessionHistory(channelId, userId, {
+        teamMemberId: 'tmm_9',
+      });
+
+      // 关键：降级路径的分页查询必须带 senderInstanceId 过滤，
+      // 否则成员视角会显示整群所有人的发言（用户实测 bug）。
+      const calls = prisma.message.findMany.mock.calls.map((c: any[]) => c[0]);
+      const pageCall = calls.find((c: any) => c?.select?.id === true);
+      expect(pageCall?.where).toMatchObject({
+        channelId,
+        senderInstanceId: 'tmm_9',
+      });
+    });
+
     it('群聊 + teamMemberId 但该席位无会话 → 回退平台表（不报错）', async () => {
       allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
       (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
