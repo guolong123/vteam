@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import {
   DONE_FRESH_WINDOW_MS,
   PRESENCE_COLOR,
+  RUNNING_FRESH_WINDOW_MS,
   resolveMemberPresence,
 } from "./member-presence";
 
@@ -27,14 +28,50 @@ test.describe("resolveMemberPresence", () => {
    * `busy_state` 恒为 idle，只有 `session.status='running'`。若只看 busyState，
    * 直聊中干活的成员头像永远不亮 —— 用户反馈「成员正在工作中，头像没有进行中提示」。
    */
-  test("席级 status=running + busyState=idle → 仍判黄点（团队直聊路径）", () => {
+  test("席级 status=running + busyState=idle + 活动新鲜 → 仍判黄点（团队直聊）", () => {
+    const p = resolveMemberPresence(
+      { busyState: "idle", status: "running", lastActivityAt: fresh },
+      null,
+      "正在执行",
+      NOW,
+    );
+    expect(p).toMatchObject({ tone: "running", running: true, done: false });
+  });
+
+  /**
+   * 僵尸态回归锁：`AGENT_IDLE_TIMEOUT_MS` 默认 0（watchdog 关闭），会话异常退出后
+   * `status` 会永久停在 running。只按 status 判会让头像**一直亮黄点**
+   * （用户实测：「现在已经没在工作了，状态还一直显示」）。
+   */
+  test("席级 status=running 但活动已陈旧 → 不判执行中（僵尸态自愈）", () => {
+    const staleActivity = new Date(NOW - RUNNING_FRESH_WINDOW_MS - 60_000).toISOString();
+    const p = resolveMemberPresence(
+      { busyState: "idle", status: "running", lastActivityAt: staleActivity },
+      null,
+      "正在执行",
+      NOW,
+    );
+    expect(p).toMatchObject({ tone: "idle", running: false });
+  });
+
+  test("席级 status=running 且无任何活动时间 → 保守不判执行中", () => {
     const p = resolveMemberPresence(
       { busyState: "idle", status: "running" },
       null,
       "正在执行",
       NOW,
     );
-    expect(p).toMatchObject({ tone: "running", running: true, done: false });
+    expect(p).toMatchObject({ tone: "idle", running: false });
+  });
+
+  test("busyState=running 不受时效约束（轮次台账权威，即使活动时间陈旧）", () => {
+    const p = resolveMemberPresence(
+      { busyState: "running", status: "running", lastActivityAt: stale },
+      null,
+      "正在执行",
+      NOW,
+    );
+    expect(p).toMatchObject({ tone: "running", running: true });
   });
 
   test("status=idle 不误判为执行中（两种来源都 idle → 空闲）", () => {
