@@ -964,8 +964,22 @@ export function TeamSessionView({
   // 初次加载/切换 Tab 时滚到底；加载更多（头部插入历史）不打断阅读位置
   const bottomTabRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = isGroupTab ? `group:${channelId}` : `private:${activePrivateId ?? ""}`;
-    const items = isGroupTab ? (messagesQuery.data?.items ?? []) : (privateMessagesQuery.data?.items ?? []);
+    /**
+     * key 必须包含**成员视角**：切到某成员时数据源从群聊消息换成该成员会话历史
+     * （memberHistoryQuery），但 isGroupTab/channelId 不变 —— 旧 key 因此恒等，
+     * effect 直接 return，列表停在原位（用户实测：点成员后滚动条停在中部，
+     * 需要手动拖到底才能看到最新一条）。
+     */
+    const key = isMemberView
+      ? `member:${channelId}:${filterMemberId ?? ""}`
+      : isGroupTab
+        ? `group:${channelId}`
+        : `private:${activePrivateId ?? ""}`;
+    const items = isMemberView
+      ? (memberHistoryQuery.data?.items ?? [])
+      : isGroupTab
+        ? (messagesQuery.data?.items ?? [])
+        : (privateMessagesQuery.data?.items ?? []);
     if (items.length === 0 || !listRef.current) return;
     if (bottomTabRef.current === key) return;
     bottomTabRef.current = key;
@@ -975,7 +989,16 @@ export function TeamSessionView({
       el.scrollTop = el.scrollHeight;
       setTimeout(() => { el.scrollTop = el.scrollHeight; }, 150);
     });
-  }, [isGroupTab, channelId, activePrivateId, messagesQuery.data, privateMessagesQuery.data]);
+  }, [
+    isMemberView,
+    filterMemberId,
+    isGroupTab,
+    channelId,
+    activePrivateId,
+    memberHistoryQuery.data,
+    messagesQuery.data,
+    privateMessagesQuery.data,
+  ]);
 
   const invalidateTaskCaches = useCallback((taskId: string) => {
     queryClient.invalidateQueries({ queryKey: ["task", taskId], exact: true });
