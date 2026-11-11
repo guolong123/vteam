@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
+// DSH primitives 设计令牌桥接（--dsw-*）：私聊 DSH 流式样式的 markdown/代码块/工具卡
+// 全靠这些令牌排版，缺失会导致字号/行高/代码区背景全部失效（详见该文件头注释）。
+import "@/src/styles/dsh-tokens.css";
 // DSH 设计令牌（vendored，仅变量定义）：供 src/components/chat/dsh/ 下的
 // @deepseek-ai/dsh-client-ui-primitives 组件取用 --dsw-* 令牌。
 // 只定义变量、不含组件样式，也不含 scrollbar/focus 等全局行为样式（见文件头）。

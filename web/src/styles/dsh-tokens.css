@@ -1,0 +1,185 @@
+/*
+ * DSH primitives 设计令牌桥接（--dsw-*）
+ * ===================================================================
+ * 背景（2026-11-11 用户反馈）：
+ *   DSH 流式样式（`MsgParts variant="dsh"` → `@deepseek-ai/dsh-client-ui-primitives`
+ *   的 MarkdownText / CodeBlock / ToolCard …）在 vteam 里「字体大小、行间隔、代码区
+ *   全没样式」。放大排查后确认不是缺组件，而是**缺令牌**：
+ *
+ *   这些组件是 CSS Modules，样式里写的是 `font: var(--dsw-font-markdown-base)`、
+ *   `color: var(--dsw-alias-label-primary)` 等 `--dsw-*` 设计令牌；而令牌由 **DSH 宿主
+ *   应用**注入，primitives 包本身**不定义**（实测 `grep -r '--dsw-font-markdown-base:'`
+ *   在 node_modules 里 0 命中）。vteam 只装了组件包、没桥接令牌 ⇒ 所有 `var()` 解析失败：
+ *     - `font:` 整条失效   ⇒ 字号/行高回落到浏览器默认（正文过小、行距过紧）
+ *     - `color:` 失效      ⇒ 继承父级色，层级信息（caption/tertiary）丢失
+ *     - 代码块背景/边框失效 ⇒ 代码区与正文糊在一起、无卡片区隔
+ *
+ * 做法：
+ *   1. 令牌值**取自 DSH 官方**（从 `/Applications/DeepSeek Harness.app/.../app.asar`
+ *      提取真实定义，非臆测），例如正文 `14px/24px`、代码 `12px/19px`、圆角 4/8/12/16。
+ *   2. **颜色不写死**，映射到 vteam 既有 `--color-*` 令牌 —— vteam 已在 `.dark`
+ *      里翻转这些变量，因此这里天然同时适配浅色/深色，无需第二套色板。
+ *   3. 只覆盖 primitives 实际引用到的令牌（101 个），未用到的 DSH 令牌不引入，
+ *      避免把 DSH 整套主题搬进来污染 vteam 观感。
+ *
+ * 维护提示：升级 `@deepseek-ai/dsh-client-ui-primitives` 后若某处仍无样式，
+ * 用 `grep -rho 'var(--dsw-[a-z0-9-]*' node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/`
+ * 比对是否出现新令牌，再按同样方式补映射。
+ */
+
+:root {
+  /* ---------- 中间量（DSH 的字体增量机制，vteam 固定为 0 增量） ---------- */
+  --dsh-content-font-size: 14px;
+  --dsh-content-font-size-secondary: 13px;
+  --dsh-code-font-size: 12px;
+  --dsh-content-font-delta: 0px;
+  --dsh-content-font-delta-secondary: 0px;
+  --dsh-code-font-delta: 0px;
+  --dsh-font-family-text-default: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue",
+    Helvetica, Arial, sans-serif;
+  --dsh-font-family-code-default: "SF Mono", "JetBrains Mono", "Fira Code",
+    Consolas, "Liberation Mono", Menlo, Courier, "PingFang SC", "Microsoft YaHei";
+
+  /* ---------- 字体族 ---------- */
+  --dsw-font-family: var(--dsh-font-family-text-default);
+  --ds-font-family-code: var(--dsh-font-family-code-default);
+  --dsw-font-markdown-code-font-family: var(--ds-font-family-code);
+
+  /* ---------- Markdown 排版（值取自 DSH 官方定义） ---------- */
+  --dsw-font-markdown-base: var(--dsh-content-font-size) / 24px
+    var(--dsw-font-family);
+  --dsw-font-markdown-base-strong: 600 var(--dsh-content-font-size) / 24px
+    var(--dsw-font-family);
+  --dsw-font-markdown-h1: 700 21px / 30px var(--dsw-font-family);
+  --dsw-font-markdown-h2: 700 19px / 28px var(--dsw-font-family);
+  --dsw-font-markdown-h3: 700 18px / 26px var(--dsw-font-family);
+  --dsw-font-markdown-h4: 600 var(--dsh-content-font-size) / 24px
+    var(--dsw-font-family);
+  --dsw-font-markdown-table: var(--dsh-content-font-size-secondary) / 22px
+    var(--dsw-font-family);
+  --dsw-font-markdown-table-head: 500 var(--dsh-content-font-size-secondary) /
+    22px var(--dsw-font-family);
+  --dsw-font-markdown-code: var(--dsh-code-font-size) / 19px
+    var(--ds-font-family-code);
+  --dsw-font-markdown-code-block: 11px / 19px var(--ds-font-family-code);
+  --dsw-font-xs-13: 13px / 20px var(--dsw-font-family);
+
+  /* ---------- 圆角（DSH 官方 4/8/12/16/28） ---------- */
+  --dsw-radius-xs: 4px;
+  --dsw-radius-sm: 8px;
+  --dsw-radius-md: 12px;
+  --dsw-radius-lg: 16px;
+  --dsw-radius-panel: 28px;
+
+  /* ---------- 焦点环 / 阴影 / 层级（沿用 vteam 观感的保守值） ---------- */
+  --dsw-focus-ring-width: 2px;
+  --dsw-focus-ring-color: transparent;
+  --dsw-shadow-lv3: 0 6px 24px rgba(15, 23, 42, 0.12);
+  --dsw-elevation-soft: 0 1px 3px rgba(15, 23, 42, 0.08);
+  --dsw-elevation-prominent: 0 8px 28px rgba(15, 23, 42, 0.16);
+  --dsw-elevation-panel: 0 12px 40px rgba(15, 23, 42, 0.18);
+  --dsw-mask-blur: 2px;
+
+  /* ---------- 颜色别名 → vteam 令牌（随 .dark 自动翻转） ---------- */
+  --dsw-alias-bg-base: var(--color-surface);
+  --dsw-alias-bg-layer-1: var(--color-surface);
+  --dsw-alias-bg-layer-2: var(--color-neutral-50);
+  --dsw-alias-bg-layer-3: var(--color-neutral-100);
+  --dsw-alias-bg-layer-4: var(--color-neutral-200);
+  --dsw-alias-bg-mask-1: rgba(15, 23, 42, 0.32);
+  --dsw-alias-bg-module-platform: var(--color-neutral-50);
+
+  --dsw-alias-border-l1: var(--color-neutral-100);
+  --dsw-alias-border-l2: var(--color-neutral-200);
+  --dsw-alias-border-l2-darkmode-thin: var(--color-neutral-200);
+  --dsw-alias-border-l3: var(--color-neutral-300);
+  --dsw-alias-border-l4: var(--color-neutral-400);
+
+  --dsw-alias-brand-primary: var(--color-primary);
+  --dsw-alias-button-primary-fill: var(--color-primary);
+  --dsw-alias-button-primary-hover: var(--color-primary-hover);
+  --dsw-alias-button-ghost-active-border: var(--color-neutral-300);
+  --dsw-alias-button-ghost-active-fill: var(--color-neutral-100);
+  --dsw-alias-button-tool-bar-fill: transparent;
+  --dsw-alias-button-tool-bar-hover: var(--color-neutral-100);
+
+  --dsw-alias-interactive-bg-active: var(--color-neutral-100);
+  --dsw-alias-interactive-bg-hover: var(--color-neutral-100);
+  --dsw-alias-interactive-bg-hover-danger: rgba(220, 38, 38, 0.08);
+
+  --dsw-alias-label-primary: var(--color-neutral-900);
+  --dsw-alias-label-primary-foreground: var(--color-surface);
+  --dsw-alias-label-primary-inverted: var(--color-surface);
+  --dsw-alias-label-secondary: var(--color-neutral-600);
+  --dsw-alias-label-tertiary: var(--color-neutral-500);
+  --dsw-alias-label-caption: var(--color-neutral-400);
+  --dsw-alias-label-dimmed: var(--color-neutral-400);
+  --dsw-alias-label-error: #dc2626;
+  --dsw-alias-label-shimmer: var(--color-neutral-300);
+  --dsw-alias-link: var(--color-primary);
+
+  /* 代码块：浅底 + 稍深 banner 头，与正文形成卡片区隔（此前全无背景 → 糊在一起） */
+  --dsw-alias-markdown-code-block: var(--color-neutral-50);
+  --dsw-alias-markdown-code-block-banner: var(--color-neutral-100);
+  --dsw-alias-markdown-inline-code: var(--color-neutral-100);
+  --dsw-alias-code-diff-added: rgba(16, 185, 129, 0.14);
+  --dsw-alias-code-diff-deleted: rgba(239, 68, 68, 0.14);
+
+  --dsw-alias-state-business-primary: var(--color-primary);
+  --dsw-alias-state-error-primary: #dc2626;
+  --dsw-alias-state-error-secondary: rgba(220, 38, 38, 0.12);
+  --dsw-alias-state-idle-primary: var(--color-neutral-400);
+  --dsw-alias-state-success-primary: #10b981;
+  --dsw-alias-state-success-secondary: rgba(16, 185, 129, 0.14);
+  --dsw-alias-state-success-tertiary: rgba(16, 185, 129, 0.08);
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-warn-secondary: rgba(245, 158, 11, 0.16);
+  --dsw-alias-state-warn-tertiary: rgba(245, 158, 11, 0.08);
+  --dsw-alias-state-warn-label: #b45309;
+
+  --dsw-alias-switch-thumb: var(--color-surface);
+  --dsw-alias-toast-bg: var(--color-neutral-900);
+  --dsw-alias-toast-label: var(--color-surface);
+  --dsw-alias-tooltip-bg: var(--color-neutral-900);
+  --dsw-alias-tooltip-key-bg: var(--color-neutral-700);
+  --dsw-alias-menu-group-header-fill: var(--color-neutral-100);
+  --dsw-alias-menu-icon: var(--color-neutral-500);
+  --dsw-alias-scrollbar-bg-l2: var(--color-neutral-300);
+  --dsw-alias-scrollbar-hover-l2: var(--color-neutral-400);
+
+  /* ---------- 浮层 / 菜单 ---------- */
+  --dsw-menu-surface-fill: var(--color-surface);
+  --dsw-menu-backdrop-filter: blur(12px);
+  --dsw-hovercard-bg: var(--color-surface);
+  --dsw-specific-input-major: var(--color-neutral-100);
+  --dsw-specific-menu: var(--color-surface);
+
+  /* ---------- 静态色板（组件直接引用的少量固定色） ---------- */
+  --dsw-static-neutral-00: #ffffff;
+  --dsw-static-neutral-400: #94a3b8;
+  --dsw-static-neutral-bluish-00: #ffffff;
+  --dsw-static-neutral-bluish-300: #cfd3d6;
+  --dsw-static-neutral-bluish-1000: #0f1115;
+  --dsw-static-deepseek-400: #6b97ee;
+  --dsw-static-deepseek-450: #5a86ea;
+  --dsw-static-deepseek-500: #4176e6;
+  --dsw-static-blue-400: #60a5fa;
+  --dsw-static-blue-500: #3b82f6;
+  --dsw-static-blue-600: #2563eb;
+  --dsw-static-green-500: #10b981;
+  --dsw-static-amber-400: #fbbf24;
+  --dsw-static-amber-500: #f59e0b;
+  --dsw-static-red-600: #dc2626;
+}
+
+/*
+ * 深色：vteam 用 `.dark` class 翻转 `--color-*`，颜色别名已映射过去 ⇒ 自动适配。
+ * 仅少数「固定浅色」的静态色板需要按深色语境微调（代码块 banner、inline code 等
+ * 语义色用的是 --color-* 已覆盖，无需重复）。这里只修正静态中性色端点。
+ */
+.dark {
+  --dsw-static-neutral-bluish-00: #0f1115;
+  --dsw-static-neutral-bluish-1000: #f1f5f9;
+  --dsw-static-neutral-00: #0f1115;
+}
