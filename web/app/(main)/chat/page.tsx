@@ -803,7 +803,6 @@ function ChatPageContent() {
               presence={selectedSeatPresence}
               isMainAgent={team?.mainAgentMemberId === selectedSeat.id}
               roleKey={selectedSeatRoleKey}
-              messageCount={messages.length}
               onClose={() => setFilterMemberId(null)}
             />
           ) : (
@@ -1394,14 +1393,12 @@ function GroupMemberContextPanel({
   presence,
   isMainAgent,
   roleKey,
-  messageCount,
   onClose,
 }: {
   seat: TeamMemberDto;
   presence: MemberPresence;
   isMainAgent: boolean;
   roleKey: RoleKey;
-  messageCount: number;
   onClose: () => void;
 }) {
   const name = seat.member?.name ?? seat.alias ?? "成员";
@@ -1536,7 +1533,6 @@ function GroupMemberContextPanel({
         {infoRow("Agent", agentName, "group-member-context-agent")}
         {infoRow("席位 ID", seat.id, "group-member-context-seat")}
         {seat.workDir ? infoRow("工作目录", seat.workDir) : null}
-        {infoRow("视角内消息", `${messageCount} 条`, "group-member-context-count")}
       </div>
 
       <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>

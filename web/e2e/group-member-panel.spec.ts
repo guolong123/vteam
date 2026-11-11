@@ -125,28 +125,31 @@ function groupMessagesFixture() {
   };
 }
 
+/**
+ * 成员会话历史夹具：**刻意造 24 条**让列表高于容器，否则「切成员后自动滚到底」
+ * 无从断言（内容不足一屏时 scrollTop 恒 0，断言会假通过）。
+ */
+const MEMBER_HISTORY_COUNT = 24;
 function memberHistoryFixture() {
   return {
-    items: [
-      {
-        id: "m_member_1",
-        channelId: CHANNEL_ID,
-        senderType: "agent",
-        senderId: "a_project_manager",
-        senderInstanceId: RUNNING_SEAT,
-        content: {
-          text: "我查一下配置",
-          parts: [
-            { type: "reasoning", state: "done", text: "先看看配置" },
-            { type: "tool", name: "bash", state: { status: "success", input: "cat config.json", output: "{}" } },
-            { type: "text", text: "我查一下配置" },
-          ],
-        },
-        mentions: [],
-        status: "sent",
-        createdAt: iso,
+    items: Array.from({ length: MEMBER_HISTORY_COUNT }, (_, i) => ({
+      id: `m_member_${i + 1}`,
+      channelId: CHANNEL_ID,
+      senderType: "agent",
+      senderId: "a_project_manager",
+      senderInstanceId: RUNNING_SEAT,
+      content: {
+        text: `第 ${i + 1} 条成员输出：正在核对配置文件与运行状态，确保本轮结论可复核。`,
+        parts: [
+          { type: "reasoning", state: "done", text: `第 ${i + 1} 条思考过程` },
+          { type: "tool", name: "bash", state: { status: "success", input: "cat config.json", output: "{}" } },
+          { type: "text", text: `第 ${i + 1} 条成员输出：正在核对配置文件与运行状态，确保本轮结论可复核。` },
+        ],
       },
-    ],
+      mentions: [],
+      status: "sent",
+      createdAt: iso,
+    })),
     nextCursor: null,
     source: "session",
   };
@@ -321,8 +324,33 @@ test.describe("群聊成员状态角标 + 成员视角右栏", () => {
     await expect(page.getByTestId("group-member-context-status")).toContainText("正在执行");
     await expect(page.getByTestId("group-member-context-agent")).toHaveText("项目经理");
     await expect(page.getByTestId("group-member-context-seat")).toHaveText(RUNNING_SEAT);
-    // 视角内消息数（该成员会话历史条数）
-    await expect(page.getByTestId("group-member-context-count")).toContainText("1 条");
+  });
+
+  test("4. 点成员后消息区自动滚到底（最新一条可见）", async ({ page }) => {
+    const h = await installMocks(page);
+    h.setRunningSeat(RUNNING_SEAT);
+    await page.goto(`/chat?c=${encodeURIComponent(`group:${TEAM_ID}`)}`);
+    await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("task-panel")).toBeVisible();
+
+    // 点成员 → 数据源切到成员会话历史（24 条，高于容器）
+    await page.locator(`[data-testid="group-member-chip"][data-presence="running"]`).click();
+
+    const list = page.getByTestId("chat-message-list");
+    await expect(list).toContainText(`第 ${MEMBER_HISTORY_COUNT} 条成员输出`, { timeout: 15_000 });
+
+    // ★ 自动滚到底：距底部应接近 0（切成员视角时 key 变化触发滚动；
+    //   旧实现 key 不含成员视角 ⇒ 列表停在原位，此断言红）
+    await expect
+      .poll(
+        () => list.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
+        { timeout: 10_000, message: "点成员后应自动滚到最底" },
+      )
+      .toBeLessThan(48);
+
+    // 顺带确认容器确实可滚（否则上面断言无意义）
+    const scrollable = await list.evaluate((el) => el.scrollHeight > el.clientHeight + 100);
+    expect(scrollable, "夹具内容应高于容器，滚动断言才有意义").toBeTruthy();
   });
 
   test("3. 「返回团队」恢复团队面板", async ({ page }) => {
