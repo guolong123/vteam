@@ -232,6 +232,62 @@ describe('WorkerDispatcher 异常终止通知（缺陷 5）', () => {
     );
   });
 
+  /**
+   * 收件人分流回归锁（2026-11-11）：被终止的是**主 Agent 自己**时，
+   * 原文案「请主 Agent 复核该成员」指向一个已不在场的收件人（没人被通知）。
+   * 主 Agent 被终止必须改请**人工**介入。
+   */
+  it('主 Agent 自己被终止 → 文案改请人工复核（不再指向主 Agent）', async () => {
+    // teamMemberId 即 mainAgentMemberId ⇒ 终止者就是主 Agent
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: teamMemberId,
+    });
+    const d = createDispatcher();
+
+    await d.handleAgentStatus({
+      taskId: 'team:tm_0000000001',
+      agentId,
+      sessionId,
+      status: 'error',
+      error: '执行失败：[v2-driver] 请求超时（>600000ms）',
+    });
+
+    const created = prisma.message.create.mock.calls.map(
+      (c: any[]) => c[0].data.content.text as string,
+    );
+    const mainNotice = created.find((t) =>
+      t.includes('【主 Agent 会话异常终止】'),
+    );
+    expect(mainNotice).toBeDefined();
+    expect(mainNotice).not.toContain('请主 Agent 复核');
+    expect(mainNotice).toContain('请人工复核');
+  });
+
+  it('普通成员被终止 → 仍请主 Agent 复核（原语义不变）', async () => {
+    // 主 Agent 是别人（tmm_other），终止的是普通成员
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: 'tmm_other',
+    });
+    const d = createDispatcher();
+
+    await d.handleAgentStatus({
+      taskId: 'team:tm_0000000001',
+      agentId,
+      sessionId,
+      status: 'error',
+      error: '执行失败：模型不可用',
+    });
+
+    const created = prisma.message.create.mock.calls.map(
+      (c: any[]) => c[0].data.content.text as string,
+    );
+    const memberNotice = created.find((t) =>
+      t.includes('【成员会话异常终止】'),
+    );
+    expect(memberNotice).toBeDefined();
+    expect(memberNotice).toContain('请主 Agent 复核该成员');
+  });
+
   it('同一终止重复投递 → 不产生第二条通知（幂等）', async () => {
     const d = createDispatcher();
     const payload = {

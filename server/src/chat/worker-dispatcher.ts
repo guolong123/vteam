@@ -4445,9 +4445,28 @@ export class WorkerDispatcher
       // 不能直接写 task_events 的外键列）。
       const taskId = await this.taskIdOfSession(sessionId);
       const alias = await this.memberAlias(teamMemberId, agentId);
-      const text =
-        `【成员会话异常终止】${alias}（session ${sessionId}，终止类型 ${reasonType}）：` +
-        `${reason}。请主 Agent 复核该成员本轮产出与回执，决定是否重新派发。`;
+      /**
+       * 终止者是否**就是主 Agent**：决定通知文案的收件人。
+       *
+       * 原文案一律「请主 Agent 复核该成员」—— 但主 Agent 自己被杀时（实测 v2-driver
+       * 请求超时 600s），这句话指向一个已经不在场的收件人，等于没人被通知。
+       * 主 Agent 被终止时改请**人工**介入（人类用户是唯一还能兜底的人）。
+       */
+      const mainAgentMemberId =
+        (
+          await this.prisma.team.findUnique({
+            where: { id: teamId },
+            select: { mainAgentMemberId: true },
+          })
+        )?.mainAgentMemberId ?? null;
+      const terminatedIsMainAgent =
+        !!mainAgentMemberId && mainAgentMemberId === teamMemberId;
+      const text = terminatedIsMainAgent
+        ? `【主 Agent 会话异常终止】${alias}（session ${sessionId}，终止类型 ${reasonType}）：` +
+          `${reason}。主 Agent 本轮未能完成汇总/推进，且无其他 Agent 可代为接管，` +
+          `请人工复核该会话产出，决定是否重新派发或手动推进。`
+        : `【成员会话异常终止】${alias}（session ${sessionId}，终止类型 ${reasonType}）：` +
+          `${reason}。请主 Agent 复核该成员本轮产出与回执，决定是否重新派发。`;
       const existing = await this.findTerminationNotice(
         channel.id,
         sessionId,
