@@ -693,7 +693,7 @@ function ChatPageContent() {
                     memberById.get(seat.memberId ?? "")?.session ?? null,
                   );
                   return (
-                    <span key={seat.id} style={{ marginLeft: -6, position: "relative", display: "inline-flex" }} title={`${seat.member?.name ?? seat.alias} · ${presence.label}`}>
+                    <span key={seat.id} style={{ marginLeft: -6, position: "relative", display: "inline-flex" }} title={`${seat.alias ?? seat.member?.name ?? "成员"}${seat.member?.name && seat.alias ? `（${seat.member.name}）` : ""} · ${presence.label}`}>
                       <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
                       {presence.tone !== "idle" && (
                         <span
@@ -741,7 +741,7 @@ function ChatPageContent() {
                 );
                 const selected = filterMemberId === seat.id;
                 return (
-                  <button key={seat.id} type="button" data-testid="group-member-chip" data-presence={presence.tone} title={`${seat.member?.name ?? seat.alias} · ${presence.label}`} onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
+                  <button key={seat.id} type="button" data-testid="group-member-chip" data-presence={presence.tone} title={`${seat.alias ?? seat.member?.name ?? "成员"}${seat.member?.name && seat.alias ? `（${seat.member.name}）` : ""} · ${presence.label}`} onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
                     <span style={{ position: "relative" }}>
                       <AgentAvatar role={roleKey} size="sm" />
                       {presence.tone !== "idle" && (
@@ -759,7 +759,7 @@ function ChatPageContent() {
                         />
                       )}
                     </span>
-                    <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.member?.name ?? seat.alias}</span>
+                    <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 132, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memberChipLabel(seat)}</span>
                   </button>
                 );
               })}
@@ -1103,6 +1103,23 @@ function ChatPageContent() {
 }
 
 /** useSearchParams 需要 Suspense 边界（Next App Router CSR bailout）。 */
+/**
+ * 成员切换条的名字显示。
+ *
+ * 线上 `member.name` 会带团队/群后缀（如「开发者-1（值班群：xxx）」），
+ * 直接展示会被 `maxWidth` 截断成「开发者-1（值班群:…」，根本看不出是谁
+ * （用户反馈「这个名称还是显示不全」）。
+ * 规则：**优先 alias**（该成员在本团队的短名，语义最准），
+ * 没有 alias 才回退 name 并去掉「（…）」后缀；完整名字仍放在 title 里供 hover。
+ */
+function memberChipLabel(seat: TeamMemberDto): string {
+  const alias = (seat.alias ?? "").trim();
+  if (alias) return alias;
+  const name = (seat.member?.name ?? "").trim();
+  if (!name) return "成员";
+  return name.split(/（|\(/)[0].trim() || name;
+}
+
 export default function ChatPage() {
   return (
     <Suspense

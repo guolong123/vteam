@@ -1722,13 +1722,14 @@ describe('ChatService', () => {
         teamMemberId: 'tmm_9',
       });
 
-      // 关键：降级路径的分页查询必须带 senderInstanceId 过滤，
-      // 否则成员视角会显示整群所有人的发言（用户实测 bug）。
+      // 关键：降级路径的分页查询必须限定「该席位 + 全部 user 消息」——
+      //   - 不加席位过滤 → 显示整群所有人的发言（bug）
+      //   - 只按席位过滤 → user 消息（关键时间锚点）被滤掉（bug）
       const calls = prisma.message.findMany.mock.calls.map((c: any[]) => c[0]);
       const pageCall = calls.find((c: any) => c?.select?.id === true);
       expect(pageCall?.where).toMatchObject({
         channelId,
-        senderInstanceId: 'tmm_9',
+        OR: [{ senderInstanceId: 'tmm_9' }, { senderType: 'user' }],
       });
     });
 

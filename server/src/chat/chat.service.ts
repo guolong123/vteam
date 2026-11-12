@@ -400,7 +400,11 @@ export class ChatService {
      * 仅 `getSessionHistory` 的群聊降级路径使用（见该处注释），不对外暴露成
      * 查询参数——群聊「全部视角」必须仍能读到全员消息。
      */
-    opts?: { senderInstanceId?: string | null },
+    opts?: {
+      senderInstanceId?: string | null;
+      /** 群聊成员视角：user 消息只保留 @该成员 / @all 的（见 userMentionTargetsSeat）。 */
+      filterUserByMention?: boolean;
+    },
   ) {
     await this.resolveChannelAccess(channelId, userId);
     const limit = this.normalizeLimit(query.limit);
@@ -413,7 +417,15 @@ export class ChatService {
         ? { senderInstanceId: opts.senderInstanceId }
         : {}),
     });
-    const rows = await this.loadMessageRowsInIdOrder(pageIds.ids);
+    const allRows = await this.loadMessageRowsInIdOrder(pageIds.ids);
+    const rows =
+      opts?.filterUserByMention && opts.senderInstanceId
+        ? allRows.filter(
+            (r) =>
+              r.senderType !== SENDER_TYPE.user ||
+              this.userMentionTargetsSeat(r.mentions, opts.senderInstanceId!),
+          )
+        : allRows;
     return {
       // ids 为 id 降序（最新优先），反转回升序供前端时间正序渲染
       items: [...rows].reverse().map((row) => this.toMessageDto(row)),
@@ -437,7 +449,14 @@ export class ChatService {
     beforeId?: string;
     take: number;
     limit: number;
-    /** 仅取该席位产出的消息（成员视角降级路径用）。 */
+    /**
+     * 成员视角过滤：**该席位产出的消息 + 全部 user 消息**。
+     *
+     * 为什么必须带上 user 消息（2026-11-11 用户反馈）：
+     * 用户消息是会话时间线上最重要的**锚点**——它标记了「什么时候被派了什么活」。
+     * 只按席位过滤会把 user 行全部滤掉，成员视角就只剩 agent 自说自话，
+     * 完全看不出任务的起止与上下文。
+     */
     senderInstanceId?: string;
   }): Promise<{ ids: string[]; hasMore: boolean }> {
     const idRows = await this.prisma.message.findMany({
@@ -445,7 +464,12 @@ export class ChatService {
         channelId: opts.channelId,
         ...(opts.beforeId ? { id: { lt: opts.beforeId } } : {}),
         ...(opts.senderInstanceId
-          ? { senderInstanceId: opts.senderInstanceId }
+          ? {
+              OR: [
+                { senderInstanceId: opts.senderInstanceId },
+                { senderType: SENDER_TYPE.user },
+              ],
+            }
           : {}),
       },
       orderBy: { id: 'desc' },
@@ -523,7 +547,7 @@ export class ChatService {
           ...(beforeId ? { cursor: beforeId } : {}),
         },
         isGroupChannel && query.teamMemberId
-          ? { senderInstanceId: query.teamMemberId }
+          ? { senderInstanceId: query.teamMemberId, filterUserByMention: true }
           : undefined,
       );
       return { ...page, source: 'db' as const };
@@ -627,7 +651,7 @@ export class ChatService {
           beforeId,
           // 群聊成员视角：只合并该席位在平台表的行（见方法注释）
           ...(isGroupChannel && teamMemberId
-            ? { senderInstanceId: teamMemberId }
+            ? { senderInstanceId: teamMemberId, filterUserByMention: true }
             : {}),
         },
       );
@@ -787,6 +811,31 @@ export class ChatService {
    *   非 processing 行顺序不变。流式聚合行 createdAt 冻结在轮次起点，若不后置
    *   会被后续落库消息压在下方，出现「流式块卡在列表中部、新消息堆在下面」。
    */
+  /**
+   * 群聊里这条 user 消息**是否该出现在某个成员视角**。
+   *
+   * 判定：mentions 里含 `{type:'all'}`（@all）或含该席位（`instanceId`/`id` = teamMemberId）。
+   *
+   * 为什么需要（2026-11-11 用户反馈）：此前把频道内**全部** user 消息都放进了成员视角，
+   * 结果用户发的每条群聊公共发言在每个成员的私聊/成员视角里都出现一遍
+   * （「为啥我发的消息，每个私聊中都有？」）。user 消息是锚点，但只应是
+   * **与该成员相关**的那些：@他 的、或 @所有人 的。
+   */
+  private userMentionTargetsSeat(
+    mentions: unknown,
+    teamMemberId: string,
+  ): boolean {
+    if (!Array.isArray(mentions)) return false;
+    return mentions.some((m) => {
+      if (!m || typeof m !== 'object') return false;
+      const rec = m as Record<string, unknown>;
+      if (rec.type === 'all') return true;
+      if (rec.instanceId === teamMemberId) return true;
+      if (rec.id === teamMemberId) return true;
+      return false;
+    });
+  }
+
   private async mergeSessionWithPlatform(
     channelId: string,
     sessionItems: Array<Record<string, unknown>>,
@@ -801,6 +850,8 @@ export class ChatService {
        * 一并合并进来（用户实测：选中文一知，列表里出现苏一产/林一架/秦一测…）。
        */
       senderInstanceId?: string;
+      /** 群聊成员视角：user 消息按 @提及 精筛（见 userMentionTargetsSeat）。 */
+      filterUserByMention?: boolean;
     } = { limit: 500 },
   ): Promise<{
     items: Array<Record<string, unknown>>;
@@ -821,7 +872,16 @@ export class ChatService {
         ? { senderInstanceId: page.senderInstanceId }
         : {}),
     });
-    const rows = await this.loadMessageRowsInIdOrder(pageIds.ids);
+    const allRows = await this.loadMessageRowsInIdOrder(pageIds.ids);
+    // 群聊成员视角：user 消息只保留 @该成员 / @all 的（私聊频道不过滤，一对一即全部相关）
+    const rows =
+      page.filterUserByMention && page.senderInstanceId
+        ? allRows.filter(
+            (r) =>
+              r.senderType !== SENDER_TYPE.user ||
+              this.userMentionTargetsSeat(r.mentions, page.senderInstanceId!),
+          )
+        : allRows;
     const dbItems = [...rows]
       .reverse()
       .map((row) => this.toMessageDto(row as any));

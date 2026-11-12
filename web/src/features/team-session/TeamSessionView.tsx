@@ -41,6 +41,8 @@ import { TeamSwitcher } from "@/src/components/teams/TeamSwitcher";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
 import { stripExternalChannelPrefix } from "@/lib/strip-external-channel";
 import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRightPanel";
+import { MemberProcessAggregate } from "@/src/components/chat/dsh/member-process-aggregate";
+import { MessageNavigator, type MessageNavAnchor } from "@/src/components/chat/message-navigator";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
 import type {
   TaskDetail,
@@ -1648,6 +1650,38 @@ export function TeamSessionView({
   const messages: RealtimeChatMessage[] = allMessages;
 
   /**
+   * 右侧导航条锚点：一条有文本的消息一个。
+   * 纯过程消息不进导航（成员视角已聚合进过程组，摘要为空会让刻度失去意义）。
+   */
+  const navAnchors: MessageNavAnchor[] = (() => {
+    const out: MessageNavAnchor[] = [];
+    for (const m of messages) {
+      const raw = ((m as unknown as { content?: { text?: string } })?.content
+        ?.text ?? "") as string;
+      const text = stripInjectedContext(raw).replace(/\s+/g, " ").trim();
+      if (!text) continue;
+      const st = (m as unknown as { senderType?: string }).senderType;
+      const role: MessageNavAnchor["role"] =
+        st === "user"
+          ? "user"
+          : st === "system"
+            ? "system"
+            : st === "external"
+              ? "external"
+              : "agent";
+      const inst = (m as unknown as { senderInstanceId?: string | null })
+        .senderInstanceId;
+      out.push({
+        id: (m as unknown as { id: string }).id,
+        label: text.slice(0, 140),
+        author: inst ? nameByStateKey.get(inst) ?? undefined : undefined,
+        role,
+      });
+    }
+    return out;
+  })();
+
+  /**
    * 成员视角的过程规模统计（用于**折叠历史过程**）。
    *
    * 为什么需要：成员视角展示该成员**完整会话历史**，而每个历史轮次都带一组
@@ -1655,27 +1689,6 @@ export function TeamSessionView({
    * （用户实测反馈：缩略信息没有实际意义、把正文全挤没了）。
    * 处理策略：历史轮次只保留**正文**，最新一轮保留可展开过程，并在顶部给一条汇总。
    */
-  // 用普通计算而非 useMemo：本处位于若干提前 return 之后，useMemo 会触发
-  // rules-of-hooks（hook 顺序可能不一致）；messages 规模在数十条量级，成本可忽略。
-  const memberProcessStats = (() => {
-    if (!isMemberView) return null;
-    let turns = 0;
-    let tools = 0;
-    let thinks = 0;
-    for (const m of messages) {
-      const cs = (m as unknown as { content?: { parts?: unknown } }).content;
-      const ps = Array.isArray(cs?.parts) ? (cs!.parts as Array<{ type?: string }>) : [];
-      const toolCount = ps.filter((x) => x?.type === "tool").length;
-      const thinkCount = ps.filter(
-        (x) => x?.type === "reasoning" || x?.type === "thinking",
-      ).length;
-      if (toolCount === 0 && thinkCount === 0) continue;
-      turns += 1;
-      tools += toolCount;
-      thinks += thinkCount;
-    }
-    return turns > 0 ? { turns, tools, thinks } : null;
-  })();
   const nextCursor = isMemberView
     ? (memberHistoryQuery.data?.nextCursor ?? null)
     : isGroupTab
@@ -1989,6 +2002,8 @@ export function TeamSessionView({
             })}
           </div>
 
+          <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <MessageNavigator scrollRef={listRef} anchors={navAnchors} measureKey={`${messages.length}:${isMemberView ? "m" : "g"}`} />
           <div data-testid="chat-message-list" ref={listRef} onScroll={(e) => { const el = e.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120; }} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.xl}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
             <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
               <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
@@ -2001,42 +2016,26 @@ export function TeamSessionView({
               </span>
               <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
             </div>
-            {/*
-              成员视角的过程折叠说明：历史轮次的过程片段不逐条渲染（见 memberProcessStats
-              注释），这里显式告知「折叠了多少」，避免用户以为过程丢了。
-            */}
-            {isMemberView && memberProcessStats && memberProcessStats.turns > 1 && (
-              <div
-                data-testid="member-process-summary"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: space.xs,
-                  alignSelf: "center",
-                  maxWidth: 640,
-                  padding: `${space.xs}px ${space.md}px`,
-                  borderRadius: radius.pill,
-                  backgroundColor: neutral[50],
-                  border: `1px solid ${neutral[200]}`,
-                  fontSize: fontSize.xs,
-                  color: neutral[500],
-                  ...baseFont,
-                }}
-              >
-                <span aria-hidden style={{ color: neutral[400] }}>▸</span>
-                已折叠 {memberProcessStats.turns - 1} 轮历史过程
-                <span style={{ color: neutral[400] }}>
-                  （{memberProcessStats.tools} 次工具调用 · {memberProcessStats.thinks} 段思考）
-                </span>
-                ，仅显示正文；最新一轮过程保留在末尾可展开
-              </div>
-            )}
             {nextCursor && (
               <div style={{ display: "flex", justifyContent: "center" }}>
                 <button type="button" data-testid="chat-load-more" disabled={loadingMore} onClick={handleLoadMore} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, cursor: loadingMore ? "default" : "pointer", opacity: loadingMore ? 0.6 : 1 }}> {loadingMore ? "加载中…" : "加载更多历史消息"}</button>
               </div>
             )}
-            {messages.map((msg, index) => {
+            {(() => {
+              /**
+               * 成员视角：**跨轮累积过程**，遇到正文才成组。
+               *
+               * 用户要的布局（2026-11-11 反馈）：不要顶部单独一条汇总，而是
+               * 「一段连续过程 → 就近聚合成一个折叠组」，遇到正文就断开、后面新起一组。
+               * 这样组数 = 正文块数（而非轮次数），既降噪又贴着正文。
+               */
+              const pendingProc: unknown[] = [];
+              const flushProc = (keySuffix: string) => {
+                if (!isMemberView || pendingProc.length === 0) return null;
+                const agg = pendingProc.splice(0, pendingProc.length);
+                return <MemberProcessAggregate key={`agg-${keySuffix}`} parts={agg} />;
+              };
+              return messages.map((msg, index) => {
               // 成员视角已切换数据源到该成员的会话历史（含其思考/工具过程），
               // 不再需要按 sender 做客户端过滤——那样只会得到群聊消息的子集。
               // B2 连续分组：仅与上一条比较，不重排、不过滤数据源
@@ -2044,7 +2043,67 @@ export function TeamSessionView({
               // B3 跨天分隔：只在本地日键变化的那一条之前插入，消息顺序与数据源不动
               const separatorKey = dateSeparatorFlagsByIndex[index] ? localDateKey(msg.createdAt) : null;
               const withSeparator = (node: React.ReactElement): React.ReactNode => {
-                if (separatorKey === null) return node;
+                /**
+                 * 锚点容器：右侧导航按 `data-msg-nav-id` 量取每条消息的真实位置。
+                 * 用普通 div（不用 display:contents）——导航要 getBoundingClientRect，
+                 * 而 contents 元素没有布局盒，量不出位置。
+                 */
+                const anchored = (
+                  <div
+                    key={msg.id}
+                    data-msg-nav-id={msg.id}
+                    style={{ display: "flex", flexDirection: "column", minWidth: 0 }}
+                  >
+                    {node}
+                  </div>
+                );
+                /**
+                 * 轮次分组：**用户消息开启新一轮**（或连续用户发言的第一次），
+                 * 在其前面画一条「本轮起点」分隔。
+                 *
+                 * 目的（用户反馈）：长会话里 user 消息是时间锚点——看不出
+                 * 「哪句话触发了后面这一大段过程与结论」。分隔线把
+                 * 「用户消息 → 本轮过程/正文」在视觉上圈成一组，扫一眼就知道轮次边界。
+                 * 连续多条用户发言只在第一条前画（避免同一轮出现多条分隔）。
+                 */
+                const isTurnStart =
+                  msg.senderType === "user" &&
+                  (index === 0 || messages[index - 1]?.senderType !== "user");
+                const turnDivider = isTurnStart ? (
+                  <div
+                    key={`turn-${msg.id}`}
+                    data-testid="chat-turn-divider"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.md,
+                      marginTop: space.xl,
+                      marginBottom: space.xs,
+                    }}
+                  >
+                    <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
+                    <span
+                      style={{
+                        fontSize: fontSize.xs,
+                        color: neutral[400],
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      新一轮 · {formatTime(msg.createdAt)}
+                    </span>
+                    <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
+                  </div>
+                ) : null;
+                if (separatorKey === null) {
+                  return turnDivider ? (
+                    <React.Fragment key={msg.id}>
+                      {turnDivider}
+                      {anchored}
+                    </React.Fragment>
+                  ) : (
+                    anchored
+                  );
+                }
                 return (
                   <React.Fragment key={msg.id}>
                     <div
@@ -2068,7 +2127,8 @@ export function TeamSessionView({
                       </span>
                       <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
                     </div>
-                    {node}
+                    {turnDivider}
+                    {anchored}
                   </React.Fragment>
                 );
               };
@@ -2099,16 +2159,37 @@ export function TeamSessionView({
                  * `member-process-summary` 汇总提示说明。
                  */
                 const isLatestMessage = index === messages.length - 1;
-                const renderedParts =
-                  isMemberView && !isLatestMessage
-                    ? parts.filter(
-                        (x) => (x as { type?: string })?.type === "text",
-                      )
-                    : parts;
+                if (isMemberView) {
+                  const procParts = parts.filter((x) => {
+                    const t = (x as { type?: string })?.type;
+                    return t === "tool" || t === "reasoning" || t === "thinking" || t === "error";
+                  });
+                  const textParts = parts.filter(
+                    (x) => (x as { type?: string })?.type === "text",
+                  );
+                  if (!isLatestMessage) {
+                    // 历史轮次：过程收进聚合组，只有正文单独占位；纯过程轮次直接不渲染
+                    pendingProc.push(...procParts);
+                    if (textParts.length === 0) return null;
+                    return withSeparator(
+                      <React.Fragment key={msg.id}>
+                        {flushProc(msg.id)}
+                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} grouped={grouped} initials={initials} />
+                      </React.Fragment>,
+                    );
+                  }
+                  // 最新一轮：先 flush 之前累积的过程组，再完整渲染（过程可展开）
+                  return withSeparator(
+                    <React.Fragment key={msg.id}>
+                      {flushProc(`tail-${msg.id}`)}
+                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} grouped={grouped} initials={initials} />
+                    </React.Fragment>,
+                  );
+                }
                 return withSeparator(
                   <MsgParts
                     key={msg.id}
-                    parts={renderedParts}
+                    parts={parts}
                     // 私聊 / 群聊「成员视角」按全局设置选 native(bubble) / dsh 变体；
                     // 群聊「全部」视角保持 bubble（数据源不同，见 richSource 注释）。
                     variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"}
@@ -2139,10 +2220,24 @@ export function TeamSessionView({
                   ),
                 );
               }
-              return withSeparator(
-                <ChatBubble key={msg.id} text={stripInjectedContext((msg.content?.text ?? "") as string)} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} initials={initials} status={msg.status} />,
-              );
-            })}
+              {
+                const rawText = (msg.content?.text ?? "") as string;
+                const cleaned = stripInjectedContext(rawText);
+                /**
+                 * 纯「注入上下文」消息（如 worker 每次派发拼进去的【团队上下文】）
+                 * 剥离后为空 ⇒ **整条不渲染**。
+                 *
+                 * 为什么必须隐藏整条：底层会话里每个 user 轮次都会带一段这类注入，
+                 * 全部展示会让成员视角被同一段背景说明刷屏（本地实测 5 条重复），
+                 * 而它本是只该进模型上下文的噪音。真实用户消息与派发通知不受影响。
+                 */
+                if (!cleaned && rawText) return null;
+                return withSeparator(
+                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} initials={initials} status={msg.status} />,
+                );
+              }
+              });
+            })()}
             {!hideInlineStatus && loadingLabel && (
               <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
                 <LoadingIndicator label={loadingLabel} />
@@ -2172,6 +2267,7 @@ export function TeamSessionView({
             {errorLabel && <MsgError kind={errorLabel.kind} detail={errorLabel.detail} time={formatTime(new Date().toISOString())} />}
             {/* B12：瞬态 session 状态行复用 LoadingIndicator 的容器（testid=session-status，指示点 testid=session-status-dots）；仍在 messages.map 之外追加，不进消息数组。 */}
             {!hideInlineStatus && sessionLabel && <LoadingIndicator label={sessionLabel} testid="session-status" dotsTestId="session-status-dots" />}
+          </div>
           </div>
 
           <div style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "var(--color-surface)", borderTop: `1px solid ${neutral[200]}` }}>
