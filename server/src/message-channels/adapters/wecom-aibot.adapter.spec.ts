@@ -194,6 +194,51 @@ describe('WecomAibotAdapter (message-channels)', () => {
     });
   });
 
+  /**
+   * 回归锁（2026-11-12）：**不得再发送 `⏳` 等待占位 / 周期性刷新**。
+   *
+   * 原实现每秒交替发带零宽后缀的 `⏳` 强制企微重绘来模拟"正在输入"，
+   * 用户实测导致**企业微信窗口持续抖动**。移除后需保证：
+   * 1. 入站消息不会产生任何 `⏳` 内容；
+   * 2. 不再有周期性 replyStream 调用（只允许最终 replyStream(finish)）。
+   */
+  it('入站消息不再发送 ⏳ 占位，也不周期性刷新（防企微窗口抖动）', async () => {
+    jest.useFakeTimers();
+    try {
+      const host = {
+        submitInbound: jest.fn().mockResolvedValue({
+          results: [{ ok: true, internalMessageId: 'm_x' }],
+        }),
+        registerStreamCorrelation: jest.fn(),
+        updateChannelRuntime: jest.fn().mockResolvedValue(undefined),
+      } as any;
+      const client: any = {
+        replyStream: jest.fn().mockResolvedValue({}),
+      };
+      await (adapter as any).dispatchInboundWithSpinner(
+        client,
+        'mc_1',
+        host,
+        { headers: { req_id: 'r1' } },
+        [{ kind: 'post_message', text: 'hi', senderExternalId: 'u_1' }],
+        'u_1',
+        '用户',
+        'single',
+        'u_1',
+      );
+      // 推进 5 秒：若还有 setInterval 刷新，replyStream 会被调用多次
+      jest.advanceTimersByTime(5000);
+      const sent = (client.replyStream.mock.calls as unknown[][]).map((c) =>
+        String(c[2]),
+      );
+      expect(sent.some((t) => t.includes('⏳'))).toBe(false);
+      expect(sent).toHaveLength(0);
+      expect(host.submitInbound).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('finishStream logs called and miss when no stream', async () => {
     const ok = await adapter.finishStream('missing_id', 'hello');
     expect(ok).toBe(false);
@@ -978,24 +1023,6 @@ describe('WecomAibotAdapter (message-channels)', () => {
       expect(adapter.getPendingOperatorForTask('t_a')).toBeUndefined();
       expect(mockClients[0].disconnect).toHaveBeenCalled();
       expect(mockClients[1].disconnect).toHaveBeenCalled();
-    });
-  });
-
-  describe('spinner 帧视觉一致性', () => {
-    const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
-
-    it('所有帧剥离零宽字符后是同一个字形', () => {
-      const frames = (WecomAibotAdapter as any).SPINNER_FRAMES as string[];
-      const visible = frames.map((f) => f.replace(ZERO_WIDTH, ''));
-      expect(visible.length).toBeGreaterThan(1);
-      expect(new Set(visible).size).toBe(1);
-    });
-
-    it('相邻帧仅靠零宽后缀区分（借其触发企微重绘，避免被去重缓存）', () => {
-      const frames = (WecomAibotAdapter as any).SPINNER_FRAMES as string[];
-      const suffixes = frames.map((f) => f.slice(-1));
-      expect(new Set(suffixes).size).toBe(frames.length);
-      for (const s of suffixes) expect(s).toMatch(ZERO_WIDTH);
     });
   });
 
