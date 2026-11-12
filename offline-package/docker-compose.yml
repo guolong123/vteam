@@ -121,9 +121,16 @@ services:
     platform: linux/amd64
     container_name: vteam-offline-web
     restart: unless-stopped
+    # 内存兜底：Next 15.5.22 的 middleware 代理存在已知泄漏（详见
+    # docs/web-memory-leak-investigation.md），未打补丁的镜像会随 SSE 重连
+    # 持续涨内存。此处设硬上限，避免拖垮宿主机；根因仍需更新 web 镜像。
+    # 与 chart/vteam/values.yaml 的 web.resources.limits.memory 对齐并留余量。
+    mem_limit: ${WEB_MEM_LIMIT:-1g}
     environment:
       # 运行时代理目标（middleware.ts 读取）：compose 网络内服务名 server
       API_PROXY_TARGET: http://server:3000
+      # 让 V8 提前 GC 而不是无限向 OS 要页（只是兜底，不是泄漏修复）
+      NODE_OPTIONS: "--max-old-space-size=768"
     depends_on:
       server:
         condition: service_healthy
