@@ -45,6 +45,50 @@ export type WecomConnectionState =
  * Inbound: WS message.text + template_card_event handling.
  * Outbound: sendQuestionCard sends button_interaction template_card via WSClient.sendMessage.
  */
+/**
+ * 企微模板卡片：标题（≤64 字符，企微上限）。
+ *
+ * 优先取问题的 `header`（通常就是「PR !90 处理方式」这类短标签）；
+ * 没有 header 才截取问题正文前 64 字符。**不再把完整问题塞进标题**——
+ * 标题与描述重复是这个卡片最容易被吐槽的问题。
+ */
+function wecomCardTitle(q0: Record<string, unknown>): string {
+  const header = typeof q0?.header === 'string' ? q0.header.trim() : '';
+  if (header) return header.slice(0, 64);
+  const question = typeof q0?.question === 'string' ? q0.question.trim() : '';
+  if (!question) return '待确认';
+  return question.slice(0, 64);
+}
+
+/**
+ * 企微模板卡片：描述（≤512 字符）。
+ *
+ * 承载**完整问题 + 全部选项清单（带序号）**。为什么必须列选项：
+ * 企微对 `option_list[].text` 只有 17 字符、按钮 `text` 只有 10 字符硬限制，
+ * 长选项（如「直接合并并删除源分支」「我先看 PR 再决定」）会被截成
+ * 「直接合并并…」「我先看 P…」，用户根本不知道点哪个。描述区有 512 字符，
+ * 足够把每个选项的完整文案列出来，按钮只负责「选第几个」。
+ */
+function wecomCardDesc(
+  q0: Record<string, unknown>,
+  opts: readonly unknown[],
+): string {
+  const question = typeof q0?.question === 'string' ? q0.question.trim() : '';
+  const header = typeof q0?.header === 'string' ? q0.header.trim() : '';
+  const body = question || header || '待确认问题';
+  const labels = (opts ?? []).map((o) => {
+    if (typeof o === 'string') return o.trim();
+    const label = (o as { label?: unknown })?.label;
+    return typeof label === 'string' ? label.trim() : '';
+  });
+  const list = labels
+    .map((label, i) => (label ? `${i + 1}. ${label}` : ''))
+    .filter((x) => x.length > 0)
+    .join('\n');
+  const text = list ? `${body}\n\n可选项：\n${list}` : body;
+  return text.slice(0, 512);
+}
+
 @Injectable()
 export class WecomAibotAdapter extends MessageAdapter {
   readonly type = MESSAGE_CHANNEL_TYPES.wecom_aibot;
@@ -1614,13 +1658,25 @@ export class WecomAibotAdapter extends MessageAdapter {
         typeof content.title === 'string' && content.title.trim().length > 0
           ? content.title.trim()
           : '权限请求';
-      const patternRaw =
-        typeof content.pattern === 'string'
-          ? content.pattern
-          : typeof content.type === 'string'
-            ? content.type
-            : '';
-      const pattern = String(patternRaw ?? '').slice(0, 512);
+      /**
+       * 权限目标：`pattern` 可能是**字符串**（单目标）或**数组**（多目标，
+       * 如同时申请多个目录）。此前只认 string，数组会 fallback 到 `type`，
+       * 于是卡片上标题与描述都变成动作名（线上实测 `external_directory` 重复两遍，
+       * 完全看不出要访问哪个目录）。
+       */
+      const rawPattern = content.pattern;
+      const pattern = (
+        Array.isArray(rawPattern)
+          ? rawPattern
+              .map((x: unknown) => String(x ?? '').trim())
+              .filter(Boolean)
+              .join(' , ')
+          : typeof rawPattern === 'string'
+            ? rawPattern.trim()
+            : typeof content.type === 'string'
+              ? content.type
+              : ''
+      ).slice(0, 512);
       const card = {
         card_type: 'button_interaction',
         main_title: {
@@ -1680,9 +1736,19 @@ export class WecomAibotAdapter extends MessageAdapter {
             });
             const card = {
               card_type: 'vote_interaction',
+              /**
+               * 标题/描述分工（2026-11-12 用户反馈「看不出要做什么」）：
+               * 企微模板卡片对 `option_list[].text` 有 **17 字符**硬限制、
+               * 按钮 `text` 有 10 字符限制，截断不可避免；此前把同一个 qText
+               * 同时塞进 title 和 desc（标题重复两遍），而 512 字符的 desc 反而
+               * 没用来承载有效信息。改为：
+               * - title = 短 header（团队里通常就是「XX 处理方式」这类标签）
+               * - desc = 完整问题 + **全部选项清单（带序号）**
+               * 这样即使按钮文字被截断，用户也能在描述里看全每个选项的含义。
+               */
               main_title: {
-                title: (qText || '待确认').slice(0, 64),
-                desc: qText.slice(0, 512) || '待确认问题',
+                title: wecomCardTitle(q0),
+                desc: wecomCardDesc(questions[0], opts),
               },
               checkbox: {
                 question_key: String(aqId).slice(0, 1024),
@@ -1730,10 +1796,10 @@ export class WecomAibotAdapter extends MessageAdapter {
           const card = {
             card_type: 'button_interaction',
             main_title: {
-              title: (qText || '待确认').slice(0, 64),
-              desc: qText.slice(0, 512) || '待确认问题',
+              title: wecomCardTitle(q0),
+              desc: wecomCardDesc(q0, opts),
             },
-            sub_title_text: qText.slice(0, 512) || '请选择',
+            sub_title_text: wecomCardDesc(q0, opts),
             button_list: buttons,
             task_id: String(aqId).slice(0, 128),
           };

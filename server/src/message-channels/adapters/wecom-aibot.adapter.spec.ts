@@ -370,6 +370,48 @@ describe('WecomAibotAdapter (message-channels)', () => {
     expect(body.template_card.button_list[0].key).toBe('aq_2:A');
   });
 
+  /**
+   * 回归锁（2026-11-12 用户反馈「权限/确认卡片看不出要做什么」）：
+   * 企微对选项文字有 17 字符、按钮 10 字符硬限制，长选项必然被截断；
+   * 因此必须把**完整选项清单**放进 512 字符的 desc，且 title 不能与 desc 重复。
+   */
+  it('question 卡片：title 用 header、desc 列出完整选项（防截断后看不懂）', async () => {
+    const mockClient: any = {
+      sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+    };
+    (adapter as any).clients.set('mc_1', mockClient);
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: { lastChatid: 'chat1' },
+      secrets: {},
+      enabled: true,
+    };
+    const longA = '直接合并并删除源分支';
+    const longB = '我先看 PR 再决定';
+    await adapter.sendQuestionCard(channel, {
+      id: 'aq_9',
+      kind: 'question',
+      content: {
+        questions: [
+          {
+            header: 'PR !90 处理方式',
+            question: 'PR !90 处理方式',
+            options: [longA, longB, '暂不处理'],
+          },
+        ],
+      },
+    });
+    const card = mockClient.sendMessage.mock.calls[0][1].template_card;
+    // 标题：短 header，且不与 desc 完全重复
+    expect(card.main_title.title).toBe('PR !90 处理方式');
+    // 描述：完整选项清单都在（按钮文字被截断也能看懂）
+    expect(card.main_title.desc).toContain(longA);
+    expect(card.main_title.desc).toContain(longB);
+    expect(card.main_title.desc).toMatch(/1\. /);
+    expect(card.main_title.desc).toMatch(/2\. /);
+  });
+
   it('sendQuestionCard question with 3 options uses vote_interaction for full text', async () => {
     const mockClient: any = {
       sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),

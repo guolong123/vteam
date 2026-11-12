@@ -34,8 +34,7 @@ import {
   MAX_FILE_FETCH_BYTES,
   MAX_PLAN_DOC_BYTES,
   MAX_PLAN_UPLOAD_BYTES,
-  resolveUsageModelKey,
-} from './exec-server';
+  resolveUsageModelKey, describePermission } from './exec-server';
 
 function asstMsg(id: string, parts: DriverContent[]): DriverMessage {
   return { info: { id, role: 'assistant' }, parts };
@@ -4840,5 +4839,42 @@ describe('ExecServer：detectPendingRequests（配置热重载的安全闸门数
     } finally {
       await exec.stop();
     }
+  });
+});
+
+/**
+ * 权限请求可读标题（2026-11-12 用户反馈）
+ *
+ * 原先 `title: p.action` 直接把动作名当标题，企微/vteam 卡片上只有
+ * `external_directory` 一个词，看不出要访问什么、为什么问。
+ */
+describe('describePermission（权限请求可读标题）', () => {
+  it('external_directory + 单目标 → 「访问目录 /tmp/*」', () => {
+    expect(describePermission('external_directory', ['/tmp/*'])).toBe(
+      '访问目录 /tmp/*',
+    );
+  });
+
+  it('bash + 命令 → 带出具体命令', () => {
+    expect(describePermission('bash', ['rm -rf /data/tmp'])).toBe(
+      '执行命令 rm -rf /data/tmp',
+    );
+  });
+
+  it('多目标 → 逗号拼接；超过 3 个给出总数', () => {
+    expect(
+      describePermission('external_directory', ['/a', '/b', '/c', '/d']),
+    ).toContain('访问目录');
+    expect(describePermission('external_directory', ['/a', '/b', '/c', '/d'])).toContain(
+      '等 4 项',
+    );
+  });
+
+  it('无目标 → 退回动作标签（不丢信息）', () => {
+    expect(describePermission('webfetch', [])).toBe('访问网页');
+  });
+
+  it('未知动作 → 保留原动作名', () => {
+    expect(describePermission('custom_action', ['x'])).toBe('custom_action x');
   });
 });

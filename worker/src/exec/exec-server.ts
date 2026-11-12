@@ -3250,6 +3250,47 @@ export class ExecServer {
  * - 去重：同一 requestId/permissionId 只上送一次（每轮 poll 都调用，避免重复上报）。
  * - 检测失败吞错记日志（旁路不阻断 step-finish 主流程）。
  */
+/**
+ * 权限请求 → **可读标题**。
+ *
+ * 为什么需要（2026-11-12 用户反馈）：原先 `title: p.action` 直接把动作名当标题，
+ * 企微/vteam 卡片上只显示一个 `external_directory`，既看不出**要访问什么**，
+ * 也看不出**为什么**——用户根本没法判断该不该批。而真正有用的目标（如
+ * `/tmp/*`）在 `resources` 里，此前只作为 `pattern` 字段透传、卡片没渲染。
+ *
+ * 输出形如：
+ * - `访问目录 /tmp/*`（external_directory）
+ * - `执行命令 rm -rf /data/tmp`（bash，resources 通常是命令）
+ * - `编辑文件 src/app.ts`
+ * - 无 resources 时退回动作名本身（不丢信息）。
+ *
+ * 保持纯函数、不依赖 driver，便于单测与渲染产物复用。
+ */
+export function describePermission(
+  action: string,
+  resources: readonly string[] = [],
+): string {
+  const ACTION_LABEL: Record<string, string> = {
+    external_directory: '访问目录',
+    bash: '执行命令',
+    edit: '编辑文件',
+    write: '写入文件',
+    read: '读取文件',
+    webfetch: '访问网页',
+    websearch: '搜索网络',
+    task: '派发子任务',
+    skill: '调用技能',
+  };
+  const label = ACTION_LABEL[action] ?? action;
+  const targets = resources
+    .map((r) => String(r ?? '').trim())
+    .filter((r) => r.length > 0);
+  if (targets.length === 0) return label;
+  const shown = targets.slice(0, 3).join(' , ');
+  const more = targets.length > 3 ? ` 等 ${targets.length} 项` : '';
+  return `${label} ${shown}${more}`;
+}
+
 class PendingQuestionDetector {
   /** 已上送去重集：`q:${requestId}` 或 `p:${permissionId}`。 */
   private readonly reported = new Set<string>();
@@ -3292,14 +3333,16 @@ class PendingQuestionDetector {
           continue;
         }
         this.reported.add(key);
-        const resources = p.resources ?? [];
+        const resources = (p.resources ?? []).map((r) => String(r));
         await this.sender.send(WORKER_EVENT_TYPES.SESSION_PERMISSION, {
           ...ctx,
           sessionId: sessionID,
           permissionId: p.id,
           type: p.action,
           pattern: resources.length === 1 ? resources[0] : resources,
-          title: p.action,
+          // 可读标题（带目标）：卡片上直接能看懂「要访问/执行什么」，
+          // 而不是只显示一个动作名（见 describePermission 注释）。
+          title: describePermission(p.action, resources),
           upstream: { eventId: p.id },
         });
       }
