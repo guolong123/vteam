@@ -113,9 +113,13 @@ services:
       dockerfile: web/Dockerfile
     container_name: vteam-compose-web
     restart: unless-stopped
+    # 内存兜底，见 docs/web-memory-leak-investigation.md（Next 15.5.22 middleware
+    # 代理泄漏）。根因修复在 web/middleware.ts，此处仅防宿主机被拖垮。
+    mem_limit: ${WEB_MEM_LIMIT:-1g}
     environment:
       # 运行时代理目标（middleware.ts 读取）：compose 网络内服务名 server
       API_PROXY_TARGET: http://server:3000
+      NODE_OPTIONS: "--max-old-space-size=768"
     depends_on:
       server:
         condition: service_healthy
