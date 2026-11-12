@@ -173,8 +173,8 @@ function isProcessBlock(block: DshBlock): boolean {
   return block.kind === "reasoning" || block.kind === "tool" || block.kind === "error";
 }
 
-/** 单个块渲染（过程组内外共用）。 */
-function renderBlock(block: DshBlock, labels: MarkdownLabels) {
+/** 单个块渲染（过程组内外共用；导出供成员视角的聚合过程组复用）。 */
+export function renderDshBlock(block: DshBlock, labels: MarkdownLabels) {
   switch (block.kind) {
     case "reasoning":
       return (
@@ -219,7 +219,7 @@ function renderRuns(blocks: DshBlock[], streaming: boolean, labels: MarkdownLabe
   while (i < blocks.length) {
     const block = blocks[i];
     if (!isProcessBlock(block)) {
-      out.push(renderBlock(block, labels));
+      out.push(renderDshBlock(block, labels));
       i += 1;
       continue;
     }
@@ -232,7 +232,7 @@ function renderRuns(blocks: DshBlock[], streaming: boolean, labels: MarkdownLabe
       i += 1;
     }
     if (run.length === 1) {
-      out.push(renderBlock(run[0], labels));
+      out.push(renderDshBlock(run[0], labels));
       continue;
     }
     const toolCount = run.filter((b) => b.kind === "tool").length;
@@ -244,7 +244,7 @@ function renderRuns(blocks: DshBlock[], streaming: boolean, labels: MarkdownLabe
         reasoningCount={reasoningCount}
         streaming={streaming}
       >
-        {run.map((b) => renderBlock(b, labels))}
+        {run.map((b) => renderDshBlock(b, labels))}
       </DshProcessGroup>,
     );
   }
