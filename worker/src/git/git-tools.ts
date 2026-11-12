@@ -405,7 +405,13 @@ export function runGit(gitArgs: string[], env: Record<string, string> = {}, cwd?
     const err = (result.stderr || result.stdout || '').trim();
     throw new Error(`git ${gitArgs.join(' ')} failed (exit ${result.status}): ${err}`);
   }
-  return result.stdout ?? '';
+  /**
+   * 成功时 **stdout + stderr 一起返回**：git 把「进度/结果」类信息写到 stderr
+   * （`git push` 的 `To <url>` / `* [new branch]`、`git fetch` 的更新列表都是 stderr），
+   * 只取 stdout 会让这些工具表现为「无输出」，用户无法判断到底推没推成功
+   * （线上实测：开发者-2 的 `git_push` 返回 empty，只能靠本地 `ahead 1` 猜远端没更新）。
+   */
+  return [result.stdout ?? '', result.stderr ?? ''].filter(Boolean).join('\n').trim();
 }
 
 /**
@@ -542,8 +548,15 @@ export function _buildGitArgs(exportName: string, args: Record<string, unknown>)
       break;
     case 'push':
       a.push('push');
-      if (args.repo_url) a.push(String(args.repo_url));
-      a.push(String(args.refspec));
+      /**
+       * repository 位置**必须显式给出**：`git push <refspec>` 会把 refspec 当成
+       * repository 解析（线上实测：`git push feat/p3-bridge:feat/p3-bridge` 报
+       * 「does not appear to be a git repository」，`HEAD:xxx` 甚至被当 ssh 主机名
+       * 解析成「Could not resolve hostname head」）。
+       * 缺省用 `origin`（取该仓库配置的 remote），而不是把 refspec 顶到 repo 位置。
+       */
+      a.push(args.repo_url ? String(args.repo_url) : 'origin');
+      if (args.refspec) a.push(String(args.refspec));
       break;
     default:
       throw new Error(`unknown git tool export: ${exportName}`);
@@ -695,13 +708,18 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
         executeLines = [
           workdirLine,
           repoUrlLine,
+          'if (!repoUrl) {',
+          '  throw new Error("无法确定远端仓库：请传 repo_url，或在 git 仓库目录（有 remote.origin.url）内执行");',
+          '}',
           'const entry = loadCredential(repoUrl);',
           'if (entry.permission !== "write") {',
           '  throw new Error(`仓库 ${repoUrl} 未授予 write 权限，禁止 push`);',
           '}',
           'const tmp = buildGitEnv(entry);',
           'try {',
-          `  return runGit(_buildGitArgs("${def.exportName}", args), tmp.env, workdir);`,
+          // 关键：把解析后的 repoUrl 显式回填给 _buildGitArgs —— 否则 repository 位置
+          // 为空、refspec 会被 git 当成仓库地址（见 _buildGitArgs 内注释）。
+          `  return runGit(_buildGitArgs("${def.exportName}", { ...args, repo_url: repoUrl }), tmp.env, workdir);`,
           '} finally {',
           '  for (const p of tmp.paths) cleanupTemp(p);',
           '}',

@@ -18,6 +18,7 @@ import {
   normalizeRepoUrl,
   normalizeSshKey,
   cwdOrigin,
+  _buildGitArgs,
   loadCredential,
   tryLoadCredential,
   writeTempKey,
@@ -840,7 +841,11 @@ describe('workdir 可选参数（仓库子目录执行）', () => {
     expect(content).toContain('const cloneArgs = _buildGitArgs("clone", { ...args, target: absTarget });');
     expect(content).toContain('runGit(cloneArgs, {}, workdir)');
     expect(content).toContain('runGit(cloneArgs, tmp.env, workdir)');
-    expect(content).toContain('return runGit(_buildGitArgs("push", args), tmp.env, workdir);');
+    // 渲染产物必须把解析出的 repoUrl 回填给 _buildGitArgs：否则 repository 位置
+    // 为空、refspec 会被 git 当成仓库地址（线上实测 git_push 全不可用）。
+    expect(content).toContain(
+      'return runGit(_buildGitArgs("push", { ...args, repo_url: repoUrl }), tmp.env, workdir);',
+    );
   });
 
   it('渲染产物：本地工具（status/diff/log）execute 含 workdir 透传', () => {
@@ -978,5 +983,61 @@ describe('git_clone 中央库默认落点与复用（WORK_DIR/repos）', () => {
     expect(content).toContain(isSameRepoCheckout.toString());
     expect(content).toContain(prepareCloneTarget.toString());
     expect(content).toContain('process.env.WORK_DIR');
+  });
+});
+
+/**
+ * git_push 参数构建回归（2026-11-12 线上故障）
+ *
+ * 故障现象（开发者-2 回执）：
+ * - `git_push(refspec="feat/p3-bridge:feat/p3-bridge")` →
+ *   `fatal: 'feat/p3-bridge:feat/p3-bridge' does not appear to be a git repository`
+ * - `git_push(refspec="HEAD:feat/p3-bridge")` →
+ *   `ssh: Could not resolve hostname head`
+ *
+ * 根因：`_buildGitArgs('push')` 只读 `args.repo_url`，而渲染产物里 repoUrl 是
+ * `cwdOrigin(workdir)` 解析出来的**独立变量**、没被回填 ⇒ `git push <refspec>`
+ * 让 git 把 refspec 当成 repository 解析。
+ */
+describe('git_push 参数构建（repository 位置必须显式）', () => {
+  it('缺省 repo_url → 用 origin 占位，绝不让 refspec 顶到 repository 位置', () => {
+    const args = _buildGitArgs('push', { refspec: 'feat/p3-bridge:feat/p3-bridge' });
+    expect(args).toEqual(['push', 'origin', 'feat/p3-bridge:feat/p3-bridge']);
+  });
+
+  it('显式 repo_url → 排在 refspec 之前', () => {
+    const args = _buildGitArgs('push', {
+      repo_url: 'git@gitee.com:xishuhq/keta-apps.git',
+      refspec: 'feat/p3-bridge',
+    });
+    expect(args).toEqual([
+      'push',
+      'git@gitee.com:xishuhq/keta-apps.git',
+      'feat/p3-bridge',
+    ]);
+  });
+
+  it('refspec 含冒号（HEAD:branch）也不会被当成仓库地址', () => {
+    const args = _buildGitArgs('push', { refspec: 'HEAD:feat/p3-bridge' });
+    expect(args[0]).toBe('push');
+    expect(args[1]).toBe('origin');
+    expect(args[2]).toBe('HEAD:feat/p3-bridge');
+  });
+
+  it('runGit 成功时返回 stderr（git push/fetch 的有效输出在 stderr）', () => {
+    const spy = jest
+      .spyOn(child_process, 'spawnSync')
+      .mockReturnValue({
+        status: 0,
+        stdout: '',
+        stderr: 'To git@gitee.com:xishuhq/keta-apps.git\n * [new branch] feat/p3-bridge',
+      } as any);
+    try {
+      const out = runGit(['push', 'origin', 'feat/p3-bridge']);
+      expect(out).toContain('To git@gitee.com');
+      expect(out).toContain('[new branch]');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
