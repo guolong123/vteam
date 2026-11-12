@@ -72,12 +72,13 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
   >();
   private static readonly STREAM_LIMIT = 100;
-  // Zero-width suffix forces WeCom markdown diff repaint (the bare ⏳ alone may be deduped/cached by the WeCom client).
-  // INVARIANT: both frames must use the SAME glyph — only the invisible suffix may differ, or the placeholder visibly alternates between two icons.
-  private static readonly SPINNER_FRAMES = ['⏳\u200B', '⏳\u200C'];
-  private static readonly SPINNER_INTERVAL_MS = 1000;
+  // ⚠️ 2026-11-12 移除「等待动画」：
+  // 原实现每秒交替发送带不同零宽后缀的 `⏳`（`\u200B` / `\u200C`），靠企微
+  // markdown diff 重绘来模拟"正在输入"。用户实测：**企微窗口一直在抖动**
+  // ——每秒一次内容重绘把消息区反复重排，观感极差。现已整体去掉占位动画，
+  // 回复完成时由 `finishStream` 一次性下发结果。
   /**
-   * stream 存活上限 ms：超过即停 spinner 并从 map 摘除。
+   * stream 存活上限 ms：超过即从 map 摘除（spinner 已移除，仍防 stream 关联泄漏）。
    *
    * 此前唯一的清理是 `registerStreamCorrelation` 里 `size >= STREAM_LIMIT(=100)` 的
    * FIFO 淘汰——**低流量下永不触发**。而 spinner 的正常收尾依赖下游调用
@@ -901,113 +902,8 @@ export class WecomAibotAdapter extends MessageAdapter {
         }
       }
       const streamId = generateReqId('stream');
-      const spinnerFrames = WecomAibotAdapter.SPINNER_FRAMES;
-      let spinnerIndex = 0;
-      let spinnerTimer: NodeJS.Timeout | null = null;
-      const frameHeadersForSpinner = (f as { headers?: unknown }).headers ?? f;
-      const spinnerPayload = { headers: frameHeadersForSpinner } as unknown as {
-        headers: { req_id: string };
-      };
-      try {
-        await client.replyStream(
-          spinnerPayload,
-          streamId,
-          spinnerFrames[0],
-          false,
-        );
-      } catch (e) {
-        this.logger.warn(
-          `wecom replyStream placeholder failed channel=${channelId}: ${(e as Error).message}`,
-        );
-      }
-      spinnerIndex = 1;
-      this.logger.log(
-        `wecom spinner start stream=${streamId} channel=${channelId} interval=${WecomAibotAdapter.SPINNER_INTERVAL_MS}ms frames=${JSON.stringify(spinnerFrames)}`,
-      );
-      try {
-        let pendingTick = false;
-        let consecutiveFailures = 0;
-        const startedAt = Date.now();
-        const stopSpinner = (reason: string) => {
-          if (spinnerTimer) {
-            try {
-              clearInterval(spinnerTimer);
-            } catch {}
-            spinnerTimer = null;
-          }
-          for (const [key, entry] of this.streams) {
-            if (entry.streamId === streamId) this.streams.delete(key);
-          }
-          this.logger.warn(
-            `wecom spinner auto-stopped stream=${streamId} reason=${reason}`,
-          );
-        };
-        spinnerTimer = setInterval(() => {
-          if (pendingTick) {
-            this.logger.warn(
-              `wecom spinner tick skipped (prev pending) stream=${streamId}`,
-            );
-            return;
-          }
-          if (Date.now() - startedAt > WecomAibotAdapter.STREAM_TTL_MS) {
-            stopSpinner('stream TTL exceeded');
-            return;
-          }
-          const tickText = spinnerFrames[spinnerIndex++ % spinnerFrames.length];
-          const tickAt = new Date().toISOString();
-          this.logger.log(
-            `wecom spinner tick ${JSON.stringify(tickText)} for stream ${streamId} at ${tickAt} idx=${spinnerIndex - 1}`,
-          );
-          pendingTick = true;
-          client
-            .replyStream(spinnerPayload, streamId, tickText, false)
-            .then((res) => {
-              pendingTick = false;
-              const rc = (res as any)?.errcode;
-              if (typeof rc !== 'undefined' && rc !== 0) {
-                consecutiveFailures += 1;
-                this.logger.warn(
-                  `wecom spinner replyStream non-zero errcode stream=${streamId} tickText=${JSON.stringify(tickText)} res=${JSON.stringify(res).slice(0, 500)}`,
-                );
-                // 企微回 846608（stream 超期）等即同步为连续失败：连续 3 次即自停，
-                // 避免企微已判定 stream 过期后仍每秒重试刷屏。
-                if (consecutiveFailures >= 3) {
-                  stopSpinner(`consecutive replyStream failures (rc=${rc})`);
-                }
-              } else {
-                consecutiveFailures = 0;
-                this.logger.log(
-                  `wecom spinner replyStream ok stream=${streamId} tickText=${JSON.stringify(tickText)}`,
-                );
-              }
-            })
-            .catch((e) => {
-              pendingTick = false;
-              consecutiveFailures += 1;
-              const errText =
-                e instanceof Error
-                  ? e.message
-                  : (() => {
-                      try {
-                        return JSON.stringify(e);
-                      } catch {
-                        return String(e);
-                      }
-                    })();
-              this.logger.warn(
-                `wecom spinner replyStream failed stream=${streamId} tickText=${JSON.stringify(tickText)} err=${errText}`,
-              );
-              if (consecutiveFailures >= 3) {
-                stopSpinner('consecutive replyStream failures (exception)');
-              }
-            });
-        }, WecomAibotAdapter.SPINNER_INTERVAL_MS);
-        if ((spinnerTimer as any)?.unref) (spinnerTimer as any).unref();
-      } catch (e) {
-        this.logger.warn(
-          `wecom spinner setInterval failed stream=${streamId}: ${(e as Error)?.message ?? String(e)}`,
-        );
-      }
+      // 不再发送 `⏳` 首帧占位、也不起 setInterval 刷新（见上方常量处说明）。
+      // streamId 仍在消息落库后注册关联，回复完成时由 finishStream 下发结果。
       let result:
         | { results: Array<{ ok: boolean; internalMessageId?: string }> }
         | undefined;
@@ -1021,7 +917,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       const first = result?.results?.[0];
       if (first?.ok && first.internalMessageId) {
         this.logger.log(
-          `wecom spinner registered stream=${streamId} internalMessageId=${first.internalMessageId} hasTimer=${!!spinnerTimer}`,
+          `wecom stream registered stream=${streamId} internalMessageId=${first.internalMessageId}`,
         );
         this.registerStreamCorrelation(first.internalMessageId, {
           channelId,
@@ -1031,7 +927,6 @@ export class WecomAibotAdapter extends MessageAdapter {
           fromUserName,
           chattype,
           chatid: body.chatid ?? fromUserId ?? null,
-          spinnerTimer,
         });
         try {
           if (
@@ -1047,20 +942,14 @@ export class WecomAibotAdapter extends MessageAdapter {
                 fromUserName,
                 chattype,
                 chatid: body.chatid ?? fromUserId ?? null,
-                spinnerTimer,
               } as any,
             );
           }
         } catch {}
       } else {
-        if (spinnerTimer) {
-          try {
-            clearInterval(spinnerTimer);
-          } catch {}
-          this.logger.log(
-            `wecom spinner cleared (no internalMessageId) stream=${streamId}`,
-          );
-        }
+        this.logger.log(
+          `wecom stream not registered (no internalMessageId) stream=${streamId}`,
+        );
       }
       try {
         const effectiveChatId = body.chatid ?? body.from?.userid ?? null;
@@ -2168,6 +2057,15 @@ export class WecomAibotAdapter extends MessageAdapter {
   }
 
   /** 图片/图文消息的公共尾流：spinner + submitInbound + stream 关联（与文本路径同形）。 */
+  /**
+   * 入站命令派发（方法名沿用历史命名，实现里已**不再有 spinner**）。
+   *
+   * 2026-11-12 移除等待动画：原实现先发一帧 `⏳` 占位，再每秒交替发送带不同
+   * 零宽后缀（`\u200B` / `\u200C`）的同一字形，靠企微 markdown diff 重绘
+   * 模拟"正在输入"。用户实测：**企业微信窗口一直在抖动**（每秒重排一次消息区），
+   * 观感极差。现改为：不预发占位、不刷新；入站落库后仅注册 stream 关联，
+   * 回复完成时由 `finishStream` 一次性下发结果。
+   */
   private async dispatchInboundWithSpinner(
     client: WSClient,
     channelId: string,
@@ -2179,83 +2077,13 @@ export class WecomAibotAdapter extends MessageAdapter {
     chattype: string,
     chatid?: string,
   ): Promise<void> {
+    // client 参数保留：调用方（图片/文本）签名一致，便于日后需要时改回带占位实现。
+    void client;
     const frameHeaders = (f as { headers?: unknown }).headers ?? f;
     // 企微单聊入站不返回 chatid，主动推送地址就是发送者 userid
     const effectiveChatId = chatid ?? fromUserId ?? null;
     const streamId = generateReqId('stream');
-    const spinnerFrames = WecomAibotAdapter.SPINNER_FRAMES;
-    let spinnerIndex = 0;
-    let spinnerTimer: NodeJS.Timeout | null = null;
-    const spinnerPayload = { headers: frameHeaders } as unknown as {
-      headers: { req_id: string };
-    };
-    try {
-      await client.replyStream(
-        spinnerPayload,
-        streamId,
-        spinnerFrames[0],
-        false,
-      );
-    } catch (e) {
-      this.logger.warn(
-        `wecom replyStream placeholder failed channel=${channelId}: ${(e as Error).message}`,
-      );
-    }
-    spinnerIndex = 1;
-    try {
-      let pendingTick = false;
-      let consecutiveFailures = 0;
-      const startedAt = Date.now();
-      const stopSpinner = (reason: string) => {
-        if (spinnerTimer) {
-          try {
-            clearInterval(spinnerTimer);
-          } catch {}
-          spinnerTimer = null;
-        }
-        for (const [key, entry] of this.streams) {
-          if (entry.streamId === streamId) this.streams.delete(key);
-        }
-        this.logger.warn(
-          `wecom spinner auto-stopped stream=${streamId} reason=${reason}`,
-        );
-      };
-      spinnerTimer = setInterval(() => {
-        if (pendingTick) return;
-        if (Date.now() - startedAt > WecomAibotAdapter.STREAM_TTL_MS) {
-          stopSpinner('stream TTL exceeded');
-          return;
-        }
-        const tickText = spinnerFrames[spinnerIndex++ % spinnerFrames.length];
-        pendingTick = true;
-        client
-          .replyStream(spinnerPayload, streamId, tickText, false)
-          .then((res) => {
-            pendingTick = false;
-            const rc = (res as any)?.errcode;
-            if (typeof rc !== 'undefined' && rc !== 0) {
-              consecutiveFailures += 1;
-              if (consecutiveFailures >= 3) {
-                stopSpinner(`consecutive replyStream failures (rc=${rc})`);
-              }
-            } else {
-              consecutiveFailures = 0;
-            }
-          })
-          .catch(() => {
-            pendingTick = false;
-            consecutiveFailures += 1;
-            if (consecutiveFailures >= 3) {
-              stopSpinner('consecutive replyStream failures (exception)');
-            }
-          });
-      }, WecomAibotAdapter.SPINNER_INTERVAL_MS);
-      if ((spinnerTimer as any)?.unref) (spinnerTimer as any).unref();
-    } catch (e) {
-      this.logger.warn(
-        `wecom spinner setInterval failed stream=${streamId}: ${(e as Error).message}`,
-      );
-    }
+
     let result:
       | { results: Array<{ ok: boolean; internalMessageId?: string }> }
       | undefined;
@@ -2276,7 +2104,6 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserName,
         chattype,
         chatid: effectiveChatId,
-        spinnerTimer,
       });
       try {
         if (
@@ -2292,17 +2119,14 @@ export class WecomAibotAdapter extends MessageAdapter {
               fromUserName,
               chattype,
               chatid: effectiveChatId,
-              spinnerTimer,
             } as any,
           );
         }
       } catch {}
     } else {
-      if (spinnerTimer) {
-        try {
-          clearInterval(spinnerTimer);
-        } catch {}
-      }
+      this.logger.log(
+        `wecom stream not registered (no internalMessageId) stream=${streamId}`,
+      );
     }
   }
 
