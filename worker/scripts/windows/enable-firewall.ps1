@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     为 vteam worker 的执行端点创建 Windows 防火墙「入站放行」规则（幂等，支持 -WhatIf）。
 

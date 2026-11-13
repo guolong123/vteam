@@ -72,6 +72,24 @@ npm install
 | tar.exe | Win10 1803+ 自带（`System32\tar.exe` = bsdtar） | 用于解 `worker-src.tar.gz`；`Expand-Archive` **不支持** `.tar.gz` |
 | 管理员权限 | 仅防火墙规则 / 安装 Windows 服务需要 | 前台运行不需要管理员 |
 
+**一键安装（预览，M1）**
+
+控制面「Worker 管理 → 新增 Worker → 安装方式」选 **Windows PowerShell**，复制生成的命令，在**管理员 PowerShell** 执行；
+也可手工两条（`-SrcUrl` 必须指向 **web origin**，不是 SERVER_URL）：
+
+```powershell
+Invoke-WebRequest -UseBasicParsing '<web-origin>/install-worker.ps1' -OutFile "$env:TEMP\install-worker.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install-worker.ps1" `
+  -Server '<server-url>' -SrcUrl '<web-origin>/worker-src.tar.gz' `
+  -WorkerId '<worker-id>' -Concurrency 8 -Token '<token>' [-AdvertiseHost '<worker-lan-ip>']
+```
+
+脚本自举便携 Node / opencode v2、下载 worker 发布包、生成 `.env`（含随机 serve 密码）、注册服务
+`vteam-worker`（WinSW 2.12 主选 / 计划任务回退）并放行 4198；重复执行 = 幂等升级。
+⚠️ **安装器与服务化脚本为预览、尚未在 Windows 真机验证**（设计/未验证点见
+[docs/deployment.md §8.1.2](../docs/deployment.md) 与 [scripts/windows/README.md](scripts/windows/README.md)）。
+以下是手工/排障路径。
+
 ```powershell
 # 安装 opencode 并解析 OPENCODE_BIN（PowerShell）
 npm install -g @opencode/cli@2.0.32

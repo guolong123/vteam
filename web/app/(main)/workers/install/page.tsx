@@ -53,7 +53,8 @@ import {
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 安装方式 */
-type InstallMethod = "curl" | "docker";
+/** 安装方式：curl（Linux/macOS 一键脚本）/ docker（容器）/ powershell（Windows 原生，M1 新增） */
+type InstallMethod = "curl" | "docker" | "powershell";
 
 /** 生成随机 workerId（worker-XX，10-99；安装向导初始值 + 「重新生成」按钮共用） */
 function randomWorkerId(): string {
@@ -386,7 +387,27 @@ export default function WorkerInstallPage() {
     ? `docker run -d --init --name dsh-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
     : `docker run -d --init --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
 
-  const command = method === "curl" ? curlCommand : dockerCommand;
+  /**
+   * Windows 原生安装命令（M1）。
+   *
+   * 形态：先下载 install-worker.ps1 到 %TEMP%，再用 `-File` 执行（显式参数、可复查、失败有行号）。
+   * 不用 `irm | iex`：iex 无法安全传参、EDR 对远程 IEX 高度敏感、且无法校验下载物。
+   *
+   * 参数名与 web/public/install-worker.ps1 严格对齐：
+   *   -Server/-SrcUrl/-WorkerId/-Concurrency/-Token/-AdvertiseHost/-McpUrl
+   * `-SrcUrl` 显式取**当前 web origin**（不是 SERVER_URL）：worker-src.tar.gz 由 web 静态服务提供，
+   * 集群内 server 与 web 可能是两个端口/域名（Linux 脚本从 SERVER_URL 推导的坑，Windows 版不继承）。
+   * PowerShell 单引号字符串按 PS 规则转义（' → ''），避免 token/URL 里的特殊字符破坏命令。
+   */
+  const psQuote = (value: string) => `'${value.replace(/'/g, "''")}'`;
+  const windowsSrcUrl = `${pageOrigin}/worker-src.tar.gz`;
+  const windowsCommand = [
+    `Invoke-WebRequest -UseBasicParsing ${psQuote(`${pageOrigin}/install-worker.ps1`)} -OutFile "$env:TEMP\\install-worker.ps1"`,
+    `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\\install-worker.ps1" -Server ${psQuote(serverUrl)} -SrcUrl ${psQuote(windowsSrcUrl)} -WorkerId ${psQuote(workerId)} -Concurrency ${concurrency}${workerToken ? ` -Token ${psQuote(workerToken)}` : ""}${advertiseHost ? ` -AdvertiseHost ${psQuote(sanitizeIp(advertiseHost))}` : ""}${mcpUrl ? ` -McpUrl ${psQuote(mcpUrl)}` : ""}`,
+  ].join("; ");
+
+  const command =
+    method === "curl" ? curlCommand : method === "docker" ? dockerCommand : windowsCommand;
 
   const curlSteps = [
     "在目标机器执行右侧 curl 命令（无需控制面反向可达）",
@@ -412,12 +433,28 @@ export default function WorkerInstallPage() {
     "只带 WORKER_ENGINE=dsh 即可：模型与凭据由控制面下发、按任务派发",
   ];
 
-  const steps = method === "curl" ? (isDsh ? curlDshSteps : curlSteps) : isDsh ? dockerDshSteps : dockerSteps;
+  const windowsSteps = [
+    "以「管理员身份」打开 Windows PowerShell（注册服务 + 放行防火墙需要管理员；只前台试用可加 -NoService -NoFirewall 并用普通用户）",
+    "执行右侧命令：脚本自举便携 Node / opencode v2，下载 worker 发布包，生成 .env（含随机 serve 密码）并注册 Windows 服务 vteam-worker（WinSW 2.12 主选、计划任务回退）",
+    "多网卡 / WSL2 / Hyper-V / Docker Desktop 机器请在「上报 IP」填控制面可达的物理网卡地址；控制面只拨 <上报主机>:4198（本页 Windows 首版仅支持 opencode，dsh 不可用）",
+  ];
+
+  const steps =
+    method === "curl"
+      ? isDsh
+        ? curlDshSteps
+        : curlSteps
+      : method === "docker"
+        ? isDsh
+          ? dockerDshSteps
+          : dockerSteps
+        : windowsSteps;
 
   /* Tab 配置 */
   const methods: { key: InstallMethod; label: string; icon: string; desc: string }[] = [
     { key: "curl", label: "curl 命令安装", icon: "⌥", desc: "一键脚本 · 适合裸机 / 已有环境" },
     { key: "docker", label: "docker 容器安装", icon: "▣", desc: "容器化 · 隔离与版本可回滚" },
+    { key: "powershell", label: "Windows PowerShell", icon: "❖", desc: "Windows 原生 · 服务化/开机自启（预览）" },
   ];
 
   /** 重新生成 workerId（原型占位按钮 → 真实随机，仍满足"自动生成可修改"语义） */
@@ -478,7 +515,11 @@ export default function WorkerInstallPage() {
 
               <FieldRow
                 label="执行引擎（engine）"
-                hint="opencode = 现有引擎（光/容器镜像 vteam-worker）；dsh = DeepSeek Harness 引擎（镜像 vteam-worker-dsh，需 Node ≥ 24）"
+                hint={
+                  method === "powershell"
+                    ? "Windows 原生首版仅支持 opencode（dsh 的 Linux 沙箱链在 Windows 不可用，启动即报错）"
+                    : "opencode = 现有引擎（光/容器镜像 vteam-worker）；dsh = DeepSeek Harness 引擎（镜像 vteam-worker-dsh，需 Node ≥ 24）"
+                }
               >
                 <div data-testid="engine-select" style={{ display: "flex", gap: space.sm }}>
                   {([
@@ -486,13 +527,20 @@ export default function WorkerInstallPage() {
                     { key: "dsh" as const, label: "dsh", desc: "DeepSeek Harness" },
                   ]).map((item) => {
                     const active = engine === item.key;
+                    // Windows 原生安装只支持 opencode（dsh 的 Linux 沙箱链在 Windows 不可用）
+                    const disabled = method === "powershell" && item.key === "dsh";
                     return (
                       <button
                         key={item.key}
                         type="button"
                         data-engine={item.key}
                         data-active={active ? "true" : "false"}
-                        onClick={() => setEngine(item.key)}
+                        data-disabled={disabled ? "true" : "false"}
+                        disabled={disabled}
+                        title={disabled ? "Windows 原生首版仅支持 opencode 引擎" : undefined}
+                        onClick={() => {
+                          if (!disabled) setEngine(item.key);
+                        }}
                         style={{
                           flex: 1,
                           display: "flex",
@@ -505,7 +553,8 @@ export default function WorkerInstallPage() {
                           backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
                           color: active ? "#0D9488" : neutral[700],
                           fontSize: fontSize.md,
-                          cursor: "pointer",
+                          cursor: disabled ? "not-allowed" : "pointer",
+                          opacity: disabled ? 0.5 : 1,
                           fontFamily: fontFamily.body,
                           textAlign: "left",
                         }}
@@ -666,7 +715,7 @@ export default function WorkerInstallPage() {
                 data-testid="install-method-tabs"
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
                   gap: space.sm,
                   padding: space.xs,
                   borderRadius: radius.lg,
@@ -682,7 +731,14 @@ export default function WorkerInstallPage() {
                       data-testid="install-method-tab"
                       data-method={m.key}
                       data-active={active ? "true" : "false"}
-                      onClick={() => setMethod(m.key)}
+                      onClick={() => {
+                        setMethod(m.key);
+                        // Windows 首版只支持 opencode：切到该 Tab 时把引擎收回缺省，
+                        // 避免「选了 dsh + Windows 命令」这种装完必定启动失败的组合。
+                        if (m.key === "powershell") {
+                          setEngine("opencode");
+                        }
+                      }}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -733,7 +789,11 @@ export default function WorkerInstallPage() {
               <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
                 <StepBadge index={3} />
                 <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>
-                  {method === "curl" ? "curl 命令安装" : "docker 容器安装"}
+                  {method === "curl"
+                    ? "curl 命令安装"
+                    : method === "docker"
+                      ? "docker 容器安装"
+                      : "Windows PowerShell 安装（预览）"}
                 </span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>
                   在目标机器执行
@@ -765,6 +825,32 @@ export default function WorkerInstallPage() {
                       : "opencode 引擎缺省 guojongg/vteam-worker:latest——发布流水线 IMAGE_NAMESPACE=guojongg 推送的命名空间；内网机器改填内网仓库 docker-hosted.ketaops.cc/ketaops/vteam-worker、docker-release.ketaops.cc/ketaops/vteam-worker（chart 缺省 docker.ketaops.cc/ketaops/vteam-worker），取目标机能拉通的那一个。镜像必须是包含 opencode v2 适配的构建。"}
                   </span>
                 </FieldRow>
+              )}
+
+              {method === "powershell" && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                    padding: `${space.sm}px ${space.md}px`,
+                    borderRadius: radius.md,
+                    backgroundColor: "rgba(180,83,9,0.06)",
+                    border: "1px solid rgba(180,83,9,0.35)",
+                    fontSize: fontSize.xs,
+                    color: "#B45309",
+                    lineHeight: 1.7,
+                  }}
+                >
+                  <span>
+                    ⚠️ Windows 安装脚本为**预览**：未在 Windows 真机验证（运行时 M0 已实测，安装器/
+                    服务化待真机验收）；首版仅 opencode 引擎，自更新默认关闭（升级=重跑本命令）。
+                  </span>
+                  <span>
+                    需管理员 PowerShell；安装目录缺省 C:\ProgramData\vteam-worker（可用 -Dir 改）。
+                    卸载：<code>{"C:\\ProgramData\\vteam-worker\\app\\scripts\\windows\\uninstall-worker.ps1 -InstallDir C:\\ProgramData\\vteam-worker"}</code>
+                  </span>
+                </div>
               )}
 
               <CommandBlock command={command} />

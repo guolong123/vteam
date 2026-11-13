@@ -784,6 +784,9 @@ describe('T16b：隔离配置域（spawn env 不继承宿主 HOME / XDG_*）', (
       expect(env.XDG_STATE_HOME).toBe(SCOPE.stateHome);
       expect(env.XDG_CACHE_HOME).toBe(SCOPE.cacheHome);
       expect(env.HOME).not.toBe('/host/home');
+      // Windows：opencode 的 global.home 走 OPENCODE_TEST_HOME ?? os.homedir()（USERPROFILE），
+      // 只设 HOME 不够 ⇒ 必须把 OPENCODE_TEST_HOME 也钉到隔离域（否则 <USERPROFILE>\.agents 泄漏）。
+      expect(env.OPENCODE_TEST_HOME).toBe(SCOPE.home);
     } finally {
       if (prevHome === undefined) {
         delete process.env.HOME;
