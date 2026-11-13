@@ -113,6 +113,8 @@ node --env-file=.env dist\index.js     # Node >= 20.6 直接读 .env；Node 18 �
 
 - Windows 没有 systemd：**服务化/开机自启/日志滚动/卸载清理**见 [scripts/windows/README.md](scripts/windows/README.md)（WinSW 2.12 主选、NSSM 备选，**均未真机验证**）。
 - **自更新在 Windows 暂不支持**：升级 = 停服务（或停前台进程）→ 用新发布包替换 `dist`/`app` → 重启；保留 `work\`、`data\`、`.env`。
+- **真机验收**：仓库提供手动触发的 `.github/workflows/windows-worker-smoke.yml`（`workflow_dispatch`），
+  在 `windows-latest` 上验证「装 opencode → 平台断言 → worker 真实启动 serve + Basic Auth 200」；本地 macOS 测试全绿不等于 Windows 可用。
 
 **排障（Windows 三条最常见）**
 

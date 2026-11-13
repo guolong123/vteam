@@ -29,7 +29,11 @@ describe('ensureWorkDirReady', () => {
     expect(fs.readdirSync(workDir)).toEqual([]);
   });
 
-  it('目录不可写 → 抛出带 WORK_DIR 的可操作错误', () => {
+  // Windows 上 chmod 不改 ACL（只影响只读位）⇒ 该断言只在 POSIX 有意义；
+  // Windows 的「不可写」由 ACL/服务账户场景覆盖（真机验收项）。
+  const itPosix = process.platform === 'win32' ? it.skip : it;
+
+  itPosix('目录不可写 → 抛出带 WORK_DIR 的可操作错误', () => {
     const workDir = path.join(tmpDir, 'readonly');
     fs.mkdirSync(workDir);
     fs.chmodSync(workDir, 0o500);
