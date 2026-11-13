@@ -298,6 +298,8 @@ model Member {
   teamMembers       TeamMember[]
   chatChannels      ChatChannel[]
   notificationLinks MemberNotificationChannel[]
+  /// 绑定的入站消息渠道（企微消息直达该成员私聊，不进群聊）
+  messageChannelLinks MemberMessageChannel[]
   sessions          Session[]
 
   @@index([defaultRoleId], map: "idx_members_default_role")
@@ -1358,6 +1360,7 @@ model MessageChannel {
   deliveries MessageDelivery[]
   taskLinks  TaskMessageChannel[]
   teamLinks  TeamMessageChannel[]
+  memberLinks MemberMessageChannel[]
 
   @@map("message_channels")
 }
@@ -1452,6 +1455,32 @@ model TeamMessageChannel {
  @@unique([teamId, messageChannelId])
  @@index([teamId])
  @@map("team_message_channels")
+}
+
+/**
+ * 入站消息渠道 → **成员**绑定（2026-11-13 用户需求）。
+ *
+ * 语义：渠道绑定到**人**（`members.id`），该渠道收到的消息直接进这个人的私聊
+ * （vteam 的成员私聊是全局一条，与团队无关），并触发其执行；不再进团队群聊。
+ *
+ * 为什么不绑席位（team_member）：用户的心智是「发给这个人」，而不关心他在哪个
+ * 团队任职。一个成员可能有多个席位（线上「平台管理」在 3 个团队），按人绑定
+ * 才不会出现「绑了却选错团队」的歧义。
+ *
+ * 渠道是独占资源：同一渠道只能绑「一个团队」或「一个成员」之一。
+ */
+model MemberMessageChannel {
+  memberId         String         @map("member_id")
+  messageChannelId String         @map("message_channel_id")
+  member           Member         @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  messageChannel   MessageChannel @relation(fields: [messageChannelId], references: [id], onDelete: Cascade)
+  createdAt        DateTime       @default(now()) @map("created_at")
+
+  @@id([memberId, messageChannelId])
+  @@unique([memberId, messageChannelId])
+  @@index([memberId])
+  @@index([messageChannelId])
+  @@map("member_message_channels")
 }
 
 model TeamNotificationChannel {

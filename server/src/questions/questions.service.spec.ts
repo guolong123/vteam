@@ -634,6 +634,112 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
     });
 
+    /**
+     * 多选答案加边界（2026-11-13 用户反馈「回传是纯文本、数逗号才知道选了几个」）：
+     * 内核用 ", " join answers，选项 label 自带逗号时模型无法区分边界；
+     * 平台在多选（>1 项）时给每个 label 包「」。
+     */
+    it('多选答案 → 传给内核的 label 加「」边界；单选保持原样', async () => {
+      prisma.agentQuestion.findUnique
+        .mockResolvedValueOnce(
+          aqRow({ id: 'aq_m1', requestId: 'frm_m1', kind: 'question' }),
+        )
+        .mockResolvedValueOnce(
+          aqRow({ id: 'aq_m2', requestId: 'frm_m2', kind: 'question' }),
+        );
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.agentQuestion.update.mockImplementation(async (args: any) =>
+        aqRow({ id: args.where.id, status: 'resolved' }),
+      );
+
+      // 多选 3 项
+      await service.reply('aq_m1', {
+        answers: [['选项 A, 含逗号', '乙', '丙']],
+      } as ReplyQuestionDto);
+      expect(
+        workerClient.questionReply.mock.calls.at(-1)?.[1]?.answers,
+      ).toEqual([['「选项 A, 含逗号」', '「乙」', '「丙」']]);
+
+      // 单选 1 项 → 不包裹
+      await service.reply('aq_m2', {
+        answers: [['选项 A']],
+      } as ReplyQuestionDto);
+      expect(
+        workerClient.questionReply.mock.calls.at(-1)?.[1]?.answers,
+      ).toEqual([['选项 A']]);
+    });
+
+    /**
+     * 2026-11-13 用户反馈：弹窗「刷新页面、点按钮都清不了」。
+     * worker exec-server 对已不存在的 pending question 回的是 **HTTP 400**
+     * （不是 404），旧实现只认 404 ⇒ 永远不走终态化 ⇒ 前端拿到 503、弹窗卡死。
+     */
+    it('僵尸 pending（转发 serve 400）同样终态化，不再 503 卡死', async () => {
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        aqRow({ id: 'aq_400', requestId: 'frm_stale', kind: 'question' }),
+      );
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.questionReply.mockRejectedValue(
+        new WorkerUnavailableException('w_1', 'question reply HTTP 400'),
+      );
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({
+          id: 'aq_400',
+          status: 'expired',
+          answers: {
+            expired: true,
+            reason: 'reply 转发 serve 400（frm_stale）',
+          },
+        }),
+      );
+
+      await expect(
+        service.reply('aq_400', { answers: [['A']] } as ReplyQuestionDto),
+      ).rejects.toMatchObject({
+        response: { code: QUESTIONS_ERRORS.QUESTION_EXPIRED },
+      });
+      expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
+        where: { id: 'aq_400' },
+        data: expect.objectContaining({ status: 'expired' }),
+      });
+    });
+
+    it('worker 5xx → 仍抛 503（可重试，不误判为僵尸）', async () => {
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        aqRow({ id: 'aq_500', requestId: 'frm_500', kind: 'question' }),
+      );
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.questionReply.mockRejectedValue(
+        new WorkerUnavailableException('w_1', 'question reply HTTP 500'),
+      );
+
+      await expect(
+        service.reply('aq_500', { answers: [['A']] } as ReplyQuestionDto),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+    });
+
     it('僵尸 pending（转发 serve 404）→ 终态落库 expired + emit 收敛 + 抛 410 QUESTION_EXPIRED', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(
         aqRow({ id: 'aq_4', requestId: 'per_stale', kind: 'permission' }),

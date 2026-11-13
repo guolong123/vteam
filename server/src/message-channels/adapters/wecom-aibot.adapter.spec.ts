@@ -409,7 +409,89 @@ describe('WecomAibotAdapter (message-channels)', () => {
     expect(card.main_title.desc).toContain(longA);
     expect(card.main_title.desc).toContain(longB);
     expect(card.main_title.desc).toMatch(/1\. /);
+    // 回归锁：选项清单不再包裹「可选项：」标题（卡片上重复显得啰嗦）
+    expect(card.main_title.desc).not.toContain('可选项：');
     expect(card.main_title.desc).toMatch(/2\. /);
+  });
+
+  it('vote 卡片 mode 按 question.multiple 下发（多选=1 / 单选=0）', async () => {
+    const mockClient: any = {
+      sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+    };
+    (adapter as any).clients.set('mc_1', mockClient);
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: { lastChatid: 'chat1' },
+      secrets: {},
+      enabled: true,
+    };
+    const opts = ['选项A较长内容', '选项B较长内容', '选项C较长内容'];
+    // 多选
+    await adapter.sendQuestionCard(channel, {
+      id: 'aq_multi',
+      kind: 'question',
+      content: {
+        questions: [
+          {
+            header: '多选测试',
+            question: '多选测试',
+            options: opts,
+            multiple: true,
+          },
+        ],
+      },
+    });
+    expect(
+      mockClient.sendMessage.mock.calls[0][1].template_card.checkbox.mode,
+    ).toBe(1);
+    // 单选
+    mockClient.sendMessage.mockClear();
+    await adapter.sendQuestionCard(channel, {
+      id: 'aq_single',
+      kind: 'question',
+      content: {
+        questions: [
+          { header: '单选测试', question: '单选测试', options: opts },
+        ],
+      },
+    });
+    expect(
+      mockClient.sendMessage.mock.calls[0][1].template_card.checkbox.mode,
+    ).toBe(0);
+  });
+
+  it('question 2 选项（button 卡）：sub_title 不重复 desc 内容', async () => {
+    const mockClient: any = {
+      sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+    };
+    (adapter as any).clients.set('mc_1', mockClient);
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: { lastChatid: 'chat1' },
+      secrets: {},
+      enabled: true,
+    };
+    await adapter.sendQuestionCard(channel, {
+      id: 'aq_10',
+      kind: 'question',
+      content: {
+        questions: [
+          {
+            header: 'Questions',
+            question: 'question 重试',
+            options: ['看到了，测试成功 (Recommended)', '还是没看到'],
+          },
+        ],
+      },
+    });
+    const card = mockClient.sendMessage.mock.calls[0][1].template_card;
+    expect(card.card_type).toBe('button_interaction');
+    // 此前 desc 与 sub_title_text 都调 wecomCardDesc → 卡片上内容重复两遍
+    expect(card.sub_title_text).toBe('请选择一项');
+    expect(card.sub_title_text).not.toContain('还是没看到');
+    expect(card.main_title.desc).toContain('还是没看到');
   });
 
   it('sendQuestionCard question with 3 options uses vote_interaction for full text', async () => {
@@ -540,6 +622,66 @@ describe('WecomAibotAdapter (message-channels)', () => {
           action: '选项一内容较长',
         }),
       ]);
+    });
+
+    /**
+     * 多选回归（2026-11-13 用户反馈「我三个都选了，只回传一个」）：
+     * 企微回调形状是 `option_ids: { option_id: [多个] }` —— 多选时数组长度 >1。
+     * 旧解析只认字符串/数组形态，对象形态收集为空 ⇒ 只回传第一项。
+     */
+    it('vote 多选提交 → actions 带全部选中项、answers 同组', async () => {
+      const submitInbound = jest
+        .fn()
+        .mockResolvedValue({ results: [{ ok: true }] });
+      const ctx: any = { submitInbound, updateChannelRuntime: jest.fn() };
+      const mockClient: any = {
+        on: jest.fn((ev: string, fn: any) => {
+          mockClient._handlers = mockClient._handlers ?? {};
+          mockClient._handlers[ev] = fn;
+        }),
+        updateTemplateCard: jest.fn().mockResolvedValue({}),
+      };
+      (adapter as any).clients.set('mc_multi', mockClient);
+      (adapter as any).bindListeners('mc_multi', mockClient, ctx);
+      const handler = mockClient._handlers['event'];
+      const aqId = 'aq_multi_1';
+      const frame: any = {
+        headers: { req_id: 'req_multi_1' },
+        body: {
+          chattype: 'single',
+          from: { userid: 'alice' },
+          event: {
+            eventtype: 'template_card_event',
+            task_id: aqId,
+            card_type: 'vote_interaction',
+            event_key: `${aqId}:submit`,
+            selected_items: {
+              selected_item: [
+                {
+                  question_key: aqId,
+                  option_ids: {
+                    option_id: [
+                      `${aqId}:选项 A`,
+                      `${aqId}:选项 B`,
+                      `${aqId}:选项 C`,
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      };
+      await handler(frame);
+      const cmd = submitInbound.mock.calls[0][1][0];
+      expect(cmd.kind).toBe('card_action');
+      expect(cmd.actions).toEqual(['选项 A', '选项 B', '选项 C']);
+      // 结果卡片要回显全部选中项 + 标注多选（而不是只显示第一个 + 「单选」）
+      expect(mockClient.updateTemplateCard).toHaveBeenCalled();
+      const updated = mockClient.updateTemplateCard.mock.calls.at(-1)?.[1];
+      const card: any = updated?.template_card ?? updated;
+      expect(card.checkbox.option_list).toHaveLength(3);
+      expect(card.checkbox.mode).toBe(1);
     });
 
     it('vote submit handles nested template_card_event wrapper', async () => {

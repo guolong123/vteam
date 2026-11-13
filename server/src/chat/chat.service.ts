@@ -1973,6 +1973,72 @@ export class ChatService {
   }
 
   /**
+   * 取/建某**成员**的私聊频道（供入站消息渠道定向投递使用，无用户鉴权）。
+   *
+   * 成员私聊是**全局一条**（`memberId + private`，P4 语义），与团队无关——
+   * 入站渠道绑定到人之后，消息直接进这个人的 DM。若该成员还没有 DM，
+   * 用他第一个席位（团队上下文）建一条；没有席位则无法建（返回错误由调用方记日志）。
+   */
+  async ensureMemberDmChannel(memberId: string): Promise<{
+    id: string;
+    teamId: string;
+    memberId: string;
+  }> {
+    const member = await (this.prisma as any).member.findUnique({
+      where: { id: memberId },
+      select: { id: true, name: true },
+    });
+    if (!member) {
+      throw new NotFoundException({
+        code: CHAT_ERRORS.MEMBER_NOT_FOUND,
+        message: `成员 ${memberId} 不存在`,
+      });
+    }
+    const existing = await this.prisma.chatChannel.findFirst({
+      where: { memberId, type: CHANNEL_TYPE.private } as any,
+      orderBy: { createdAt: 'asc' },
+    });
+    if (existing) {
+      if ((existing as any).deletedAt) {
+        await this.prisma.chatChannel.update({
+          where: { id: existing.id },
+          data: { deletedAt: null } as any,
+        });
+      }
+      return {
+        id: existing.id,
+        teamId: (existing as any).teamId,
+        memberId,
+      };
+    }
+    // 无 DM：借该成员第一个席位的团队上下文建频道（对使用者不可见）
+    const seat = await (this.prisma as any).teamMember.findFirst({
+      where: { memberId },
+      select: { id: true, teamId: true, agentId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!seat) {
+      throw new BadRequestException({
+        code: CHAT_ERRORS.MEMBER_NOT_IN_TEAM,
+        message: `成员 ${member.name} 尚未加入任何团队，无法建立私聊`,
+      });
+    }
+    const created = await this.prisma.chatChannel.create({
+      data: {
+        id: await this.idGen.nextId(CHANNEL_ID_PREFIX),
+        type: CHANNEL_TYPE.private,
+        teamId: seat.teamId,
+        memberId,
+        teamMemberId: seat.id,
+        agentId: seat.agentId,
+        taskId: null,
+      } as any,
+      select: { id: true, teamId: true },
+    });
+    return { id: created.id, teamId: created.teamId, memberId };
+  }
+
+  /**
    * 删除会话（UX-09 soft delete）：deletedAt 置当前时间，频道从列表隐藏、不可再访问。
    * 权限经 resolveChannelAccess（已删除频道 → 404）；重复删除同频道 → 404（幂等）。
    */

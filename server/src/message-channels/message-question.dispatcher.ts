@@ -199,9 +199,19 @@ export class MessageQuestionDispatcher
    */
   async dispatchQuestionCard(
     taskId: string,
-    questionRow: { id: string; requestId?: string; kind: string; content: any },
+    questionRow: {
+      id: string;
+      requestId?: string;
+      kind: string;
+      content: any;
+      /** 发起提问的会话（用于解析成员级渠道绑定；成员私聊场景必需）。 */
+      sessionId?: string;
+    },
   ): Promise<boolean> {
-    const channels = await this.resolveWecomChannelsForTask(taskId);
+    const channels = await this.resolveWecomChannelsForTask(
+      taskId,
+      questionRow.sessionId,
+    );
     if (channels.length === 0) {
       this.logger.warn(
         `dispatchQuestionCard no wecom channels bound taskId=${taskId} aqId=${questionRow.id}`,
@@ -263,11 +273,24 @@ export class MessageQuestionDispatcher
    * 必须走 `team_message_channels`（团队绑定），否则查任务绑定必然 0 行，
    * 卡片静默丢失（生产事故 aq_0000000478：主 Agent 权限请求挂死 3.5h 无通知）。
    */
-  private async resolveWecomChannelsForTask(taskId: string): Promise<any[]> {
+  private async resolveWecomChannelsForTask(
+    taskId: string,
+    sessionId?: string,
+  ): Promise<any[]> {
     const teamScopedId = parseTeamScopedTaskId(taskId);
     const ids = teamScopedId
       ? await this.teamBoundChannelIds(teamScopedId)
       : await this.taskBoundChannelIds(taskId);
+    /**
+     * **成员级渠道回落**（2026-11-13 用户反馈）：入站渠道可以绑定到成员，
+     * 消息直达成员私聊。该成员在私聊里触发 question/权限确认时，卡片也必须
+     * 发到他绑定的企微渠道——否则用户在企微端完全看不到弹窗（线上实测：
+     * 私聊提问只在 vteam web 弹窗出现，企微无感）。
+     */
+    if (ids.length === 0 && sessionId) {
+      const memberIds = await this.memberBoundChannelIdsForSession(sessionId);
+      ids.push(...memberIds);
+    }
     if (ids.length === 0) return [];
     let channels: any[];
     try {
@@ -301,6 +324,40 @@ export class MessageQuestionDispatcher
     }
     if (!links || links.length === 0) return [];
     return links.map((l) => l.messageChannelId).filter(Boolean);
+  }
+
+  /**
+   * 成员级企微渠道 id（member_message_channels）：按会话 → 席位 → 成员解析。
+   *
+   * 成员私聊（渠道绑成员）场景下团队/任务都没有绑定，卡片只能走这条路径。
+   */
+  private async memberBoundChannelIdsForSession(
+    sessionId: string,
+  ): Promise<string[]> {
+    try {
+      const sess = await (this.prisma as any).session.findUnique({
+        where: { id: sessionId },
+        select: { teamMemberId: true },
+      });
+      const teamMemberId: string | null = sess?.teamMemberId ?? null;
+      if (!teamMemberId) return [];
+      const seat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: teamMemberId },
+        select: { memberId: true },
+      });
+      const memberId: string | null = seat?.memberId ?? null;
+      if (!memberId) return [];
+      const links = await (this.prisma as any).memberMessageChannel.findMany({
+        where: { memberId },
+        select: { messageChannelId: true },
+      });
+      return (links as Array<{ messageChannelId: string }>)
+        .map((l) => l.messageChannelId)
+        .filter(Boolean);
+    } catch {
+      // 读失败 → 按「未绑定」降级，不阻断提问链路
+      return [];
+    }
   }
 
   /** 团队域企微渠道 id（team_message_channels；团队直聊无任务的唯一绑定源）。 */

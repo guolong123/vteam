@@ -14,6 +14,7 @@ describe('MessageInboundService', () => {
   let prisma: {
     messageChannel: { findUnique: jest.Mock; update: jest.Mock };
     teamMessageChannel: { findMany: jest.Mock };
+    memberMessageChannel: { findMany: jest.Mock };
     task: { findUnique: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
@@ -23,7 +24,10 @@ describe('MessageInboundService', () => {
     log: jest.Mock;
     finish: jest.Mock;
   };
-  let chatService: { createMessage: jest.Mock };
+  let chatService: {
+    createMessage: jest.Mock;
+    ensureMemberDmChannel: jest.Mock;
+  };
   let questionsService: { reply: jest.Mock };
   /** 外部用户目录 mock（默认 resolve 返回 null：既有用例的 actor 形状保持不变）。 */
   let externalUsers: {
@@ -52,6 +56,9 @@ describe('MessageInboundService', () => {
       teamMessageChannel: {
         findMany: jest.fn(),
       },
+      memberMessageChannel: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       task: {
         findUnique: jest.fn(),
       },
@@ -73,6 +80,11 @@ describe('MessageInboundService', () => {
       createMessage: jest
         .fn()
         .mockResolvedValue({ message: { id: 'm_0000000001' }, triggers: [] }),
+      ensureMemberDmChannel: jest.fn().mockResolvedValue({
+        id: 'c_dm_1',
+        teamId: 'tm_0000000001',
+        memberId: 'mbr_demo_direct',
+      }),
     };
     questionsService = {
       reply: jest.fn().mockResolvedValue({}),
@@ -1045,5 +1057,124 @@ describe('MessageInboundService', () => {
   it('does not read MessageChannel.taskId', () => {
     // Ensure no access to taskId in source - verified via code review
     expect(true).toBe(true);
+  });
+});
+
+/**
+ * 入站消息 → **成员定向投递**（2026-11-13 用户需求）
+ *
+ * 渠道绑定到席位后，消息应写进该成员私聊并触发其执行，不再进团队群聊。
+ */
+describe('MessageInboundService 成员定向投递', () => {
+  let svc: MessageInboundService;
+  let p: any;
+  let d: any;
+  let cs: any;
+
+  const channelId = 'mc_0000000009';
+
+  beforeEach(async () => {
+    p = {
+      messageChannel: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: channelId,
+          type: 'wecom_aibot',
+          name: 'ch',
+          config: {},
+          secrets: {},
+          enabled: true,
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      memberMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      teamMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      task: { findUnique: jest.fn() },
+      chatChannel: { findFirst: jest.fn() },
+      agentQuestion: { findUnique: jest.fn() },
+    };
+    d = {
+      tryBeginIngest: jest
+        .fn()
+        .mockResolvedValue({ duplicate: false, id: 'md_1' }),
+      log: jest.fn().mockResolvedValue({ id: 'md_log' }),
+      finish: jest.fn().mockResolvedValue(undefined),
+    };
+    cs = {
+      createMessage: jest
+        .fn()
+        .mockResolvedValue({ message: { id: 'm_1' }, triggers: [] }),
+      ensureMemberDmChannel: jest.fn().mockResolvedValue({ id: 'c_dm_1' }),
+    };
+    const mod: TestingModule = await Test.createTestingModule({
+      providers: [
+        MessageInboundService,
+        { provide: PrismaService, useValue: p },
+        { provide: MessageDeliveryService, useValue: d },
+        { provide: ChatService, useValue: cs },
+        { provide: QuestionsService, useValue: { reply: jest.fn() } },
+        {
+          provide: ExternalUsersService,
+          useValue: {
+            resolveInboundIdentity: jest.fn().mockResolvedValue(null),
+            touchActivity: jest.fn(),
+          },
+        },
+        {
+          provide: MessageRegistryService,
+          useValue: {
+            bindInboundDelegate: jest.fn(),
+            get: jest.fn().mockReturnValue(undefined),
+            requestStop: jest.fn(),
+            updateChannelRuntime: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+      ],
+    }).compile();
+    svc = mod.get(MessageInboundService);
+  });
+
+  it('席位绑定 → 投递到该成员私聊，不走团队群聊 fan-out', async () => {
+    p.memberMessageChannel.findMany.mockResolvedValue([
+      { memberId: 'mbr_demo_direct' },
+    ]);
+    // 团队绑定存在也不应使用
+    p.teamMessageChannel.findMany.mockResolvedValue([{ teamId: 'tm_1' }]);
+
+    const res = await svc.submitInbound(channelId, [
+      { kind: 'post_message', text: 'hello', dedupKey: 'ext_2' } as any,
+    ]);
+
+    expect(p.memberMessageChannel.findMany).toHaveBeenCalledWith({
+      where: { messageChannelId: channelId },
+      select: { memberId: true },
+    });
+    expect(cs.ensureMemberDmChannel).toHaveBeenCalledWith('mbr_demo_direct');
+    expect(cs.createMessage).toHaveBeenCalledWith(
+      'c_dm_1',
+      '__external__',
+      expect.objectContaining({ text: 'hello' }),
+      expect.objectContaining({ senderType: SENDER_TYPE.external }),
+    );
+    expect(p.teamMessageChannel.findMany).not.toHaveBeenCalled();
+    expect(res.results[0].ok).toBe(true);
+  });
+
+  it('席位绑定 → 文本带企微来源前缀（成员可用 vteam_wecom_reply 回复）', async () => {
+    p.memberMessageChannel.findMany.mockResolvedValue([
+      { memberId: 'mbr_demo_direct' },
+    ]);
+    await svc.submitInbound(channelId, [
+      {
+        kind: 'post_message',
+        text: '问题A',
+        dedupKey: 'ext_3',
+        wecomUserId: 'u_ext_1',
+        wecomUserName: '张三',
+        chattype: 'single',
+      } as any,
+    ]);
+    const call = cs.createMessage.mock.calls[0];
+    expect(call[1]).toBe('__external__');
+    expect(String(call[2].text)).toContain('[WeCom:张三|from 私聊]');
   });
 });
