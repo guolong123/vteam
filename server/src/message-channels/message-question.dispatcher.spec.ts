@@ -21,6 +21,9 @@ describe('MessageQuestionDispatcher 问题/权限卡片投递', () => {
     teamMessageChannel: { findMany: jest.Mock };
     messageChannel: { findMany: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
+    memberMessageChannel: { findMany: jest.Mock };
+    session: { findUnique: jest.Mock };
+    teamMember: { findUnique: jest.Mock };
   };
   let adapter: { sendQuestionCard: jest.Mock; sendNewMessage: jest.Mock };
   let delivery: { log: jest.Mock; finish: jest.Mock };
@@ -57,6 +60,10 @@ describe('MessageQuestionDispatcher 问题/权限卡片投递', () => {
       teamMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
       messageChannel: { findMany: jest.fn().mockResolvedValue([]) },
       agentQuestion: { findUnique: jest.fn().mockResolvedValue(null) },
+      // 成员级渠道绑定（2026-11-13）：默认无
+      memberMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      session: { findUnique: jest.fn().mockResolvedValue(null) },
+      teamMember: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     adapter = {
       sendQuestionCard: jest.fn().mockResolvedValue({ externalId: 'req_1' }),
@@ -224,5 +231,74 @@ describe('buildQuestionFallbackText', () => {
         content: { questions: [{ question: '用哪个模板？' }] },
       }),
     ).toBe('【待确认】用哪个模板？（请前往 Web 处理）');
+  });
+});
+
+/**
+ * 成员级渠道回落（2026-11-13 用户反馈）
+ *
+ * 渠道绑定到成员后消息直达成员私聊；该成员在私聊里触发 question 时，
+ * 卡片也要推到他绑定的企微渠道 —— 否则企微端完全看不到弹窗。
+ */
+describe('MessageQuestionDispatcher 成员级渠道回落', () => {
+  const build = () => {
+    const prisma: any = {
+      taskMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      teamMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      messageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      agentQuestion: { findUnique: jest.fn().mockResolvedValue(null) },
+      memberMessageChannel: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ messageChannelId: 'mc_member_1' }]),
+      },
+      session: {
+        findUnique: jest.fn().mockResolvedValue({ teamMemberId: 'tmm_1' }),
+      },
+      teamMember: {
+        findUnique: jest.fn().mockResolvedValue({ memberId: 'mbr_1' }),
+      },
+    };
+    const adapter = {
+      sendQuestionCard: jest.fn().mockResolvedValue({ externalId: 'req_1' }),
+      sendNewMessage: jest.fn().mockResolvedValue(true),
+    };
+    const dispatcher = new MessageQuestionDispatcher(
+      { subscribe: jest.fn(() => () => {}) } as any,
+      prisma,
+      { get: jest.fn().mockReturnValue(adapter) } as any,
+      { log: jest.fn(), finish: jest.fn() } as any,
+    );
+    return { dispatcher, prisma, adapter };
+  };
+
+  it('团队无绑定 + 有 sessionId → 按成员绑定解析渠道并送达', async () => {
+    const { dispatcher, prisma } = build();
+    prisma.messageChannel.findMany.mockResolvedValue([
+      { id: 'mc_member_1', type: 'wecom_aibot', enabled: true, config: {} },
+    ]);
+
+    const ok = await dispatcher.dispatchQuestionCard('team:tm_1', {
+      id: 'aq_1',
+      kind: 'question',
+      content: { questions: [] },
+      sessionId: 's_1',
+    });
+
+    expect(prisma.memberMessageChannel.findMany).toHaveBeenCalledWith({
+      where: { memberId: 'mbr_1' },
+      select: { messageChannelId: true },
+    });
+    expect(ok).toBe(true);
+  });
+
+  it('无 sessionId 时不查成员绑定（团队/任务路径不变）', async () => {
+    const { dispatcher, prisma } = build();
+    await dispatcher.dispatchQuestionCard('team:tm_1', {
+      id: 'aq_2',
+      kind: 'question',
+      content: { questions: [] },
+    });
+    expect(prisma.memberMessageChannel.findMany).not.toHaveBeenCalled();
   });
 });

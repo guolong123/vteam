@@ -85,7 +85,9 @@ function wecomCardDesc(
     .map((label, i) => (label ? `${i + 1}. ${label}` : ''))
     .filter((x) => x.length > 0)
     .join('\n');
-  const text = list ? `${body}\n\n可选项：\n${list}` : body;
+  // 选项清单直接跟在问题后用换行分隔：多一层「可选项：」标题在企微卡片上
+  // 会显得啰嗦（尤其标题/描述本来就不长时）
+  const text = list ? `${body}\n\n${list}` : body;
   return text.slice(0, 512);
 }
 
@@ -1156,6 +1158,67 @@ export class WecomAibotAdapter extends MessageAdapter {
 
       let aqId: string | undefined;
       let action: string | undefined;
+      /** 多选时的全部选项 label（单选时为空，沿用 action 既有语义）。 */
+      const multiActions: string[] = [];
+
+      /**
+       * 收集投票卡**全部**选中项（多选卡：`selected_item` 是数组）。
+       *
+       * 企微投票卡 `mode: 1` 时用户可勾多个，回调里 `selected_item` 每项一个
+       * option_id（格式 `${aqId}:${label}`）。单选时数组长度为 1，行为与旧实现一致。
+       */
+      const extractSelectedOptionIds = (si: any): string[] => {
+        if (!si) return [];
+        let items: any[] | undefined;
+        if (Array.isArray(si)) items = si;
+        else if (Array.isArray(si.selected_item)) items = si.selected_item;
+        else if (Array.isArray(si.selected_items)) items = si.selected_items;
+        else if (si.selected_item && !Array.isArray(si.selected_item))
+          items = [si.selected_item];
+        else if (
+          (si as any).question_key &&
+          ((si as any).option_ids || (si as any).option_id)
+        ) {
+          items = [si];
+        }
+        if (!items || items.length === 0) return [];
+        const out: string[] = [];
+        for (const it of items) {
+          const oidContainer =
+            it?.option_ids ??
+            it?.optionIds ??
+            it?.option_id ??
+            it?.optionId ??
+            it?.options ??
+            it?.optionIds;
+          if (typeof oidContainer === 'string') {
+            out.push(oidContainer);
+          } else if (Array.isArray(oidContainer)) {
+            for (const v of oidContainer) {
+              if (typeof v === 'string') out.push(v);
+            }
+          } else if (oidContainer && typeof oidContainer === 'object') {
+            // 企微实际回调形状：`option_ids: { option_id: ["aq_x:选项A", ...] }`
+            // —— 多选时 option_id 是**数组**。此前只处理了字符串/数组分支，
+            // 对象分支落到 `it.id`（通常不存在）⇒ 多选收集为空，用户勾了多项
+            // 却只回传第一项（2026-11-13 线上实测）。
+            const nested =
+              (oidContainer as any).option_id ??
+              (oidContainer as any).option_ids ??
+              (oidContainer as any).optionId;
+            if (typeof nested === 'string') {
+              out.push(nested);
+            } else if (Array.isArray(nested)) {
+              for (const v of nested) {
+                if (typeof v === 'string') out.push(v);
+              }
+            }
+          } else if (typeof it?.id === 'string') {
+            out.push(it.id);
+          }
+        }
+        return out;
+      };
 
       const extractSelectedOptionId = (si: any): string | undefined => {
         if (!si) return undefined;
@@ -1211,7 +1274,15 @@ export class WecomAibotAdapter extends MessageAdapter {
         return undefined;
       };
 
-      const selectedOptionId = extractSelectedOptionId(selectedItems);
+      const allSelectedOptionIds = extractSelectedOptionIds(selectedItems);
+      const selectedOptionId =
+        allSelectedOptionIds[0] ?? extractSelectedOptionId(selectedItems);
+      // 多选：把所有选中项还原成 label（option_id 形如 `${aqId}:${label}`）
+      for (const oid of allSelectedOptionIds) {
+        const sep = oid.indexOf(':');
+        const label = sep === -1 ? oid : oid.slice(sep + 1);
+        if (label) multiActions.push(label);
+      }
       try {
         this.logger.log(
           `wecom template_card_event selectedOptionId=${String(selectedOptionId ?? 'undefined')} channel=${channelId}`,
@@ -1336,7 +1407,9 @@ export class WecomAibotAdapter extends MessageAdapter {
           ? '已批准'
           : action === 'reject'
             ? '已拒绝'
-            : `已选择 ${action}`;
+            : `已选择 ${
+                multiActions.length > 1 ? multiActions.join('、') : action
+              }`;
       const isVoteCard = !!selectedItems;
       // Optimistic card update BEFORE submitInbound to ensure card update happens before reply
       // and to gray/disable buttons immediately (prevent double-click). This also ensures
@@ -1345,19 +1418,25 @@ export class WecomAibotAdapter extends MessageAdapter {
         try {
           let optimisticCard: unknown;
           if (isVoteCard) {
+            const checkedLabels: string[] =
+              multiActions.length > 0 ? multiActions : action ? [action] : [];
             optimisticCard = {
               card_type: 'vote_interaction',
               main_title: { title: display, desc: `由 ${userLabel} 处理` },
               checkbox: {
                 question_key: String(aqId).slice(0, 1024),
-                option_list: [
-                  {
-                    id: `${aqId}:${action}`.slice(0, 128),
-                    text: String(action).slice(0, 17) || '已选择',
-                    is_checked: true,
-                  },
-                ],
-                mode: 0,
+                /**
+                 * 结果卡片要回显**全部**选中项并按多选/单选标注（2026-11-13
+                 * 用户反馈）：此前 option_list 只放 `action`（第一个选中项）
+                 * 且 mode 固定 0 —— 多选提交后卡片上只显示一项 + 「单选」标签，
+                 * 与顶部「已选择 丙、乙、甲」自相矛盾。
+                 */
+                option_list: checkedLabels.map((label) => ({
+                  id: `${aqId}:${label}`.slice(0, 128),
+                  text: String(label).slice(0, 17) || '已选择',
+                  is_checked: true,
+                })),
+                mode: checkedLabels.length > 1 ? 1 : 0,
                 disable: true,
               },
               submit_button: {
@@ -1403,6 +1482,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         kind: 'card_action',
         aqId,
         action,
+        ...(multiActions.length > 1 ? { actions: multiActions } : {}),
         operatorExternalId,
         operatorExternalName,
         operatorName: operatorExternalName,
@@ -1753,7 +1833,9 @@ export class WecomAibotAdapter extends MessageAdapter {
               checkbox: {
                 question_key: String(aqId).slice(0, 1024),
                 option_list,
-                mode: 0,
+                // 企微投票卡：0=单选、1=多选。按 question.multiple 下发，
+                // 否则多选问题在企微只能选一个（2026-11-13 用户反馈）。
+                mode: (questions[0] as any)?.multiple === true ? 1 : 0,
               },
               submit_button: {
                 text: '提交',
@@ -1797,9 +1879,13 @@ export class WecomAibotAdapter extends MessageAdapter {
             card_type: 'button_interaction',
             main_title: {
               title: wecomCardTitle(q0),
+              // desc 承载完整问题 + 全部选项清单（企微按钮文字只有 10 字符，
+              // 长选项必然截断，靠这里兜底让用户看懂每个选项的含义）
               desc: wecomCardDesc(q0, opts),
             },
-            sub_title_text: wecomCardDesc(q0, opts),
+            // 副标题不再重复一遍问题+选项（此前 desc 与 sub_title_text 都调
+            // wecomCardDesc，卡片上「可选项」出现两次，非常难看）
+            sub_title_text: '请选择一项',
             button_list: buttons,
             task_id: String(aqId).slice(0, 128),
           };

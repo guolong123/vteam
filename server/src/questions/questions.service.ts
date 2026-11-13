@@ -524,12 +524,33 @@ export class QuestionsService {
 
     try {
       if (row.kind === AGENT_QUESTION_KINDS.QUESTION) {
+        /**
+         * 多选答案加边界（2026-11-13 用户反馈）。
+         *
+         * opencode 内核把 answers 拼成一句给人看的话：
+         *   `User has answered your questions: "<问题>": "丙, 乙, 甲"`
+         * —— 用 `, ` 直接 join。若选项 label 自己含逗号（如「选项 A：多选可用
+         * (Recommended)」），模型根本无法区分边界，也数不出到底选了几项。
+         *
+         * 平台能在传参前控制的内容就是 label 文本：多选（>1 项）时给每项包上
+         * 「」，让内核拼出来的句子仍有清晰边界：
+         *   `"多选问题": "「丙」, 「乙」, 「甲」"`
+         * 单选保持原样（没有歧义，且不改既有观感）。
+         */
+        const answersForKernel =
+          Array.isArray(payload.answers) && payload.answers !== null
+            ? (payload.answers as string[][]).map((group) =>
+                Array.isArray(group) && group.length > 1
+                  ? group.map((label) => `「${label}」`)
+                  : group,
+              )
+            : payload.answers;
         await this.workerClient.questionReply(
           { id: worker.id, capabilities: worker.capabilities },
           {
             sessionId: opencodeSessionId,
             requestId: row.requestId,
-            answers: payload.answers ?? null,
+            answers: answersForKernel ?? null,
           },
         );
       } else {
@@ -543,11 +564,17 @@ export class QuestionsService {
         );
       }
     } catch (err) {
-      // 僵尸 pending：serve 已无该 requestId/permissionId（worker 转发 404，如 serve 重启/请求
-      // 已消失）→ 终态落库 + 广播收敛，前端弹窗关闭；而非一直 503 死循环（GET pending 恒返回）。
+      // 僵尸 pending：serve 已无该 requestId/permissionId → 终态落库 + 广播收敛，
+      // 前端弹窗关闭；而非一直 503 死循环（GET pending 恒返回 → 弹窗永远关不掉）。
+      //
+      // 状态码不止 404（2026-11-13 用户反馈「弹窗刷新/点按钮都清不了」）：
+      // worker exec-server 对「已不存在的 pending question」实际回 **HTTP 400**
+      // （参数/请求校验失败），旧实现只认 404 ⇒ 该场景永远走不到终态化，
+      // 用户点确认只拿到 503，弹窗卡死。4xx 一律视为「请求已不在」，可安全收敛；
+      // 5xx/网络错误仍抛 503（可重试，不误杀）。
       if (
         err instanceof WorkerUnavailableException &&
-        /HTTP 404/.test(err.message)
+        /HTTP (400|404|410)/.test(err.message)
       ) {
         await this.expire(row, `reply 转发 serve 404（${row.requestId}）`);
         throw new GoneException({

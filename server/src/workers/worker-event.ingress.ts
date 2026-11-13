@@ -13,7 +13,9 @@ import {
   SENDER_TYPE,
   SESSION_STATUS,
 } from '../common/constants/event.constants';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
+import { MessageQuestionDispatcher } from '../message-channels/message-question.dispatcher';
 import { RealtimeScope } from '../realtime/realtime.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerEventDto } from './dto/worker-event.dto';
@@ -402,6 +404,15 @@ export class WorkerEventIngress {
     // @Optional：既有单测零 provider 构造仍可编译（缺席时该功能降级为「不自动放行」）。
     @Optional()
     private readonly workerClient?: WorkerClient,
+    /**
+     * 提问/权限卡片的企微推送：经 ModuleRef **运行时**取 MessageQuestionDispatcher。
+     *
+     * 不能直接在本模块 import MessageChannelsModule —— 会与 ChatModule 形成循环
+     * 依赖（实测 Nest 启动失败：`ChatModule imports[1] is undefined`）。
+     * ModuleRef.get({ strict:false }) 从全局容器取已注册的 provider，不建模块边。
+     */
+    @Optional()
+    private readonly moduleRef?: ModuleRef,
   ) {}
 
   /** 订阅 task.completed 回流（T10 WorkerDispatcher 构造时注册：落库+广播+emitFinal）。 */
@@ -1539,6 +1550,37 @@ export class WorkerEventIngress {
       },
       scope,
     );
+    /**
+     * **同步推送企微卡片**（2026-11-13 用户反馈）：企微来源的消息触发 question /
+     * 权限确认时，用户应该在**企微端**看到弹窗，而不是只在 vteam web 里等。
+     *
+     * 此前卡片推送只有调度器自环一个调用点，成员私聊里的提问永远发不到企微。
+     * best-effort：失败不阻断事件回流（前端弹窗仍然有效）。
+     */
+    if (this.moduleRef) {
+      try {
+        const dispatcher = this.moduleRef.get(MessageQuestionDispatcher, {
+          strict: false,
+        });
+        if (dispatcher) {
+          void dispatcher
+            .dispatchQuestionCard(payloadTaskId ?? '', {
+              id: row.id,
+              requestId,
+              kind,
+              content,
+              sessionId: storeSessionId,
+            })
+            .catch((err: unknown) => {
+              this.logger.warn(
+                `[ingress] 企微卡片推送失败 requestId=${requestId}: ${(err as Error)?.message ?? err}`,
+              );
+            });
+        }
+      } catch {
+        // 容器里没有 dispatcher（单测/裁剪部署）→ 降级为「只走前端弹窗」
+      }
+    }
     return true;
   }
 

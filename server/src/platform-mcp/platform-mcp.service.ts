@@ -6589,6 +6589,19 @@ export class PlatformMcpService implements OnModuleInit {
     }
     const replyScopeId = teamId;
 
+    /**
+     * 当前执行者的成员 id（席位 → 成员）：成员级渠道绑定与成员 DM 的入站消息
+     * 定位都要用。放在渠道解析之前，供后续两处复用。
+     */
+    let callerMemberId: string | null = null;
+    try {
+      const callerSeat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: instanceId },
+        select: { memberId: true },
+      });
+      callerMemberId = callerSeat?.memberId ?? null;
+    } catch {}
+
     const boundWecomChannelIds: string[] = [];
     try {
       const bindings = await (this.prisma as any).teamMessageChannel.findMany({
@@ -6605,6 +6618,34 @@ export class PlatformMcpService implements OnModuleInit {
         } catch {}
       }
     } catch {}
+    /**
+     * **成员级渠道绑定**（2026-11-13）：入站渠道可以绑定到成员而不是团队，
+     * 消息直达成员私聊（见 message-inbound.service.ts 的定向分支）。
+     * 回复路径必须同样认这些渠道，否则会出现「消息进得来、回不出去」——
+     * 线上实测：成员收到企微消息后 wecom_reply 报「当前团队未绑定企业微信渠道」。
+     */
+    try {
+      if (callerMemberId) {
+        const memberBindings = await (
+          this.prisma as any
+        ).memberMessageChannel.findMany({
+          where: { memberId: callerMemberId },
+          select: { messageChannelId: true },
+        });
+        for (const b of memberBindings as Array<{ messageChannelId: string }>) {
+          if (boundWecomChannelIds.includes(b.messageChannelId)) continue;
+          try {
+            const ch = await (this.prisma as any).messageChannel.findUnique({
+              where: { id: b.messageChannelId },
+              select: { id: true, type: true },
+            });
+            if (ch && ch.type === 'wecom_aibot') {
+              boundWecomChannelIds.push(ch.id);
+            }
+          } catch {}
+        }
+      }
+    } catch {}
     if (boundWecomChannelIds.length === 0) {
       // 区分「显式指定团队确实未绑定」与「团队上下文是回填推断出来的」——后者在多团队
       // worker 上可能根本不是当前会话的团队（线上事故 2026-10-13：值班群调用被推断成
@@ -6613,7 +6654,7 @@ export class PlatformMcpService implements OnModuleInit {
       const viaFallback = ctx.resolvedContext?.fromFallback === true;
       const text = viaFallback
         ? `发送失败: 无法可靠解析团队上下文——回填推断为 ${teamId}（可能非当前会话所属团队），该团队未绑定企业微信渠道。请显式传 teamId 与 selfInstanceId 后重试。`
-        : '发送失败: 当前团队未绑定企业微信渠道';
+        : '发送失败: 当前团队与成员均未绑定企业微信渠道（可在「集成」或成员编辑里绑定）';
       return {
         content: [{ type: 'text', text }],
         isError: true,
@@ -6665,13 +6706,23 @@ export class PlatformMcpService implements OnModuleInit {
       ) {
         pending = null;
       }
+      // 入站消息可能落在**成员私聊**（渠道绑成员）而不是团队群聊 —— 先查成员 DM，
+      // 否则带 replyToUser 的精确回复会因为「群聊里找不到这条消息」而中止。
+      const dmExternal = callerMemberId
+        ? await this.findActiveMemberDmExternalMessage(
+            callerMemberId,
+            adapter,
+            replyToUser,
+          )
+        : null;
       activeExternal = pending
         ? null
-        : await this.findActiveTeamExternalMessage(
+        : (dmExternal ??
+          (await this.findActiveTeamExternalMessage(
             teamId,
             adapter,
             replyToUser,
-          );
+          )));
       if (pending) {
         fromName = pending.fromUserName ?? pending.fromUserId ?? null;
         chattype = pending.chattype ?? null;
@@ -6695,8 +6746,18 @@ export class PlatformMcpService implements OnModuleInit {
     let inboundChatId =
       pending?.chatid ?? activeExternal?.stream?.chatid ?? null;
     if (!inboundChatId) {
-      // 内存流（10 分钟 TTL）已失效/重启丢失：回退持久化的 chatid 锚点
-      inboundChatId = await this.latestExternalChatId(teamId, replyToUser);
+      // 内存流（10 分钟 TTL）已失效/重启丢失：回退持久化的 chatid 锚点。
+      // 成员私聊场景先按成员 DM 频道找（消息在那儿），再回退团队群聊。
+      if (callerMemberId) {
+        const dmChatId = await this.latestMemberDmExternalChatId(
+          callerMemberId,
+          replyToUser,
+        );
+        if (dmChatId) inboundChatId = dmChatId;
+      }
+      if (!inboundChatId) {
+        inboundChatId = await this.latestExternalChatId(teamId, replyToUser);
+      }
     }
 
     // 被动回复（finishStream / replyMedia / replyTemplateCard）带入站帧上下文，天然按消息
@@ -7853,10 +7914,20 @@ export class PlatformMcpService implements OnModuleInit {
 
     let mirrorMessageId: string | null = null;
     let groupChannelId: string | null = null;
+    /**
+     * **企微私聊来源不镜像团队群聊**（2026-11-13 用户反馈）：
+     * 用户在企微里私聊机器人时，消息直达成员私聊处理；回复若再镜像到团队群聊，
+     * 会变成「我私聊他，回复却出现在群里」。
+     *
+     * 群聊来源（chattype=group）仍镜像——那是「群里问、群里答」的既有语义，
+     * 群成员能在 vteam 侧看到同一条回复。chattype 未知（null）时保持旧行为。
+     */
+    const skipGroupMirror = chattype === 'single';
     try {
-      const groupCh =
-        (await this.findTeamGroupChannel(teamId)) ??
-        (await this.ensureTeamGroupChannelByTeam(teamId));
+      const groupCh = skipGroupMirror
+        ? null
+        : ((await this.findTeamGroupChannel(teamId)) ??
+          (await this.ensureTeamGroupChannelByTeam(teamId)));
       if (groupCh) {
         groupChannelId = groupCh.id;
         const senderAgentId = await this.resolveTeamSenderAgentId(
@@ -8723,19 +8794,26 @@ export class PlatformMcpService implements OnModuleInit {
     return { memberId, sessionId: session.id };
   }
 
-  private async findActiveTeamExternalMessage(
-    teamId: string,
+  /**
+   * 按**指定频道**找活跃的企微入站消息（含内存流）。
+   *
+   * 2026-11-13 抽出：入站消息既可以落在团队群聊（渠道绑团队），也可以落在
+   * **成员的私聊频道**（渠道绑成员）。此前只查群聊，导致成员私聊场景里
+   * 「带 replyToUser 精确回复」永远定位不到入站消息而中止——
+   * 同一句回复去掉 replyToUser 反而能发（靠 pending/兜底），非常反直觉。
+   */
+  private async findActiveExternalMessageInChannel(
+    channelId: string,
     adapter: unknown,
     targetUser?: string | null,
   ): Promise<
     (WecomExternalMessage & { readonly stream: WecomStreamInfo }) | null
   > {
     try {
-      const groupChannel = await this.findTeamGroupChannel(teamId);
       const getStream = getWecomStreamReader(adapter);
-      if (!groupChannel || !getStream) return null;
+      if (!getStream) return null;
       const baseWhere = {
-        channelId: groupChannel.id,
+        channelId,
         senderType: SENDER_TYPE.external,
       };
       const pick = async (
@@ -8777,6 +8855,96 @@ export class PlatformMcpService implements OnModuleInit {
         );
       }
       return await pick(baseWhere, 20);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 团队群聊里的活跃企微入站消息（渠道绑团队时的既有路径）。 */
+  private async findActiveTeamExternalMessage(
+    teamId: string,
+    adapter: unknown,
+    targetUser?: string | null,
+  ): Promise<
+    (WecomExternalMessage & { readonly stream: WecomStreamInfo }) | null
+  > {
+    const groupChannel = await this.findTeamGroupChannel(teamId);
+    if (!groupChannel) return null;
+    return this.findActiveExternalMessageInChannel(
+      groupChannel.id,
+      adapter,
+      targetUser,
+    );
+  }
+
+  /**
+   * 成员私聊里的活跃企微入站消息（渠道绑成员时的路径）。
+   *
+   * 成员的 DM 是全局一条（memberId + private），入站消息由
+   * message-inbound.service 的成员定向分支写进去。
+   */
+  private async findActiveMemberDmExternalMessage(
+    memberId: string,
+    adapter: unknown,
+    targetUser?: string | null,
+  ): Promise<
+    (WecomExternalMessage & { readonly stream: WecomStreamInfo }) | null
+  > {
+    try {
+      const dm = await (this.prisma as any).chatChannel.findFirst({
+        where: { memberId, type: 'private' },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+      if (!dm) return null;
+      return this.findActiveExternalMessageInChannel(
+        dm.id,
+        adapter,
+        targetUser,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 出站会话锚点（成员私聊版）：该成员 DM 频道最近一条外部消息的 chatid。
+   *
+   * 渠道绑成员时入站消息落在成员 DM（`memberId + private`），chatid 也持久化
+   * 在那条消息上；团队群聊里查不到，所以这里单独按 DM 频道查。
+   */
+  private async latestMemberDmExternalChatId(
+    memberId: string,
+    targetUser?: string | null,
+  ): Promise<string | null> {
+    try {
+      const dm = await (this.prisma as any).chatChannel.findFirst({
+        where: { memberId, type: 'private' },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+      if (!dm) return null;
+      const rows = (await (this.prisma as any).message.findMany({
+        where: {
+          channelId: dm.id,
+          senderType: SENDER_TYPE.external,
+          createdAt: {
+            gte: new Date(Date.now() - WECOM_CHAT_ANCHOR_TTL_MS),
+          },
+          externalChatId: { not: null },
+          ...(targetUser ? { senderId: targetUser } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: { externalChatId: true },
+      })) as Array<{ externalChatId: string | null }>;
+      const chatId = rows[0]?.externalChatId ?? null;
+      if (chatId) {
+        this.logger.log(
+          `wecom_reply chatid 锚点回退（成员DM）memberId=${memberId} chatId=${chatId}${targetUser ? ` replyToUser=${targetUser}` : ''}`,
+        );
+      }
+      return chatId;
     } catch {
       return null;
     }

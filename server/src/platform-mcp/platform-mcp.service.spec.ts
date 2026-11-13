@@ -98,6 +98,7 @@ describe('PlatformMcpService', () => {
     };
     externalUser: { findMany: jest.Mock };
     teamMessageChannel: { findMany: jest.Mock };
+    memberMessageChannel: { findMany: jest.Mock };
     messageChannel: { findUnique: jest.Mock };
     artifact: {
       findMany: jest.Mock;
@@ -260,6 +261,8 @@ describe('PlatformMcpService', () => {
       // team_view externalUsers：默认无外部用户实体
       externalUser: { findMany: jest.fn().mockResolvedValue([]) },
       teamMessageChannel: { findMany: jest.fn() },
+      // 成员级入站渠道绑定（2026-11-13）：默认无绑定
+      memberMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
       messageChannel: { findUnique: jest.fn() },
       artifact: {
         findMany: jest.fn(),
@@ -8798,7 +8801,12 @@ describe('PlatformMcpService', () => {
         id: 'mc_team_1',
         type: 'wecom_aibot',
       });
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_team_1' });
+      // 区分查询维度：成员 DM 查询（where.memberId）默认无 DM，避免把成员私聊
+      // 路径误命中到团队群频道 mock（2026-11-13 成员级渠道修复后新增查询）。
+      prisma.chatChannel.findFirst.mockImplementation(
+        async (query: { where?: { memberId?: unknown } }) =>
+          query?.where?.memberId ? null : { id: 'c_team_1' },
+      );
       prisma.message.findMany.mockResolvedValue([externalMessage]);
       prisma.message.findFirst.mockImplementation(
         async (query: { where?: { senderType?: unknown } }) =>
@@ -8823,6 +8831,10 @@ describe('PlatformMcpService', () => {
       });
       prisma.teamMember.findFirst.mockResolvedValue({
         agentId: senderAgentId,
+      });
+      // 席位 → 成员映射（wecom_reply 成员级渠道探测用）
+      prisma.teamMember.findUnique.mockResolvedValue({
+        memberId: 'mbr_sender',
       });
       idGen.nextId.mockResolvedValue('m_team_1');
       return adapter;
@@ -9038,6 +9050,130 @@ describe('PlatformMcpService', () => {
       );
     });
 
+    /**
+     * 成员级渠道绑定（2026-11-13 用户反馈）：入站渠道可绑定到成员，消息直达
+     * 成员私聊。回复路径必须认这份绑定，否则出现「消息进得来、回不出去」。
+     */
+    /**
+     * 成员私聊场景的入站消息定位（2026-11-13 用户反馈）：
+     * 带 replyToUser 精确回复时，消息在**成员 DM** 里而不在团队群聊，
+     * 旧实现只查群聊 → 定位不到 → 中止；同一句回复去掉 replyToUser 反而能发。
+     */
+    it('成员私聊里的入站消息：带 replyToUser 也能定位并回复成功', async () => {
+      const adapter = arrangeTeamChannel();
+      prisma.teamMessageChannel.findMany.mockResolvedValue([]);
+      prisma.memberMessageChannel.findMany.mockResolvedValue([
+        { messageChannelId: 'mc_member_1' },
+      ]);
+      prisma.messageChannel.findUnique.mockResolvedValue({
+        id: 'mc_member_1',
+        type: 'wecom_aibot',
+      });
+      // 该成员有 DM 频道
+      prisma.chatChannel.findFirst.mockImplementation(
+        async (query: { where?: { memberId?: unknown } }) =>
+          query?.where?.memberId ? { id: 'c_dm_sender' } : { id: 'c_team_1' },
+      );
+      // 只有 **DM 频道**里有这条外部消息（群聊里没有）——否则即使不查 DM
+      // 也能从群聊查到，用例就测不出「成员私聊定位」这条分支。
+      prisma.message.findMany.mockImplementation(
+        async (query: { where?: { channelId?: string } }) =>
+          query?.where?.channelId === 'c_dm_sender'
+            ? [{ ...externalMessage, channelId: 'c_dm_sender' }]
+            : [],
+      );
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: '精准回复',
+        replyToUser: 'Long',
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.wecomSent).toBe(true);
+      // 确认查的是成员 DM 频道（而不是只查群聊）
+      const dmQueries = prisma.message.findMany.mock.calls.filter(
+        (c: any[]) => c[0]?.where?.channelId === 'c_dm_sender',
+      );
+      expect(dmQueries.length).toBeGreaterThan(0);
+    });
+
+    /**
+     * 2026-11-13 用户反馈：「我现在是私聊他的，他每次都回复到群里了」。
+     * 根因是 wecom_reply 无条件把回复镜像到团队群聊（为了群内留痕）。
+     * 企微私聊来源（chattype=single）不应镜像；群聊来源保持既有行为。
+     */
+    it('企微私聊来源 → 回复不镜像到团队群聊', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Long',
+        chattype: 'single',
+      });
+      prisma.message.create.mockClear();
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: '私聊回复',
+        replyToUser: 'Long',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      // 不应向团队群聊频道写镜像消息
+      const groupCreates = prisma.message.create.mock.calls.filter(
+        (c: any[]) => c[0]?.data?.channelId === 'c_team_1',
+      );
+      expect(groupCreates).toHaveLength(0);
+    });
+
+    it('企微群聊来源 → 仍镜像到团队群聊（既有语义不变）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Long',
+        chattype: 'group',
+      });
+      prisma.message.create.mockClear();
+
+      await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: '群聊回复',
+        replyToUser: 'Long',
+      });
+
+      const groupCreates = prisma.message.create.mock.calls.filter(
+        (c: any[]) => c[0]?.data?.channelId === 'c_team_1',
+      );
+      expect(groupCreates.length).toBeGreaterThan(0);
+    });
+
+    it('团队未绑定但成员绑定了企微渠道 → 用成员渠道回复成功', async () => {
+      arrangeTeamChannel();
+      prisma.teamMessageChannel.findMany.mockResolvedValue([]);
+      prisma.memberMessageChannel.findMany.mockResolvedValue([
+        { messageChannelId: 'mc_member_1' },
+      ]);
+      prisma.messageChannel.findUnique.mockResolvedValue({
+        id: 'mc_member_1',
+        type: 'wecom_aibot',
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hi from member channel',
+        replyToUser: 'w_alice',
+      });
+
+      expect(prisma.memberMessageChannel.findMany).toHaveBeenCalledWith({
+        where: { memberId: 'mbr_sender' },
+        select: { messageChannelId: true },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(result.wecomSent).toBe(true);
+    });
+
     it('当前团队未绑定企微渠道时返回既有未绑定文案', async () => {
       arrangeTeamChannel();
       prisma.teamMessageChannel.findMany.mockResolvedValue([]);
@@ -9049,7 +9185,7 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result.content[0].text).toBe(
-        '发送失败: 当前团队未绑定企业微信渠道',
+        '发送失败: 当前团队与成员均未绑定企业微信渠道（可在「集成」或成员编辑里绑定）',
       );
       expect(prisma.messageChannel.findUnique).not.toHaveBeenCalled();
       expect(prisma.message.create).not.toHaveBeenCalled();
@@ -9780,7 +9916,7 @@ describe('PlatformMcpService', () => {
         '请显式传 teamId 与 selfInstanceId',
       );
       expect(result.content[0].text).not.toBe(
-        '发送失败: 当前团队未绑定企业微信渠道',
+        '发送失败: 当前团队与成员均未绑定企业微信渠道（可在「集成」或成员编辑里绑定）',
       );
     });
 
@@ -9801,7 +9937,7 @@ describe('PlatformMcpService', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toBe(
-        '发送失败: 当前团队未绑定企业微信渠道',
+        '发送失败: 当前团队与成员均未绑定企业微信渠道（可在「集成」或成员编辑里绑定）',
       );
     });
 

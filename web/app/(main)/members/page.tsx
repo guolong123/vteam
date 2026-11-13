@@ -9,6 +9,7 @@
  * - 布局与 token 对齐 agents/skills 等资源页；无 fixed / 100vh / 100vw。
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -109,6 +110,8 @@ export default function MembersPage() {
   const [form, setForm] = useState<MemberFormState>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [channelIds, setChannelIds] = useState<string[]>([]);
+  /** 入站消息渠道（2026-11-13）：绑定到席位后，该渠道消息**直达该成员**而非进群聊。 */
+  const [messageChannelIds, setMessageChannelIds] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<MemberDto | null>(null);
   /** 成员仍在群聊 → 二次确认「连带移出这些群聊后删除」。 */
   const [cascadeTarget, setCascadeTarget] = useState<{
@@ -163,6 +166,33 @@ export default function MembersPage() {
       );
     }
   }, [memberDetailQuery.data]);
+
+  /** 全部入站消息渠道（可绑定的候选）。 */
+  const messageChannelsQuery = useQuery({
+    queryKey: ["message-channels", "members-page"],
+    queryFn: () =>
+      api.get<NotificationChannelOption[] | { items: NotificationChannelOption[] }>(
+        "/message-channels",
+      ),
+    enabled: !!user?.id && !!editing && editing !== "new",
+  });
+  const messageChannels = (Array.isArray(messageChannelsQuery.data)
+    ? messageChannelsQuery.data
+    : messageChannelsQuery.data?.items) ?? [];
+  /**
+   * 入站消息渠道是**成员级**绑定（渠道 → 人）：绑定后该渠道消息直接进这个人的
+   * 私聊（全局一条 DM），与他/她在哪个团队无关，因此这里不需要席位信息。
+   */
+  const memberMessageChannelsQuery = useQuery({
+    queryKey: ["member-message-channels", editingMemberId],
+    queryFn: () => membersApi.listMemberMessageChannels(editingMemberId),
+    enabled: !!user?.id && !!editingMemberId,
+  });
+  useEffect(() => {
+    setMessageChannelIds(
+      (memberMessageChannelsQuery.data ?? []).map((c) => c.id),
+    );
+  }, [memberMessageChannelsQuery.data]);
 
   const notificationChannels = (Array.isArray(notificationChannelsQuery.data)
     ? notificationChannelsQuery.data
@@ -386,6 +416,26 @@ export default function MembersPage() {
             promptMode: form.promptMode,
           },
         });
+        // 入站消息渠道（成员级）：失败不阻断主保存，但要让用户看到原因
+        try {
+          await membersApi.bindMemberMessageChannels(editing.id, {
+            messageChannelIds,
+          });
+        } catch (err) {
+          if (isApiError(err) && err.code === "CHANNEL_ALREADY_BOUND") {
+            const transfer = window.confirm(
+              "部分消息渠道已被其他团队或成员占用，是否转移归属到该成员？（转移后该渠道消息将直达该成员私聊，不再进群聊）",
+            );
+            if (transfer) {
+              await membersApi.bindMemberMessageChannels(editing.id, {
+                messageChannelIds,
+                replaceExisting: true,
+              });
+            }
+          } else {
+            throw err;
+          }
+        }
         try {
           await membersApi.bindNotificationChannels(editing.id, {
             notificationChannelIds: channelIds,
@@ -836,13 +886,64 @@ export default function MembersPage() {
 
               {editing !== "new" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>
+                    消息渠道（入站）{" "}
+                    <span style={{ fontSize: 10, color: neutral[400], fontWeight: 400 }}>可选</span>
+                  </span>
+                  <span style={{ fontSize: 10, color: neutral[400] }}>
+                    绑定后企微等渠道的消息<b>直达该成员私聊</b>（与团队无关，不进群聊）
+                  </span>
+                  {messageChannelsQuery.isPending ? (
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>渠道加载中…</span>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 150, overflow: "auto", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: space.sm }}>
+                      {messageChannels.length === 0 && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+                            暂无消息渠道（需先在「集成」创建并启用）
+                          </span>
+                          <Link href="/integrations" style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}>
+                            去集成页创建消息渠道 →
+                          </Link>
+                        </div>
+                      )}
+                      {messageChannels.map((channel) => (
+                        <label key={channel.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: fontSize.xs, color: channel.enabled ? neutral[700] : neutral[400] }}>
+                          <input type="checkbox" checked={messageChannelIds.includes(channel.id)} onChange={(e) => setMessageChannelIds((prev) => e.target.checked ? [...prev, channel.id] : prev.filter((id) => id !== channel.id))} />
+                          {channel.name}
+                          <span style={{ color: neutral[400] }}>({channel.type})</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <span style={{ fontSize: 10, color: neutral[400] }}>一个渠道只能归属一个团队或成员；绑定到成员后该渠道消息不再进群聊。</span>
+                </div>
+              )}
+
+              {editing !== "new" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>通知渠道 <span style={{ fontSize: 10, color: neutral[400], fontWeight: 400 }}>可选</span></span>
                   {notificationChannelsQuery.isPending ? (
                     <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>渠道加载中…</span>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 150, overflow: "auto", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: space.sm }}>
+                      {/*
+                        空状态要给出**下一步入口**（2026-11-13 用户反馈「这个点击不了」）：
+                        此处是渠道列表容器而不是输入框，没有渠道时原本只显示一行灰字，
+                        用户会以为它坏了/该能点。补一句说明 + 去集成页创建的链接。
+                      */}
                       {notificationChannels.length === 0 && (
-                        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无通知渠道</span>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+                            暂无通知渠道（需先在「集成」创建并启用）
+                          </span>
+                          <Link
+                            href="/integrations"
+                            style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}
+                          >
+                            去集成页创建通知渠道 →
+                          </Link>
+                        </div>
                       )}
                       {notificationChannels.map((channel) => (
                         <label key={channel.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: fontSize.xs, color: channel.enabled ? neutral[700] : neutral[400] }}>

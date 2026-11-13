@@ -8,6 +8,7 @@ import { CoordinationMetricsService } from './coordination-metrics.service';
 import { TeamsController } from './teams.controller';
 import { TeamsService } from './teams.service';
 import { TeamChannelBindingsController } from './team-channel-bindings.controller';
+import { MemberChannelBindingsController } from './member-channel-bindings.controller';
 
 /**
  * TeamsModule：团队/成员/队列 + 团队维度只读观测面（批次 E 协调度指标）。
@@ -25,6 +26,7 @@ import { TeamChannelBindingsController } from './team-channel-bindings.controlle
   controllers: [
     TeamsController,
     TeamChannelBindingsController,
+    MemberChannelBindingsController,
     CoordinationMetricsController,
   ],
   providers: [

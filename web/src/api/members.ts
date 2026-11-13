@@ -95,6 +95,11 @@ export interface MemberSessionSummary {
 export interface MemberDetailDto extends MemberDto {
   groups: MemberGroupRef[];
   notificationChannels: MemberNotificationChannelRef[];
+  /**
+   * 该成员绑定的入站消息渠道（2026-11-13 新增）：绑定后企微等渠道的消息
+   * **直达该成员私聊**（全局一条 DM，与团队无关）。
+   */
+  messageChannels?: MemberNotificationChannelRef[];
   /** P3 全局会话摘要（null = 尚未建立会话）。 */
   session?: MemberSessionSummary | null;
 }
@@ -187,6 +192,24 @@ export const membersApi = {
   ): Promise<{ memberId: string; notificationChannelIds: string[] }> {
     return api.put<{ memberId: string; notificationChannelIds: string[] }>(
       `/members/${id}/notification-channels`,
+      payload,
+    );
+  },
+  /** 读取成员绑定的入站消息渠道（渠道 → 成员，消息直达该成员私聊）。 */
+  listMemberMessageChannels(
+    id: string,
+  ): Promise<MemberNotificationChannelRef[]> {
+    return api.get<MemberNotificationChannelRef[]>(
+      `/members/${id}/message-channels`,
+    );
+  },
+  /** 绑定入站消息渠道到成员（replace-all；冲突时抛 CHANNEL_ALREADY_BOUND）。 */
+  bindMemberMessageChannels(
+    id: string,
+    payload: { messageChannelIds: string[]; replaceExisting?: boolean },
+  ): Promise<{ memberId: string; messageChannelIds: string[] }> {
+    return api.post<{ memberId: string; messageChannelIds: string[] }>(
+      `/members/${id}/message-channels`,
       payload,
     );
   },

@@ -204,18 +204,39 @@ export class MessageInboundService implements MessageHost {
         continue;
       }
 
-      // Resolve bound teams via join table — do NOT read MessageChannel.teamId
-      let teamLinks: Array<{ teamId: string }> = [];
+      /**
+       * **成员定向绑定优先**（2026-11-13 用户需求）：
+       * 渠道可以绑定到具体席位（`team_member_message_channels`），此时入站消息
+       * 直达该成员的私聊（并触发其执行），不再进团队群聊。
+       *
+       * 与团队绑定互斥（渠道独占），由绑定接口保证；这里只要查到成员绑定就
+       * **不再走团队 fan-out**，避免同一条外部消息既进私聊又进群。
+       */
+      let memberLinks: Array<{ memberId: string }> = [];
       try {
-        teamLinks = await (this.prisma as any).teamMessageChannel.findMany({
+        memberLinks = await (this.prisma as any).memberMessageChannel.findMany({
           where: { messageChannelId: channelRow.id },
-          select: { teamId: true },
+          select: { memberId: true },
         });
       } catch {
-        teamLinks = [];
+        memberLinks = [];
       }
 
-      if (teamLinks.length === 0) {
+      // Resolve bound teams via join table — do NOT read MessageChannel.teamId
+      // 成员绑定优先：已绑定席位时**短路**，不再查团队绑定（两者互斥，见上方注释）。
+      let teamLinks: Array<{ teamId: string }> = [];
+      if (memberLinks.length === 0) {
+        try {
+          teamLinks = await (this.prisma as any).teamMessageChannel.findMany({
+            where: { messageChannelId: channelRow.id },
+            select: { teamId: true },
+          });
+        } catch {
+          teamLinks = [];
+        }
+      }
+
+      if (memberLinks.length === 0 && teamLinks.length === 0) {
         await this.delivery.log(
           DELIVERY_DIRECTIONS.inbound,
           (cmd as any).kind ?? null,
@@ -239,6 +260,96 @@ export class MessageInboundService implements MessageHost {
       if (cmd.kind === 'post_message') {
         let anyOk = false;
         let lastInternalId: string | undefined;
+
+        /**
+         * **成员定向投递**（渠道绑定到席位时）：把消息写进该成员的私聊频道。
+         *
+         * `chatService.createMessage` 对私聊频道会自动走 team-mode 派发
+         * （`isTeamPrivate` → dispatch 给对端成员），因此写库即完成「触发该成员执行」，
+         * 无需额外 dispatch 调用。消息带上 `[WeCom:xxx|from …]` 前缀与 wecom 元数据，
+         * 成员可用 `vteam_wecom_reply` 直接回复到企微。
+         */
+        if (memberLinks.length > 0) {
+          if (!this.chatService) {
+            await this.delivery.log(
+              DELIVERY_DIRECTIONS.inbound,
+              'post_message',
+              DELIVERY_STATUS.failed,
+              {
+                channelId,
+                externalId:
+                  (cmd as { dedupKey?: string }).dedupKey ??
+                  (cmd as { senderExternalId?: string }).senderExternalId ??
+                  null,
+                error: 'chatService not available',
+                payload: cmd as unknown,
+              },
+            );
+            results.push({ ok: false });
+            continue;
+          }
+          const cmdAny = cmd as any;
+          const wecomUserId: string | undefined =
+            cmdAny.wecomUserId ?? cmdAny.senderExternalId;
+          const wecomUserName: string | undefined =
+            cmdAny.wecomUserName ?? cmdAny.senderName;
+          const displayLabel = wecomUserName || wecomUserId || '';
+          const chattype: string | undefined = cmdAny.chattype;
+          const rawText: string = String(cmdAny.text ?? '');
+          const wecomSource = chattype === 'group' ? '群聊' : '私聊';
+          const inboundText = displayLabel
+            ? `[WeCom:${displayLabel}|from ${wecomSource}] ${rawText}`
+            : rawText;
+          const pushChatId: string | null =
+            cmdAny.chatid || wecomUserId || null;
+
+          let memberOk = false;
+          for (const link of memberLinks) {
+            const dedupKey = cmdAny.dedupKey
+              ? `${cmdAny.dedupKey}_${link.memberId}`
+              : null;
+            if (dedupKey) {
+              const r = await this.delivery.tryBeginIngest(channelId, dedupKey);
+              if (r.duplicate) continue;
+            }
+            try {
+              const dm = await this.chatService.ensureMemberDmChannel(
+                link.memberId,
+              );
+              const res = await this.chatService.createMessage(
+                dm.id,
+                '__external__',
+                {
+                  text: inboundText,
+                  ...(pushChatId ? { externalChatId: String(pushChatId) } : {}),
+                  ...(cmdAny.attachmentUrl
+                    ? {
+                        attachmentUrl: cmdAny.attachmentUrl,
+                        attachmentName: cmdAny.attachmentName ?? null,
+                        attachmentType: cmdAny.attachmentType ?? null,
+                      }
+                    : {}),
+                } as any,
+                {
+                  senderType: SENDER_TYPE.external,
+                  senderId: displayLabel || null,
+                },
+              );
+              const internalMessageId = (res as { message?: { id?: string } })
+                ?.message?.id;
+              if (internalMessageId) {
+                lastInternalId = internalMessageId;
+                memberOk = true;
+              }
+            } catch (e) {
+              this.logger.warn(
+                `成员定向投递失败 channel=${channelId} member=${link.memberId}: ${(e as Error).message}`,
+              );
+            }
+          }
+          results.push({ ok: memberOk, internalMessageId: lastInternalId });
+          continue;
+        }
 
         // 外部发送者的渠道原始身份（fan-out 到多个团队时只解析一次，同一入站
         // 消息在不同群里是同一个外部人；展示名/稳定 userid 全命令一致）。
@@ -735,7 +846,22 @@ export class MessageInboundService implements MessageHost {
               '__external__',
             );
           } else {
-            const answers = [[action]];
+            /**
+             * 多选支持（2026-11-13）：投票卡 mode=1 时用户可勾多项，回调里
+             * `cmd.actions` 带全部 label；answers 是「每个 question 一组 label」，
+             * 故同一 question 的多项要放进**同一个内层数组**。
+             */
+            const selectedActions: string[] = Array.isArray(
+              (cmd as any).actions,
+            )
+              ? (cmd as any).actions.filter(
+                  (x: unknown): x is string =>
+                    typeof x === 'string' && x.length > 0,
+                )
+              : [];
+            const answers = [
+              selectedActions.length > 0 ? selectedActions : [action],
+            ];
             await this.questionsService.reply(
               aqId,
               { answers } as any,
