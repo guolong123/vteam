@@ -369,6 +369,11 @@ npm test
 
 ### 8.3 Windows 真机复验清单（按优先级，验收总表见 §5）
 
+> 真机验收可直接触发仓库的 **`.github/workflows/windows-worker-smoke.yml`**（手动 `workflow_dispatch`）：
+> 它会在 `windows-latest` 上安装 opencode、跑平台无关单测、断言 `WORK_DIR` 缺省 / dsh 拒绝 /
+> cmd 包装，并真实启动 worker（`OPENCODE_BIN` → spawn serve → Basic Auth `/api/info` 200 → 无 spawn 失败）。
+> 通过该 workflow 即视为 M0 的「起得来」验收项通过；其余清单项仍需在目标桌面机/服务器上验证。
+
 1. **起得来**：全新 Win10/11 + Node 22 + `@opencode/cli@2.0.32`，设 `OPENCODE_BIN` → `node --env-file=.env dist\index.js` 到日志出现「注册成功」，且 `/api/info` 带 Basic Auth 返回 200。
 2. **能派单**：控制面机器上 `Test-NetConnection <worker IP> -Port 4198` 通 → 派 1 个「读文件 + 改文件」任务成功，事件回流完整。
 3. **清理**：重启 serve / 停进程后任务管理器无残留 `opencode.exe`；`taskkill /T /F` 路径有日志可查。

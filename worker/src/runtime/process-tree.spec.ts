@@ -77,7 +77,11 @@ describe('terminateProcessTree · win32', () => {
   });
 });
 
-describe('terminateProcessTree · POSIX（真实子进程）', () => {
+// POSIX 专有用例（进程组 SIGTERM/SIGKILL 语义）：Windows 上跑必然失败（没有进程组），
+// 由 win32 的 fake-process 用例覆盖对应分支。
+const describePosix = process.platform === 'win32' ? describe.skip : describe;
+
+describePosix('terminateProcessTree · POSIX（真实子进程）', () => {
   it('detached 子进程被整组清理并确认退出', async () => {
     const child = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], {
       detached: true,
@@ -95,10 +99,8 @@ describe('terminateProcessTree · POSIX（真实子进程）', () => {
     await new Promise<void>((resolve) => child.once('exit', () => resolve()));
     await expect(waitForChildExit(child, 5000)).resolves.toBeUndefined();
   });
-});
 
-describe('killProcessTreeImmediate', () => {
-  it('POSIX 立即强杀进程组', async () => {
+  it('killProcessTreeImmediate 立即强杀进程组', async () => {
     const child = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], {
       detached: true,
       stdio: 'ignore',
@@ -107,7 +109,9 @@ describe('killProcessTreeImmediate', () => {
     const finished = await killProcessTreeImmediate(child, { platform: 'linux', wait: true });
     expect(finished).toBe(true);
   });
+});
 
+describe('killProcessTreeImmediate', () => {
   it('win32 走 taskkill /T /F', async () => {
     const runner = jest.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => ({ ok: true }));
     const child = fakeChild(777);
