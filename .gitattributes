@@ -1,0 +1,4 @@
+# Windows 批处理（*.cmd）在 cmd.exe 里必须是 CRLF：LF-only 的批处理在部分 Windows 版本上
+# 解析异常（多行括号块 / 标签 / goto 场景）。本仓库 core.autocrlf=input 会把 CRLF 归一为 LF，
+# 故显式声明 checkout 时还原 CRLF（仓库内存 LF，工作树 CRLF）。
+*.cmd text eol=crlf
