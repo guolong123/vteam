@@ -649,6 +649,15 @@ export function formatWakeBody(
   text: string,
   messageId?: string | null,
 ): string {
+  /**
+   * 空正文兜底：调用方漏传 text 时，不要把唤醒消息变成「来自 tmm_xxx：」+ 空白
+   * （线上实测：主 Agent 收到一条完全看不出要干什么的唤醒）。给一句明确的下步指引。
+   */
+  if (!text || !text.trim()) {
+    return messageId
+      ? `（无回执正文）详见群聊消息 ${messageId}；请汇总本轮各成员产出并给出验收结论。`
+      : '（无回执正文）本轮派发已全部完工，请汇总各成员产出并给出验收结论。';
+  }
   const truncated = text.length > WAKE_TEXT_BODY_MAX_CHARS;
   const body = truncated ? `${text.slice(0, WAKE_TEXT_BODY_MAX_CHARS)}…` : text;
   if (!messageId) return body;
@@ -718,7 +727,17 @@ export class PlatformMcpService implements OnModuleInit {
       await this.checkAndDrainFanOut({
         teamId: row.teamId,
         mainMemberId: row.fromInstanceId,
-        text: '',
+        /**
+         * 必须给出**可读正文**（2026-11-13 用户反馈）。
+         *
+         * 回执结算（ack / 超时过期）时本 hook 是 fan-out drain 的唯一触发点；
+         * 此前传空串 ⇒ 唤醒消息变成「【子 Agent fan-out 完成】来自 tmm_xxx：」
+         * 后面一片空白，主 Agent 根本不知道要汇总什么。
+         *
+         * 这里给的是「收敛信号」本身：全部外派已结清，该汇总了。
+         * 具体是谁完成的、产出是什么，主 Agent 可经 vteam_chat_history 查群聊。
+         */
+        text: '全部外派回执已结清（已确认或已超时），本轮 fan-out 已收敛；请汇总各成员产出并给出验收结论。',
       });
     });
   }
