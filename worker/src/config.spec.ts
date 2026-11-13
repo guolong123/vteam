@@ -9,6 +9,8 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  assertEngineSupported,
+  defaultWorkDir,
   detectLocalIPv4,
   ensureIsolationScope,
   loadConfig,
@@ -264,6 +266,152 @@ describe('detectLocalIPv4（自动探测本机非回环 IPv4）', () => {
       ],
     });
     expect(detectLocalIPv4()).toBeUndefined();
+  });
+});
+
+/** 造一条网卡地址记录（只填探测逻辑真正用到的字段，其余给稳定假值）。 */
+function nic(
+  address: string,
+  family: string | number = 'IPv4',
+  internal = false,
+): os.NetworkInterfaceInfo {
+  return {
+    address,
+    netmask: '255.255.255.0',
+    family,
+    mac: 'aa:bb:cc:dd:ee:ff',
+    internal,
+    cidr: null,
+  } as os.NetworkInterfaceInfo;
+}
+
+describe('detectLocalIPv4（Windows 虚拟网卡 / 链路本地地址，P1-8）', () => {
+  it('Windows：vEthernet/Loopback 在前时仍选 Ethernet（网卡名小写归一 + 物理网卡优先）', () => {
+    // Windows 上键顺序不保证真实网卡在前：这里刻意把 Hyper-V 的 vEthernet 放第一位。
+    expect(
+      detectLocalIPv4({
+        'vEthernet (nat)': [nic('172.20.128.1')],
+        'Loopback Pseudo-Interface 1': [nic('127.0.0.1', 'IPv4', true)],
+        Ethernet: [nic('192.168.1.20')],
+      }),
+    ).toBe('192.168.1.20');
+  });
+
+  it('Windows：VMware/VirtualBox/WSL/Tailscale/Hyper-V 前缀全部跳过（大小写不敏感）', () => {
+    expect(
+      detectLocalIPv4({
+        'vEthernet (WSL (Hyper-V firewall))': [nic('172.28.64.1')],
+        'VMware Network Adapter VMnet8': [nic('192.168.170.1')],
+        'VirtualBox Host-Only Network': [nic('192.168.56.1')],
+        'Tailscale': [nic('100.64.0.1')],
+        'Wi-Fi': [nic('10.1.2.3')],
+      }),
+    ).toBe('10.1.2.3');
+  });
+
+  it('只有虚拟网卡 / 只有链路本地地址 → undefined（不把不可路由地址上报给控制面）', () => {
+    expect(
+      detectLocalIPv4({
+        'vEthernet (Default Switch)': [nic('172.20.144.1')],
+        'Loopback Pseudo-Interface 1': [nic('127.0.0.1', 'IPv4', true)],
+      }),
+    ).toBeUndefined();
+    expect(detectLocalIPv4({ Ethernet: [nic('169.254.10.20')] })).toBeUndefined();
+  });
+
+  it('跳过 169.254.0.0/16 链路本地地址，继续找可路由地址（DHCP 失败场景）', () => {
+    expect(
+      detectLocalIPv4({
+        Ethernet: [nic('169.254.10.20')],
+        'Wi-Fi': [nic('192.168.0.5')],
+      }),
+    ).toBe('192.168.0.5');
+  });
+
+  it('物理网卡优先于其它非虚拟接口（utun/tun 类隧道排在 en0 之前也不选它）', () => {
+    expect(
+      detectLocalIPv4({
+        utun3: [nic('10.8.0.2')],
+        en0: [nic('192.168.1.5')],
+      }),
+    ).toBe('192.168.1.5');
+  });
+
+  it('无物理网卡时兜底取第一个非虚拟候选（保持既有「按返回顺序」语义）', () => {
+    expect(
+      detectLocalIPv4({
+        utun3: [nic('10.8.0.2')],
+        utun4: [nic('10.8.0.3')],
+      }),
+    ).toBe('10.8.0.2');
+  });
+
+  it('Node 18.0–18.3 的数字 family（4）：仍能命中（P2-10 兼容）', () => {
+    expect(detectLocalIPv4({ eth0: [nic('10.88.1.5', 4)] })).toBe('10.88.1.5');
+  });
+});
+
+describe('defaultWorkDir（WORK_DIR 平台缺省，P1-6）', () => {
+  const LOCALAPPDATA = 'C:\\Users\\u\\AppData\\Local';
+
+  it('win32：%LOCALAPPDATA%\\vteam-worker（非管理员也能建目录，不落盘符根）', () => {
+    expect(defaultWorkDir('win32', { LOCALAPPDATA })).toBe(
+      path.join(LOCALAPPDATA, 'vteam-worker'),
+    );
+    // 末尾必须带业务目录名，避免直接把整个 LOCALAPPDATA 当工作区
+    expect(defaultWorkDir('win32', { LOCALAPPDATA }).endsWith('vteam-worker')).toBe(true);
+  });
+
+  it('win32 + LOCALAPPDATA 缺失/空串：回落 <homedir>\\vteam-worker', () => {
+    mockHomedir.mockReturnValueOnce('/home/u');
+    expect(defaultWorkDir('win32', {})).toBe(path.join('/home/u', 'vteam-worker'));
+    mockHomedir.mockReturnValueOnce('/home/u');
+    expect(defaultWorkDir('win32', { LOCALAPPDATA: '   ' })).toBe(
+      path.join('/home/u', 'vteam-worker'),
+    );
+  });
+
+  it('linux/darwin：保持 /data/vteam-worker（不改动现网 Linux 行为）', () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      expect(defaultWorkDir(platform, {})).toBe('/data/vteam-worker');
+      expect(defaultWorkDir(platform, { LOCALAPPDATA })).toBe('/data/vteam-worker');
+    }
+  });
+
+  it('loadConfig：WORK_DIR 显式值优先于平台缺省', () => {
+    expect(loadConfig({ ...BASE_ENV, WORK_DIR: '/srv/w' }).workDir).toBe('/srv/w');
+    expect(
+      loadConfig({ ...BASE_ENV, WORK_DIR: '  ', LOCALAPPDATA }).workDir,
+    ).toBe(defaultWorkDir(process.platform, { LOCALAPPDATA }));
+  });
+
+  it('loadConfig：未设 WORK_DIR → 当前平台的缺省值', () => {
+    expect(loadConfig(BASE_ENV).workDir).toBe(defaultWorkDir(process.platform, {}));
+  });
+});
+
+describe('assertEngineSupported（Windows 首版只支持 opencode，C6）', () => {
+  it('win32 + dsh：抛出可操作错误（说明沙箱链/flock/入口 + 修复方向）', () => {
+    const call = (): void => assertEngineSupported('dsh', 'win32');
+    expect(call).toThrow(/Windows 原生 worker 首版只支持 opencode/);
+    expect(call).toThrow(/bwrap/);
+    expect(call).toThrow(/flock/);
+    expect(call).toThrow(/WORKER_ENGINE=opencode/);
+  });
+
+  it('win32 + opencode：放行（首版唯一支持的组合）', () => {
+    expect(() => assertEngineSupported('opencode', 'win32')).not.toThrow();
+  });
+
+  it('POSIX（linux/darwin）+ dsh：放行（不改动现网 dsh 能力）', () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      expect(() => assertEngineSupported('dsh', platform)).not.toThrow();
+      expect(() => assertEngineSupported('opencode', platform)).not.toThrow();
+    }
+  });
+
+  it('loadConfig：当前平台（非 win32）WORKER_ENGINE=dsh 仍可解析（引擎字段透传）', () => {
+    expect(loadConfig({ ...BASE_ENV, WORKER_ENGINE: 'dsh' }).engine).toBe('dsh');
   });
 });
 

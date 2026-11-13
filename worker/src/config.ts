@@ -81,7 +81,10 @@ export interface WorkerConfig {
   heartbeatIntervalMs: number;
   /** 日志级别；默认 info */
   logLevel: string;
-  /** opencode serve 工作目录（T5：.opencode/tools/ 注入落点）；默认 /data/vteam-worker */
+  /**
+   * opencode serve 工作目录（T5：.opencode/tools/ 注入落点）。
+   * 缺省按平台：POSIX `/data/vteam-worker`，win32 `%LOCALAPPDATA%\vteam-worker`（见 defaultWorkDir）。
+   */
   workDir: string;
   /** SSH 私钥路径（T5 git 凭证注入：GIT_SSH_KEY_PATH，D6 2B）；可选，空 = 不注入 GIT_SSH_COMMAND */
   gitSshKeyPath: string;
@@ -286,28 +289,159 @@ export function ensureIsolationScope(scope: OpencodeIsolationScope): string[] {
 }
 
 /**
+ * 虚拟网卡名前缀表（统一小写比较，见 detectLocalIPv4）。
+ *
+ * 为什么需要 Windows 条目：这张表最初是 **Linux 视角**（docker/veth/br-/vnic/virbr/cni/flannel），
+ * 而 Windows 上装了 Docker Desktop / WSL2 / Hyper-V 后会出现 `vEthernet (Default Switch)`、
+ * `vEthernet (WSL (Hyper-V firewall))`、`VMware Network Adapter VMnet8`、
+ * `VirtualBox Host-Only Network`、`Tailscale`、`Loopback Pseudo-Interface 1` 等虚拟适配器。
+ * 其中 `vEthernet` 恰好是大小写敏感的陷阱：旧实现 `name.startsWith('veth')` 对它为 **false**
+ * （第 2 个字符是 `E`）⇒ 会把 172.x 的 Hyper-V 地址上报给控制面，执行端点不可达
+ * （与 config.ts 中 inContainer 注释里记录的「容器 eth0 被选中」是同一类故障）。
+ */
+const VIRTUAL_INTERFACE_PREFIXES = [
+  // Linux：容器/桥接/隧道
+  'docker',
+  'veth',
+  'br-',
+  'vnic',
+  'virbr',
+  'cni',
+  'flannel',
+  // Windows：Hyper-V / WSL2 / VMware / VirtualBox / 回环 / 抓包 / VPN（全部小写比较）
+  'vethernet',
+  'wsl',
+  'vmware',
+  'vmnet',
+  'virtualbox',
+  'hyper-v',
+  'loopback',
+  'npcap',
+  'tailscale',
+  'vpn',
+  'tap',
+];
+
+/**
+ * 名字像「物理/主用网卡」的前缀（小写）：Windows 的 `Ethernet` / `Ethernet 2` / `Wi-Fi`、
+ * macOS 的 `en0`/`en1`、Linux 的 `eth0`/`eth1`。
+ *
+ * 为什么需要优先级而不是「按 networkInterfaces 返回顺序取第一个」：Windows 上
+ * `os.networkInterfaces()` 的键顺序**不保证**真实网卡在前（装 WSL2/Hyper-V 后顺序随虚拟
+ * 适配器创建顺序变化，[需 Windows 真机复验]），而前缀表不可能穷举所有虚拟网卡名
+ * （用户可自定义适配器名）。先把「明显是物理网卡」的挑出来，能显著降低选中 172.x
+ * 虚拟地址的概率；剩下的一律按原顺序兜底。
+ */
+const PREFERRED_INTERFACE_PREFIXES = ['ethernet', 'wi-fi', 'wifi', 'wlan', 'en0', 'en1', 'eth'];
+
+/**
  * 自动探测本机非回环网卡 IPv4，作为 WORKER_ADVERTISE_HOST 缺省来源（用户未显式设置时
  * 用探测到的内网 IP 上报，替代固定回退 http://127.0.0.1——后者仅本机可访问，跨机 worker
  * 控制面连不上）。
- * 遍历 os.networkInterfaces()：按返回顺序取第一个非 internal 的 IPv4 地址；跳过虚拟网卡
- * （docker/veth/br-/vnic/virbr/cni/flannel 等桥接/容器网络，非控制面可达的真实网卡）。
- * 返回裸 IP 字符串（如 "192.168.1.10"）；无命中（全回环/无网卡/仅 IPv6）返回 undefined。
- * 纯函数（仅依赖 os 内置模块），独立导出便于单测 mock。
+ *
+ * 规则（按顺序）：
+ * 1. 跳过虚拟网卡（`VIRTUAL_INTERFACE_PREFIXES`，**网卡名统一小写比较**——Windows 的
+ *    `vEthernet`/`VMware` 大小写不一致，大小写敏感的前缀匹配会漏掉它们）；
+ * 2. 跳过 `internal`（回环）与 **169.254.0.0/16 链路本地地址**（Windows 在 DHCP 失败/
+ *    网卡未连接时会给出 169.254.x.x，报文不可路由；上报它 = 控制面必然 fetch failed）；
+ * 3. 优先返回名字像物理网卡的候选（`PREFERRED_INTERFACE_PREFIXES`），没有才按返回顺序
+ *    取第一个其它非虚拟候选。
+ *
+ * 返回裸 IP 字符串（如 "192.168.1.10"）；无命中（全回环/无网卡/仅 IPv6/全链路本地）
+ * 返回 undefined。
+ *
+ * 纯函数：网卡表可注入（缺省 `os.networkInterfaces()`），单测不需要 mock 内置模块；
+ * `interfaces` 参数也是 Windows 真机复验时的注入点（把真机抓到的适配器表喂进来断言选中的网卡）。
  */
-export function detectLocalIPv4(): string | undefined {
-  const VIRTUAL_PREFIXES = ['docker', 'veth', 'br-', 'vnic', 'virbr', 'cni', 'flannel'];
-  const interfaces = os.networkInterfaces();
+export function detectLocalIPv4(
+  interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]> = os.networkInterfaces(),
+): string | undefined {
+  const candidates: Array<{ name: string; address: string }> = [];
   for (const name of Object.keys(interfaces)) {
-    if (VIRTUAL_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+    const lowerName = name.toLowerCase();
+    if (VIRTUAL_INTERFACE_PREFIXES.some((prefix) => lowerName.startsWith(prefix))) {
       continue;
     }
     for (const net of interfaces[name] ?? []) {
-      if (!net.internal && net.family === 'IPv4') {
-        return net.address;
+      // Node 18.0–18.3 的 family 是数字 4（P2-10）：同时接受字符串 'IPv4' 与数字 4，
+      // 否则老 Windows 机器上探测恒失败（静默回落到 127.0.0.1）。
+      const family: unknown = net.family;
+      if (net.internal || (family !== 'IPv4' && family !== 4)) {
+        continue;
       }
+      // 链路本地地址（169.254.0.0/16）不可路由，不作为上报基址。
+      if (net.address.startsWith('169.254.')) {
+        continue;
+      }
+      candidates.push({ name: lowerName, address: net.address });
     }
   }
-  return undefined;
+  const preferred = candidates.find((candidate) =>
+    PREFERRED_INTERFACE_PREFIXES.some((prefix) => candidate.name.startsWith(prefix)),
+  );
+  return (preferred ?? candidates[0])?.address;
+}
+
+/**
+ * WORK_DIR 的平台缺省值（纯函数，便于单测；loadConfig 用它替换硬编码 `'/data/vteam-worker'`）。
+ *
+ * - POSIX（linux/darwin…）：保持 `'/data/vteam-worker'`，**不改动现网 Linux 行为**；
+ * - win32：`%LOCALAPPDATA%\vteam-worker`（缺 LOCALAPPDATA 时回落 `os.homedir()`）。
+ *
+ * 为什么 win32 不能沿用 POSIX 绝对路径：`path.resolve('/data/vteam-worker')` 在 Windows 上
+ * 变成 `C:\data\vteam-worker`，**非管理员账号无法在盘符根下建目录**（EPERM/EACCES）⇒
+ * installGitTools 的 mkdir 失败 → serve 以不存在的 cwd 启动 → 报「spawn 失败」，
+ * 根因与「没装 opencode」撞车，极难排查。[需 Windows 真机复验] LOCALAPPDATA 在
+ * 服务账号/漫游配置下的实际值，以及该目录的 ACL 是否满足凭证文件落盘要求。
+ *
+ * 注意：LOCALAPPDATA 只用于**本地**数据（不漫游），worker 的 workDir 是纯本地工作区，
+ * 语义正确；env 显式设置 WORK_DIR 时优先用 env（见 loadConfig）。
+ */
+export function defaultWorkDir(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (platform !== 'win32') {
+    return '/data/vteam-worker';
+  }
+  const localAppData = (env.LOCALAPPDATA ?? '').trim();
+  return path.join(localAppData !== '' ? localAppData : os.homedir(), 'vteam-worker');
+}
+
+/**
+ * 引擎/平台组合支持矩阵校验：Windows 原生 worker 首版**只支持 opencode**。
+ *
+ * 为什么在 config 层直接拒（而不是启动后降级）：dsh 在 win32 上有上游代码
+ * （`dsh-sandbox-local` 的 win32 后端链 = windows-acl 受限令牌，档位上游自标 `partial`），
+ * 但 vteam 的接线是 Linux 形状的：安装器走 bash + apt 装 bubblewrap、`dsh` 的 bin 是 JS
+ * （Windows 上只有 `dsh.cmd` shim，无法被直接 spawn）、且 `dsh-session-persistence-jsonl`
+ * 依赖的 `node-addon-system` 的 flock 在非 linux/darwin 上直接抛
+ * `ERR_FLOCK_UNSUPPORTED_PLATFORM`。全部未在真机验证过 ⇒ **静默放行 = 首版失败原因不可判定**，
+ * 故宁可启动即响亮失败并给出可操作指引。
+ *
+ * @param engine   resolveWorkerEngine 解析出的引擎
+ * @param platform 平台（缺省当前进程平台；参数化便于单测）
+ * @throws win32 + dsh 组合抛出可操作错误；其它组合一律放行。
+ *
+ * [需 Windows 真机复验] 解禁 dsh 的条件：真机 smoke 全绿 + `dsh --profile sdk` 一次真实
+ * 会话成功（含会话持久化不报 ERR_FLOCK_UNSUPPORTED_PLATFORM）后再放开本闸门。
+ */
+export function assertEngineSupported(
+  engine: WorkerEngineKind,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== 'win32' || engine !== 'dsh') {
+    return;
+  }
+  throw new Error(
+    '[config] Windows 原生 worker 首版只支持 opencode 引擎（WORKER_ENGINE=opencode）：' +
+      'dsh 的 Linux 沙箱链（bwrap/landlock）在 Windows 上不存在，' +
+      '其依赖的 flock 会话持久化在 win32 不受支持，且 dsh 的 npm 全局入口是 .cmd shim' +
+      '（无法被直接 spawn）。' +
+      '修复方向：① 设置 WORKER_ENGINE=opencode（或删除该变量走缺省）；' +
+      '② 若确需在 Windows 用 dsh，请先用真机验证 dsh 的 win32 沙箱链 + 绝对路径入口，' +
+      '并解禁本校验（后续版本）。',
+  );
 }
 
 /**
@@ -408,6 +542,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   // http://127.0.0.1——仅本机可访问，跨机 worker 场景由启动告警引导显式设置）。
   const detectedIPv4 = advertiseHostRaw ? undefined : detectLocalIPv4();
 
+  // P1：引擎选择（env WORKER_ENGINE）。未知值在这里抛错 = 启动即失败，
+  // 不静默回落 opencode（否则"切了引擎"在运维眼里是成功了、实际没变）。
+  const engine = resolveWorkerEngine(env.WORKER_ENGINE);
+  // Windows 原生 worker 首版只支持 opencode：dsh 在 win32 上的沙箱/flock/入口形态均未验证，
+  // 放行只会让首版失败原因不可判定（见 assertEngineSupported 注释）。
+  assertEngineSupported(engine, process.platform);
+
   return {
     workerToken,
     serverUrl: (env.SERVER_URL ?? '').trim() || 'http://localhost:3000',
@@ -426,7 +567,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     ),
     // P1：引擎选择（env WORKER_ENGINE）。未知值在这里抛错 = 启动即失败，
     // 不静默回落 opencode（否则"切了引擎"在运维眼里是成功了、实际没变）。
-    engine: resolveWorkerEngine(env.WORKER_ENGINE),
+    engine,
     // P4：dsh 引擎配置（仅在 engine=dsh 时使用；opencode 模式下这些字段被忽略）
     dshBin: (env.DSH_BIN ?? '').trim() || undefined,
     dshHome: (env.DSH_HOME_DIR ?? '').trim() || undefined,
@@ -439,7 +580,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     dshSystemPrompt: (env.DSH_SYSTEM_PROMPT ?? '') || undefined,
     heartbeatIntervalMs: parseNonNegativeInt('HEARTBEAT_INTERVAL_MS', env.HEARTBEAT_INTERVAL_MS, 10000),
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
-    workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',
+    // WORK_DIR：env 显式值优先；缺省按平台给（win32 → %LOCALAPPDATA%\vteam-worker，
+    // POSIX 保持 /data/vteam-worker）。见 defaultWorkDir 的平台差异说明。
+    workDir: (env.WORK_DIR ?? '').trim() || defaultWorkDir(process.platform, env),
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
     workerAdvertiseHost: advertiseHostRaw || (detectedIPv4 ? `http://${detectedIPv4}` : 'http://127.0.0.1'),
     inContainer: detectContainerized(),

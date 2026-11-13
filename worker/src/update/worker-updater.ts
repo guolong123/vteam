@@ -38,6 +38,7 @@
  */
 
 import { spawn } from 'child_process';
+import { resolveCliCommand } from '../runtime/cli-command';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -63,6 +64,15 @@ export const SYSTEMD_RUNTIME_DIR = '/run/systemd/system';
 export const WORKER_SOURCE_TARBALL = 'worker-src.tar.gz';
 /** 发布包版本元数据文件名（pack-worker.sh 与 tarball 同目录写出）。 */
 export const WORKER_SOURCE_VERSION_FILE = 'worker-src.version.json';
+
+/**
+ * Windows 自更新逃生开关（默认关闭）。
+ *
+ * Windows 原生支持首版没有服务重启桥：替换 dist 后进程仍在跑旧码，无法自动重启。
+ * 默认走 `ready-manual`（提示人工重启），只有明确配置了服务管理器/重启脚本的部署
+ * 才应设置 `WORKER_WINDOWS_SELF_UPDATE=1` 放开文件替换流程。
+ */
+export const WINDOWS_SELF_UPDATE_ENV = 'WORKER_WINDOWS_SELF_UPDATE';
 
 /** tarball 内要求存在的成员（缺任一即视为坏包，**在备份 dist 之前**就中止）。 */
 const REQUIRED_PACKAGE_ENTRIES = [
@@ -258,10 +268,21 @@ export async function robustRename(
 /** spawn 版命令执行器（异步，见 CommandRunner 注释里的死锁说明）。 */
 export const spawnCommandRunner: CommandRunner = (command, args, options = {}) =>
   new Promise<CommandOutcome>((resolve, reject) => {
-    const child = spawn(command, args, {
+    // win32：`npm` 是 `.cmd` shim（裸名 spawn = ENOENT/EINVAL）、`tar` 是系统 exe；
+    // 统一经 runtime/cli-command 解析（POSIX 下原样返回，行为不变）。
+    const resolved = resolveCliCommand({
+      command,
+      args,
+      env: options.env ?? process.env,
+    });
+    const child = spawn(resolved.file, resolved.args, {
       cwd: options.cwd,
       env: options.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+      ...(resolved.windowsVerbatimArguments === undefined
+        ? {}
+        : { windowsVerbatimArguments: resolved.windowsVerbatimArguments }),
     });
     let stdout = '';
     let stderr = '';
@@ -480,6 +501,21 @@ export class WorkerUpdater {
   }
 
   private async runUpdate(version: string | undefined): Promise<UpdateRunOutcome> {
+    // Windows 原生支持首版：默认**不执行**自更新。
+    // 原因：Windows 没有 systemd，`detectSystemd()` 恒为 null；替换 dist 后当前进程仍跑旧码，
+    // 既不会自动重启、也没有服务重启桥；若在替换途中失败，进程还活着 → 注册正常 →
+    // 自动回滚永远不触发（下次重启才炸）。因此首版把「升级」交给安装器（重跑/换 dist 后
+    // 重启服务），自更新指令只回一个诚实的 ready-manual + 告警。
+    if (process.platform === 'win32' && !this.isWindowsSelfUpdateAllowed()) {
+      this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      this.logger.warn(
+        '[worker-update] Windows 首版不支持自更新（没有服务重启桥）：本次 update-worker 指令不会执行。' +
+          '升级请重跑 Windows 安装器 / 替换 dist 后重启 worker；' +
+          `若已自行配置服务管理器与重启脚本，可设置 ${WINDOWS_SELF_UPDATE_ENV}=1 显式放开（风险自负）。`,
+      );
+      return 'applied-ready-manual';
+    }
+
     // a) 空闲判定：绝不打断进行中的会话（本计划决策④）。
     this.setState(WORKER_UPDATE_STATES.PENDING);
     const sessions = this.activeSessionCount();
@@ -625,9 +661,13 @@ export class WorkerUpdater {
     const systemd = await this.detectSystemd();
     if (systemd === null) {
       this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      const restartHint =
+        process.platform === 'win32'
+          ? `重启 worker 服务（或重跑 Windows 安装器）：installDir=${this.installDir}`
+          : `cd ${this.installDir} && ./scripts/start.sh`;
       this.logger.warn(
         `[worker-update] 未检测到可用的 systemd（候选 unit ${this.systemdUnitCandidates().join(' / ')} 均不存在）——已下载待手动重启：` +
-          `cd ${this.installDir} && ./scripts/start.sh`,
+          restartHint,
       );
       return 'applied-ready-manual';
     }
@@ -932,6 +972,11 @@ export class WorkerUpdater {
    * 三条任一不满足 → null（调用方据此走 ready-manual，绝不 process.exit）。
    */
   private async detectSystemd(): Promise<SystemdTarget | null> {
+    // Windows 没有 systemd：直接判否，避免每次探测都 spawn 一个必然失败的命令
+    // （原实现会 reject，把「无服务管理器」变成更新链异常）。
+    if (process.platform === 'win32') {
+      return null;
+    }
     const probe = await this.run('systemctl', ['--version'], { timeoutMs: 10_000 });
     if (probe.code !== 0) {
       return null;
@@ -989,9 +1034,21 @@ export class WorkerUpdater {
 
   /** 人工恢复一行命令（硬崩溃等进程内状态已失的场景靠它兜底）。 */
   private manualRecoveryHint(): string {
+    if (process.platform === 'win32') {
+      return (
+        `Windows：把 ${this.installDir}\\dist.prev 改名回 dist（先备份现有 dist），` +
+        '然后重启 worker 服务 / 重跑安装器'
+      );
+    }
     return (
       `cd ${this.installDir} && rm -rf dist.failed && mv dist dist.failed && ` +
       `mv dist.prev dist && systemctl --user restart ${this.systemdUnitCandidates()[0]}`
     );
+  }
+
+  /** Windows 自更新逃生开关（默认关闭，见 WINDOWS_SELF_UPDATE_ENV）。 */
+  private isWindowsSelfUpdateAllowed(): boolean {
+    const raw = (this.env[WINDOWS_SELF_UPDATE_ENV] ?? '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on' || raw === 'y';
   }
 }
