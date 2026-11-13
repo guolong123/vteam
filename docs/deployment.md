@@ -711,6 +711,140 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
   （`mcp:` → `mcp.servers:`）⇒ 残留的 v2 形态嵌套键被 **v1 的注入器**读到会**误解析 MCP 段**
   （这一份文件就是本形态下"数据卷快照"的对应物）。
 
+### 8.1.2 Windows worker 安装（原生，预览）
+
+> **状态**：M0（运行时 Windows 兼容：CLI 解析 / 进程树清理 / 平台缺省路径 / 隔离域 / 自更新禁用）已落地并在
+> macOS 上完成 `tsc` + 全量 jest；**一键安装器（`install-worker.ps1`）与服务化脚本为预览版，尚未在 Windows 真机验证**。
+> 首版范围：**Windows 10 1809+ / 11 x64、仅 opencode 引擎、自更新默认关闭**。dsh 引擎在 Windows 上**启动即报错**
+> （dsh 的 Linux 沙箱链不可用，不做静默回退）。真机验收清单见 `docs/windows-worker-feasibility.md` §8.3。
+
+**前置条件**
+
+| 依赖 | 说明 |
+|------|------|
+| Windows 10 1803+ / 11（x64） | 需要 `tar.exe`（系统自带 bsdtar，Win10 1803+） |
+| 管理员 PowerShell | 注册 Windows 服务 + 放行防火墙入站需要；仅前台试用可加 `-NoService -NoFirewall` 用普通用户 |
+| Git for Windows（可选） | 提供 `git.exe`/`ssh.exe`；缺省只检测不自动装，缺失时 git 工具族退化 |
+| 出网或内网镜像 | 安装器自举便携 Node（nodejs.org / npmmirror）、npm 装 opencode（可 `-Registry` 指定镜像） |
+
+**安装方式 A：安装页一键命令（推荐）**
+
+控制面「Worker 管理 → 新增 Worker → 安装方式」选择 **Windows PowerShell**，填写 Server 地址、Worker 标识、
+并发上限、上报 IP（可选）后复制命令，在**管理员 PowerShell** 中执行。生成的命令等价于：
+
+```powershell
+Invoke-WebRequest -UseBasicParsing '<web-origin>/install-worker.ps1' -OutFile "$env:TEMP\install-worker.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install-worker.ps1" `
+  -Server '<server-url>' -SrcUrl '<web-origin>/worker-src.tar.gz' `
+  -WorkerId '<worker-id>' -Concurrency 8 -Token '<worker-token>' `
+  [-AdvertiseHost '<worker-lan-ip>'] [-McpUrl '<web-origin>/api/v1/platform-mcp']
+```
+
+⚠️ `-SrcUrl` 必须指向 **web origin**（`install-worker.ps1` / `worker-src.tar.gz` 都由 web 静态服务提供），
+**不要**从 `SERVER_URL` 推导——集群内 server 与 web 可能是不同端口/域名（Linux 脚本的既有坑，Windows 版不继承）。
+内网/离线环境请显式传 `-SrcUrl`（或预先下载发布包到本机后用 `-SrcUrl file:///...` 的方式视脚本实现而定）。
+
+**安装方式 B：手工（排障 / 无安装页权限）**
+
+```powershell
+# 1) 装 opencode（本仓库对着 2.0.32 验证；装完必须自检）
+npm install -g @opencode/cli@2.0.32
+opencode --version              # 期望：opencode v2.0.32
+
+# 2) 解发布包（tar.exe 自带；worker-src.tar.gz 由控制面 web 提供）
+curl.exe -fsSL '<web-origin>/worker-src.tar.gz' -o "$env:TEMP\worker-src.tar.gz"
+New-Item -ItemType Directory -Force C:\ProgramData\vteam-worker\app | Out-Null
+tar.exe -xzf "$env:TEMP\worker-src.tar.gz" -C C:\ProgramData\vteam-worker\app
+
+# 3) 写 .env（UTF-8 无 BOM；OPENCODE_BIN 指向 npm 全局 opencode.cmd 的绝对路径）
+$prefix = (npm prefix -g).Trim()
+$envText = @"
+SERVER_URL=<server-url>
+X_WORKER_TOKEN=<worker-token>
+WORKER_ID=<worker-id>
+WORKER_ENGINE=opencode
+OPENCODE_BIN=$prefix\opencode.cmd
+OPENCODE_SERVER_PASSWORD=<openssl rand -hex 32 等价的随机串>
+WORKER_EXEC_PORT=4198
+WORK_DIR=C:\ProgramData\vteam-worker\work
+OPENCODE_ISOLATION_ROOT=C:\ProgramData\vteam-worker\data
+"@
+# ⚠️ 必须写「UTF-8 无 BOM」：PowerShell 5.1 的 `Set-Content -Encoding utf8` 会写入 BOM，
+#    worker 读 .env 时会把 BOM 带进第一个键名 ⇒ 启动失败。用 .NET API 写无 BOM 文本。
+[System.IO.File]::WriteAllText(
+  'C:\ProgramData\vteam-worker\app\.env',
+  $envText,
+  [System.Text.UTF8Encoding]::new($false)
+)
+
+# 4) 前台试跑（Ctrl+C 停）
+node --env-file=C:\ProgramData\vteam-worker\app\.env C:\ProgramData\vteam-worker\app\dist\index.js
+```
+
+**目录布局（机器级）**
+
+```
+C:\ProgramData\vteam-worker\
+├─ app\       worker 发布包（dist\、scripts\、.env）
+├─ node\      便携 Node（node.exe / npm.cmd）
+├─ npm-global\ 全局 opencode（bin\opencode.exe / shim）
+├─ work\      WORK_DIR（agent 工作区/仓库/产物）
+├─ data\      OPENCODE_ISOLATION_ROOT（home/config/data/state/cache）
+├─ logs\      服务日志（WinSW 滚动日志 / 手工重定向）
+├─ bin\       vteam-worker-service.exe（WinSW 包装器）
+└─ run\       worker.pid（stop/排障用）
+```
+
+**服务化**
+
+- 缺省 `-ServiceManager auto`：有 `winsw.exe`（`-WinswPath` / 安装目录 `bin\winsw.exe` / 缺省 URL 下载）就用
+  **WinSW 2.12** 注册服务 `vteam-worker`（崩溃自动重启、日志滚动、开机自启）；拿不到 WinSW 时回退**计划任务**
+  （`AtStartup` + `SYSTEM` + 失败重启），并在输出里标明回退原因。
+- 只前台试用：`-NoService`（不注册服务、不要求管理员）。
+- 停止/清理：`<安装目录>\app\scripts\windows\stop-worker.ps1 -InstallDir <安装目录>`（服务/计划任务停止 +
+  `taskkill /T /F` 清 opencode 子进程——Windows 服务停止是 TerminateProcess，子进程会残留，必须树杀）。
+
+**防火墙**
+
+只放行执行端点（缺省 TCP 4198）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File <安装目录>\app\scripts\windows\enable-firewall.ps1
+# 回滚：Remove-NetFirewallRule -Name 'vteam-worker-exec'
+```
+
+**升级 / 卸载**
+
+```powershell
+# 升级 = 重跑安装命令（幂等：保留 .env 里的 token/密码，停服务 → 替换 app → 重启 → 自检）
+# 注意：Windows 首版**自更新默认关闭**（无服务重启桥，update-worker 指令只落 ready-manual），
+#       `WORKER_WINDOWS_SELF_UPDATE=1` 仅在自备重启桥时使用。
+
+# 卸载（缺省保留 work\、data\ 与 .env；加 -PurgeData 全删）
+powershell -NoProfile -ExecutionPolicy Bypass -File <安装目录>\app\scripts\windows\uninstall-worker.ps1 -InstallDir <安装目录>
+```
+
+**排障三条（Windows 最常见）**
+
+| 现象 | 原因 | 处置 |
+|------|------|------|
+| 启动日志 `spawn 失败: spawn opencode ENOENT` | 未设 `OPENCODE_BIN` 或指向了无扩展名 shim | 设 `OPENCODE_BIN=<npm 全局前缀>\opencode.cmd`（或 `...\@opencode\cli\bin\opencode.exe`） |
+| 注册/心跳正常但派发 503 / `fetch failed` | 防火墙未放行 4198，或 `WORKER_ADVERTISE_HOST` 填了虚拟网卡（WSL/Hyper-V/Docker 的 `vEthernet`） | 跑防火墙脚本；控制面机器 `Test-NetConnection <worker-ip> -Port 4198`；改填物理网卡地址 |
+| 控制面显示 opencode 版本 `unknown` | `OPENCODE_BIN` 不可执行或 `opencode --version` 本身失败 | 手工 `opencode --version`（主版本必须 ≥ 2）；核对 `OPENCODE_BIN` |
+
+**Windows 版与 Linux 版差异一览**
+
+| 维度 | Linux（`install-worker.sh`） | Windows（`install-worker.ps1`） |
+|------|-----------------------------|----------------------------------|
+| 入口 | `curl ... | bash -s --` | `Invoke-WebRequest` 下载 ps1 + `powershell -File` |
+| Node 自举 | `.tar.xz` + `xz`（glibc ≥ 2.28 校验） | 便携 `.zip` + `Expand-Archive` |
+| 守护 | systemd unit（用户级/系统级） | WinSW 2.12 服务（主选）/ 计划任务（回退） |
+| 配置加载 | `EnvironmentFile` / `source .env` | 服务模式 `node --env-file`；手工/前台 `start-worker.ps1` 自解析 |
+| 权限收紧 | `chmod 600` | `icacls /inheritance:r` |
+| 进程清理 | `kill(-pid)` 进程组 | `taskkill /PID <pid> /T /F` |
+| 自更新 | 可用（systemd 重启） | **默认关闭**（升级=重跑安装器） |
+| dsh 引擎 | 支持（Linux 沙箱链） | **不支持**（启动即报错） |
+
 ### 8.2 灰度步骤与闸门
 
 **阶段 0 —— 前置（不可跳过）**

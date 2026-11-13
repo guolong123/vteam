@@ -7,7 +7,36 @@
 > 真机已实测的只有上游侧与旧 worker 的失败点：`npm i -g @opencode/cli@2.0.32` 可装（18s，落 213MB 原生 `opencode.exe`）、`opencode --version` = `v2.0.32`、`opencode serve` + Basic Auth `/api/info` 200、`tar.exe` 可解 `.tar.gz`、`spawn('opencode')` ENOENT、`process.kill(-pid)` ESRCH、Windows 无 `HOME`。
 > 详见仓库 `docs/windows-worker-feasibility.md`（可行性报告）与 `worker/README.md`「Windows（原生，预览）」章节。
 >
-> 本目录目前只提供 **`enable-firewall.ps1`** 与本文；`install-worker.ps1` / `uninstall-worker.ps1` 等安装器属于 M1 计划，**尚未落地**（本文给的是手工步骤）。
+> 本目录提供运维脚本：`enable-firewall.ps1`（防火墙）、`start-worker.ps1`（前台启动/排障）、
+> `stop-worker.ps1`（停止 + 进程树清理）、`uninstall-worker.ps1`（卸载）。**Windows 一键安装器**
+> 位于控制面静态资源 `web/public/install-worker.ps1`（由安装页 Windows Tab 生成命令），本文 §0 给出用法。
+> 所有 `.ps1` 均为 **UTF-8 带 BOM**（Windows PowerShell 5.1 对无 BOM 的 UTF-8 按 ANSI 解码，中文会乱码；
+> 带 BOM 才能 5.1/7 双兼容），`.cmd` 为 ANSI。脚本与命令**均未在 Windows 真机验证**。
+
+---
+
+## 0. 一键安装器（`install-worker.ps1`，预览）
+
+由控制面 web 静态服务分发（`<web-origin>/install-worker.ps1`），安装页「Windows PowerShell」Tab 会生成：
+
+```powershell
+Invoke-WebRequest -UseBasicParsing '<web-origin>/install-worker.ps1' -OutFile "$env:TEMP\install-worker.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install-worker.ps1" `
+  -Server '<server-url>' -SrcUrl '<web-origin>/worker-src.tar.gz' `
+  -WorkerId '<worker-id>' -Concurrency 8 -Token '<token>' [-AdvertiseHost '<worker-lan-ip>'] [-McpUrl '<url>']
+```
+
+流程：前置检查（OS/架构/管理员/执行策略/TLS）→ 目录 `<dir>\{node,npm-global,app,work,data,logs,bin,run}` →
+便携 Node（nodejs.org/npmmirror/tuna + SHASUMS256）→ npm 全局装 opencode（v2 闸门 + 解析 `OPENCODE_BIN`）→
+下载发布包（可选 `-SrcSha256`）→ 调 `stop-worker.ps1` 停旧实例 → `tar.exe` 解包 → `npm ci --omit=dev` →
+写 `.env`（UTF-8 无 BOM、保留旧键、`icacls` 收权）→ 防火墙（调 `enable-firewall.ps1 -Port 4198`）→
+服务化（`-ServiceManager auto`：WinSW 2.12 优先，取不到回退计划任务）→ 自检（服务/任务 → 4198 监听 → 本机 HTTP 探测）。
+
+常用参数：`-Dir`（缺省：管理员 `%ProgramData%\vteam-worker`，否则 `%LOCALAPPDATA%\vteam-worker`）、
+`-TokenFile`（无人值守）、`-NoService -NoFirewall`（普通用户前台试用）、`-Force`（升级：重下发布包/重建服务）、
+`-WinswPath`（内网离线提供 WinSW）、`-Registry`（npm 镜像）、`-SkipNpmCi`（离线包自带 node_modules 时）。
+
+⚠️ 安装器要求 **Node ≥ 20.6**（服务模式用 `node --env-file` 读 `.env`）；`-NoService` 前台路径不受此限（走 `start-worker.ps1` 自解析）。
 
 ---
 
@@ -211,7 +240,7 @@ Test-NetConnection <worker 局域网 IP> -Port 4198            # 在控制面机
 
 ---
 
-## 5. 服务化建议（**未在真机验证**）
+## 5. 服务化（手工路径；安装器已自动化，**均未在真机验证**）
 
 Windows 没有 systemd。下面两种包装器都**未在本仓库的真机流程验证过**，请在目标机按 §5.5 自检确认。
 

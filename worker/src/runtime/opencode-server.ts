@@ -157,6 +157,16 @@ export function buildIsolatedServeEnv(
   env.XDG_DATA_HOME = scope.dataHome;
   env.XDG_STATE_HOME = scope.stateHome;
   env.XDG_CACHE_HOME = scope.cacheHome;
+  /**
+   * Windows 必需：opencode 的 `global.home` 取自 `OPENCODE_TEST_HOME ?? os.homedir()`，
+   * 而 Node 在 win32 上 `os.homedir()` 读 **USERPROFILE**（Windows 没有 HOME 变量，
+   * 上面的 `env.HOME` 对它无效）⇒ `<USERPROFILE>\.agents` / `.claude` 之类的
+   * `global.home` 系路径仍会进作用域（GitHub Actions windows-latest 实测：XDG_* 生效，
+   * HOME 不生效）。`OPENCODE_TEST_HOME` 是上游唯一能覆盖 `global.home` 的入口，
+   * 故这里**无条件**把它固定到隔离域的 home（宿主残留值一并覆盖，避免泄漏）。
+   * POSIX 上该变量本就不参与路径解析时也无害——HOME 已经指向隔离域。
+   */
+  env.OPENCODE_TEST_HOME = scope.home;
   delete env.OPENCODE_CONFIG;
   delete env.OPENCODE_CONFIG_CONTENT;
   delete env.OPENCODE_DISABLE_PROJECT_CONFIG;

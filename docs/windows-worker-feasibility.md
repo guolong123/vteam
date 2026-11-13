@@ -390,3 +390,59 @@ npm test
 - `install-worker.ps1` / `install-worker.cmd` / `uninstall-worker.ps1` / `start-worker.ps1` 等安装器资产、安装页 Windows Tab、`worker-src.zip`、`capabilities.platform` —— 属 M1/二期，本轮未改。
 - `docs/deployment.md` 的 Windows 章节未在本分支补；本轮 Windows 文档只落在 `worker/README.md`、`worker/.env.example`、`worker/scripts/windows/README.md` 与本文件。
 - 控制面协议/调度**零改动**（§4.5 已论证不需要改）。
+
+---
+
+## 9. M1 实现进度（Windows 安装器 + 服务化 + 安装入口）
+
+> 本节由实现分支追加（分支 `feat/windows-worker-native`，2026-11-13）。M0 见 §8。
+> **M1 全部脚本为预览：未在 Windows 真机执行**；macOS 上能验证的只有类型检查/单测/静态语法与契约一致性。
+
+### 9.1 交付物
+
+| 文件 | 作用 | 验证状态 |
+|---|---|---|
+| `web/public/install-worker.ps1`（2249 行） | 一键安装器（控制面 web 静态分发）：前置检查 → 目录布局 → 便携 Node（3 镜像 + SHASUMS256）→ npm 全局 opencode（v2 闸门 + `OPENCODE_BIN`）→ 下载发布包（可选 `-SrcSha256`）→ 调 `stop-worker.ps1` 停旧实例 → `tar.exe` 解包 → `npm ci --omit=dev` → 写 `.env`（无 BOM/保留旧键/密钥转义）+ `icacls` → 防火墙 → 服务化（WinSW 2.12 主选 / 计划任务回退）→ 自检 | 静态：tree-sitter PowerShell 解析 0 error、括号/here-string 平衡、参数/调用一致性、WinSW XML well-formed、`.env` 与 `start-worker.ps1` 解析器 round-trip；**未真机执行** |
+| `web/public/install-worker.cmd` | 薄包装：定位同目录 ps1 + `powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*`；不自动提权 | 静态（cmd 语法人工审查） |
+| `worker/scripts/windows/start-worker.ps1` | 前台启动/排障：自解析 `.env`（BOM/UTF-16 报错、引号/转义/行尾注释/CRLF/LF）→ 校验 token/引擎/`OPENCODE_BIN`/node/dist → 建目录 → `Start-Process -PassThru` 跑 node，写 `run\worker.pid`、退出码透传；`-DryRun` 只校验 | 静态；**未真机执行** |
+| `worker/scripts/windows/stop-worker.ps1` | 停止：`sc stop`（含 StopPending 超时兜底）→ 计划任务 → `run\worker.pid` `taskkill /T /F` → 命令行兜底（node.exe + 安装根前缀 + `dist\index.js`）→ 清理父进程命中/路径在安装根下的 `opencode.exe` 残留；`-WhatIf`/幂等/退出码 | 静态；**未真机执行** |
+| `worker/scripts/windows/uninstall-worker.ps1` | 卸载：调 stop → WinSW uninstall（回退 `sc delete`）→ 删计划任务 → 删防火墙规则 → `-PurgeData` 前做安全校验（非盘根/含安装特征）否则保留 `work\`/`data\`/`.env` | 静态；**未真机执行** |
+| `web/app/(main)/workers/install/page.tsx` | 安装向导新增第 3 个 Tab「Windows PowerShell」：生成「下载 ps1 + `-File` 执行」两条命令（`-Server/-SrcUrl/-WorkerId/-Concurrency/-Token/-AdvertiseHost/-McpUrl`），切到该 Tab 强制 opencode 引擎、dsh 置灰，附管理员/未验证/卸载提示 | `npx tsc --noEmit` ✅、`npx eslint` ✅；浏览器渲染/复制待 e2e |
+| `web/e2e/pages.spec.ts` | install 页断言补 Windows Tab 联动（命令含 `install-worker.ps1` 与 `-SrcUrl`） | 未跑 Playwright（需完整栈）；tsc 覆盖 |
+| `docs/deployment.md` §8.1.2 | Windows worker 安装章节：前置/一键命令/手工路径/目录布局/服务化/防火墙/升级卸载/排障/与 Linux 差异 | 文档 |
+| `worker/README.md` / `worker/scripts/windows/README.md` | 一键安装入口、参数、脚本说明、编码约定（`.ps1` UTF-8 BOM、`.cmd` ANSI） | 文档 |
+
+另：M0 的 `enable-firewall.ps1` 与三个新 `.ps1` 已统一转为 **UTF-8 带 BOM**（Windows PowerShell 5.1 对无 BOM 的 UTF-8 按 ANSI 解码，中文提示会乱码；带 BOM 才能 5.1/7 双兼容）。
+
+### 9.2 关键接口契约（后续改动不要破坏）
+
+- 安装页命令参数名固定：`-Server -SrcUrl -WorkerId -Concurrency -Token [-AdvertiseHost] [-McpUrl]`；`-SrcUrl` 指向 **web origin**（`worker-src.tar.gz` 由 web 静态服务提供，集群内 server 与 web 可能不同源）。
+- 安装根布局：`<dir>\{node,npm-global,app,work,data,logs,bin,run}`；`.env` 在 `<dir>\app\.env`；pid 文件 `<dir>\run\worker.pid`。
+- 服务名/任务名固定 `vteam-worker`；WinSW 包装器 `<dir>\bin\vteam-worker-service.exe`；防火墙规则名 `vteam-worker-exec`；执行端点 `4198`。
+- 服务/计划任务模式用 `node --env-file` 加载 `.env` ⇒ 要求 Node ≥ 20.6（安装器自举 v22.12.0 满足）；`-NoService` 前台走 `start-worker.ps1` 自解析，可用更旧 Node。
+- 卸载/停止只在一个地方实现（`stop-worker.ps1` / `uninstall-worker.ps1`），安装器不重复实现。
+
+### 9.3 macOS 上的最终验证（提交前）
+
+```bash
+cd worker && npx tsc --noEmit && npm test     # 53 suites / 1509 tests 通过（3 suites / 8 tests 原有 skip）
+cd web && npx tsc --noEmit && npx eslint "app/(main)/workers/install/page.tsx" "e2e/pages.spec.ts"   # 均通过
+```
+
+### 9.4 Windows 真机验收清单（M1，按优先级）
+
+1. 全新 Win10/11 + 管理员 PowerShell：跑安装页生成的命令 → 安装器完成（Node/opencode/发布包/.env/服务/防火墙/自检）。
+2. `Get-Service vteam-worker` Running + 重启机器后自动 Running + 控制面显示 online。
+3. `Test-NetConnection <worker-ip> -Port 4198` 通；控制面派 1 个任务成功（事件回流完整）。
+4. `stop-worker.ps1` / `start-worker.ps1` / `uninstall-worker.ps1` 三个脚本全流程；停止后无残留 `opencode.exe`、`run\worker.pid` 被清理。
+5. WinSW 2.12 路径：`install/start/stop/uninstall` 与日志滚动；WinSW 不可得时计划任务回退（`AtStartup`/`SYSTEM`）可启动、重启恢复。
+6. 升级：重跑安装器（`-Force`）→ 停旧实例、换 app、重启、自检；`work\`/`data\`/`.env` 保留。
+7. 防火墙：`enable-firewall.ps1` 幂等/`-WhatIf`/回滚；端口不一致时报错可操作。
+8. 非管理员：`-NoService -NoFirewall` 装到 `%LOCALAPPDATA%` 能前台跑；不带这两个开关时错误提示可操作。
+9. 安装页 Windows Tab：命令复制、curl 缺省 Tab 不回归、Windows Tab 下 dsh 置灰；Playwright 断言通过。
+
+### 9.5 本轮仍未做（M2 及以后）
+
+- 平台维度（`capabilities.platform`）与混合池调度过滤；`/file` 路径白名单；`OPENCODE_TEST_HOME` 已由 M0.5 补进 serve 隔离 env（`buildIsolatedServeEnv`），真机需确认 `<USERPROFILE>\.agents` 不再被读。
+- Windows CI 常驻 job（`ci.yml` windows 矩阵）；发布流水线产出 Windows 安装包/签名；`worker-src.zip` 双产物（Win Server 2016 等无 `tar.exe` 场景）。
+- 安装器与服务脚本的真机修 bug 迭代（按 §9.4 结果）。

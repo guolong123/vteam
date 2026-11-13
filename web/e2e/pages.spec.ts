@@ -572,6 +572,10 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     // Tab 联动：docker 分支命令更新
     await page.getByTestId("install-method-tab").filter({ hasText: /docker/ }).click();
     await expect(page.getByTestId("install-command")).toContainText("docker run");
+    // Tab 联动：Windows（PowerShell）分支命令更新（M1：install-worker.ps1 + -SrcUrl 显式指向 web origin）
+    await page.getByTestId("install-method-tab").filter({ hasText: /Windows/ }).click();
+    await expect(page.getByTestId("install-command")).toContainText("install-worker.ps1");
+    await expect(page.getByTestId("install-command")).toContainText("-SrcUrl");
   });
 
   test("17/18 worker-list /workers（列表 + 唯一安装入口）", async ({ page }) => {
