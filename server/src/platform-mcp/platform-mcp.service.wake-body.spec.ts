@@ -213,6 +213,23 @@ describe('PlatformMcpService 完工回执截断（缺陷 3）', () => {
     expect(body).not.toContain('已截断');
   });
 
+  /**
+   * 回归锁（2026-11-13 用户反馈）：回执结算 hook 触发 drain 时曾传空 text，
+   * 唤醒消息变成「【子 Agent fan-out 完成】来自 tmm_xxx：」后面一片空白，
+   * 主 Agent 完全看不出要汇总什么。
+   */
+  it('空正文 → 给明确的下步指引（不留空白）', () => {
+    const body = formatWakeBody('', messageId);
+    expect(body.trim().length).toBeGreaterThan(0);
+    expect(body).toContain('汇总');
+    expect(body).toContain(messageId);
+  });
+
+  it('纯空白正文同样兜底', () => {
+    const body = formatWakeBody('   \n  ', null);
+    expect(body).toContain('汇总');
+  });
+
   it('端到端：完工回执落库（全文）→ 唤醒正文带 messageId，可据此取回全文', async () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
