@@ -58,7 +58,9 @@
  * 本类不依赖 server 代码、不引入 nestjs（worker 独立进程铁律）。
  */
 
-import { spawn, spawnSync, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
+import { resolveCliCommand, spawnCliSync } from './cli-command';
+import { terminateProcessTree } from './process-tree';
 import {
   isAnyLine,
   isServeErrorLine,
@@ -219,7 +221,11 @@ export class OpencodeServer {
     }
     this.isolationScope = options.isolationScope ?? resolveIsolationScope();
     this.options = {
-      command: DEFAULT_COMMAND,
+      // Windows：npm 全局装出来的 `opencode` 是 `.cmd` shim，裸名 spawn 必 ENOENT
+      // ⇒ 安装器应把真实可执行文件（`…\@opencode\cli\bin\opencode.exe` 或
+      // `…\npm\opencode.cmd`）的绝对路径写进 OPENCODE_BIN；未设置时仍按逻辑命令名走，
+      // 由 cli-command 在 win32 上做 where 解析 + cmd 包装兜底（见 runtime/cli-command.ts）。
+      command: (process.env.OPENCODE_BIN ?? '').trim() || DEFAULT_COMMAND,
       cwd: process.cwd(),
       healthCheckTimeoutMs: DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
       healthCheckIntervalMs: DEFAULT_HEALTH_CHECK_INTERVAL_MS,
@@ -390,7 +396,13 @@ export class OpencodeServer {
     return this.start();
   }
 
-  /** 停止 serve：kill(-pid) 进程组 + 3s 后 SIGKILL 兜底，await 退出。 */
+  /**
+   * 停止 serve：清理**整棵进程树**并等待退出。
+   *
+   * POSIX：`kill(-pid)` 进程组（SIGTERM → 宽限 → SIGKILL）；
+   * win32：`taskkill /PID <pid> /T /F`（负 pid 无进程组语义，实测 ESRCH）。
+   * 实现见 `runtime/process-tree.ts`。
+   */
   async stop(timeoutMs = 3000): Promise<void> {
     const proc = this.process;
     this.process = null;
@@ -398,35 +410,20 @@ export class OpencodeServer {
     if (!proc || proc.pid === undefined) {
       return;
     }
-    const pid = proc.pid;
-    try {
-      // D2 铁律：负 pid = 进程组组长，一次性清理 serve 及其子进程
-      process.kill(-pid, 'SIGTERM');
-    } catch {
-      // ESRCH：进程组已不存在（提前退出/已在别处清理）
-    }
-    await this.waitForExit(proc, timeoutMs);
-    if (proc.exitCode === null) {
-      try {
-        process.kill(-pid, 'SIGKILL');
-      } catch {
-        // 同上：已退出
-      }
-      await this.waitForExit(proc, timeoutMs);
-    }
+    await terminateProcessTree(proc, {
+      graceMs: timeoutMs,
+      logger: { warn: (message) => this.options.logger?.warn(message) },
+    });
   }
 
   /** 探测 opencode CLI 版本（start 时调用，失败不阻断启动）；返回**原始**输出。 */
   private detectVersion(): string {
-    try {
-      const result = spawnSync(this.options.command!, ['--version'], {
-        encoding: 'utf8',
-        timeout: 5000,
-      });
-      return (result.stdout ?? '').trim() || (result.stderr ?? '').trim() || 'unknown';
-    } catch {
+    // Windows：裸名 spawn 会 ENOENT（`.cmd` shim）⇒ 统一走 cli-command 解析。
+    const result = spawnCliSync(this.options.command!, ['--version'], { timeoutMs: 5000 });
+    if (result.error) {
       return 'unknown';
     }
+    return (result.stdout ?? '').trim() || (result.stderr ?? '').trim() || 'unknown';
   }
 
   /**
@@ -555,13 +552,25 @@ export class OpencodeServer {
       // 逃生开关捕获不到 banner 里的自动生成密码）。
       delete env.OPENCODE_SERVER_PASSWORD;
     }
-    const proc = spawn(this.options.command!, args, {
+    // 命令解析：win32 上 `opencode` 是 .cmd shim（裸名 spawn = ENOENT），统一走
+    // runtime/cli-command 解析（显式 OPENCODE_BIN → 直接 spawn；否则 where + cmd 包装）。
+    const resolved = resolveCliCommand({ command: this.options.command!, args });
+    const spawnOptions: Parameters<typeof spawn>[2] = {
       cwd: this.options.cwd,
       env,
-      // D2 铁律：detached:true → 独立进程组，进程组组长即 proc.pid，可用 kill(-pid) 整体清理
+      // D2 铁律：POSIX 下 detached:true → 独立进程组，可用 kill(-pid) 整体清理；
+      // win32 下 detached 没有进程组语义，清理改由 taskkill /T /F 承担（见 process-tree）。
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    };
+    if (process.platform === 'win32') {
+      // 服务/无桌面会话下避免弹出控制台窗口
+      spawnOptions.windowsHide = true;
+    }
+    if (resolved.windowsVerbatimArguments !== undefined) {
+      spawnOptions.windowsVerbatimArguments = resolved.windowsVerbatimArguments;
+    }
+    const proc = spawn(resolved.file, resolved.args, spawnOptions);
     proc.stdout?.on('data', (chunk: Buffer) => this.pushLog(chunk.toString()));
     proc.stderr?.on('data', (chunk: Buffer) => this.pushLog(chunk.toString()));
     // F2 M3：spawn 异步失败（ENOENT 等，opencode 不在 PATH）记录字段——waitForHealthy
@@ -664,18 +673,4 @@ export class OpencodeServer {
     }
   }
 
-  private waitForExit(proc: ChildProcess, timeoutMs: number): Promise<void> {
-    return new Promise((resolve) => {
-      if (proc.exitCode !== null) {
-        resolve();
-        return;
-      }
-      const timer = setTimeout(() => resolve(), timeoutMs);
-      timer.unref?.();
-      proc.once('exit', () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
-  }
 }

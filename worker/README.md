@@ -45,6 +45,83 @@ npm install
   驱动只对着 v2 验证过，而 worker 自身的版本闸门只拦 `< 2` ⇒ v3 会被放行、到运行期才以难排查的
   方式失败（契约漂移）⇒ 请钉一个 v2 版本，如 `--opencode 2.0.32`。
 
+### Windows（原生，预览）
+
+> **首版预览**：只支持 opencode 引擎、Windows 原生运行（非 WSL、非 Docker Desktop）。
+> ⚠️ **本仓库的 Windows 改动尚未在 Windows 真机验证**：已在 GitHub Actions `windows-latest` 实测的是**上游侧**
+> （`@opencode/cli@2.0.32` 可装、`opencode --version`/`serve` 可用、`tar.exe` 可解 `.tar.gz`）以及**旧 worker 的失败点**
+> （`spawn opencode ENOENT`、`process.kill(-pid)` ESRCH、无 `HOME`）。本仓库改动的真机复验清单见
+> [docs/windows-worker-feasibility.md](../docs/windows-worker-feasibility.md)（§8）。
+
+**首版范围**
+
+| 项 | 状态 |
+|----|------|
+| 操作系统 | Windows 10 1809+ / Windows 11，x64（Server 2019+ 未验证） |
+| 执行引擎 | **仅 `opencode`**；`WORKER_ENGINE=dsh` 在 Windows 上**启动即报错**（dsh 的 Linux 沙箱链不可用，不做静默回退） |
+| 自更新 | **默认不支持**（Windows 没有 systemd，`update-worker` 指令落 `ready-manual` 不执行）；升级 = 停服务/重装后替换 `dist` 再启动。逃生开关 `WORKER_WINDOWS_SELF_UPDATE=1` 只在**自备服务重启桥**时使用（风险自负） |
+| 服务化/开机自启 | 仓库暂只提供防火墙脚本与运维说明：[scripts/windows/README.md](scripts/windows/README.md)；安装器属 M1 计划，尚未落地 |
+
+**前置条件**
+
+| 依赖 | 版本要求 | 说明 |
+|------|---------|------|
+| Node.js | >= 18（推荐 22 LTS） | 官方安装包或便携 zip 均可；`node --env-file`（读 `.env`）需要 >= 20.6 |
+| opencode CLI | **v2，主版本 ≥ 2**（本仓库对着 `@opencode/cli@2.0.32` 验证） | `npm install -g @opencode/cli@2.0.32` —— ⚠️ **已实测可用，但属上游未承诺渠道**（上游文档写明 Windows 包管理器不受支持）⇒ 装完**必须** `opencode --version` 自检，失败就别继续 |
+| Git for Windows | 任意近期版本 | 提供 `git.exe` / `ssh.exe`，需在 PATH（worker 的 git 工具族与凭证注入依赖） |
+| tar.exe | Win10 1803+ 自带（`System32\tar.exe` = bsdtar） | 用于解 `worker-src.tar.gz`；`Expand-Archive` **不支持** `.tar.gz` |
+| 管理员权限 | 仅防火墙规则 / 安装 Windows 服务需要 | 前台运行不需要管理员 |
+
+```powershell
+# 安装 opencode 并解析 OPENCODE_BIN（PowerShell）
+npm install -g @opencode/cli@2.0.32
+opencode --version                      # 期望：opencode v2.0.32；失败不要继续
+$prefix = (npm prefix -g).Trim()
+Join-Path $prefix 'opencode.cmd'        # ← 这个绝对路径就是 OPENCODE_BIN 该填的值
+```
+
+**配置要点**（Windows 相关项；其余见下方「环境变量」表与 [scripts/windows/README.md](scripts/windows/README.md)）
+
+| 变量/项 | Windows 建议值 | 说明 |
+|--------|---------------|------|
+| `OPENCODE_BIN` | `<npm 全局前缀>\opencode.cmd`（或 `...\node_modules\@opencode\cli\bin\opencode.exe`） | **强烈建议显式设置**：npm 在 Windows 只生成 `.cmd`/`.ps1` shim，裸 `spawn('opencode')` 会 ENOENT。**不要**指向 `where.exe opencode` 第一条那个无扩展名 shim（Git Bash 用） |
+| `OPENCODE_SERVER_PASSWORD` | 随机 32 字节 hex | v2 serve 恒开鉴权，**必填**；为空则 worker 启动 fail-fast |
+| `WORK_DIR` | 缺省 `%LOCALAPPDATA%\vteam-worker` | Windows 缺省不再用 `/data/vteam-worker`（普通用户建不了 `C:\data`）；服务化建议显式指向安装目录下的 `work\`。启动时会做可写性 preflight：不可写则**启动即报错**（而不是跑到一半失败） |
+| `WORKER_ADVERTISE_HOST` | `http://<worker 局域网 IP>` | **Windows 上强烈建议显式填**：装了 WSL2/Hyper-V/Docker Desktop 的机器自动探测可能选中 `vEthernet` 的 172.x ⇒ 控制面连不上 → 注册成功但派发全失败 |
+| `WORKER_EXEC_PORT` | `4198` | 执行端点端口；防火墙只放行这个端口 |
+| 防火墙入站 | 放行 TCP `4198`（Domain,Private） | 用 `scripts\windows\enable-firewall.ps1`（见下）；**不要**放行 serve 端口 |
+| `OPENCODE_SERVE_HOSTNAME` | `127.0.0.1`（缺省，勿改） | v2 控制面只连执行端点、不直连 serve；serve 保留回环更安全 |
+
+```powershell
+# 防火墙（管理员 PowerShell；路径按仓库位置调整）——只放行执行端点 4198
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\enable-firewall.ps1
+# 预演不改动：
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\enable-firewall.ps1 -WhatIf
+# 回滚：
+Remove-NetFirewallRule -Name 'vteam-worker-exec'
+```
+
+**启动方式**
+
+```powershell
+cd <worker 目录>
+npm install
+npm run build                          # 产出 dist\index.js
+node --env-file=.env dist\index.js     # Node >= 20.6 直接读 .env；Node 18 的加载方式见 scripts\windows\README.md
+# 也可用 npm start（= node dist\index.js）；但它**不会**读 .env，需先把变量导入当前进程
+```
+
+- Windows 没有 systemd：**服务化/开机自启/日志滚动/卸载清理**见 [scripts/windows/README.md](scripts/windows/README.md)（WinSW 2.12 主选、NSSM 备选，**均未真机验证**）。
+- **自更新在 Windows 暂不支持**：升级 = 停服务（或停前台进程）→ 用新发布包替换 `dist`/`app` → 重启；保留 `work\`、`data\`、`.env`。
+
+**排障（Windows 三条最常见）**
+
+| 现象 | 原因 | 处置 |
+|------|------|------|
+| 启动日志 `spawn 失败: spawn opencode ENOENT` | 未设 `OPENCODE_BIN`，或指向了无扩展名 shim | 按上文解析 `opencode.cmd` 绝对路径写进 `.env`；`& $env:OPENCODE_BIN --version` 自检 |
+| 注册成功、心跳正常，但派发任务全 503 / `fetch failed` | 防火墙未放行 4198，或 `WORKER_ADVERTISE_HOST` 填成虚拟网卡/VPN 地址 | 跑防火墙脚本；在控制面机器 `Test-NetConnection <worker IP> -Port 4198`；重选 advertise 地址（排除 `vEthernet`/WSL/Hyper-V） |
+| 控制面显示 opencode 版本 `unknown` | `OPENCODE_BIN` 指向不可执行文件，或 `opencode --version` 本身失败 | 手工跑 `opencode --version`（主版本必须 ≥ 2）；再核对 `& $env:OPENCODE_BIN --version` |
+
 ## 构建
 
 ```bash
@@ -86,13 +163,14 @@ npm run dev            # tsx src/index.ts
 | `WORKER_ID` | 否 | `w_<hostname>` | worker 唯一 id |
 | `WORKER_NAME` | 否 | `<hostname>` | worker 可读名称 |
 | `OPENCODE_SERVE_PORT` | 否 | `0` | opencode serve 端口；`0` = OS 随机空闲端口（占用则 +1 重试） |
+| `OPENCODE_BIN` | 否 | 空 | opencode CLI 的绝对路径（**Windows 强烈建议设置**：npm 只产 `.cmd`/`.ps1` shim，裸名 `spawn` 会 ENOENT；见下文「Windows」章节）。留空 = 用逻辑命令名 `opencode`（win32 上 worker 会自行 `where` 解析并做 `cmd` 包装兜底） |
 | `OPENCODE_SERVER_PASSWORD` | **是**（OpenCode v2 恒开鉴权） | 无 | opencode serve 认证密码（Basic Auth username=opencode）。**为空则 worker 启动 fail-fast**（v2 会自动生成随机密码并打到 stdout，worker 不解析就会全线 401） |
 | `OPENCODE_ALLOW_GENERATED_PASSWORD` | 否 | `false` | 逃生开关：为 `1`/`true` 时允许在未配密码的情况下，从 serve stdout 捕获 opencode 自动生成的密码（明文不落日志）；不推荐 |
 | `OPENCODE_V2_ENABLED` | 否 | `true` | 驱动模式开关（**vteam 侧开关，不是 opencode 的 CLI flag**）：⚠️ **自 T18 起单轨 v2——显式设 `false` 会让 worker 在 `loadConfig` 阶段直接抛错**（v1 驱动已删除，没有第二个实现可选；错误文案直接指向真正的回退手段：回滚镜像/代码到 v1.0.x + 回滚 opencode 数据卷）。**除显式 `false` 外的任何取值（含缺省未设、非法值告警后回落）都按启用处理**。留一个"看起来能切、实际切不了"的开关只会让故障现场更难解释 |
 | `OPENCODE_ISOLATION_ROOT` | 否 | `<HOME>/.opencode-iso` | opencode **隔离配置域**根目录：serve 子进程的 `HOME` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` / `XDG_CACHE_HOME` 全部指向它（其下 `home/ config/ data/ state/ cache/`）。作用 = **替代 v1 的 `--pure`**（v2 无 `--pure` 等价物，隔离是唯一可靠手段）：宿主的全局配置 / 全局插件 / 全局 `AGENTS.md` 不进作用域。⚠️ 受管目录（`/etc/opencode` 等）**不受 XDG 控制**，仍会被 watch |
 | `HEARTBEAT_INTERVAL_MS` | 否 | `10000` | 心跳间隔 ms（server 30s = 3 周期判 offline） |
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
-| `WORK_DIR` | 否 | `/data/vteam-worker` | opencode serve 工作目录（工具注入落点） |
+| `WORK_DIR` | 否 | POSIX `/data/vteam-worker`；win32 `%LOCALAPPDATA%\vteam-worker` | opencode serve 工作目录（工具注入落点）；启动时会做可写性 preflight，不可写则启动即报错 |
 | `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | opencode serve 绑定地址（**v2 控制面不直连 serve**，只调 worker 的执行端点 `:4198` ⇒ 留回环 `127.0.0.1` 即可，更安全；集群外/跨机 worker 也**不必**为控制面改成 `0.0.0.0`） |
 | `WORKER_ADVERTISE_HOST` | 否 | 自动探测本机非回环 IPv4（失败回退 `http://127.0.0.1`） | worker 对控制面公布的基址主机（随注册 capabilities.baseUrl 上报；控制面只取其中的**主机部分** + `capabilities.execPort` 拼执行端点；compose 设 `http://worker`）。未设置时 worker 启动自动探测本机内网 IP 上报（跳过 docker/veth/br- 等虚拟网卡，探测失败才回退回环地址）。**集群外/跨机 worker 若 server 无法访问探测到的地址（多网卡/VPN 等），应显式设置为 server 可达的 worker 地址**（如 `http://<worker 局域网 IP>`），否则 server 连不上 → worker 显示不可用 |
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（git 凭证注入 `GIT_SSH_COMMAND`）；空 = 不注入 |
@@ -101,6 +179,7 @@ npm run dev            # tsx src/index.ts
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `300000` | 首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时）。首字/模型探测唯一归 worker；server 侧为 `SILENT_SESSION_WAKE_MS=600000` 滑动事件静默自愈（>300s 不抢跑） |
 | `WORKER_MAX_INSTANCES` | 否 | `5` | worker 最大并发会话数（随注册上报，server 按 capacity 分派）；≤0/非法值兜底 5 |
 | `WORKER_STANDALONE` | 否 | `false` | 独立模式：`true` = 跳过控制面注册/心跳/资源拉取，serve + 执行端点（`:4198`）照常启动（无 `SERVER_URL` 可达也能起，供本地/SDK 直连执行）；`false`/缺省 = 现行注册模式。可选值：`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off` |
+| `WORKER_WINDOWS_SELF_UPDATE` | 否 | `false` | **Windows 自更新逃生开关**：win32 默认不执行 `update-worker` 指令（状态落 `ready-manual`，跳过版本不变）；仅当已自备服务重启桥时设 `1`/`true` 放开（风险自负）。非 Windows 平台忽略 |
 
 ## 集群外 worker 配置（内置 MCP + 执行端点可达地址）
 
@@ -147,6 +226,9 @@ opencode 版本缺省按 npm `latest` 装（可复现安装用 `--opencode 2.0.3
 ```
 worker/
 ├── scripts/start.sh          # 部署脚本（校验 opencode → 加载 .env → 构建 → 启动）
+├── scripts/windows/          # Windows 原生运行（预览）的运维脚本
+│   ├── enable-firewall.ps1   # 幂等放行执行端点 4198 入站（-WhatIf 可预演，可回滚）
+│   └── README.md             # Windows 运维说明（依赖检查/服务化/卸载/排障）
 ├── src/
 │   ├── index.ts              # 入口：serve 挂载 + 注册/心跳/事件上送 + 优雅退出
 │   ├── config.ts             # env 配置（带默认值 + 必填校验）

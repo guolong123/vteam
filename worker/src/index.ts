@@ -13,7 +13,6 @@
  * 事件内容语义（T9 server 侧消费）；事件上送通道（EventSender）已就绪供会话上报。
  */
 
-import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadConfig, WorkerConfig, OpencodeIsolationScope, ensureIsolationScope } from './config';
@@ -59,6 +58,7 @@ import {
   WORKER_COMMAND_TYPES,
 } from './protocol/worker-protocol';
 import { OpencodeServer } from './runtime/opencode-server';
+import { spawnCliSync } from './runtime/cli-command';
 import {
   assertOpencodeVersionSupported,
   formatOpencodeVersion,
@@ -644,16 +644,16 @@ export function formatToolInjectionSummary(report: InjectReport): string {
  * 返回**原始**输出（`opencode v2.0.28` / `opencode 1.19.0` / `unknown`）。
  */
 export function detectOpencodeVersionRaw(): string {
-  try {
-    const result = spawnSync('opencode', ['--version'], {
-      encoding: 'utf8',
-      timeout: 5000,
-    });
-    const version = (result.stdout ?? '').trim() || (result.stderr ?? '').trim();
-    return version || 'unknown';
-  } catch {
+  // 与 OpencodeServer 同源：OPENCODE_BIN（安装器写入的绝对路径）优先；
+  // win32 上 `opencode` 是 npm 的 .cmd shim，裸名 spawn 会 ENOENT ⇒ 由 cli-command
+  // 解析真实可执行文件或经 cmd.exe 包装（见 runtime/cli-command.ts）。
+  const command = (process.env.OPENCODE_BIN ?? '').trim() || 'opencode';
+  const result = spawnCliSync(command, ['--version'], { timeoutMs: 5000 });
+  if (result.error) {
     return 'unknown';
   }
+  const version = (result.stdout ?? '').trim() || (result.stderr ?? '').trim();
+  return version || 'unknown';
 }
 
 /**
@@ -1171,9 +1171,9 @@ export async function handleModelCredentialsCommand(
 function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   let browserInfo = '未安装';
   try {
-    const r = spawnSync('agent-browser', ['--version'], { encoding: 'utf8', timeout: 3000 });
+    const r = spawnCliSync('agent-browser', ['--version'], { timeoutMs: 3000 });
     browserInfo = (r.stdout ?? '').trim() || (r.stderr ?? '').trim() || 'unknown';
-    if (r.status !== 0) browserInfo = `不可用(${browserInfo})`;
+    if (r.error || r.status !== 0) browserInfo = `不可用(${browserInfo})`;
   } catch {
     browserInfo = '未安装';
   }
@@ -1641,6 +1641,42 @@ export function writeGitCredsToServeScope(
   return writeGitCredsFile(entries, isolationScope.home);
 }
 
+/**
+ * 启动期工作目录可写性预检（Windows 原生支持 · M0）。
+ *
+ * 为什么必须前置：WORK_DIR 的缺省在 Windows 上是 `%LOCALAPPDATA%\vteam-worker`（见
+ * config.ts 的 defaultWorkDir），但服务账户/误配时仍可能指向不可写路径（LocalSystem 的
+ * systemprofile、或历史 POSIX 路径残留 `/data/vteam-worker`）。不预检的话第一处 mkdir
+ * 发生在注入器内部，报错是 `EACCES + 一长串内部路径`，会与「opencode 没装」的报错混在
+ * 一起，排障成本极高（Windows 真机日志已出现这类串味）。
+ *
+ * 失败即抛错（main 的启动链会据此退出）——工作目录不可写时继续跑毫无意义。
+ */
+export function ensureWorkDirReady(workDir: string): void {
+  try {
+    fs.mkdirSync(workDir, { recursive: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? 'UNKNOWN';
+    throw new Error(
+      `[worker] WORK_DIR 不可用（${code}）：${workDir}\n` +
+        '  请确认运行账户对该目录有读写权限，或在 .env 里显式设置 WORK_DIR' +
+        '（Windows 建议 %LOCALAPPDATA%\\vteam-worker 或安装目录下的 work\\）。',
+    );
+  }
+  const probePath = path.join(workDir, `.worker-write-probe-${process.pid}`);
+  try {
+    fs.writeFileSync(probePath, 'ok', 'utf8');
+    fs.rmSync(probePath, { force: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? 'UNKNOWN';
+    throw new Error(
+      `[worker] WORK_DIR 不可写（${code}）：${workDir}\n` +
+        '  请确认运行账户对该目录有写权限（Windows 服务账户默认无法写用户目录；' +
+        '建议用专用低权账户，或把 WORK_DIR 指到安装目录下的 work\\）。',
+    );
+  }
+}
+
 export function main(env: NodeJS.ProcessEnv = process.env): void {
   const config = loadConfig(env);
   const versionInfo = detectOpencodeVersionInfo();
@@ -1659,6 +1695,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // T16b：先把隔离配置域的目录建好（serve 的 HOME / XDG_* 全部指向它）。
   ensureIsolationScope(config.isolationScope);
+
+  // Windows M0：工作目录可写性预检（报错必须指向 WORK_DIR，而不是注入器的内部路径）。
+  ensureWorkDirReady(config.workDir);
 
   // K3 修复（T6）：serve 启动前把 git 工具族注入工作目录（<workDir>/.opencode/tools/git.ts，
   // opencode 启动时扫描该目录自动注册；注入失败不阻断启动，工具缺失由后续执行时报错暴露）。

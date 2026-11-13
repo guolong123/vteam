@@ -23,6 +23,8 @@ import {
   tryLoadCredential,
   writeTempKey,
   writeAskpass,
+  escapeCmdEchoValue,
+  buildSshCommand,
   buildGitEnv,
   cleanupTemp,
   runGit,
@@ -37,10 +39,18 @@ function sliceImpl(content: string, hint: string): string {
 }
 
 // loadCredential 单测需拦截 fs.readFileSync；jest.spyOn 在本环境对 Node 内置 fs 无效
-// （__importStar 生成模块副本），故模块级部分 mock：仅 readFileSync 为 jest.fn，其余真实。
+// （__importStar 生成模块副本），故模块级部分 mock：readFileSync 为 jest.fn、chmodSync 为
+// 可断言但仍委托真实实现的 jest.fn（Windows 分支「跳过 chmod」需要按调用次数断言）。
 jest.mock('fs', () => {
   const actual = jest.requireActual<typeof import('fs')>('fs');
-  return { ...actual, readFileSync: jest.fn() };
+  return {
+    ...actual,
+    readFileSync: jest.fn(),
+    // 委托真实 chmod（POSIX 用例仍要真正改权限），同时保留调用记录供 win32 断言。
+    chmodSync: jest.fn((...args: unknown[]) =>
+      (actual.chmodSync as (...a: unknown[]) => unknown)(...args),
+    ),
+  };
 });
 
 // child_process 默认透传真实实现（normalizeSshKey 的 ssh-keygen 交叉验证依赖真实 spawnSync），
@@ -502,6 +512,149 @@ describe('git 凭证辅助函数（渲染产物内联实现，todo 4）', () => 
     expect(content).toContain('const entry = tryLoadCredential(repoUrl);');
     expect(content).toContain('if (!entry) {');
     expect(content).toContain('return runGit(_buildGitArgs(');
+  });
+});
+
+describe('Windows 凭证可移植性（.cmd askpass / ssh 路径引号 / 跳过 chmod，P1-3/P1-4）', () => {
+  const chmodMock = fs.chmodSync as unknown as jest.Mock;
+  // 顶层 jest.mock('fs') 只 mock readFileSync/chmodSync，读文件内容走真实 fs。
+  const realRead = (p: string): string =>
+    jest.requireActual<typeof import('fs')>('fs').readFileSync(p, 'utf8');
+
+  afterEach(() => {
+    chmodMock.mockClear();
+  });
+
+  it('escapeCmdEchoValue：cmd 元字符 %/^/&/|/</>/" 逐个转义，普通字符原样', () => {
+    expect(escapeCmdEchoValue('plain-Token_123')).toBe('plain-Token_123');
+    expect(escapeCmdEchoValue('a%b')).toBe('a%%b');
+    expect(escapeCmdEchoValue('a^b')).toBe('a^^b');
+    expect(escapeCmdEchoValue('a&b|c<d>e"f')).toBe('a^&b^|c^<d^>e^"f');
+    // 单引号在 cmd 里是普通字符（只有 POSIX 分支才需要 '\'' 转义）。
+    expect(escapeCmdEchoValue("it's")).toBe("it's");
+  });
+
+  it('writeAskpass(win32)：.cmd 扩展名 + @echo off + CRLF + 转义后的 echo（token 不含明文回显语句）', () => {
+    chmodMock.mockClear();
+    const scriptPath = writeAskpass('p%a&s s', 'win32');
+    try {
+      expect(scriptPath.endsWith('.cmd')).toBe(true);
+      const content = realRead(scriptPath);
+      // 精确断言：CRLF 行尾 + 第一行 @echo off（缺它 cmd 会把命令行本身回显进 stdout，
+      // git 取到的第一行就成了 `echo ...` 这句假密码）。
+      expect(content).toBe('@echo off\r\necho p%%a^&s s\r\n');
+      expect(content.startsWith('@echo off\r\n')).toBe(true);
+    } finally {
+      cleanupTemp(scriptPath);
+    }
+    // win32 不依赖 mode 语义：跳过 chmod（P2-1）
+    expect(chmodMock).not.toHaveBeenCalled();
+  });
+
+  it('writeAskpass(POSIX)：行为不变（#!/bin/sh + 单引号转义 + chmod 0o755）', () => {
+    chmodMock.mockClear();
+    const scriptPath = writeAskpass("to'ken", 'darwin');
+    try {
+      expect(scriptPath.endsWith('.cmd')).toBe(false);
+      expect(realRead(scriptPath)).toBe(`#!/bin/sh\necho 'to'\\''ken'\n`);
+    } finally {
+      cleanupTemp(scriptPath);
+    }
+    expect(chmodMock).toHaveBeenCalledWith(scriptPath, 0o755);
+  });
+
+  it('writeTempKey(win32)：跳过 chmod；POSIX 保持 chmod 0o600', () => {
+    chmodMock.mockClear();
+    const winKey = writeTempKey(
+      '-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----',
+      'win32',
+    );
+    try {
+      expect(fs.existsSync(winKey)).toBe(true);
+    } finally {
+      cleanupTemp(winKey);
+    }
+    expect(chmodMock).not.toHaveBeenCalled();
+
+    const posixKey = writeTempKey(
+      '-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----',
+      'linux',
+    );
+    try {
+      expect(chmodMock).toHaveBeenCalledWith(posixKey, 0o600);
+    } finally {
+      cleanupTemp(posixKey);
+    }
+  });
+
+  it('buildSshCommand：win32 双引号包裹 + 反斜杠转正斜杠；POSIX 原样不变', () => {
+    expect(
+      buildSshCommand('C:\\Users\\John Doe\\AppData\\Local\\Temp\\keta-git-key-abc', 'win32'),
+    ).toBe(
+      'ssh -i "C:/Users/John Doe/AppData/Local/Temp/keta-git-key-abc" ' +
+        '-o IdentitiesOnly=yes -o StrictHostKeyChecking=no',
+    );
+    expect(buildSshCommand('/tmp/keta-git-key-abc', 'darwin')).toBe(
+      'ssh -i /tmp/keta-git-key-abc -o IdentitiesOnly=yes -o StrictHostKeyChecking=no',
+    );
+  });
+
+  it('buildGitEnv(win32, https_token)：GIT_ASKPASS 指向 .cmd 且补 GIT_ASKPASS_REQUIRE=force', () => {
+    const built = buildGitEnv(
+      { repoUrl: 'https://gitee.com/x/a.git', authType: 'https_token', key: 'tok&en', permission: 'read' },
+      'win32',
+    );
+    try {
+      expect(built.env.GIT_ASKPASS.endsWith('.cmd')).toBe(true);
+      // 不补 force 时 git 在"终端可用/已缓存凭证"场景可能不回退到 askpass。
+      expect(built.env.GIT_ASKPASS_REQUIRE).toBe('force');
+      expect(built.env.GIT_TERMINAL_PROMPT).toBe('0');
+      expect(realRead(built.env.GIT_ASKPASS)).toContain('echo tok^&en');
+      expect(built.paths).toHaveLength(1);
+    } finally {
+      for (const p of built.paths) cleanupTemp(p);
+    }
+  });
+
+  it('buildGitEnv(POSIX, https_token)：不注入 GIT_ASKPASS_REQUIRE（不改现网行为）', () => {
+    const built = buildGitEnv(
+      { repoUrl: 'https://gitee.com/x/a.git', authType: 'https_token', key: 'tok', permission: 'read' },
+      'linux',
+    );
+    try {
+      expect(built.env.GIT_ASKPASS.endsWith('.cmd')).toBe(false);
+      expect(built.env.GIT_ASKPASS_REQUIRE).toBeUndefined();
+    } finally {
+      for (const p of built.paths) cleanupTemp(p);
+    }
+  });
+
+  it('buildGitEnv(win32, ssh_key)：GIT_SSH_COMMAND 的 key 路径被双引号包裹', () => {
+    const built = buildGitEnv(
+      { repoUrl: 'git@gitee.com:x/a.git', authType: 'ssh_key', key: 'FAKEKEY', permission: 'write' },
+      'win32',
+    );
+    try {
+      expect(built.env.GIT_SSH_COMMAND).toMatch(/-i "[^"]+"/);
+      expect(built.env.GIT_SSH_COMMAND).toContain('IdentitiesOnly=yes');
+      expect(built.env.GIT_SSH_COMMAND).toContain('StrictHostKeyChecking=no');
+      // ssh_key 分支不注入 askpass 相关变量
+      expect(built.env.GIT_ASKPASS).toBeUndefined();
+      expect(built.env.GIT_ASKPASS_REQUIRE).toBeUndefined();
+    } finally {
+      for (const p of built.paths) cleanupTemp(p);
+    }
+  });
+
+  it('渲染产物内联 Windows 分支依赖（escapeCmdEchoValue/buildSshCommand），否则插件内 ReferenceError', () => {
+    const content = renderGitToolsFile();
+    expect(content).toContain(escapeCmdEchoValue.toString());
+    expect(content).toContain(buildSshCommand.toString());
+    expect(content.indexOf(escapeCmdEchoValue.toString())).toBeLessThan(
+      content.indexOf(writeAskpass.toString()),
+    );
+    expect(writeAskpass.toString()).toContain('escapeCmdEchoValue(');
+    expect(buildGitEnv.toString()).toContain('buildSshCommand(');
   });
 });
 

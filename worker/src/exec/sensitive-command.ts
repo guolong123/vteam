@@ -15,6 +15,7 @@
 
 import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import { killProcessTreeImmediate } from '../runtime/process-tree';
 import * as path from 'path';
 import type {
   SensitiveCommandInput,
@@ -40,7 +41,28 @@ const MAX_RAW_CAPTURE_BYTES = 1024 * 1024;
 const SUBSTITUTE_RE = /\{\{([A-Za-z0-9_]+)\}\}/g;
 const PLACEHOLDER_RE = /\{\{[A-Za-z0-9_]+\}\}/g;
 const REDACT_MASK = '{{REDACTED}}';
-const SHELL_FILE = '/bin/sh';
+/**
+ * 敏感命令的 shell 选择（平台化）。
+ *
+ * POSIX：`/bin/sh -c <template>`（保持既有行为）。
+ * win32：`cmd.exe /d /s /c <template>`——Windows 没有 /bin/sh，原实现会 ENOENT 并把
+ * 「没有 shell」伪装成「命令执行失败」。注意语义变化：模板在 Windows 上按 cmd 语法解释
+ * （`&&`、`%VAR%` 等），POSIX 的引号/转义写法不能直接照搬，文档已注明。
+ */
+export interface SensitiveCommandShell {
+  file: string;
+  argsPrefix: string[];
+}
+
+export function resolveSensitiveShell(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): SensitiveCommandShell {
+  if (platform === 'win32') {
+    return { file: env.ComSpec ?? env.COMSPEC ?? 'cmd.exe', argsPrefix: ['/d', '/s', '/c'] };
+  }
+  return { file: '/bin/sh', argsPrefix: ['-c'] };
+}
 /** errno 白名单正则：只有匹配的码才允许进错误 message（杜绝把任意字符串拼进去）。 */
 const ERRNO_RE = /^[A-Z][A-Z0-9_]*$/;
 /** 杀进程组后的兜底宽限：'close' 迟迟不来时最多再等这么久就返回已采集的输出。 */
@@ -208,24 +230,17 @@ function normalizeTimeout(timeoutMs: unknown): number {
   return Math.min(timeoutMs, MAX_COMMAND_TIMEOUT_MS);
 }
 
-/** 对进程组发 SIGKILL（detached 子进程自成组，pgid = pid）；组已消失则静默忽略。 */
+/**
+ * 立即强杀命令的整棵进程树（超时/取消路径）。
+ *
+ * POSIX：`kill(-pid, SIGKILL)` 进程组；win32：`taskkill /T /F`
+ * （负 pid 在 Windows 实测 ESRCH，原实现会静默失败、把超时命令留成孤儿）。
+ * 异步执行但调用方只依赖 KILL_GRACE_MS 的兜底计时器，故 fire-and-forget。
+ */
 function killProcessGroup(child: ChildProcess): void {
-  const pid = child.pid;
-  if (pid === undefined) {
-    return;
-  }
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ESRCH') {
-      return;
-    }
-    try {
-      child.kill('SIGKILL');
-    } catch {
-      // 进程已退出：忽略
-    }
-  }
+  void killProcessTreeImmediate(child).catch(() => {
+    // 杀树失败不影响结果返回（上方 KILL_GRACE_MS 计时器保证一定能 settle）
+  });
 }
 
 /** 截断到 max 字节并回退到完整 UTF-8 字符边界（避免切断多字节序列）。 */
@@ -320,11 +335,14 @@ export async function runSensitiveCommand(
 
   let child: ChildProcess;
   try {
-    child = spawn(SHELL_FILE, ['-c', rendered], {
+    const shell = resolveSensitiveShell();
+    child = spawn(shell.file, [...shell.argsPrefix, rendered], {
       cwd,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      // Windows：无桌面会话/服务下不要弹控制台窗口（POSIX 无此选项语义，不下发）
+      ...(process.platform === 'win32' ? { windowsHide: true } : {}),
     });
   } catch {
     return makeOutput({

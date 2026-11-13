@@ -348,27 +348,120 @@ export function normalizeSshKey(key: string): string {
   return `-----BEGIN RSA PRIVATE KEY-----\n${wrapped}\n-----END RSA PRIVATE KEY-----\n`;
 }
 
-/** 写临时 SSH 私钥文件（随机路径 + 0o600），返回路径；调用方 finally cleanupTemp。 */
-export function writeTempKey(key: string): string {
+/**
+ * 写临时 SSH 私钥文件（随机路径 + POSIX 0o600），返回路径；调用方 finally cleanupTemp。
+ *
+ * 平台差异（P1-3/P2-1）：POSIX 继续保持 `mode: 0o600` + `chmodSync(0o600)` 双保险；
+ * **win32 跳过 chmod**——Windows 上 `fs.chmod` 只影响只读位、其余位忽略且不报错，
+ * "600 保护"退化为继承 ACL（`%TEMP%` 默认是「用户 + Administrators + SYSTEM」）。
+ * 依赖 chmod 语义的代码在 Windows 上会给人"已加保护"的错觉，故显式跳过并把口径
+ * 交给部署 ACL 文档（安全基线见 notes-runtime-port P2-1）。[需 Windows 真机复验] ACL。
+ */
+export function writeTempKey(key: string, platform: NodeJS.Platform = process.platform): string {
   // ssh_key 落盘前格式归一：OPENSSH 容器格式 ssh-rsa → PKCS#1 PEM（兼容 OpenSSL 3.x，
   // 见 normalizeSshKey）。转换失败抛错（buildGitEnv/runGit 调用方错误链路已处理，不静默降级）。
   const normalized = normalizeSshKey(key);
   const keyPath = path.join(os.tmpdir(), `keta-git-key-${crypto.randomBytes(8).toString('hex')}`);
   fs.writeFileSync(keyPath, normalized, { mode: 0o600 });
-  fs.chmodSync(keyPath, 0o600);
+  if (platform !== 'win32') {
+    fs.chmodSync(keyPath, 0o600);
+  }
   return keyPath;
 }
 
 /**
- * 写临时 GIT_ASKPASS 脚本（随机路径 + 0o600 + chmod 0o755）。
- * token 单引号转义：`'` → `'\''`（防单引号破坏 shell 脚本/注入）。
+ * 转义要经 `echo` 打印到 stdout 的文本（**仅 Windows 批处理**，纯函数、可单测）。
+ *
+ * 为什么需要：`writeAskpass` 的 Windows 版是 `.cmd` 批处理，token 直接拼进 `echo` 行时，
+ * cmd 的元字符会改变语义而非原样输出：
+ * - `%` → 变量展开（`%PATH%` 变成路径，且未闭合的 `%` 会被丢掉）；
+ * - `& | < >` → 命令分隔/重定向（token 含 `&` 会截断密码，含 `>` 会写出文件）；
+ * - `^` → 转义字符本身（会把后一个字符吃掉）；
+ * - `"` → 切换引号态（后续元字符处理规则随之改变）。
+ * 转义口径（`^` 前缀 + `%` 双写）是 cmd 解析器的标准做法；`!` 只在不带 `/V:ON` 的
+ * 延迟展开下才有特殊含义，这里不启用延迟展开故不处理。
  */
-export function writeAskpass(token: string): string {
-  const scriptPath = path.join(os.tmpdir(), `keta-git-askpass-${crypto.randomBytes(8).toString('hex')}`);
+export function escapeCmdEchoValue(value: string): string {
+  const text = String(value ?? '');
+  let out = '';
+  for (const ch of text) {
+    if (ch === '%') {
+      // 批处理里 `%%` 解析为一个字面 `%`（单写会被当变量展开起点）。
+      out += '%%';
+      continue;
+    }
+    if (ch === '^') {
+      out += '^^';
+      continue;
+    }
+    if (ch === '&' || ch === '|' || ch === '<' || ch === '>' || ch === '"') {
+      out += `^${ch}`;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * 写临时 GIT_ASKPASS 脚本（随机路径），返回脚本路径；调用方 finally cleanupTemp。
+ *
+ * 平台差异（P1-3）：Git for Windows 对 `GIT_ASKPASS` 的目标**直接 CreateProcess**
+ * （不经 shell、不认 shebang、不认"无扩展名"）⇒ POSIX 那个 `#!/bin/sh` 文本文件在
+ * Windows 上启动失败（git 报 `unable to read askpass response`），所有 https_token
+ * 仓库的 clone/pull/push 全失败。故 win32 分支写 **`.cmd`** 批处理：
+ * ```
+ * @echo off
+ * echo <转义后的 token>
+ * ```
+ * - 扩展名必须显式 `.cmd`（CreateProcess 不会按 PATHEXT 补）；
+ * - `@echo off` 不可省：否则 cmd 会把命令行本身（含明文 token）先回显到 stdout，
+ *   git 取到的第一个非空行就成了 `echo xxx` 这句话，密码错误；
+ * - 行尾用 **CRLF**（cmd 对 LF-only 的批处理在部分版本上解析异常）；
+ * - token 经 `escapeCmdEchoValue` 转义（`%`/`^`/`&`/`|`/`<`/`>`/`"`），否则截断或执行意外命令；
+ * - token 里的换行会破坏批处理（凭证 token 不含换行，这里不做额外处理）。
+ *
+ * POSIX 分支保持原样（`#!/bin/sh` + 单引号转义 + 0o600 写 + 0o755 chmod），**不改现网行为**。
+ * [需 Windows 真机复验] Git for Windows 是否接受 `.cmd` 作为 askpass（notes V5）；
+ * 若不接受，退路是 `GIT_ASKPASS` 指向 node.exe + 一个读 env 的 .js 脚本。
+ */
+export function writeAskpass(token: string, platform: NodeJS.Platform = process.platform): string {
+  const suffix = platform === 'win32' ? '.cmd' : '';
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `keta-git-askpass-${crypto.randomBytes(8).toString('hex')}${suffix}`,
+  );
+  if (platform === 'win32') {
+    // CRLF：cmd 批处理的标准行尾（LF-only 在部分 Windows 版本上会解析失败）。
+    const script = `@echo off\r\necho ${escapeCmdEchoValue(token)}\r\n`;
+    fs.writeFileSync(scriptPath, script, { mode: 0o600 });
+    // Windows 上 chmod 无语义（只影响只读位），不调用（见 writeTempKey 注释）。
+    return scriptPath;
+  }
   const escaped = String(token).replace(/'/g, "'\\''");
   fs.writeFileSync(scriptPath, `#!/bin/sh\necho '${escaped}'\n`, { mode: 0o600 });
   fs.chmodSync(scriptPath, 0o755);
   return scriptPath;
+}
+
+/**
+ * 构造 `GIT_SSH_COMMAND`（纯函数、可单测）。
+ *
+ * 平台差异（P1-4）：Windows 下临时 key 路径形如
+ * `C:\Users\John Doe\AppData\Local\Temp\keta-git-key-xxxx`。git 执行 `core.sshCommand` /
+ * `GIT_SSH_COMMAND` 时会经过 Git for Windows 自带的 sh 解析：
+ * - 未加引号时路径里的空格把参数切断（用户名含空格必踩），`\U`/`\A`/`\L` 等被 sh 当转义序列消费；
+ * - 故 win32 分支**整体加双引号 + 反斜杠转正斜杠**（`C:/Users/...`，sh 不会把 `/` 当转义）。
+ * POSIX 分支保持原样（不加引号、不改分隔符），**不改现网行为**。
+ * [需 Windows 真机复验] 三种写法（`C:\...` / `C:/...` / `"C:/..."`）在目标 Git 版本上的实际效果。
+ */
+export function buildSshCommand(
+  keyPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const shown =
+    platform === 'win32' ? `"${String(keyPath).replace(/\\/g, '/')}"` : String(keyPath);
+  return `ssh -i ${shown} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no`;
 }
 
 /** 删除临时文件（幂等：不存在静默忽略）。 */
@@ -379,20 +472,29 @@ export function cleanupTemp(p: string): void {
 /**
  * 按凭证 authType 构造 git 子进程注入 env + 需清理的临时文件路径。
  * ssh_key → GIT_SSH_COMMAND 指定临时 key；https_token → GIT_ASKPASS 临时脚本。
+ *
+ * win32 额外差异：
+ * - askpass 指向 `.cmd` 脚本，并补 `GIT_ASKPASS_REQUIRE=force`——否则 git 在
+ *   "终端可用/已缓存凭证"时可能**不回退到 askpass**（P1-3 的隐性失败面）；
+ * - SSH key 路径由 buildSshCommand 加引号 + 正斜杠化（P1-4）。
  */
-export function buildGitEnv(entry: GitCredentialEntry): { env: Record<string, string>; paths: string[] } {
+export function buildGitEnv(
+  entry: GitCredentialEntry,
+  platform: NodeJS.Platform = process.platform,
+): { env: Record<string, string>; paths: string[] } {
   if (entry.authType === 'ssh_key') {
-    const keyPath = writeTempKey(entry.key);
+    const keyPath = writeTempKey(entry.key, platform);
     return {
-      env: { GIT_SSH_COMMAND: `ssh -i ${keyPath} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no` },
+      env: { GIT_SSH_COMMAND: buildSshCommand(keyPath, platform) },
       paths: [keyPath],
     };
   }
-  const scriptPath = writeAskpass(entry.key);
-  return {
-    env: { GIT_ASKPASS: scriptPath, GIT_TERMINAL_PROMPT: '0' },
-    paths: [scriptPath],
-  };
+  const scriptPath = writeAskpass(entry.key, platform);
+  const env: Record<string, string> = { GIT_ASKPASS: scriptPath, GIT_TERMINAL_PROMPT: '0' };
+  if (platform === 'win32') {
+    env.GIT_ASKPASS_REQUIRE = 'force';
+  }
+  return { env, paths: [scriptPath] };
 }
 
 /** spawn git（合并注入 env），非 0 退出抛错（stderr/stdout，不含 token 明文）。 */
@@ -796,8 +898,12 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
     tryLoadCredential.toString(),
     normalizeSshKey.toString(),
     writeTempKey.toString(),
+    // escapeCmdEchoValue 必须排在 writeAskpass 之前（后者 win32 分支调用它；
+    // 函数声明虽提升，但顺序一致更利于读者确认「渲染产物自包含」）。
+    escapeCmdEchoValue.toString(),
     writeAskpass.toString(),
     cleanupTemp.toString(),
+    buildSshCommand.toString(),
     buildGitEnv.toString(),
     runGit.toString(),
     cwdOrigin.toString(),

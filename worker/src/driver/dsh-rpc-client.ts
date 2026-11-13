@@ -119,6 +119,14 @@ export class DshRpcClient {
   private readonly turnErrors = new Map<string, string>();
   /** stderr 尾部（诊断用；官方客户端同样保留 stderr tail 给握手失败诊断）。 */
   private stderrTail: string[] = [];
+  /**
+   * 子进程启动失败的错误（spawn `'error'` 事件，如 ENOENT/EACCES/`.cmd` 的 EINVAL）。
+   *
+   * 为什么单独存：spawn 失败后 `request()` 必须**立即**以这个错误失败，而不是写进
+   * 已死的 stdin 后空等到超时（见 start() 里 'error' 监听的注释）。
+   * 每次 start() 重置；成功后保持 null。
+   */
+  private spawnError: DriverRequestError | null = null;
   private closed = false;
 
   constructor(options: DshRpcClientOptions = {}) {
@@ -145,6 +153,17 @@ export class DshRpcClient {
   /** stderr 尾部（握手失败时随错误抛出，便于定位）。 */
   get recentStderr(): string[] {
     return [...this.stderrTail];
+  }
+
+  /**
+   * 读当前的 spawn 失败错误（null = 没有发生过 spawn 失败）。
+   *
+   * 为什么用方法读而不是直接读字段：`start()` 里刚执行过 `this.spawnError = null`，
+   * TS 的控制流分析会把该字段在后续代码里窄化成 `null`（它看不到 `'error'` 回调里的赋值），
+   * 直接访问 `this.spawnError?.message` 会被推断成 `never`（编译报错 TS2339）。
+   */
+  private currentSpawnError(): DriverRequestError | null {
+    return this.spawnError;
   }
 
   /** 注册事件回调（幂等覆盖）。 */
@@ -184,6 +203,7 @@ export class DshRpcClient {
     });
     this.process = child;
     this.closed = false;
+    this.spawnError = null;
 
     child.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf8');
@@ -191,6 +211,43 @@ export class DshRpcClient {
         if (line.trim() === '') continue;
         this.stderrTail.push(line);
         if (this.stderrTail.length > 50) this.stderrTail.shift();
+      }
+    });
+
+    /**
+     * spawn 失败必须有人听 `'error'`（P0-3）。
+     *
+     * 为什么这条监听不可省：
+     * ① `ChildProcess` 的 `'error'` 没有监听者时，Node 按**未捕获异常**处理 ⇒
+     *    `uncaughtException` ⇒ worker 进程在任意时刻崩溃（不是"启动失败退出"，是崩）。
+     *    典型的触发场景就是 Windows 上 `dsh` 只有 `.cmd` shim（`spawn('dsh')` → ENOENT）；
+     *    即便命令解析修好，EACCES / 路径不存在仍会走这里。
+     * ② spawn 失败时**只发 `'close'` 不发 `'exit'`**（Node 18–24 实测：ENOENT 时
+     *    exitCode=-2、`'exit'` 不触发）⇒ 下面挂在 `'exit'` 上的兜底 reject 根本不执行，
+     *    在途的 `initialize` 会一直等到 30s 超时，且错误信息里拿不到根因。
+     * 因此这里必须同时做三件事：记 stderr/错误（供握手失败诊断）、把 pending 全部以
+     * 明确错误 reject（initialize 立即失败而非超时）、把 spawnError 钉住让后续
+     * `request()` 快速失败（不再往死进程的 stdin 写帧）。
+     */
+    child.once('error', (error: Error) => {
+      const err = error as NodeJS.ErrnoException;
+      const detail =
+        err.code === undefined ? err.message : `${err.message}（code=${err.code}）`;
+      this.spawnError = new DriverRequestError(
+        `[dsh-rpc] 子进程启动失败（bin=${bin}）：${detail}` +
+          (process.platform === 'win32'
+            ? '；Windows 上 npm 全局安装只产出 .cmd shim（CreateProcess 不能直接执行 .cmd），' +
+              '请把 DSH_BIN 指向 node.exe 的绝对路径（参数带 dsh 的 lib/bin.js），或经 cmd.exe /c 启动'
+            : ''),
+      );
+      this.stderrTail.push(this.spawnError.message);
+      if (this.stderrTail.length > 50) this.stderrTail.shift();
+      // 通知上层：直接落日志（错误同时会随 initialize 的 reject 抛给驱动层）
+      this.logger.error(this.spawnError.message);
+      for (const [id, entry] of this.pending) {
+        clearTimeout(entry.timer);
+        this.pending.delete(id);
+        entry.reject(this.spawnError);
       }
     });
 
@@ -206,14 +263,19 @@ export class DshRpcClient {
       }
     });
 
-    if (child.stdout === null) {
-      throw new DriverRequestError('[dsh-rpc] 子进程 stdout 不可用（spawn 失败？）');
-    }
-    const rl = createInterface({ input: child.stdout });
-    rl.on('line', (line) => this.handleLine(line));
-
-    // 握手：官方客户端把 initialize 当就绪边界，失败带上 stderr tail
+    // 握手：官方客户端把 initialize 当就绪边界，失败带上 stderr tail。
+    // stdout 检查放进 try：spawn 失败时它是二道闸，错误要经同一条 close + 诊断链路抛出
+    // （而不是裸抛一个"stdout 不可用"、把真正的 spawn 错误丢掉）。
     try {
+      if (child.stdout === null) {
+        // 用取值方法而非直接读字段：start() 里刚把 spawnError 赋成 null，TS 会把该字段
+        // 控制流窄化成 null（回调里写回的值它看不见），直接读会让 ?.message 变成 never。
+        throw new DriverRequestError(
+          this.currentSpawnError()?.message ?? '[dsh-rpc] 子进程 stdout 不可用（spawn 失败？）',
+        );
+      }
+      const rl = createInterface({ input: child.stdout });
+      rl.on('line', (line) => this.handleLine(line));
       await this.request('initialize', params, this.options.initializeTimeoutMs);
       this.initialized = true;
     } catch (err) {
@@ -237,7 +299,9 @@ export class DshRpcClient {
       entry.reject(new DriverRequestError('[dsh-rpc] 客户端已关闭'));
     }
     this.pending.clear();
-    if (child === null || child.exitCode !== null) return;
+    // spawn 失败过：子进程从未真正起来（无 pid、无句柄），再走 EOF→SIGTERM→SIGKILL 的
+    // 阶梯只会白等 1s+3s+1s；直接返回（错误已经在上层抛出）。
+    if (child === null || child.exitCode !== null || this.currentSpawnError() !== null) return;
 
     try {
       child.stdin?.end();
@@ -279,6 +343,11 @@ export class DshRpcClient {
     params?: Record<string, unknown>,
     timeoutMs = this.options.requestTimeoutMs,
   ): Promise<unknown> {
+    // spawn 已失败：立即以启动错误失败，不再往死进程的 stdin 写帧、也不空等超时。
+    const spawnError = this.currentSpawnError();
+    if (spawnError !== null) {
+      throw spawnError;
+    }
     if (this.process === null || this.closed) {
       throw new DriverRequestError(`[dsh-rpc] 运行时未启动，无法发送 ${method}`);
     }
