@@ -86,13 +86,21 @@ export function materializeProjectConfig(
     fs.mkdirSync(targetDir, { recursive: true });
     const srcConfig = path.join(workDir, 'opencode.json');
     const dstConfig = path.join(targetDir, 'opencode.json');
-    if (fs.existsSync(srcConfig) && !fs.existsSync(dstConfig)) {
-      fs.copyFileSync(srcConfig, dstConfig);
+    if (fs.existsSync(srcConfig)) {
+      // 内容不同就**刷新**（不能"存在即跳过"）：真机踩过——WORKER_MCP_URL 修好后
+      // work/opencode.json 已更新，但会话目录里早先物化的副本仍是旧的集群内 URL
+      // （http://server:3000），serve 按会话目录读配置 → MCP 一直 ENOTFOUND、模型轮次挂住。
+      const srcText = fs.readFileSync(srcConfig, 'utf8');
+      const dstText = fs.existsSync(dstConfig) ? fs.readFileSync(dstConfig, 'utf8') : null;
+      if (dstText !== srcText) {
+        fs.writeFileSync(dstConfig, srcText, 'utf8');
+      }
     }
     const srcDot = path.join(workDir, '.opencode');
     const dstDot = path.join(targetDir, '.opencode');
-    if (fs.existsSync(srcDot) && !fs.existsSync(dstDot)) {
-      fs.cpSync(srcDot, dstDot, { recursive: true });
+    if (fs.existsSync(srcDot)) {
+      // force 只覆盖同名文件、不删除目标目录里的其它文件（agent 在任务目录写的 plans 等保留）
+      fs.cpSync(srcDot, dstDot, { recursive: true, force: true });
     }
   } catch (err) {
     logger?.warn(

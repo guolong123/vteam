@@ -73,12 +73,25 @@ describe('materializeProjectConfig', () => {
     expect(fs.existsSync(path.join(target, 'opencode.json'))).toBe(true);
     expect(fs.existsSync(path.join(target, '.opencode', 'plugins', 'git.ts'))).toBe(true);
 
-    // 幂等：再次调用不覆盖（改成不同内容后验证保留）
-    fs.writeFileSync(path.join(target, 'opencode.json'), '{"agents":{"local":{}}}', 'utf8');
+    // 幂等：内容一致时不重复写（行为等价；这里只断言结果仍为源内容）
     materializeProjectConfig(workDir, target, undefined, 'win32');
     expect(JSON.parse(fs.readFileSync(path.join(target, 'opencode.json'), 'utf8'))).toEqual({
-      agents: { local: {} },
+      agents: { 'vteam-x': {} },
     });
+  });
+
+  it('源配置变化后刷新目标目录（升级 MCP URL 场景）', () => {
+    const target = path.join(workDir, 'teams', 'tm_2');
+    materializeProjectConfig(workDir, target, undefined, 'win32');
+    expect(fs.readFileSync(path.join(target, 'opencode.json'), 'utf8')).toContain('vteam-x');
+
+    fs.writeFileSync(
+      path.join(workDir, 'opencode.json'),
+      JSON.stringify({ agents: { 'vteam-y': {} } }),
+      'utf8',
+    );
+    materializeProjectConfig(workDir, target, undefined, 'win32');
+    expect(fs.readFileSync(path.join(target, 'opencode.json'), 'utf8')).toContain('vteam-y');
   });
 
   it('目标 == WORK_DIR 时 no-op（不自我拷贝）', () => {
