@@ -1755,6 +1755,10 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       ? createDshWorkerDriver(config, systemHandoff)
       : createOpencodeDriver({
           mode: driverMode,
+          // Windows 兼容垫片需要知道本地工作区根：控制面下发的是 POSIX `/data/vteam-worker/...`，
+          // 驱动用 workDir 做前缀映射（并把 opencode.json/.opencode 物化到会话子目录）。
+          // 不传 directory 时 defaultDirectory='' ⇒ 垫片无法映射（真机实测：目录切换仍发 POSIX 路径）。
+          directory: config.workDir,
           // B1：口令取 serve 的**实际**鉴权口令（配置密码或 v2 自动生成的密码），且**每次请求
           // 时现取**——v2 自动生成的密码要等 serve 起来、从 stdout 捕获后才知道；把它固化在
           // 构造那一刻 = 无口令 ⇒ 驱动每个请求都 401，而 worker 仍注册成功、看起来健康。

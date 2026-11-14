@@ -977,6 +977,11 @@ export class V2Driver implements OpenCodeDriver {
   async listAgents(directory?: string): Promise<DriverAgentInfo[]> {
     // Windows 兼容垫片：控制面按 POSIX `/data/vteam-worker/...` 查 agent 列表时映射到本地 WORK_DIR。
     const localDirectory = directory ? toLocalWorkspacePath(directory, this.defaultDirectory) : '';
+    // 只读接口也物化一份项目配置：控制面的 agent 列表/选择器可能在会话创建前就来查，
+    // 目标目录不存在时 serve 返回 404（真机实测 /agents?directory=/data/... → HTTP 502）。
+    if (localDirectory) {
+      materializeProjectConfig(this.defaultDirectory, localDirectory, this.logger);
+    }
     const path = buildV2AgentListPath(localDirectory);
     const res = await this.request(path);
     const payload = await this.readJson<{ data?: unknown }>(res, path);
