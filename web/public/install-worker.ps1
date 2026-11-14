@@ -531,7 +531,9 @@ function New-DirectoryLayout {
             "  常见原因：① 没有权限（ProgramData 需要管理员；普通用户请用 -NoService -NoFirewall 或 -Dir 指向用户目录）；" +
             "② 目录被安全软件锁定。")
     }
-    Write-Detail ("目录布局就绪：{0}\{node,npm-global,app,work,data,logs,bin,run}" -f $InstallDir)
+    # 注意：这里**不能**用 -f 拼接——格式串里的 {node,...} 会被 .NET 当成格式项解析，
+    # 直接抛 FormatException（"输入字符串的格式不正确"）。Windows 真机实测踩到，改用变量插值。
+    Write-Detail ("目录布局就绪：${InstallDir}\{node,npm-global,app,work,data,logs,bin,run}")
 }
 
 # ==========================================================================
@@ -889,11 +891,31 @@ function Test-GitAvailability {
 # ==========================================================================
 function Format-AdvertiseHost {
     param([Parameter(Mandatory)][string]$Value)
+
+    # 规范成 http://host（可只传 IP）。校验放在这里：占位符/空白/非法字符越早报错越好，
+    # 否则会带着一个坏地址一路装到注册/派发阶段才以「fetch failed」暴露（排障成本极高）。
+    #   - 允许 IPv4 / 主机名 / 方括号 IPv6；
+    #   - 拒绝 <...> 占位符（文档里常见 '<Windows 局域网 IP>' 被原样粘贴）、空白、路径/查询串；
+    #   - 不带端口的写法规整为 http://<host>。
     $v = $Value.Trim().Trim('"')
     if ($v -match '://') {
-        return $v.TrimEnd('/')
+        $v = $v.TrimEnd('/')
+        if ($v -notmatch '^(?i)https?://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9\.\-]*)(:[0-9]{1,5})?$') {
+            throw ("-AdvertiseHost 不是合法的控制面可达地址（当前：$Value）。`n" +
+                "  正确写法：只填局域网 IP（如 192.168.1.50），脚本会补 http://；或填 http://192.168.1.50。`n" +
+                "  不要保留文档占位符（<...>）、不要带路径/查询串。")
+        }
+        return $v
     }
-    return ('http://' + $v.TrimEnd('/'))
+    if ($v -match '[<>\s/?#]') {
+        throw ("-AdvertiseHost 含占位符/空白/非法字符（当前：$Value）。`n" +
+            "  请填写控制面能访问到的**本机**局域网 IP，例如 192.168.1.50（只填 IP，脚本会补 http://）。`n" +
+            "  不确定时可以不传 -AdvertiseHost：安装器会枚举网卡并在多候选时交互询问（排除虚拟网卡）。")
+    }
+    if ($v -notmatch '^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9\.\-]*)$') {
+        throw ("-AdvertiseHost 不是合法的 IP/主机名（当前：$Value）。请填如 192.168.1.50 的局域网 IP。")
+    }
+    return ('http://' + $v)
 }
 
 function Get-CandidateAdvertiseHosts {
@@ -2238,6 +2260,15 @@ try {
 } catch {
     Write-Host ''
     Write-Fail ([string]$_.Exception.Message)
+    # 真机反馈时最有用的就是出错行：把 ScriptStackTrace 的前几行打出来（不打印任何变量值/密钥）。
+    $errorStack = [string]$_.ScriptStackTrace
+    if (-not [string]::IsNullOrWhiteSpace($errorStack)) {
+        Write-Host ''
+        Write-Host '  错误位置（反馈问题时请附上这几行）：'
+        foreach ($frame in ($errorStack -split "`n" | Select-Object -First 6)) {
+            if (-not [string]::IsNullOrWhiteSpace($frame)) { Write-Host ('    ' + $frame.Trim()) }
+        }
+    }
     Write-Host ''
     Write-Host '  排障提示：'
     Write-Host '    - 保留完整输出与 <安装目录>\logs（WinSW 模式）后重试；'

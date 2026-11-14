@@ -429,6 +429,19 @@ cd worker && npx tsc --noEmit && npm test     # 53 suites / 1509 tests 通过（
 cd web && npx tsc --noEmit && npx eslint "app/(main)/workers/install/page.tsx" "e2e/pages.spec.ts"   # 均通过
 ```
 
+### 9.3.1 真机首跑发现并修复的问题（2026-11-14）
+
+Windows 11 + Windows PowerShell 5.1 首次真机执行安装器，在「安装目录」打印后立即失败：
+`ERROR: 在设置字符串格式时出错：输入字符串的格式不正确。`
+
+- **根因**：`New-DirectoryLayout` 里 `Write-Detail ("目录布局就绪：{0}\{node,npm-global,...}" -f $InstallDir)`
+  的字面 `{node,...}` 被 .NET 当成格式项解析 → `FormatException`。已改为变量插值（不再用 `-f`）。
+- **同时加固**：① `-AdvertiseHost` 增加占位符/空白/非法字符校验（真机命令里把文档占位符
+  `<Windows 局域网 IP>` 原样粘进来，旧实现会带着坏地址一路装到派发阶段才报 fetch failed）；
+  ② 顶层 catch 打印 `ScriptStackTrace` 前几行（真机反馈时能直接定位行号，不再只有一句 message）。
+- **教训**：PowerShell 的 `-f` 格式串里任何字面 `{`/`}` 都必须写成 `{{`/`}}`；本仓库脚本已全量扫描
+  （`-f` 左侧字符串的格式项校验），当前无其它同类问题。真机复跑前需重新下载 `install-worker.ps1`。
+
 ### 9.4 Windows 真机验收清单（M1，按优先级）
 
 1. 全新 Win10/11 + 管理员 PowerShell：跑安装页生成的命令 → 安装器完成（Node/opencode/发布包/.env/服务/防火墙/自检）。
