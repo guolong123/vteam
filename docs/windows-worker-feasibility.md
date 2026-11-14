@@ -488,6 +488,32 @@ Agent not found: "vteam-project_manager"
   server 用它拼实例/任务目录（或直接下发**相对路径**），再删除本垫片。
   同时 server 侧 `work-dir.util.ts`/`teams.service.ts` 需要平台化，避免继续硬编码 POSIX 路径。
 
+**第四次真机验证：端到端跑通（2026-11-14，同一台 Windows 11）**
+
+在修掉「会话目录物化配置过期」（物化只在缺失时拷贝，导致 WORKER_MCP_URL 修复后
+`<work>/teams/tm_xxx/opencode.json` 仍是旧地址 `http://server:3000`）并补上安装器
+`WORKER_MCP_URL` 缺省推导之后，端到端链路成功：
+
+- worker 侧：`[v2-driver] sendMessage -> ... model=opencode/iceman-free agent=vteam-project_manager`
+  + `[prompt-await] 判定完成（证据=event）`；MCP 连接成功（`mcp connected server=vteam tools=35`）。
+- server 侧：`session s_0000000008 status → idle`。
+- 群聊：`m_0000000090 | agent a_project_manager | Windows worker 已就绪`
+  （即 Windows worker 通过 MCP `vteam_group_post` 把回复发到了团队群聊）。
+
+**真机跑通后的运维注意（重要）**
+
+1. **模型端点必须从 Windows 可达**：本环境控制面配置的 `qwen/qwen3.8-27b` 指向内网网关
+   `http://192.168.10.10:18020/v1`（Mac 侧经 VPN 可达，Windows 不可达）⇒ 该模型在 Windows
+   worker 上会 `AI.Error.Transport: ConnectionRefused`。跑通用的是公开可达的
+   `opencode/iceman-free`。生产上要么给 Windows 主机到模型网关的网络（VPN/路由），
+   要么把团队/成员模型指向 Windows 可达的端点。
+2. **模型解析优先级**：平台成员默认模型（`members.default_model_id`）> 团队默认模型
+   （`teams.default_model_id`）> 任务覆盖 > Agent 默认。排障时先查这一条链——
+   只改 Agent/团队模型可能被成员级默认模型覆盖（本轮踩过）。
+3. **升级/重装 worker 后重置一次会话**：平台侧旧会话的 `instanceRef`/模型上下文会残留；
+   worker 已做「404 重建新会话」，但模型仍由平台侧会话上下文决定。
+   升级后建议调 `POST /teams/:id/members/:memberId/reset-session` 再派发。
+
 ### 9.4 Windows 真机验收清单（M1，按优先级）
 
 1. 全新 Win10/11 + 管理员 PowerShell：跑安装页生成的命令 → 安装器完成（Node/opencode/发布包/.env/服务/防火墙/自检）。
