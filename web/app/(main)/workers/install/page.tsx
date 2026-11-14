@@ -335,12 +335,15 @@ export default function WorkerInstallPage() {
     });
   }, [pageOrigin]);
 
-  /* MCP 地址默认值 = 当前控制面地址 + /api/v1/platform-mcp（内置 MCP 入口；外部/集群外场景可手动改） */
+  /* MCP 地址默认值 = **控制面 server 地址** + /api/v1/platform-mcp（内置 MCP 入口；可手动改）。
+     为什么不用 pageOrigin（web 地址）：worker 的 SERVER_URL 指向 server，MCP 也应由 worker 直连
+     server；web origin 只在控制面本机/反代场景可达（远程 Windows 上 127.0.0.1 是它自己）。
+     注意：serverUrl 由 pageOrigin 推导（13001→13000），所以本 effect 依赖 serverUrl。 */
   useEffect(() => {
-    if (pageOrigin) {
-      setMcpUrl((cur) => cur || `${pageOrigin}/api/v1/platform-mcp`);
+    if (serverUrl) {
+      setMcpUrl((cur) => cur || `${serverUrl}/api/v1/platform-mcp`);
     }
-  }, [pageOrigin]);
+  }, [serverUrl]);
 
   /* workerId 初始随机生成：SSR 首帧空串 → 挂载后填充（对齐 pageOrigin 模式避免 hydration mismatch，
      替代原型示例值 worker-05，避免固定 id 多 worker 冲突） */
@@ -372,6 +375,21 @@ export default function WorkerInstallPage() {
      并发上限注入 WORKER_MAX_INSTANCES（worker 侧真实读取的变量，随注册上报 capabilities.maxInstances；
      旧的 CONCURRENCY 环境变量 worker 根本不读）；镜像引用取自「worker 镜像」字段
      （缺省 guojongg/vteam-worker:latest，可改内网仓库）。 */
+  /**
+   * 页面是否用回环地址打开（127.0.0.1 / localhost / [::1]）。
+   * 是的话生成的命令里所有地址都是回环地址 ⇒ 只适用于「控制面本机装 worker」；
+   * 给远程 Windows 安装必须换成控制面局域网 IP（否则 Windows 会把 127.0.0.1 当成它自己）。
+   */
+  const isLoopbackOrigin = (() => {
+    if (!pageOrigin) return false;
+    try {
+      const host = new URL(pageOrigin).hostname;
+      return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+    } catch {
+      return false;
+    }
+  })();
+
   const isDsh = engine === "dsh";
   /** dsh 只需要声明引擎本身；模型路由/凭据由控制面「模型管理」下发，不在这里拼。 */
   const dshCurlArgs = "";
@@ -843,9 +861,15 @@ export default function WorkerInstallPage() {
                   }}
                 >
                   <span>
-                    ⚠️ Windows 安装脚本为**预览**：未在 Windows 真机验证（运行时 M0 已实测，安装器/
-                    服务化待真机验收）；首版仅 opencode 引擎，自更新默认关闭（升级=重跑本命令）。
+                    ⚠️ Windows 安装器为预览版：已在 Windows 11 真机跑通「安装 → 注册 → 派发 → MCP 回复」
+                    全链路（2026-11-14）；首版仅 opencode 引擎，自更新默认关闭（升级=重跑本命令）。
                   </span>
+                  {isLoopbackOrigin && (
+                    <span style={{ fontWeight: 600 }}>
+                      ⚠️ 当前页面用回环地址（127.0.0.1/localhost）打开：生成的命令只适用于「控制面本机」。
+                      给远程 Windows 安装请把命令里的 127.0.0.1 换成控制面局域网 IP（或从局域网地址打开本页）。
+                    </span>
+                  )}
                   <span>
                     需管理员 PowerShell；安装目录缺省 C:\ProgramData\vteam-worker（可用 -Dir 改）。
                     卸载：<code>{"C:\\ProgramData\\vteam-worker\\app\\scripts\\windows\\uninstall-worker.ps1 -InstallDir C:\\ProgramData\\vteam-worker"}</code>
