@@ -23,6 +23,7 @@
  * 经 Session.instanceRef 反查映射平台 Session 主键（F2 MINOR 防御）。
  */
 
+import { toLocalWorkspacePath } from '../runtime/workspace-path-shim';
 import { promises as fsp } from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -1377,7 +1378,9 @@ export class ExecServer {
       sendJson(res, 401, { error: 'X-Worker-Token 无效' });
       return;
     }
-    const filePath = url.searchParams.get('path') ?? '';
+    const filePathRaw = (url.searchParams.get('path') ?? '').trim();
+    // Windows 兼容垫片：控制面用 POSIX `/data/vteam-worker/...` 拉文件时映射到本地 WORK_DIR
+    const filePath = toLocalWorkspacePath(filePathRaw, this.workDir);
     if (!filePath.trim()) {
       this.logger.warn(`[exec] file fetch -> 缺少 path 参数 (HTTP 400)`);
       sendJson(res, 400, { error: '缺少必填 query 参数 path' });
@@ -1439,7 +1442,9 @@ export class ExecServer {
       sendJson(res, 401, { error: 'X-Worker-Token 无效' });
       return;
     }
-    const directory = (url.searchParams.get('directory') ?? '').trim() || this.workDir;
+    const directory =
+      toLocalWorkspacePath((url.searchParams.get('directory') ?? '').trim(), this.workDir) ||
+      this.workDir;
     if (!directory) {
       this.logger.warn('[exec] agents list -> 缺少 directory 且未配置 workDir (HTTP 400)');
       sendJson(res, 400, { error: '缺少 query 参数 directory（且 worker 未配置 workDir 回落）' });
@@ -1486,7 +1491,8 @@ export class ExecServer {
       sendJson(res, 400, { error: '缺少必填 query 参数 sessionId' });
       return;
     }
-    const directory = (url.searchParams.get('directory') ?? '').trim() || undefined;
+    const directory =
+      toLocalWorkspacePath((url.searchParams.get('directory') ?? '').trim(), this.workDir) || undefined;
     try {
       const todos = await this.driver.listTodos(sessionId, directory);
       sendJson(res, 200, { todos });
@@ -1523,7 +1529,9 @@ export class ExecServer {
       sendJson(res, 401, { error: 'X-Worker-Token 无效' });
       return;
     }
-    const directory = (url.searchParams.get('directory') ?? '').trim() || this.workDir;
+    const directory =
+      toLocalWorkspacePath((url.searchParams.get('directory') ?? '').trim(), this.workDir) ||
+      this.workDir;
     if (!directory) {
       this.logger.warn('[exec] plan-files list -> 缺少 directory 且未配置 workDir (HTTP 400)');
       sendJson(res, 400, { error: '缺少 query 参数 directory（且 worker 未配置 workDir 回落）' });
