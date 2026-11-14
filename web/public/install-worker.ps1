@@ -251,6 +251,16 @@ function Write-List {
     }
 }
 
+function ConvertTo-XmlText {
+    # 为什么不用 scriptblock + `.Invoke()`：ScriptBlock.Invoke() 返回的是
+    # Collection<PSObject>（不是 string），直接塞进 -f 会被转成类型名字符串。
+    # 真机实测：WinSW XML 的 <id> 变成
+    # "System.Collections.ObjectModel.Collection`1[System.Management.Automation.PSObject]"，
+    # 服务注册成功但启动时报「服务名包含无效字符/过长（最大 80）」。普通函数返回 string 才可靠。
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+    return [System.Security.SecurityElement]::Escape([string]$Value)
+}
+
 # ==========================================================================
 # 通用小工具
 # ==========================================================================
@@ -1467,8 +1477,6 @@ function New-WinswXmlContent {
         [Parameter(Mandatory)][string]$AppDir,
         [Parameter(Mandatory)][string]$OpencodeBin
     )
-    $esc = { param($value) return [System.Security.SecurityElement]::Escape([string]$value) }
-
     $nodeDir = Join-Path $InstallDir 'node'
     $npmDir = Join-Path $InstallDir 'npm-global'
     $logsDir = Join-Path $InstallDir 'logs'
@@ -1482,18 +1490,18 @@ function New-WinswXmlContent {
     [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
     [void]$sb.AppendLine('<!-- 本文件由 install-worker.ps1 渲染生成。改配置请改 app\.env 后重启服务，不要手改本文件。 -->')
     [void]$sb.AppendLine('<service>')
-    [void]$sb.AppendLine(('  <id>{0}</id>' -f ($esc.Invoke($Script:ServiceName))))
+    [void]$sb.AppendLine(('  <id>{0}</id>' -f (ConvertTo-XmlText $Script:ServiceName)))
     [void]$sb.AppendLine('  <name>vteam AI Worker</name>')
     [void]$sb.AppendLine('  <description>vteam worker（opencode 引擎）：注册到控制面并执行 Agent 会话。</description>')
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('  <!-- 主进程直接跑 node：.env 由 node 的 env-file 启动参数注入（Node >= 20.6）⇒ .env 是唯一配置源 -->')
-    [void]$sb.AppendLine(('  <executable>{0}</executable>' -f ($esc.Invoke($NodeExe))))
-    [void]$sb.AppendLine(('  <arguments>{0}</arguments>' -f ($esc.Invoke($argumentsLine))))
-    [void]$sb.AppendLine(('  <workingdirectory>{0}</workingdirectory>' -f ($esc.Invoke($AppDir))))
+    [void]$sb.AppendLine(('  <executable>{0}</executable>' -f (ConvertTo-XmlText $NodeExe)))
+    [void]$sb.AppendLine(('  <arguments>{0}</arguments>' -f (ConvertTo-XmlText $argumentsLine)))
+    [void]$sb.AppendLine(('  <workingdirectory>{0}</workingdirectory>' -f (ConvertTo-XmlText $AppDir)))
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('  <!-- 服务进程不继承安装会话的 PATH：显式把便携 node/npm-global 放最前 -->')
-    [void]$sb.AppendLine(('  <env name="PATH" value="{0}" />' -f ($esc.Invoke($pathValue))))
-    [void]$sb.AppendLine(('  <env name="OPENCODE_BIN" value="{0}" />' -f ($esc.Invoke($OpencodeBin))))
+    [void]$sb.AppendLine(('  <env name="PATH" value="{0}" />' -f (ConvertTo-XmlText $pathValue)))
+    [void]$sb.AppendLine(('  <env name="OPENCODE_BIN" value="{0}" />' -f (ConvertTo-XmlText $OpencodeBin)))
     [void]$sb.AppendLine('  <env name="PYTHONIOENCODING" value="utf-8" />')
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('  <startmode>Automatic</startmode>')
@@ -1504,7 +1512,7 @@ function New-WinswXmlContent {
     [void]$sb.AppendLine('  <stoptimeout>15sec</stoptimeout>')
     [void]$sb.AppendLine('  <stopparentprocessfirst>true</stopparentprocessfirst>')
     [void]$sb.AppendLine('')
-    [void]$sb.AppendLine(('  <logpath>{0}</logpath>' -f ($esc.Invoke($logsDir))))
+    [void]$sb.AppendLine(('  <logpath>{0}</logpath>' -f (ConvertTo-XmlText $logsDir)))
     [void]$sb.AppendLine('  <log mode="roll-by-size-time">')
     [void]$sb.AppendLine('    <sizeThreshold>10240</sizeThreshold>')
     [void]$sb.AppendLine('    <pattern>yyyyMMdd</pattern>')
@@ -1583,6 +1591,28 @@ function Install-WorkerWindowsService {
         New-Item -ItemType Directory -Path $binDir -Force | Out-Null
     }
 
+    # 清理「显示名相同、服务名不同」的残留服务：旧版安装器把 XML <id> 写成 Collection 类型名后，
+    # SCM 里会留下一个显示名 "vteam AI Worker"、服务名是那串类型名的坏服务（按名字查不到）。
+    # 归属判定：Win32_Service.PathName 指向本安装目录 ⇒ 是我们自己留下的，直接删；否则要 -Force。
+    $strays = @()
+    try {
+        $strays = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'vteam AI Worker' -and $_.Name -ne $Script:ServiceName })
+    } catch { $strays = @() }
+    foreach ($stray in $strays) {
+        $strayPath = [string]$stray.PathName
+        $isOurs = $strayPath.IndexOf($InstallDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        if (-not $isOurs -and -not $Force) {
+            throw ("发现同名显示名的残留服务（服务名 '$($stray.Name)'，路径 '$strayPath'），不属于本安装目录。`n" +
+                "  确认要接管请加 -Force；或手工删除：sc.exe stop `"$($stray.Name)`"; sc.exe delete `"$($stray.Name)`"")
+        }
+        Write-Warn ("清理残留服务（显示名 vteam AI Worker，服务名 '$($stray.Name)'）：$strayPath")
+        & sc.exe stop $stray.Name 2>$null | Out-Null
+        Start-Sleep -Milliseconds 500
+        & sc.exe delete $stray.Name 2>$null | Out-Null
+        Start-Sleep -Milliseconds 500
+    }
+
     # 已存在同名服务时：先确认归属（避免把别人的服务顶掉），再停/删/重装（XML 变化必须重新注册）。
     $existing = Get-Service -Name $Script:ServiceName -ErrorAction SilentlyContinue
     if ($existing) {
@@ -1623,6 +1653,25 @@ function Install-WorkerWindowsService {
     $xmlText = New-WinswXmlContent -InstallDir $InstallDir -NodeExe $NodeExe -EnvFile $EnvFile -AppDir $AppDir -OpencodeBin $OpencodeBin
     [System.IO.File]::WriteAllText($svcXml, ($xmlText + "`n"), (New-Object System.Text.UTF8Encoding($false)))
     Write-Detail ("WinSW 配置：$svcXml")
+
+    # 写盘后立刻回读校验：真机踩过「XML 字段被写成 Collection 类型名」的坑（服务能注册、启动才炸），
+    # 这里在注册前就把坏 XML 拦下来，报错直接给出实际值。
+    try {
+        [xml]$parsedXml = [System.IO.File]::ReadAllText($svcXml)
+        $parsedId = [string]$parsedXml.service.id
+        $parsedExe = [string]$parsedXml.service.executable
+        if ($parsedId -ne $Script:ServiceName) {
+            throw ("<id> 渲染异常：期望 '$($Script:ServiceName)'，实际 '$parsedId'")
+        }
+        if ([string]::IsNullOrWhiteSpace($parsedExe) -or $parsedExe -notmatch '\.exe$') {
+            throw ("<executable> 渲染异常：'$parsedExe'")
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$parsedXml.service.arguments)) {
+            throw '<arguments> 为空'
+        }
+    } catch {
+        throw ("WinSW XML 校验失败：$($_.Exception.Message)`n  文件：$svcXml`n  内容：`n$xmlText")
+    }
     # XML 里可能含账号信息（本安装器不写 serviceaccount，但保持收权习惯，便于以后扩展）
     & icacls.exe $svcXml /inheritance:r 2>$null | Out-Null
     & icacls.exe $svcXml '/grant:r' '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>$null | Out-Null
