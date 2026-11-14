@@ -68,6 +68,10 @@ import {
   OpenCodeDriver,
 } from './opencode-driver';
 import { V2PartIdDeriver, v2StepFinishPartId, v2TextPartId } from './v2-part-id';
+import {
+  materializeProjectConfig,
+  toLocalWorkspacePath,
+} from '../runtime/workspace-path-shim';
 import { SystemHandoffPort } from './v2-system-handoff';
 
 /** 默认请求超时 ms（与 v1 实现同口径：宽松，避免长轮询被误杀）。 */
@@ -590,7 +594,8 @@ export class V2Driver implements OpenCodeDriver {
     const path = '/api/session';
     const body: Record<string, unknown> = {};
     if (this.defaultDirectory !== '') {
-      body.location = { directory: this.defaultDirectory };
+      // Windows 兼容垫片：控制面下发的 POSIX 工作区路径映射到本地 WORK_DIR（POSIX 原样）。
+      body.location = { directory: toLocalWorkspacePath(this.defaultDirectory, this.defaultDirectory) };
     }
     if (model) {
       body.model = { id: model.modelID, providerID: model.providerID };
@@ -970,7 +975,9 @@ export class V2Driver implements OpenCodeDriver {
    * `permission` ← v2 的 `permissions[]`（`{action,resource,effect}` 数组，原样透传）。
    */
   async listAgents(directory?: string): Promise<DriverAgentInfo[]> {
-    const path = buildV2AgentListPath(directory ?? '');
+    // Windows 兼容垫片：控制面按 POSIX `/data/vteam-worker/...` 查 agent 列表时映射到本地 WORK_DIR。
+    const localDirectory = directory ? toLocalWorkspacePath(directory, this.defaultDirectory) : '';
+    const path = buildV2AgentListPath(localDirectory);
     const res = await this.request(path);
     const payload = await this.readJson<{ data?: unknown }>(res, path);
     const agents = unwrapV2List<V2Agent>(payload);
@@ -1122,13 +1129,17 @@ export class V2Driver implements OpenCodeDriver {
    * 同一会话同目录也不重复 move（避免每次下发都产生一条切换消息）。
    */
   private async applyDirectory(sessionID: string, directory?: string): Promise<void> {
-    const target = directory?.trim();
-    if (!target) {
+    const requested = directory?.trim();
+    if (!requested) {
       return;
     }
     if (this.promptedSessions.has(sessionID)) {
       return;
     }
+    // Windows 兼容垫片：`/data/vteam-worker/...` → `<WORK_DIR>/...`，并把项目配置物化到
+    // 目标目录（serve 只按会话目录发现 opencode.json，不上溯父目录 ⇒ 否则角色 agent 不可见）。
+    const target = toLocalWorkspacePath(requested, this.defaultDirectory);
+    materializeProjectConfig(this.defaultDirectory, target, this.logger);
     if (this.sessionDirectories.get(sessionID) === target) {
       return;
     }

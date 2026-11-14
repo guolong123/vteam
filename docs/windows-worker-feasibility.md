@@ -461,6 +461,33 @@ System.ArgumentException: 服务名 'System.Collections.ObjectModel.Collection`1
 - **教训**：PowerShell 里不要用 `ScriptBlock.Invoke()` 的返回值当字符串——它返回集合；要么用
   `& $sb $x`（管道输出），要么用普通函数。本仓库脚本已全量检查 `.Invoke(` 用法（仅此一处）。
 
+**第三次真机验证（安装/注册成功后的执行链路）**：worker `w_win_01` 注册 online、上报 13 个模型、
+凭据回放成功、控制面拨 `<worker>:4198` 已可达（`GET /execute` 返回 405「仅支持 POST」）。
+派发一条团队群聊消息后执行失败：
+
+```
+Agent not found: "vteam-project_manager"
+```
+
+- **根因（控制面 POSIX 路径假设）**：server 按 Linux 约定把**绝对工作区路径**下发为
+  `/data/vteam-worker/teams/tm_0000000001`（`server/src/tasks/work-dir.util.ts`、
+  `server/src/teams/teams.service.ts` 硬编码 `/data/vteam-worker`）。Windows worker 的
+  `WORK_DIR` 是 `C:\ProgramData\vteam-worker\work`，该 POSIX 路径在 Windows 上不可用；
+  而 opencode v2 的 agent **按目录发现**（`GET /api/agent?location[directory]=<dir>`，
+  实测**不上溯父目录**：`<work>\.opencode` 只返回原生 agent）⇒ 会话切到那个目录后
+  看不到 `opencode.json` 里的 `vteam-*` agent ⇒ 执行期 `Agent not found`。
+  对照实测（同一 worker）：`/agents?directory=<workDir>` → 14 个 agent（含全部 vteam-*）；
+  `/agents?directory=/data/vteam-worker/teams/tm_xxx` → 仅 7 个原生 agent。
+- **临时垫片（worker 侧，`runtime/workspace-path-shim.ts`）**：仅 win32 生效——
+  ① 把 `/data/vteam-worker` 前缀映射到本地 `WORK_DIR`（会话目录、`/file`、`/agents`、
+  `/todos`、`/plan-files` 等入口）；② 目标目录 ≠ WORK_DIR 时把 `opencode.json` 与
+  `.opencode/` 物化进该目录（幂等、失败只告警），保证 serve 在子目录也能发现角色 agent。
+  POSIX 平台原样返回（零行为变化）。单测覆盖映射/物化/幂等/异常路径。
+- **长期方案（建议进 M2）**：控制面感知每 worker 的工作区根——worker 在
+  `capabilities` 上报 `workspaceRoot`（如 `C:\ProgramData\vteam-worker\work`），
+  server 用它拼实例/任务目录（或直接下发**相对路径**），再删除本垫片。
+  同时 server 侧 `work-dir.util.ts`/`teams.service.ts` 需要平台化，避免继续硬编码 POSIX 路径。
+
 ### 9.4 Windows 真机验收清单（M1，按优先级）
 
 1. 全新 Win10/11 + 管理员 PowerShell：跑安装页生成的命令 → 安装器完成（Node/opencode/发布包/.env/服务/防火墙/自检）。
