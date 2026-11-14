@@ -2166,6 +2166,17 @@ try {
     $envValues['WORKER_ADVERTISE_HOST'] = $advertise
     if (-not [string]::IsNullOrWhiteSpace($McpUrl)) {
         $envValues['WORKER_MCP_URL'] = $McpUrl.Trim()
+    } else {
+        # Windows 原生 worker **永远在集群外**：server 下发的内置 MCP 地址是集群内服务名
+        # （http://server:3000 / http://vteam-server:3000），Windows 解析不了 ⇒ 模型调用
+        # vteam MCP 工具（group_post/notify_agent…）会挂住/失败。这里缺省从 -Server 推导
+        # 外部可达地址（-Server 是 worker 能访问到的控制面地址，按定义可达），除非显式 -McpUrl。
+        $derivedMcp = $serverUrl.TrimEnd('/') + '/api/v1/platform-mcp'
+        $envValues['WORKER_MCP_URL'] = $derivedMcp
+        Write-Warn ("未传 -McpUrl：缺省使用 -Server 推导的内置 MCP 地址（{0}）。" -f $derivedMcp)
+        Write-List @(
+            '若控制面外部地址与 -Server 不同（反代/多域名），请重跑并显式传 -McpUrl <外部地址>/api/v1/platform-mcp。'
+        )
     }
     # Windows 专属路径：不写 WORK_DIR 的话 /data/vteam-worker 会被解析成「当前盘符根下 \data\...」，
     # 看着能跑但与安装目录分离，卸载删不干净（worker README 已写明）。
