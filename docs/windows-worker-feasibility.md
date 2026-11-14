@@ -442,6 +442,25 @@ Windows 11 + Windows PowerShell 5.1 首次真机执行安装器，在「安装�
 - **教训**：PowerShell 的 `-f` 格式串里任何字面 `{`/`}` 都必须写成 `{{`/`}}`；本仓库脚本已全量扫描
   （`-f` 左侧字符串的格式项校验），当前无其它同类问题。真机复跑前需重新下载 `install-worker.ps1`。
 
+**第二次真机执行（同一台 Windows 11）**：过了目录布局后，WinSW 注册成功但启动失败：
+
+```
+FATAL - Unhandled exception
+System.ArgumentException: 服务名 'System.Collections.ObjectModel.Collection`1[System.Management.Automation.PSObject]'
+包含无效字符、为空或者过长（最大长度 = 80）。
+```
+
+- **根因**：`New-WinswXmlContent` 用 `$esc = { param($v) ... }` + `$esc.Invoke($x)` 做 XML 转义。
+  PowerShell 的 `ScriptBlock.Invoke()` 返回的是 **`Collection<PSObject>`**（不是 string），塞进 `-f`
+  后被转成类型名字符串 ⇒ WinSW XML 的 `<id>/<executable>/<arguments>/<env>/<logpath>` 全部变成
+  `System.Collections.ObjectModel.Collection`1[...]`。SCM 接受了这个服务名（注册成功），
+  但 WinSW 启动时 `ServiceController` 校验服务名长度/字符 → 失败。
+- **修复**：改为普通函数 `ConvertTo-XmlText`（返回 string）；XML 写盘后**回读校验** `<id>`/`<executable>`/
+  `<arguments>`（坏 XML 在注册前就拦下并打印实际值）；注册前自动清理「显示名相同、服务名不同」的
+  残留服务（旧版写坏 XML 留下的，PathName 指向本安装目录才自动删，否则要 `-Force`）。
+- **教训**：PowerShell 里不要用 `ScriptBlock.Invoke()` 的返回值当字符串——它返回集合；要么用
+  `& $sb $x`（管道输出），要么用普通函数。本仓库脚本已全量检查 `.Invoke(` 用法（仅此一处）。
+
 ### 9.4 Windows 真机验收清单（M1，按优先级）
 
 1. 全新 Win10/11 + 管理员 PowerShell：跑安装页生成的命令 → 安装器完成（Node/opencode/发布包/.env/服务/防火墙/自检）。
