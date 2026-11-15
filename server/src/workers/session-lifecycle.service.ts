@@ -183,6 +183,46 @@ export class SessionLifecycleService implements OnModuleInit {
         },
       });
       if (existing) {
+        // 判死终态（watchdog 首字超时/空闲无输出）**不得继续复用**：
+        // failed 会话仍绑着旧 worker 的 instanceRef（如 DSH 的 dsh-xxx 会话文件），
+        // 复用会把消息发回那个坏会话 —— 用户实测「发到了错误的 opencode session」
+        // 且模型设置不生效（每回合 ensureModelFor 对坏会话 selectModel 失败 →
+        // 重启运行时 → 首字超时，循环失败）。
+        // 修复：原地「复活」该行 —— 清 workerId/instanceRef（下次分派 createSession
+        // 新建干净会话）+ status=created + 软移除旧 TaskGroupInstance 行。
+        // 保留 session 行本身（id 不变、幂等、不换 sid），仅清绑定。
+        if (existing.status === SESSION_STATUS.failed) {
+          if (existing.workerId && existing.instanceRef) {
+            await tx.taskGroupInstance.updateMany({
+              where: {
+                teamId: existing.teamId,
+                teamMemberId: existing.teamMemberId,
+                workerId: existing.workerId,
+                instanceId: existing.instanceRef,
+                removedAt: null,
+              },
+              data: { removedAt: new Date() },
+            });
+          }
+          const revived = await tx.session.update({
+            where: { id: existing.id },
+            data: {
+              workerId: null,
+              instanceRef: null,
+              status: SESSION_STATUS.created,
+            },
+            select: {
+              id: true,
+              teamId: true,
+              teamMemberId: true,
+              agentId: true,
+              workerId: true,
+              instanceRef: true,
+              status: true,
+            },
+          });
+          return { ...revived, reused: false, revived: true };
+        }
         return { ...existing, reused: true };
       }
       const select = {
@@ -283,6 +323,34 @@ export class SessionLifecycleService implements OnModuleInit {
         select,
       });
       if (existing) {
+        // 判死终态（见 ensureTeamSession 同款注释）：failed 会话仍绑旧 worker 的
+        // instanceRef，复用会把消息发回坏 DSH/opencode 会话 → 模型切换不生效、
+        // 历史串场。原地复活：清绑定 + status=created + 软移除旧实例行。
+        if (existing.status === SESSION_STATUS.failed) {
+          if (existing.workerId && existing.instanceRef) {
+            await tx.taskGroupInstance.updateMany({
+              where: {
+                teamId: existing.currentTeamId,
+                teamMemberId: existing.seatId,
+                workerId: existing.workerId,
+                instanceId: existing.instanceRef,
+                removedAt: null,
+              },
+              data: { removedAt: new Date() },
+            });
+          }
+          const revived = await tx.session.update({
+            where: { id: existing.id },
+            data: {
+              workerId: null,
+              instanceRef: null,
+              status: SESSION_STATUS.created,
+              busyState: 'idle',
+            },
+            select,
+          });
+          return { ...revived, reused: false, revived: true };
+        }
         // 上下文只在调用方显式给出时更新（不覆盖未提供的维度）。
         const data: Record<string, unknown> = {};
         if (context.seatId !== undefined) data.seatId = context.seatId;
@@ -579,6 +647,85 @@ export class SessionLifecycleService implements OnModuleInit {
       );
       return { reset: 1, sessionId: created.id };
     });
+  }
+
+  /**
+   * **成员配置变更（模型/首选 worker）后重置其全部会话绑定**（vteam 修：模型设置无效）。
+   *
+   * 为什么需要：成员改模型只更新 member 行，已绑定会话的 workerId/instanceRef
+   * 不变；下回合分派直接复用旧会话 → 每回合 ensureModelFor 对旧会话
+   * selectModel（DSH 侧常报 sessionController service unavailable）→ 回退重启
+   * 运行时 → 首字超时，用户实测「改了模型也不生效、必须停会话再发」。
+   *
+   * 这里**只清绑定**（workerId/instanceRef + status=created + 软移除实例行），
+   * 不删会话行、不动消息/记忆 → 下回合分派 createSession 新建干净引擎会话，
+   * 新模型在 createSession 阶段即生效。覆盖两种 scope：
+   *  - member-scope：memberKey = memberId 的全局会话；
+   *  - team-scope： 该成员所有席位（teamMemberId）对应的会话。
+   * 幂等：无绑定时 updateMany 命中 0 行，不报错。永不抛异常（fail-open）。
+   */
+  async resetSessionBindingsByMember(
+    memberId: string,
+    reason: string | { reason?: string } = 'member_config_changed',
+  ) {
+    const reasonText =
+      typeof reason === 'string' ? reason : (reason.reason ?? 'member_config_changed');
+    try {
+      return await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const seats = await tx.teamMember.findMany({
+          where: { memberId },
+          select: { id: true },
+        });
+        const seatIds = seats.map((s) => s.id);
+        // team-scope 会话（teamMemberId in 席位）+ member-scope 全局会话（memberKey）
+        const or: Array<Record<string, unknown>> = [];
+        if (seatIds.length > 0) or.push({ teamMemberId: { in: seatIds } });
+        or.push({ memberKey: memberId });
+        const sessions = await tx.session.findMany({
+          where: { OR: or },
+          select: {
+            id: true,
+            teamId: true,
+            teamMemberId: true,
+            workerId: true,
+            instanceRef: true,
+          },
+        });
+        for (const s of sessions) {
+          if (s.workerId && s.instanceRef) {
+            await tx.taskGroupInstance.updateMany({
+              where: {
+                teamId: s.teamId,
+                teamMemberId: s.teamMemberId,
+                workerId: s.workerId,
+                instanceId: s.instanceRef,
+                removedAt: null,
+              },
+              data: { removedAt: new Date() },
+            });
+          }
+        }
+        const result = await tx.session.updateMany({
+          where: { OR: or },
+          data: {
+            workerId: null,
+            instanceRef: null,
+            status: SESSION_STATUS.created,
+            busyState: 'idle',
+          },
+        });
+        this.logger.log(
+          `成员配置变更重置会话绑定 member=${memberId} reason=${reasonText} 会话数=${sessions.length} 命中=${result.count}`,
+        );
+        return { reset: result.count };
+      });
+    } catch (err) {
+      // fail-open：绑定重置失败不阻断配置更新（最坏沿用旧会话，下轮 ensure 兜底）
+      this.logger.warn(
+        `成员配置变更重置会话绑定失败 member=${memberId}：${(err as Error)?.message ?? err}`,
+      );
+      return { reset: 0 };
+    }
   }
 
   /** 兼容：单团队批量重置（事务外入口，供 TeamsService 手动调用事务包装前置）。 */

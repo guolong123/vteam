@@ -371,10 +371,15 @@ describe('SessionLifecycleService', () => {
             workerId: null,
             instanceRef: null,
           })),
+          update: jest.fn().mockImplementation(async (args: any) => ({
+            ...(options.existing ?? {}),
+            ...args.data,
+          })),
         },
         taskGroupInstance: {
           findFirst: jest.fn(),
           create: jest.fn(),
+          updateMany: jest.fn(),
         },
       };
       prisma.$transaction.mockImplementation(async (fn: any) => fn(txModels));
@@ -442,6 +447,61 @@ describe('SessionLifecycleService', () => {
 
       expect(tx.session.create).not.toHaveBeenCalled();
       expect(result).toMatchObject({ id: 's_0000000001', reused: true });
+    });
+
+    it('failed 判死会话 → 原地复活（清 workerId/instanceRef、status=created、软移除旧实例行），不复用坏会话', async () => {
+      const existing = {
+        id: 's_0000000057',
+        teamId: 'tm_0000000009',
+        teamMemberId: 'tmm_0000000044',
+        agentId: 'a_project_manager',
+        workerId: 'w_vteam-worker-dsh-0',
+        instanceRef: 'dsh-e42ef68ba69dbf57e2589c8b',
+        status: SESSION_STATUS.failed,
+      };
+      const tx = mockEnsureTx({
+        member: {
+          id: 'tmm_0000000044',
+          teamId: 'tm_0000000009',
+          agentId: 'a_project_manager',
+        },
+        existing,
+      });
+
+      const result = await service.ensureTeamSession(
+        'tm_0000000009',
+        'tmm_0000000044',
+      );
+
+      // 关键：不再返回绑着旧 DSH 会话的 existing
+      expect(result).toMatchObject({
+        id: 's_0000000057',
+        workerId: null,
+        instanceRef: null,
+        status: SESSION_STATUS.created,
+        reused: false,
+        revived: true,
+      });
+      expect(tx.session.create).not.toHaveBeenCalled();
+      expect(tx.session.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 's_0000000057' },
+          data: expect.objectContaining({
+            workerId: null,
+            instanceRef: null,
+            status: SESSION_STATUS.created,
+          }),
+        }),
+      );
+      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            workerId: 'w_vteam-worker-dsh-0',
+            instanceId: 'dsh-e42ef68ba69dbf57e2589c8b',
+          }),
+          data: expect.objectContaining({ removedAt: expect.any(Date) }),
+        }),
+      );
     });
 
     it('并发竞态：create 报 P2002 → 重读命中胜者行，reused=true', async () => {

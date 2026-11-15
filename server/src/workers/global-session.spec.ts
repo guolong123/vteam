@@ -127,6 +127,55 @@ describe('全局会话（P3）', () => {
       expect(result.reused).toBe(true);
     });
 
+    it('failed 判死会话 → 原地复活（清绑定、status=created、软移除旧实例行），不再复用坏 DSH 会话', async () => {
+      tx.member.findUnique.mockResolvedValue({
+        id: 'mbr_1',
+        name: 'x',
+        status: 'active',
+        agentId: 'a_arch',
+      });
+      tx.session.findUnique.mockResolvedValue({
+        id: 's_failed',
+        memberId: 'mbr_1',
+        memberKey: 'mbr_1',
+        seatId: 'tmm_1',
+        currentTeamId: 'tm_1',
+        currentTaskId: null,
+        currentChannelId: 'c_old',
+        agentId: 'a_arch',
+        workerId: 'w_vteam-worker-dsh-0',
+        instanceRef: 'dsh-e42ef68ba69dbf57e2589c8b',
+        status: 'failed',
+        busyState: 'idle',
+        turnSeq: 0,
+      });
+      tx.session.update.mockImplementation(({ data }: any) => ({
+        id: 's_failed',
+        ...data,
+      }));
+
+      const result: any = await service().ensureMemberSession('mbr_1');
+
+      expect(result).toMatchObject({
+        id: 's_failed',
+        workerId: null,
+        instanceRef: null,
+        status: 'created',
+        reused: false,
+        revived: true,
+      });
+      expect(tx.session.create).not.toHaveBeenCalled();
+      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            workerId: 'w_vteam-worker-dsh-0',
+            instanceId: 'dsh-e42ef68ba69dbf57e2589c8b',
+          }),
+          data: expect.objectContaining({ removedAt: expect.any(Date) }),
+        }),
+      );
+    });
+
     it('成员不存在 → 404；已停用 → 400', async () => {
       tx.member.findUnique.mockResolvedValueOnce(null);
       await expect(

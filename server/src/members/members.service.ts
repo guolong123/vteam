@@ -470,6 +470,21 @@ export class MembersService implements OnModuleInit {
     } catch (err) {
       this.rethrowNameConflict(err, String(data.name ?? previousName));
     }
+    // vteam 修「模型设置无效」：改模型/首选 worker 后，已绑定会话会继续复用
+    // 旧 worker 的 instanceRef，每回合 selectModel 失败 → 重启运行时 → 超时。
+    // 主动清绑定，让下回合 createSession 用新配置新建干净会话（不动消息/记忆）。
+    const modelChanged =
+      dto.defaultModelId !== undefined &&
+      dto.defaultModelId !== existing.defaultModelId;
+    const workerChanged =
+      dto.preferredWorkerId !== undefined &&
+      dto.preferredWorkerId !== existing.preferredWorkerId;
+    if (modelChanged || workerChanged) {
+      await this.sessionLifecycle.resetSessionBindingsByMember(
+        id,
+        'member_model_or_worker_changed',
+      );
+    }
     // 改名同步：成员是平台级名称，席位里由平台自动生成的别名（等于旧成员名）一并更新，
     // 否则群聊/私聊的发送者身份仍显示旧名；用户自定义过的别名（不等于旧名）保持不变。
     if (dto.name !== undefined && String(data.name).trim() !== previousName) {
