@@ -7915,19 +7915,23 @@ export class PlatformMcpService implements OnModuleInit {
     let mirrorMessageId: string | null = null;
     let groupChannelId: string | null = null;
     /**
-     * **企微私聊来源不镜像团队群聊**（2026-11-13 用户反馈）：
-     * 用户在企微里私聊机器人时，消息直达成员私聊处理；回复若再镜像到团队群聊，
-     * 会变成「我私聊他，回复却出现在群里」。
+     * 群聊镜像**恒开**（2026-11-16 纠正）。
      *
-     * 群聊来源（chattype=group）仍镜像——那是「群里问、群里答」的既有语义，
-     * 群成员能在 vteam 侧看到同一条回复。chattype 未知（null）时保持旧行为。
+     * 此前曾按 `chattype === 'single'` 跳过镜像，动机是「用户私聊成员时回复不该出现在群里」——
+     * 但那个判断把两种不同场景混为一谈：
+     *   1) **vteam 平台私聊入口**（点成员头像）——真私聊，消息只在 DM；
+     *   2) **企微等外部渠道**——消息本身就落在团队群聊里（入站走 team_group），
+     *      其回复理应同样出现在群里，否则群里只看到用户提问、看不到 agent 答复。
+     * `chattype` 是**企微侧**的会话类型（用户私聊机器人 vs 群内 @机器人），**无法**区分
+     * 「vteam 平台私聊」；用它来跳过镜像必然误伤场景 2。
+     *
+     * 因此：`wecom_reply` 一律镜像到团队群聊（保持既有语义）。若某个来源确实不该进群，
+     * 应由调用方不调 `wecom_reply` 或走不绑群的渠道，而不是在这里按 chattype 猜。
      */
-    const skipGroupMirror = chattype === 'single';
     try {
-      const groupCh = skipGroupMirror
-        ? null
-        : ((await this.findTeamGroupChannel(teamId)) ??
-          (await this.ensureTeamGroupChannelByTeam(teamId)));
+      const groupCh =
+        (await this.findTeamGroupChannel(teamId)) ??
+        (await this.ensureTeamGroupChannelByTeam(teamId));
       if (groupCh) {
         groupChannelId = groupCh.id;
         const senderAgentId = await this.resolveTeamSenderAgentId(

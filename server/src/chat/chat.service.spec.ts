@@ -293,10 +293,18 @@ describe('ChatService', () => {
         messageId: 'm_0000000001',
         channelId,
         taskId,
+        // vteam 平台私聊标记（群聊频道 → false）
+        isDirectMessage: false,
         teamId: 'tm_0000000001',
         taskContext: { taskId },
         text: '你好',
-        targets: [{ agentId: 'a_product', sessionId: 's_0000000001' }],
+        targets: [
+          {
+            agentId: 'a_product',
+            sessionId: 's_0000000001',
+            instanceId: undefined,
+          },
+        ],
       });
 
       // 响应契约：{message, triggers}

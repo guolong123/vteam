@@ -734,6 +734,36 @@ describe('WorkerDispatcher', () => {
       expect(system).not.toContain(WECOM_SYSTEM_INSTRUCTION);
     });
 
+    /**
+     * 2026-11-16 用户要求：vteam 平台**私聊**入口不主动引导 agent 调 vteam_group_post
+     * （私聊就好好私聊；真调了平台不拦，只是不该教）。群聊场景保持原引导。
+     */
+    it('vteam 私聊：system 不注入「群聊通知」引导；群聊仍注入', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理助手',
+        role: 'product',
+        agentKey: 'product',
+        prompt: '你是产品需求分析专家。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const d = createDispatcher();
+      // 私聊
+      await d.dispatch({ ...request, isDirectMessage: true });
+      const dmSystem = (
+        workerClient.execute.mock.calls[0][1] as { system: string }
+      ).system;
+      expect(dmSystem).not.toContain('【群聊通知】');
+      expect(dmSystem).not.toContain('需公开结论/进展时调用');
+      // 群聊（缺省）
+      workerClient.execute.mockClear();
+      await d.dispatch(request);
+      const groupSystem = (
+        workerClient.execute.mock.calls[0][1] as { system: string }
+      ).system;
+      expect(groupSystem).toContain('【群聊通知】');
+    });
+
     it('system 注入 Agent 完整身份（buildSystemInstructions 含 id/name/角色key/prompt + selfInstanceId 引导）', async () => {
       // 行形状 = 迁移期真实 DB 行（模板行 agent_key = role）；todo 10 起身份段
       // 『角色』由 agentKey 派生，值仍是 key（product），不是展示名。

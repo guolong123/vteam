@@ -40,6 +40,14 @@ export interface DispatchRequest {
   };
   /** 用户消息正文。 */
   text: string;
+  /**
+   * 是否 vteam 平台**私聊**入口（点成员头像进入的 DM）。
+   *
+   * 用途：私聊场景**不注入**「结论要发群聊」的引导（2026-11-16 用户要求：
+   * 私聊就好好私聊，不该主动教 agent 去调 vteam_group_post；agent 真调了平台也不拦）。
+   * 企微等外部渠道**不算**私聊——它们的消息本身就落在群聊，回复也应进群。
+   */
+  isDirectMessage?: boolean;
   /** 仅 dispatched 状态的目标（agent_removed / no_session 不参与分派）。 */
   targets: DispatchTarget[];
   /**

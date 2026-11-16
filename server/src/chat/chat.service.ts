@@ -1742,6 +1742,8 @@ export class ChatService {
         messageId: message.id,
         channelId,
         taskId: dispatchTaskId,
+        // vteam 平台私聊（DM）标记：私聊不引导 group_post；外部渠道消息不算私聊
+        isDirectMessage: isTeamPrivate,
         ...(channel.teamId ? { teamId: channel.teamId } : {}),
         ...(dispatchTaskId ? { taskContext: { taskId: dispatchTaskId } } : {}),
         text: dto.text,

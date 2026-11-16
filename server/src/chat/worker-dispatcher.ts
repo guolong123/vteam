@@ -519,9 +519,21 @@ export const MEMORY_INSTRUCTION =
  * 提示词点名才是「知道它存在」的手段。本段既有断言全是哨兵式 `toContain`/
  * `not.toContain`（无一整串相等）⇒ 新增一行不撞逐字节基线。
  */
+/**
+ * 【群聊通知】提示行（2026-11-16 拆出）。
+ *
+ * 这行原本在 `GLOBAL_BASE_LINES` 里、**每次 dispatch 必注入**——包括 vteam 平台的
+ * **私聊**入口（点成员头像）。用户反馈：私聊场景不需要引导 agent 去调
+ * `vteam_group_post`（私聊就好好私聊；真调了平台也不拦，只是不该主动教）。
+ * 故拆成独立常量，由 `buildSystemInstructions` 按 `isDirectMessage` 决定是否注入。
+ *
+ * 群聊场景（team_group）保持注入：那里「结论要发群」是正确引导。
+ */
+const GROUP_POST_HINT =
+  '【群聊通知】私聊默认不公开，需公开结论/进展时调用 vteam MCP 的 vteam_group_post 发布。';
+
 const GLOBAL_BASE_LINES = [
   '你是 AI 协作平台的 Agent，请遵守以下平台协议：',
-  '【群聊通知】私聊默认不公开，需公开结论/进展时调用 vteam MCP 的 vteam_group_post 发布。',
   '【@ 定向机制】群聊中 @ 你的消息会定向分发给你。需要定向触发/通知任务内的其他 Agent 时，' +
     '调用 vteam MCP 的 vteam_notify_agent 工具' +
     '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。\n\n' +
@@ -535,8 +547,15 @@ const GLOBAL_BASE_LINES = [
   '【工具自省】不确定 vteam MCP 工具的参数（必填/枚举/状态机）时，先调 vteam MCP 的 vteam_tool_schema 工具查 schema（省略 name 则列出全部工具），不要靠报错回显反推。',
 ];
 
+/** 含 hint 的基础行（原顺序 = 首行 + hint + 其余），保持 GLOBAL_SYSTEM_INSTRUCTIONS 导出值逐字节不变。 */
+const GLOBAL_BASE_LINES_WITH_HINT = [
+  GLOBAL_BASE_LINES[0],
+  GROUP_POST_HINT,
+  ...GLOBAL_BASE_LINES.slice(1),
+];
+
 export const GLOBAL_SYSTEM_INSTRUCTIONS = [
-  ...GLOBAL_BASE_LINES,
+  ...GLOBAL_BASE_LINES_WITH_HINT,
   MEMORY_INSTRUCTION,
 ].join('\n\n');
 
@@ -777,6 +796,12 @@ export interface BuildSystemInstructionsOptions {
    */
   isWecomChannel?: boolean;
   /**
+   * vteam 平台**私聊**入口（DM）：true 时不注入「结论要发群聊」引导
+   * （2026-11-16 用户要求：私聊不主动教 agent 调 vteam_group_post，真调也不拦）。
+   * 缺省 false ⇒ 群聊场景引导不变。
+   */
+  isDirectMessage?: boolean;
+  /**
    * P1：issue 完整版开关——true 时追加 ISSUE_FULL_INSTRUCTION
    * （创建+指派+流转 action 列表）；false/缺省只收 GLOBAL【Issue协作】一句版
    * （兼容存量调用）。dispatch 调用方按目标 `agentKey` 传入
@@ -894,9 +919,13 @@ export function buildSystemInstructions(
   const resolvedTools = opts?.resolvedTools;
   const suppressMemory =
     resolvedTools != null && !toolAllowed(resolvedTools, 'vteam_memory_save');
+  // 私聊场景不注入「群聊通知」引导（见 GROUP_POST_HINT 注释）。
+  const baseLinesForScenario = opts?.isDirectMessage
+    ? GLOBAL_BASE_LINES
+    : GLOBAL_BASE_LINES_WITH_HINT;
   const globalText = suppressMemory
-    ? GLOBAL_BASE_LINES.join('\n\n')
-    : GLOBAL_SYSTEM_INSTRUCTIONS;
+    ? baseLinesForScenario.join('\n\n')
+    : [...baseLinesForScenario, MEMORY_INSTRUCTION].join('\n\n');
   // 成员级性格/专属提示词推导（members.persona / members.prompt / members.prompt_mode）：
   // 成员是平台级实例，性格与专属提示词主来源在成员；Agent 维度保留为存量兼容回退。
   // 三条推导在不传 member* 时结果与引入前完全一致（personaKey === agent.persona、
@@ -3353,6 +3382,8 @@ export class WorkerDispatcher
       persistentWorkDir: teamWorkDir,
       // P0：企微系统段默认不注入，仅触发正文含 [WeCom:] 标记时注入。
       isWecomChannel: request.text.includes('[WeCom:'),
+      // vteam 平台私聊：不注入「结论发群聊」引导（外部渠道不算，它们的消息在群里）
+      isDirectMessage: request.isDirectMessage === true,
       // P1：issue 完整版仅 product/tester/developer 注入，其余角色只收 GLOBAL 一句版。
       // todo 10：判据改由 agentKey 提供（模板行 agentKey === role ⇒ 结果不变；
       // 自定义 agentKey 为小写 ASCII，永不命中中文子串检查 ⇒ 仍 false，与旧 null 一致）。

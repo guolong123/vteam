@@ -9100,11 +9100,12 @@ describe('PlatformMcpService', () => {
     });
 
     /**
-     * 2026-11-13 用户反馈：「我现在是私聊他的，他每次都回复到群里了」。
-     * 根因是 wecom_reply 无条件把回复镜像到团队群聊（为了群内留痕）。
-     * 企微私聊来源（chattype=single）不应镜像；群聊来源保持既有行为。
+     * 2026-11-16 用户纠正：`chattype` 是**企微侧**会话类型（私聊机器人 / 群内 @），
+     * 无法区分「vteam 平台私聊」。企微渠道的消息本身就落在团队群聊，其回复也必须
+     * 出现在群里（否则群里只有用户提问、没有 agent 答复）。
+     * 故镜像**恒开**，不再按 chattype 跳过。
      */
-    it('企微私聊来源 → 回复不镜像到团队群聊', async () => {
+    it('企微私聊来源（chattype=single）→ 回复照常镜像到团队群聊', async () => {
       const adapter = arrangeTeamChannel();
       adapter.getStream.mockReturnValue({
         fromUserName: 'Long',
@@ -9120,11 +9121,37 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result.wecomSent).toBe(true);
-      // 不应向团队群聊频道写镜像消息
       const groupCreates = prisma.message.create.mock.calls.filter(
         (c: any[]) => c[0]?.data?.channelId === 'c_team_1',
       );
-      expect(groupCreates).toHaveLength(0);
+      expect(groupCreates.length).toBeGreaterThan(0);
+      // 返回体应带 messageId/channelId（镜像成功）
+      expect(result.messageId).toBeDefined();
+      expect(result.channelId).toBe('c_team_1');
+    });
+
+    /**
+     * 2026-11-16 用户误判：私聊送达正常，但工具返回「群聊同步失败」且无 messageId/channelId，
+     * 据此怀疑群聊落库坏了（实际按来源策略跳过镜像）。文案必须如实说明是策略，不是失败。
+     */
+    it('企微私聊来源 → 文案如实为「并同步到团队群聊」，不出现「失败」', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Long',
+        chattype: 'single',
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: '私聊回复',
+        replyToUser: 'Long',
+      });
+
+      const text = String(result.content?.[0]?.text ?? '');
+      expect(result.wecomSent).toBe(true);
+      expect(text).toContain('并同步到团队群聊');
+      expect(text).not.toContain('失败');
     });
 
     it('企微群聊来源 → 仍镜像到团队群聊（既有语义不变）', async () => {
