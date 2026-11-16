@@ -2469,13 +2469,46 @@ export class ChatService {
             message: 'agent mention 缺少 agentId',
           });
         }
-        // 任务分区下前端携带的是成员 id（tmm_）：未命中成员 id 时
-        // 按 agentId 回退匹配（同 agent 在团队内即有效）。
-        const memberRow =
-          (mention.instanceId
-            ? (members ?? []).find((r: any) => r.id === mention.instanceId)
-            : undefined) ??
-          (members ?? []).find((r: any) => r.agentId === mention.agentId);
+        /**
+         * 席位定位（2026-11-16 线上事故 + 用户要求「不确定必须报错」）：
+         *
+         * 1. 有 `instanceId` → 按席位精确命中；命不中即报错（不给模糊回退）。
+         * 2. 无 `instanceId` → 只在该 agent **恰好对应一个席位**时放行；
+         *    同 agent 多席位时**报错并要求指定 instanceId**，绝不取第一个。
+         *
+         * 事故背景：privately 私聊消息只带 `agentId`（无 instanceId），团队里有两个
+         * `a_project_manager` 席位，`find` 取到先创建的那个 ⇒ 在「平台管理」私聊发的
+         * 消息被派发给「项目经理-1」，回复也写进了它的会话。
+         */
+        let memberRow: any;
+        if (mention.instanceId) {
+          memberRow = (members ?? []).find(
+            (r: any) => r.id === mention.instanceId,
+          );
+          // `ta_` 前缀是**任务实例 id**（≠ 团队成员 id），任务分区下前端会传它；
+          // 未命中属正常，允许按 agentId 回退。`tmm_` 前缀是真实席位 id，命不中就是
+          // 调用方传错了 —— 直接报错，不给模糊回退。
+          if (!memberRow && !mention.instanceId.startsWith('ta_')) {
+            throw new BadRequestException({
+              code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+              message: `成员实例 ${mention.instanceId} 不在团队内`,
+            });
+          }
+        }
+        if (!memberRow) {
+          const sameAgent = (members ?? []).filter(
+            (r: any) => r.agentId === mention.agentId,
+          );
+          if (sameAgent.length > 1) {
+            throw new BadRequestException({
+              code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+              message:
+                `Agent ${mention.agentId} 在团队内有 ${sameAgent.length} 个席位` +
+                `（${sameAgent.map((m: any) => m.id).join('/')}），请传 instanceId 指定是哪一位`,
+            });
+          }
+          memberRow = sameAgent[0];
+        }
         if (!memberRow) {
           throw new BadRequestException({
             code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,

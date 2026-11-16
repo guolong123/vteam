@@ -9578,9 +9578,14 @@ describe('WorkerDispatcher', () => {
       );
     });
 
-    it('无 sessionId 回流不进幂等门：任务归属兜底团队定位，两次各落库+广播', async () => {
-      // 无 session 时经任务归属反查团队 + agent 反查成员（兜底不断流）；幂等门按
-      // sessionId 生效，无 sessionId 的回流每次独立落库
+    /**
+     * 2026-11-16 用户要求：**不确定的归属不许猜**。
+     *
+     * 此前无 sessionId 时会用 `(teamId, agentId)` 找第一个席位兜底落库 —— 同 agent
+     * 多席位时会把回复写进别人的会话。现在：归属只能来自确定性来源（平台主键 /
+     * instanceRef 反查），拿不到就**报错且不落库**。
+     */
+    it('无 sessionId 且无法反查 → 报错不落库（不再按 agent 猜席位）', async () => {
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
       (prisma as any).teamMember.findFirst.mockResolvedValue({
         id: 'tmm_0000000001',
@@ -9591,19 +9596,18 @@ describe('WorkerDispatcher', () => {
       prisma.message.create.mockResolvedValue(messageRow() as any);
       const d = createDispatcher();
       const finals: unknown[] = [];
+      const errors: unknown[] = [];
       d.onFinal((e) => finals.push(e));
+      d.onError((e) => errors.push(e));
       await d.handleTaskCompleted({
         taskId: request.taskId,
         agentId: 'a_product',
-        text: '第一次',
+        text: '无归属',
       });
-      await d.handleTaskCompleted({
-        taskId: request.taskId,
-        agentId: 'a_product',
-        text: '第二次',
-      });
-      expect(prisma.message.create).toHaveBeenCalledTimes(2);
-      expect(finals).toHaveLength(2);
+      // 不落库、不广播 final：宁可报错也不写错人的会话
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(finals).toHaveLength(0);
+      expect(errors).toHaveLength(1);
     });
 
     it('createSession 抢占失败回退 unbind：第二次 dispatch 复用新 worker', async () => {

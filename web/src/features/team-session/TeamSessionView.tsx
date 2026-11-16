@@ -1349,7 +1349,18 @@ export function TeamSessionView({
               ...(payload.text.includes("@all") ? [{ type: "all" as const }] : []),
             ]
           : privateMentionTarget
-            ? [{ type: "agent" as const, agentId: privateMentionTarget.id }]
+            ? [
+                {
+                  type: "agent" as const,
+                  agentId: privateMentionTarget.id,
+                  // 私聊必须带**席位**（instanceId）：同 agent 可能有多席位，
+                  // 只传 agentId 会让服务端按 agent 猜一个（2026-11-16 线上事故：
+                  // 平台管理私聊的回复被写进项目经理-1 的会话）。
+                  ...(privateMentionTarget.instanceId
+                    ? { instanceId: privateMentionTarget.instanceId }
+                    : {}),
+                },
+              ]
             : [],
         // 多附件契约：请求体提交 attachments 数组（≤10），不再提交 legacy 单附件三字段；
         // 无附件时不带该字段（服务端按缺省处理）。

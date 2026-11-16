@@ -3931,37 +3931,16 @@ export class WorkerDispatcher
       });
       teamId = task?.teamId ?? null;
     }
-    if (!teamMemberId && teamId && agentId) {
-      const repo = (this.prisma as any).teamMember;
-      let list: Array<{ id: string; alias: string | null }> = [];
-      if (typeof repo?.findMany === 'function') {
-        const rows = await repo.findMany({
-          where: { teamId, agentId },
-          select: { id: true, alias: true },
-          orderBy: { createdAt: 'asc' },
-          take: 2,
-        });
-        list = (rows ?? []) as Array<{ id: string; alias: string | null }>;
-      }
-      if (list.length === 0 && typeof repo?.findFirst === 'function') {
-        // 兼容裁剪过的 prisma mock / 旧注入（无 findMany 或返回空）：只取一条，
-        // 无从判断是否多席位
-        const row = await repo.findFirst({
-          where: { teamId, agentId },
-          select: { id: true },
-        });
-        if (row?.id) list = [{ id: row.id, alias: null }];
-      }
-      teamMemberId = list[0]?.id ?? null;
-      // 同 agent 多席位时这条兜底无法确定「是哪一位」，必须留痕（线上就是这么写错的）
-      if (list.length > 1) {
-        this.logger.warn(
-          `task.completed 归属兜底不确定：team=${teamId} agent=${agentId} 有多个席位 ` +
-            `(${list.map((m) => m.id).join('/')})，按最早创建取 ${teamMemberId}；` +
-            `若回复落到了错误成员的会话，说明 sessionId 未命中 instanceRef 反查`,
-        );
-      }
-    }
+    /**
+     * **不再按 (teamId, agentId) 猜席位**（2026-11-16 用户明确要求）。
+     *
+     * 旧兜底在同 agent 多席位时用 `findFirst` 取第一个 —— 线上因此把「平台管理」私聊的
+     * 回复写进了「项目经理-1」的会话（两者都是 a_project_manager）。**不确定的归属宁可
+     * 报错**，也不要静默写错人的会话：写错比不写更难发现，且会污染别人的对话历史。
+     *
+     * 归属只能来自**确定性来源**：平台主键 → instanceRef 反查 → 上面的任务归属反查团队。
+     * 都拿不到 teamMemberId ⇒ 直接 error 终止（不落库、不广播）。
+     */
     const text = payload.text ?? '';
     const unsettled = {
       teamId,
@@ -3973,7 +3952,9 @@ export class WorkerDispatcher
     };
     if (!teamId || !teamMemberId || !agentId) {
       this.logger.error(
-        `team task.completed 无法定位团队会话（session=${sessionId ?? '-'}），跳过回复落库`,
+        `team task.completed 无法确定归属（session=${sessionId ?? '-'} team=${teamId ?? '-'} ` +
+          `member=${teamMemberId ?? '-'} agent=${agentId ?? '-'}）：sessionId 未命中平台主键/` +
+          `instanceRef 反查，且不再按 agent 猜席位 —— 跳过落库（避免写错成员会话）`,
       );
       this.emitError({
         taskId: taskId ?? 'unknown',
