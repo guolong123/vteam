@@ -1079,6 +1079,30 @@ export class V2Driver implements OpenCodeDriver {
     const res = await this.request(path);
     const payload = await this.readJson<{ data?: unknown }>(res, path);
     const items = unwrapV2List<V2Integration>(payload);
+    // v1.7.89+：`/api/integration` 只有「怎么配」的声明（id/name/methods），
+    // **不含端点**；端点在 `GET /api/provider` 的 `settings.baseURL`。
+    // 同时拉取并按 id 归并，让控制面能把真实端点写进模型行/DSH patch。
+    // 失败不阻断（旧版 serve 无该端点 / 鉴权失败 → 退化为不带 baseURL）。
+    const baseURLById = new Map<string, string>();
+    try {
+      const pPath = '/api/provider';
+      const pRes = await this.request(pPath);
+      const pPayload = await this.readJson<{ data?: unknown }>(pRes, pPath);
+      for (const row of unwrapV2List<{
+        id?: string;
+        settings?: { baseURL?: string };
+      }>(pPayload)) {
+        const pid = row?.id?.trim();
+        const url = row?.settings?.baseURL?.trim();
+        if (pid && url) baseURLById.set(pid, url);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[v2-driver] /api/provider 拉取失败，集成条目不带 baseURL：${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
     const integrations: DriverIntegrationInfo[] = [];
     for (const item of items) {
       const id = item.id?.trim();
@@ -1093,11 +1117,13 @@ export class V2Driver implements OpenCodeDriver {
           }
         }
       }
+      const baseURL = baseURLById.get(id);
       integrations.push({
         id,
         name: item.name?.trim() || id,
         apiKey,
         ...(envNames.length > 0 ? { envNames } : {}),
+        ...(baseURL ? { baseURL } : {}),
       });
     }
     return integrations;

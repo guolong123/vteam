@@ -88,6 +88,8 @@ export interface DriverIntegrationInfo {
   apiKey: boolean;
   /** 该集成识别的环境变量名（`methods` 含 `{type:"env"}` 时的 names；仅作提示展示） */
   envNames?: string[];
+  /** opencode serve 侧 provider 端点（GET /api/provider → settings.baseURL）；无则省略。 */
+  baseURL?: string;
 }
 
 /**

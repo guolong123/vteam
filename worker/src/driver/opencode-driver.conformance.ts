@@ -188,6 +188,8 @@ export async function startFakeDriverServer(
             connections: [],
           },
           { id: 'env-only', name: 'Env Only', methods: [{ type: 'env', names: ['ENV_ONLY_TOKEN'] }] },
+          { id: 'commandcode', name: 'CommandCode', methods: [{ type: 'key' }] },
+          { id: 'noEndpoint', name: 'No Endpoint', methods: [{ type: 'key' }] },
           { id: '', name: 'broken-no-id', methods: [{ type: 'key' }] },
         ],
       });
@@ -275,7 +277,11 @@ export async function startFakeDriverServer(
     }
     if (method === 'GET' && path === '/api/provider') {
       sendJson(res, 200, {
-        data: [{ id: 'opencode', models: { 'free-model': { name: 'Free Model' } } }],
+        data: [
+          { id: 'opencode', settings: { baseURL: 'https://opencode.ai/inference/openai/v1' } },
+          { id: 'commandcode', settings: { baseURL: 'https://api.commandcode.ai/provider/v1' } },
+          { id: 'noEndpoint' },
+        ],
       });
       return;
     }
@@ -364,6 +370,11 @@ export function describeOpencodeDriverConformance(
       // 「怎么配」的声明可以有，**已配的值绝不出现**（输出里没有任何 key 形态的串）
       expect(JSON.stringify(items)).not.toMatch(/sk-[A-Za-z0-9]/);
       expect(JSON.stringify(items)).toContain('opencode-go');
+      // v1.7.89+：/api/provider 的 settings.baseURL 应按 id 归并进集成条目
+      expect(items.find((i) => i.id === 'commandcode')?.baseURL).toBe(
+        'https://api.commandcode.ai/provider/v1',
+      );
+      expect(items.find((i) => i.id === 'noEndpoint')?.baseURL).toBeUndefined();
     });
 
     it('listAgents 返回数组', async () => {

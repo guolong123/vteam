@@ -996,7 +996,64 @@ export class ModelsService implements OnModuleInit {
         `live 同步剪枝：禁用孤儿模型 ${disabled} 个（无 worker 持有且未配置凭据）`,
       );
     }
+    // v1.7.89+：模型清单同步后，把 opencode serve 侧各 provider 的
+    // settings.baseURL 补写进模型行（此前只同步 id，commandcode 等 provider
+    // 无 baseUrl → DSH injector 退化成 https://<providerID>/v1 占位域名，
+    // DNS 无法解析 ⇒ 模型调用超时）。只补空值，不覆盖用户手配的端点。
+    const baseUrlSynced = await this.syncProviderBaseUrls(onlineWorkers);
+    if (baseUrlSynced > 0) {
+      this.logger.log(
+        `live 同步 provider 端点：补写 ${baseUrlSynced} 个模型行 baseUrl`,
+      );
+    }
     return { synced: liveCatalogIds.length, disabled, liveModels };
+  }
+
+  /**
+   * 从在线 worker 的 `/integrations`（已带 opencode `GET /api/provider` 的
+   * settings.baseURL）取 provider 端点，补写进该 provider 下**所有 baseUrl 为空**
+   * 的启用模型行。
+   *
+   * 幂等：只写空值；无端点/全失败 → 0，不阻断同步。
+   * 为什么按 provider 批量写：baseUrl 是 provider 级配置，同 provider 的所有模型
+   * 共享一端点；`getLocalProviderConfigs()` 正是按此列聚合出 providerConfigs 下发。
+   */
+  private async syncProviderBaseUrls(
+    onlineWorkers: Array<{ id: string; capabilities: unknown }>,
+  ): Promise<number> {
+    try {
+      const endpointById = new Map<string, string>();
+      for (const w of onlineWorkers) {
+        const list = await this.workerClient.listIntegrations(
+          w as unknown as { id: string; capabilities: unknown },
+        );
+        let local = 0;
+        for (const item of list) {
+          const url = item.baseURL?.trim();
+          if (!url || endpointById.has(item.id)) continue;
+          endpointById.set(item.id, url);
+          local++;
+        }
+        if (local > 0) break; // 首个给出端点的 worker 即权威（对齐集成列表口径）
+      }
+      if (endpointById.size === 0) return 0;
+      let written = 0;
+      for (const [providerID, baseUrl] of endpointById) {
+        const result = await this.prisma.model.updateMany({
+          where: { providerID, baseUrl: null, enabled: true },
+          data: { baseUrl },
+        });
+        written += result.count;
+      }
+      return written;
+    } catch (err) {
+      this.logger.warn(
+        `provider 端点同步失败（不阻断模型同步）：${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 0;
+    }
   }
 
   private async upsertAndEnableCatalogModel(

@@ -69,6 +69,8 @@ export interface WorkerIntegrationInfo {
   apiKey: boolean;
   /** 该集成识别的环境变量名（仅作提示展示；缺失省略）。 */
   envNames?: string[];
+  /** opencode serve 侧 provider 端点（GET /api/provider → settings.baseURL）；无则省略。 */
+  baseURL?: string;
 }
 
 /**

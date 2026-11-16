@@ -690,6 +690,12 @@ export interface WorkerModelsResponsePayload {
  * ⚠️ 同 `WorkerModelInfo` 的 D3 口径：只留页面/控制面用得到的字段，**不透传被驱动端的
  * `methods`/`connections` 包装**；输出**不含任何已配的 secret**（`apiKey`/`envNames` 是
  * 「怎么配」的声明，不是「配了什么」的值）。
+ *
+ * v1.7.89+：`baseURL` 来自 opencode serve `GET /api/provider` 的
+ * `settings.baseURL`（provider 的 OpenAI 兼容端点，非 secret）。DSH 引擎需要
+ * 显式端点注入 patch；此前只同步模型 id、不带 baseUrl ⇒ commandcode 等无
+ * 本地 baseUrl 的 provider 退化成 `https://<providerID>/v1` 占位域名（DNS
+ * 无法解析）⇒ 模型调用超时。故同步链路必须带出端点。
  */
 export interface WorkerIntegrationInfo {
   /** 集成 id（= providerID，如 `opencode-go`）。 */
@@ -700,6 +706,12 @@ export interface WorkerIntegrationInfo {
   apiKey: boolean;
   /** 该集成识别的环境变量名（仅作提示展示；缺失省略）。 */
   envNames?: string[];
+  /**
+   * opencode serve 侧该 provider 的 OpenAI 兼容根端点
+   * （`GET /api/provider` → `settings.baseURL`）。无端点（内置免费/本地
+   * provider 未显式配置）时省略。
+   */
+  baseURL?: string;
 }
 
 /**

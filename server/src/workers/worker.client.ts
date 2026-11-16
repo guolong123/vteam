@@ -860,6 +860,12 @@ export class WorkerClient {
           ...(Array.isArray(item.envNames) && item.envNames.length > 0
             ? { envNames: item.envNames }
             : {}),
+          // v1.7.89+：opencode serve /api/provider 的 settings.baseURL。
+          // 只透传 http(s) 根端点（防脏数据），供模型同步写 baseUrl。
+          ...(typeof item.baseURL === 'string' &&
+          /^https?:\/\//i.test(item.baseURL.trim())
+            ? { baseURL: item.baseURL.trim() }
+            : {}),
         }));
     } catch (err) {
       // 可观测性：同 listModels 区分「不可达/失败」与「可达但空列表」，但语义统一为

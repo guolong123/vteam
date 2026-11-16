@@ -107,7 +107,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         delete: jest.fn(),
         deleteMany: jest.fn(),
         groupBy: jest.fn(),
@@ -610,6 +610,74 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(result).toEqual({ degraded: true, items: [] });
       expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('syncProviderBaseUrls（v1.7.89+：从 /integrations 补 provider 端点）', () => {
+    it('live 同步后把 commandcode 的 settings.baseURL 写进该 provider 的空 baseUrl 模型行', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: { baseUrl: 'http://worker:4199' } },
+      ]);
+      workerClient.listModels.mockResolvedValue([
+        {
+          id: 'commandcode/deepseek/deepseek-v4.1-flash',
+          name: 'v4.1',
+          providerID: 'commandcode',
+          modelID: 'deepseek/deepseek-v4.1-flash',
+          status: 'active',
+        },
+      ]);
+      workerClient.listIntegrations.mockResolvedValue([
+        {
+          id: 'commandcode',
+          name: 'CommandCode',
+          apiKey: true,
+          baseURL: 'https://api.commandcode.ai/provider/v1',
+        },
+      ]);
+      prisma.model.findUnique.mockResolvedValue({ id: 'md_cc', enabled: true });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.model.updateMany.mockResolvedValue({ count: 72 });
+
+      const result = await service.syncLiveModels();
+
+      expect(result.synced).toBe(1);
+      expect(prisma.model.updateMany).toHaveBeenCalledWith({
+        where: {
+          providerID: 'commandcode',
+          baseUrl: null,
+          enabled: true,
+        },
+        data: { baseUrl: 'https://api.commandcode.ai/provider/v1' },
+      });
+    });
+
+    it('集成条目无 baseURL → 不写模型行（旧 worker 降级）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: { baseUrl: 'http://worker:4199' } },
+      ]);
+      workerClient.listModels.mockResolvedValue([
+        {
+          id: 'opencode/big-pickle',
+          name: 'big-pickle',
+          providerID: 'opencode',
+          modelID: 'big-pickle',
+          status: 'active',
+        },
+      ]);
+      workerClient.listIntegrations.mockResolvedValue([
+        { id: 'opencode', name: 'OpenCode', apiKey: false },
+      ]);
+      prisma.model.findUnique.mockResolvedValue({ id: 'md_1', enabled: true });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.findMany.mockResolvedValue([]);
+
+      await service.syncLiveModels();
+
+      expect(prisma.model.updateMany).not.toHaveBeenCalled();
     });
   });
 

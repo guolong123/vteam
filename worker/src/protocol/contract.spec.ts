@@ -778,7 +778,7 @@ const PROTOCOL_MANIFEST = {
   WorkerModelsResponsePayload: { required: ['models'], optional: [] },
   WorkerIntegrationInfo: {
     required: ['id', 'name', 'apiKey'],
-    optional: ['envNames'],
+    optional: ['envNames', 'baseURL'],
   },
   WorkerIntegrationsResponsePayload: { required: ['integrations'], optional: [] },
   // P6：`agent?` 增补（agent 身份 / dsh 侧 agent-preset）
@@ -917,6 +917,7 @@ type _M11 = Expect<
       name: string;
       apiKey: boolean;
       envNames?: string[];
+      baseURL?: string;
     }
   >
 >;
@@ -928,7 +929,7 @@ type _M12 = Expect<
     }
   >
 >;
-type _O7 = Expect<[OptionalKeys<WorkerIntegrationInfo>] extends ['envNames'] ? true : false>;
+type _O7 = Expect<[OptionalKeys<WorkerIntegrationInfo>] extends ['envNames' | 'baseURL'] ? true : false>;
 /* 编译期：可选键集必须与 manifest 一致（`model?` 变成必填 = 契约漂移）。
  * P6 增补 `agent?`（agent 身份 / dsh 侧 agent-preset）。 */
 type _O1 = Expect<
