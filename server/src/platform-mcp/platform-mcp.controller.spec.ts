@@ -284,7 +284,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 35 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_list/memory_update + memory_archive/memory_merge + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel + secret_command + tool_schema；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 36 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_list/memory_update + memory_archive/memory_merge + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel + secret_command + tool_schema；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -320,6 +320,7 @@ describe('PlatformMcpController (HTTP)', () => {
         'memory_list',
         'memory_archive',
         'memory_merge',
+        'my_groups',
         'team_view',
         'my_profile',
         'team_add_member',
@@ -351,6 +352,16 @@ describe('PlatformMcpController (HTTP)', () => {
           expect(tool.inputSchema).toMatchObject({
             type: 'object',
             properties: expect.objectContaining({ teamId: { type: 'string' } }),
+          });
+          continue;
+        }
+        if (tool.name === 'my_groups') {
+          // 只列「我」所属的群：schema 只有可选 selfInstanceId，无 taskId/teamId
+          expect(tool.inputSchema).toMatchObject({
+            type: 'object',
+            properties: expect.objectContaining({
+              selfInstanceId: { type: 'string' },
+            }),
           });
           continue;
         }
@@ -1996,7 +2007,7 @@ describe('PlatformMcpController (HTTP)', () => {
         count: number;
         tools: string[];
       };
-      expect(body.count).toBe(35);
+      expect(body.count).toBe(36);
       expect(
         body.tools.some((line) => line.startsWith('issue_transition ')),
       ).toBe(true);

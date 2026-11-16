@@ -5280,9 +5280,21 @@ export class WorkerDispatcher
         where: { id: raw },
         select: { providerID: true, modelID: true },
       });
-      return row ? `${row.providerID}/${row.modelID}` : null;
+      if (!row) {
+        // 成员配的模型行不存在/已删：以前静默返回 null，上层只看到「未解析出模型」，
+        // 排查时无法区分「没配」和「配了但模型行丢了」（2026-11-16 用户实测踩到）。
+        this.logger.warn(
+          `模型引用解析为空：model 行不存在 id=${raw}（成员/席位配置指向了已删除的模型？）`,
+        );
+        return null;
+      }
+      return `${row.providerID}/${row.modelID}`;
     } catch (err) {
-      void err;
+      // 以前是静默 catch。保持 fail-open（返回 null 不阻断分派），但必须留痕：
+      // 否则「成员明明配了模型却用了免费默认模型」这类问题无从下手。
+      this.logger.warn(
+        `模型引用解析异常 id=${raw}：${this.describeError(err)}（回退后续模型链）`,
+      );
       return null;
     }
   }

@@ -5247,6 +5247,108 @@ export class PlatformMcpService implements OnModuleInit {
    * 4. 返回 {taskId, teamId, pendingReceipts, members, externalUsers}；team 模式
    *    pendingReceipts 恒零（无任务账本）。
    */
+  /**
+   * my_groups：列出**当前 Agent** 所属的全部团队群聊（只读，无副作用）。
+   *
+   * 解决缺口（2026-11-16 用户实测）：agent 被问「你能看到几个群」时没有工具可枚举，
+   * 只能依赖系统提示里注入的那一条，于是回答「当前没有提供列出全部群聊的工具」。
+   *
+   * 身份解析：显式 `selfInstanceId` 优先，否则按 `ctx.workerId` 的最近会话推断席位；
+   * 再经 `team_members.member_id` 展开成该**人**在所有团队的席位（一个成员可加入多个群）。
+   */
+  async myGroups(
+    ctx: PlatformMcpContext,
+    args: { selfInstanceId?: string },
+  ): Promise<{
+    groups: Array<{
+      teamId: string;
+      teamName: string | null;
+      selfInstanceId: string;
+      alias: string | null;
+      seq: number;
+      groupChannelId: string | null;
+    }>;
+  }> {
+    let selfId = args.selfInstanceId?.trim() || null;
+    if (!selfId) {
+      try {
+        const sess = await (this.prisma as any).session.findFirst({
+          where: { workerId: ctx.workerId },
+          orderBy: { updatedAt: 'desc' },
+          select: { teamMemberId: true },
+        });
+        selfId = (sess?.teamMemberId as string | null) ?? null;
+      } catch {
+        selfId = null;
+      }
+    }
+    if (!selfId) {
+      throw new BadRequestException(
+        '无法解析你的实例 id：请显式传 selfInstanceId（tmm_ 前缀，可经 vteam_my_profile 或团队名册查询）',
+      );
+    }
+    const seat = await (this.prisma as any).teamMember.findUnique({
+      where: { id: selfId },
+      select: {
+        id: true,
+        alias: true,
+        seq: true,
+        teamId: true,
+        memberId: true,
+      },
+    });
+    if (!seat) {
+      throw new NotFoundException(`实例 ${selfId} 不存在或不属于任何团队`);
+    }
+    const memberId: string | null = seat.memberId ?? null;
+    const seats: Array<{
+      id: string;
+      alias: string | null;
+      seq: number;
+      teamId: string;
+    }> = memberId
+      ? await (this.prisma as any).teamMember.findMany({
+          where: { memberId },
+          select: { id: true, alias: true, seq: true, teamId: true },
+          orderBy: { seq: 'asc' },
+        })
+      : [seat];
+    const groups: Array<{
+      teamId: string;
+      teamName: string | null;
+      selfInstanceId: string;
+      alias: string | null;
+      seq: number;
+      groupChannelId: string | null;
+    }> = [];
+    for (const s of seats) {
+      const [team, groupChannel] = await Promise.all([
+        (this.prisma as any).team
+          .findUnique({ where: { id: s.teamId }, select: { name: true } })
+          .catch(() => null),
+        (this.prisma as any).chatChannel
+          .findFirst({
+            where: {
+              teamId: s.teamId,
+              type: CHANNEL_TYPE.team_group,
+              deletedAt: null,
+            },
+            select: { id: true },
+          })
+          .catch(() => null),
+      ]);
+      groups.push({
+        teamId: s.teamId,
+        teamName: team?.name ?? null,
+        selfInstanceId: s.id,
+        alias: s.alias,
+        seq: s.seq,
+        groupChannelId: groupChannel?.id ?? null,
+      });
+    }
+    return { groups };
+  }
+
   async teamView(
     ctx: PlatformMcpContext,
     args: { taskId?: string; teamId?: string; externalUserName?: string },

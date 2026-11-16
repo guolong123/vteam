@@ -55,6 +55,12 @@ describe('platform-mcp tool naming contract', () => {
         teamId: OPTIONAL,
         taskId: OPTIONAL,
       },
+      // 只列「我」所属的群：身份可选（不传按 worker 最近会话推断），无需任务/团队上下文
+      my_groups: {
+        selfInstanceId: OPTIONAL,
+        teamId: ABSENT,
+        taskId: ABSENT,
+      },
       doclib: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: REQUIRED },
       task_context: {
         selfInstanceId: ABSENT,

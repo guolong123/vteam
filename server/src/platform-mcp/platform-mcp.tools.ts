@@ -579,6 +579,23 @@ export const teamViewSchema = z.object({
 
 type TeamViewArgs = z.infer<typeof teamViewSchema>;
 
+/**
+ * my_groups：列出**我**（当前 Agent）所属的全部团队群聊。
+ *
+ * 用户实测缺口（2026-11-16）：agent 被问「你能看到几个群」时只能靠系统注入了几个，
+ * 没有工具能主动枚举；它甚至回答「当前没有提供列出全部群聊的工具」。
+ */
+export const myGroupsSchema = z.object({
+  selfInstanceId: z
+    .string()
+    .optional()
+    .describe(
+      '你自己的团队成员实例 id（tmm_ 前缀，可选）；不传时按 worker 最近会话推断',
+    ),
+});
+
+type MyGroupsArgs = z.infer<typeof myGroupsSchema>;
+
 /** my_profile：自身 Agent 配置视图（只读，prompt 仅返回摘要，不暴露完整提示词）。
  * team-free-chat todo-4：保持 task-bound（自身配置按任务实例快照查询），不加入可选 5 工具。 */
 export const myProfileSchema = z.object({
@@ -1446,6 +1463,13 @@ function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
         '合并两条语义重复的团队级记忆：把 sourceId 的内容并入 targetId，引用计数累加转移，source 自动归档（软删，可追溯「已合并至」）。适用于同一坑/同一做法被多次沉淀成多条记忆的情形——先 vteam_memory_list 核对内容，保留更完整/更常被引用的一条作 target。仅本团队 team 级记忆可合并（跨团队 / global / role 级 403），source 已归档或与 target 同 id 返回 404 / 400。返回 {merged:true, targetId, transferredRef}。',
       inputSchema: memoryMergeSchema,
       handler: (ctx, args) => service.memoryMerge(ctx, args as MemoryMergeArgs),
+    },
+    {
+      name: 'my_groups',
+      description:
+        '列出**你（当前 Agent）**所属的全部团队群聊：每个席位的 teamId/teamName/selfInstanceId/别名/序号/群聊频道 id。用于回答「我在几个群、都是哪些群」，或在 vteam_group_post 前确认目标团队。只看自己加入的群（不是团队全员视图，后者用 vteam_team_view）。返回 {groups: [...]}。',
+      inputSchema: myGroupsSchema,
+      handler: (ctx, args) => service.myGroups(ctx, args as MyGroupsArgs),
     },
     {
       name: 'team_view',

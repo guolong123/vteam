@@ -11088,3 +11088,119 @@ describe('PlatformMcpService', () => {
     });
   });
 });
+
+/**
+ * my_groups（2026-11-16 用户需求）：agent 被问「你能看到几个群」时没有工具可枚举，
+ * 只能回答「没有提供列出全部群聊的工具」。本工具列出**我**所属的全部团队群聊。
+ */
+describe('PlatformMcpService.myGroups', () => {
+  const build = (prisma: any) =>
+    new PlatformMcpService(
+      prisma,
+      { emit: jest.fn() } as any,
+      { nextId: jest.fn().mockResolvedValue('m_1') } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+  it('按 memberId 展开该成员的全部席位，并带出群聊频道 id', async () => {
+    const prisma: any = {
+      session: { findFirst: jest.fn().mockResolvedValue(null) },
+      teamMember: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'tmm_1',
+          alias: '平台管理',
+          seq: 1,
+          teamId: 'tm_1',
+          memberId: 'mbr_1',
+        }),
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'tmm_1', alias: '平台管理', seq: 1, teamId: 'tm_1' },
+          { id: 'tmm_2', alias: '平台管理', seq: 2, teamId: 'tm_2' },
+        ]),
+      },
+      team: {
+        findUnique: jest.fn().mockImplementation(async ({ where }: any) => ({
+          name: where.id === 'tm_1' ? '团队A' : '团队B',
+        })),
+      },
+      chatChannel: {
+        findFirst: jest.fn().mockImplementation(async ({ where }: any) => ({
+          id: where.teamId === 'tm_1' ? 'c_1' : 'c_2',
+        })),
+      },
+    };
+    const svc = build(prisma);
+    const res = await svc.myGroups(
+      { workerId: 'w_1' },
+      { selfInstanceId: 'tmm_1' },
+    );
+    expect(res.groups).toEqual([
+      {
+        teamId: 'tm_1',
+        teamName: '团队A',
+        selfInstanceId: 'tmm_1',
+        alias: '平台管理',
+        seq: 1,
+        groupChannelId: 'c_1',
+      },
+      {
+        teamId: 'tm_2',
+        teamName: '团队B',
+        selfInstanceId: 'tmm_2',
+        alias: '平台管理',
+        seq: 2,
+        groupChannelId: 'c_2',
+      },
+    ]);
+  });
+
+  it('不传 selfInstanceId → 按 worker 最近会话的席位推断', async () => {
+    const prisma: any = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({ teamMemberId: 'tmm_9' }),
+      },
+      teamMember: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'tmm_9',
+          alias: 'A',
+          seq: 1,
+          teamId: 'tm_9',
+          memberId: null,
+        }),
+        findMany: jest.fn(),
+      },
+      team: { findUnique: jest.fn().mockResolvedValue({ name: 'T9' }) },
+      chatChannel: { findFirst: jest.fn().mockResolvedValue({ id: 'c_9' }) },
+    };
+    const svc = build(prisma);
+    const res = await svc.myGroups({ workerId: 'w_1' }, {});
+    expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workerId: 'w_1' } }),
+    );
+    expect(res.groups).toHaveLength(1);
+    expect(res.groups[0].selfInstanceId).toBe('tmm_9');
+  });
+
+  it('推断不出身份 → 报错并提示显式传 selfInstanceId', async () => {
+    const prisma: any = {
+      session: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const svc = build(prisma);
+    await expect(svc.myGroups({ workerId: 'w_1' }, {})).rejects.toThrow(
+      /selfInstanceId/,
+    );
+  });
+});
