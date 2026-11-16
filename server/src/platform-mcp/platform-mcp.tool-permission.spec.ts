@@ -176,6 +176,23 @@ describe('platform tool permission gate (capability model)', () => {
       ).resolves.toBeUndefined();
     });
 
+    /**
+     * 只读自省白名单（2026-11-16）：my_groups 列「我」所属的群聊，无副作用、不跨成员，
+     * 与 tool_schema 同属只读自省 —— 恒放行，不查能力目录/岗位矩阵。
+     *
+     * 为什么走白名单而不是能力目录：`VTEAM_MCP_TOOL_NAMES` + 能力目录是**历史冻结基线**
+     * （有 sha256 闸门与逐字节比对），加新工具会永久改变 `permission` 输出；只读工具走
+     * 白名单既满足「可用」又不破坏历史身份。
+     */
+    it('my_groups 属只读自省白名单 → 任意岗位恒放行（含 capabilities 显式拒绝其他能力点）', async () => {
+      const { service } = build({
+        member: memberRow({ capabilities: { 'team.view': false } }),
+      });
+      await expect(
+        service.assertToolAllowed('tmm_dev', 'my_groups'),
+      ).resolves.toBeUndefined();
+    });
+
     it('select 只读 role.{id,key,capabilities}——绝不读 Agent（角色权威，执行者不参与）', async () => {
       const { service, prisma } = build({
         member: memberRow({ capabilities: {} }),

@@ -111,7 +111,7 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
   {
     key: 'team.view',
     label: '查看团队',
-    tools: ['vteam_team_view', 'vteam_my_groups'],
+    tools: ['vteam_team_view'],
     defaultDeny: false,
   },
   {

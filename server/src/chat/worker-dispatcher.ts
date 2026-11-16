@@ -3896,10 +3896,30 @@ export class WorkerDispatcher
     let teamMemberId: string | null = null;
     let agentId: string | null = payload.agentId ?? null;
     if (sessionId) {
-      const session = await (this.prisma as any).session.findUnique({
+      /**
+       * `payload.sessionId` 是 **opencode 会话 id（ses_ 前缀）**，不是平台主键
+       * （见 worker-event.ingress.ts 的 payload 语义说明）。此前只按平台主键
+       * `findUnique({ where: { id: sessionId } })` 查 —— ses_ id 永远查不到，
+       * 于是落到下面「按 (teamId, agentId) 找第一个席位」的兜底。
+       *
+       * 多席位同 agent 时该兜底会**瞎猜**：线上 tm_0000000009 有两个
+       * `a_project_manager` 席位（项目经理-1 / 平台管理），findFirst 按
+       * created_at 命中项目经理-1 ⇒ 「在平台管理私聊发的消息，回复写进了
+       * 项目经理-1 的会话」（2026-11-16 用户实测）。
+       *
+       * 修复：先按平台主键查（兼容直接传 s_ 的调用方），查不到再按
+       * `instanceRef`（opencode 会话 id）反查 —— 这条才是生产主路径。
+       */
+      let session = await (this.prisma as any).session.findUnique({
         where: { id: sessionId },
         select: { agentId: true, teamId: true, teamMemberId: true },
       });
+      if (!session) {
+        session = await (this.prisma as any).session.findFirst({
+          where: { instanceRef: sessionId },
+          select: { agentId: true, teamId: true, teamMemberId: true },
+        });
+      }
       agentId = agentId ?? session?.agentId ?? null;
       teamId = session?.teamId ?? null;
       teamMemberId = session?.teamMemberId ?? null;
@@ -3912,11 +3932,35 @@ export class WorkerDispatcher
       teamId = task?.teamId ?? null;
     }
     if (!teamMemberId && teamId && agentId) {
-      const member = await (this.prisma as any).teamMember?.findFirst?.({
-        where: { teamId, agentId },
-        select: { id: true },
-      });
-      teamMemberId = member?.id ?? null;
+      const repo = (this.prisma as any).teamMember;
+      let list: Array<{ id: string; alias: string | null }> = [];
+      if (typeof repo?.findMany === 'function') {
+        const rows = await repo.findMany({
+          where: { teamId, agentId },
+          select: { id: true, alias: true },
+          orderBy: { createdAt: 'asc' },
+          take: 2,
+        });
+        list = (rows ?? []) as Array<{ id: string; alias: string | null }>;
+      }
+      if (list.length === 0 && typeof repo?.findFirst === 'function') {
+        // 兼容裁剪过的 prisma mock / 旧注入（无 findMany 或返回空）：只取一条，
+        // 无从判断是否多席位
+        const row = await repo.findFirst({
+          where: { teamId, agentId },
+          select: { id: true },
+        });
+        if (row?.id) list = [{ id: row.id, alias: null }];
+      }
+      teamMemberId = list[0]?.id ?? null;
+      // 同 agent 多席位时这条兜底无法确定「是哪一位」，必须留痕（线上就是这么写错的）
+      if (list.length > 1) {
+        this.logger.warn(
+          `task.completed 归属兜底不确定：team=${teamId} agent=${agentId} 有多个席位 ` +
+            `(${list.map((m) => m.id).join('/')})，按最早创建取 ${teamMemberId}；` +
+            `若回复落到了错误成员的会话，说明 sessionId 未命中 instanceRef 反查`,
+        );
+      }
     }
     const text = payload.text ?? '';
     const unsettled = {

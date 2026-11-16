@@ -9531,6 +9531,53 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.execute).toHaveBeenCalledTimes(1);
     });
 
+    /**
+     * 2026-11-16 线上事故：在「平台管理」私聊发的消息，回复写进了「项目经理-1」的会话。
+     *
+     * 链路：worker 上报的 `sessionId` 是 **opencode 会话 id（ses_ 前缀）**，而归属解析
+     * 只按平台主键 `findUnique({ where: { id: sessionId } })` 查 → 必然查不到 →
+     * 落到「(teamId, agentId) 找第一个席位」的兜底。该团队有两个 a_project_manager
+     * 席位（项目经理-1 / 平台管理），兜底按创建时间命中了前者 ⇒ 回复串到别人会话。
+     *
+     * 修复：主键查不到时按 `instanceRef`（ses_ id）反查 —— 这才是生产主路径。
+     */
+    it('ses_ 前缀回流 → 按 instanceRef 反查平台会话（不再瞎猜席位）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000009' });
+      (prisma as any).session.findUnique.mockResolvedValue(null);
+      (prisma as any).session.findFirst.mockResolvedValue({
+        agentId: 'a_project_manager',
+        teamId: 'tm_0000000009',
+        // 平台管理席位（不是兜底会命中的项目经理-1）
+        teamMemberId: 'tmm_0000000044',
+      });
+      // 兜底若被走到会返回项目经理-1（错误席位）
+      (prisma as any).teamMember.findFirst.mockResolvedValue({
+        id: 'tmm_0000000030',
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: 'c_0000000046',
+      } as any);
+      prisma.message.create.mockResolvedValue(messageRow() as any);
+      const d = createDispatcher();
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        sessionId: 'ses_abc123',
+        agentId: 'a_project_manager',
+        text: '回复正文',
+      } as any);
+      expect((prisma as any).session.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { instanceRef: 'ses_abc123' } }),
+      );
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            channelId: 'c_0000000046',
+            senderInstanceId: 'tmm_0000000044',
+          }),
+        }),
+      );
+    });
+
     it('无 sessionId 回流不进幂等门：任务归属兜底团队定位，两次各落库+广播', async () => {
       // 无 session 时经任务归属反查团队 + agent 反查成员（兜底不断流）；幂等门按
       // sessionId 生效，无 sessionId 的回流每次独立落库

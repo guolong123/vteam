@@ -321,7 +321,18 @@ export const PLATFORM_MCP_TOOLS = [
  * default-allow」）。`tool_schema`（工具 schema 自省）是唯一成员——它的存在意义就是
  * 让 agent 不必靠报错猜参数；若它本身可能被岗位矩阵拒绝，这个修法即失效。
  */
-export const PLATFORM_MCP_READONLY_TOOLS = ['tool_schema'] as const;
+/**
+ * 只读自省工具（权限门**恒放行**，不查能力目录/岗位矩阵）。
+ *
+ * - `tool_schema`：agent 查工具参数 schema 的唯一通道，任何岗位都不能关掉。
+ * - `my_groups`：列**自己**所属的群聊（只读、无副作用、不跨成员）。同类只读自省，
+ *   且它不属于任何业务能力点（能力目录与 `VTEAM_MCP_TOOL_NAMES` 是历史冻结基线，
+ *   新增只读工具走本白名单而不是改基线）。
+ */
+export const PLATFORM_MCP_READONLY_TOOLS = [
+  'tool_schema',
+  'my_groups',
+] as const;
 
 /** 平台 MCP server 标识（seed 阶段 2 的 mcp-servers 记录 name 对齐）。 */
 export const PLATFORM_MCP_SERVER_NAME = 'vteam';
