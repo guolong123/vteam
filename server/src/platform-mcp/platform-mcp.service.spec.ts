@@ -11309,3 +11309,173 @@ describe('PlatformMcpService.myGroups', () => {
     );
   });
 });
+
+/**
+ * `resolveMemberBySession`（2026-11-17）：`selfSessionId` 的解析器。
+ *
+ * 背景：worker 写 `opencode.json` 时注入的 `x-worker-id` 是 **worker 级常量**（写配置那刻
+ * 还没有会话），opencode 上游也不向 MCP 透传 session id（#6279/#45997 未实现）
+ * ⇒ 会话级身份只能由 agent 带进来，平台据此按会话反查成员。
+ */
+describe('PlatformMcpService.resolveMemberBySession', () => {
+  const buildSvc = (prisma: Record<string, any>) =>
+    new PlatformMcpService(
+      prisma as any,
+      { emit: jest.fn() } as any,
+      { nextId: jest.fn().mockResolvedValue('m_1') } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+  it('平台会话主键（s_）→ 直接按 sessions.id 查，返回其 memberId', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 's_1',
+          memberId: 'mbr_1',
+          teamMemberId: 'tmm_1',
+        }),
+      },
+      teamMember: { findUnique: jest.fn() },
+      member: { findUnique: jest.fn() },
+    };
+    const out = await buildSvc(prisma).resolveMemberBySession('s_1');
+    expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 's_1' } }),
+    );
+    expect(out).toEqual({ sessionId: 's_1', memberId: 'mbr_1', bound: false });
+    // 已有 memberId 时不再绕席位表
+    expect(prisma.teamMember.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('引擎会话 id（ses_）→ 走 instance_ref 反查', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 's_1',
+          memberId: 'mbr_1',
+          teamMemberId: 'tmm_1',
+        }),
+      },
+      teamMember: { findUnique: jest.fn() },
+      member: { findUnique: jest.fn() },
+    };
+    await buildSvc(prisma).resolveMemberBySession('ses_abc');
+    expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { instanceRef: 'ses_abc' } }),
+    );
+  });
+
+  it('session.member_id 为空 → 回退 team_member_id 查席位再取成员（member_key 可能为 NULL）', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 's_1',
+          memberId: null,
+          teamMemberId: 'tmm_1',
+        }),
+      },
+      teamMember: {
+        findUnique: jest.fn().mockResolvedValue({ memberId: 'mbr_seat' }),
+      },
+      member: { findUnique: jest.fn() },
+    };
+    const out = await buildSvc(prisma).resolveMemberBySession('s_1');
+    expect(out).toEqual({
+      sessionId: 's_1',
+      memberId: 'mbr_seat',
+      bound: false,
+    });
+  });
+
+  it('会话不存在 → null（调用方据此给「首次会话请传 selfInstanceId」的提示）', async () => {
+    const prisma = {
+      session: { findFirst: jest.fn().mockResolvedValue(null) },
+      teamMember: { findUnique: jest.fn() },
+      member: { findUnique: jest.fn() },
+    };
+    await expect(
+      buildSvc(prisma).resolveMemberBySession('s_missing'),
+    ).resolves.toBeNull();
+  });
+
+  it('会话未绑成员且未给 mbr_ → 不绑定、返回 memberId=null', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 's_1',
+          memberId: null,
+          teamMemberId: null,
+        }),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
+      teamMember: { findUnique: jest.fn() },
+      member: { findUnique: jest.fn() },
+    };
+    const out = await buildSvc(prisma).resolveMemberBySession('s_1', {
+      bindMemberId: 'tmm_1',
+    });
+    expect(out).toEqual({ sessionId: 's_1', memberId: null, bound: false });
+    expect(prisma.session.update).not.toHaveBeenCalled();
+  });
+
+  it('首次会话：未绑成员 + 传 mbr_ → 就地绑定 member_id 与 member_key', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 's_1',
+          memberId: null,
+          teamMemberId: null,
+        }),
+        findUnique: jest.fn().mockResolvedValue(null), // member_key 未被占用
+        update: jest.fn().mockResolvedValue({}),
+      },
+      teamMember: { findUnique: jest.fn() },
+      member: { findUnique: jest.fn().mockResolvedValue({ id: 'mbr_1' }) },
+    };
+    const out = await buildSvc(prisma).resolveMemberBySession('s_1', {
+      bindMemberId: 'mbr_1',
+    });
+    expect(prisma.session.update).toHaveBeenCalledWith({
+      where: { id: 's_1' },
+      data: { memberId: 'mbr_1', memberKey: 'mbr_1' },
+    });
+    expect(out).toEqual({ sessionId: 's_1', memberId: 'mbr_1', bound: true });
+  });
+
+  it('member_key 已被其它会话占用 → 只写 member_id（唯一键不冲突）', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 's_new',
+          memberId: null,
+          teamMemberId: null,
+        }),
+        findUnique: jest.fn().mockResolvedValue({ id: 's_other' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      teamMember: { findUnique: jest.fn() },
+      member: { findUnique: jest.fn().mockResolvedValue({ id: 'mbr_1' }) },
+    };
+    await buildSvc(prisma).resolveMemberBySession('s_new', {
+      bindMemberId: 'mbr_1',
+    });
+    expect(prisma.session.update).toHaveBeenCalledWith({
+      where: { id: 's_new' },
+      data: { memberId: 'mbr_1' },
+    });
+  });
+});

@@ -3124,6 +3124,28 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toMatch(/\n{3,}/);
     });
 
+    /**
+     * selfSessionId（2026-11-17）：会话 id 注入身份行。
+     *
+     * opencode 不向 MCP 透传会话身份、请求头只能承载 worker 级常量 ⇒ agent 必须从提示里
+     * 拿到自己的会话 id，才能在调工具时以 selfSessionId 传回，让平台精确反查身份。
+     */
+    it('身份行注入 selfSessionId / selfMemberId：成员 id + 会话 id 同时可见', () => {
+      const s = buildSystemInstructions(agent, {
+        selfMemberId: 'mbr_1',
+        selfSessionId: 's_0000000057',
+      });
+      expect(s).toContain('成员 id: mbr_1');
+      expect(s).toContain('selfSessionId（s_0000000057）');
+      // 成员 id 仍是首选入参，会话 id 是「要绝对精确时」的替代
+      expect(s).toContain('selfInstanceId 参数请填写你的**成员 id**（mbr_1）');
+    });
+
+    it('未注入 selfSessionId → 身份行不出现会话 id 相关提示（存量调用文案不变）', () => {
+      const s = buildSystemInstructions(agent);
+      expect(s).not.toContain('selfSessionId');
+    });
+
     it('P0 条件注入：isWecomChannel=true 才注入【企业微信】段，缺省不注入', () => {
       expect(buildSystemInstructions(agent)).not.toContain(
         WECOM_SYSTEM_INSTRUCTION,

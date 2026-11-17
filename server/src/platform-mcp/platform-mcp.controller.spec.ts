@@ -32,6 +32,7 @@ describe('PlatformMcpController (HTTP)', () => {
   let service: {
     resolveToolCallerId: jest.Mock;
     resolveToolCallerWithContext: jest.Mock;
+    resolveMemberBySession: jest.Mock;
     chatHistory: jest.Mock;
     doclib: jest.Mock;
     taskContext: jest.Mock;
@@ -72,6 +73,12 @@ describe('PlatformMcpController (HTTP)', () => {
   beforeEach(async () => {
     service = {
       resolveToolCallerId: jest.fn().mockResolvedValue('tmm_sender'),
+      // selfSessionId → 成员（2026-11-17）：默认解析到 mbr_sender
+      resolveMemberBySession: jest.fn().mockResolvedValue({
+        sessionId: 's_1',
+        memberId: 'mbr_sender',
+        bound: false,
+      }),
       resolveToolCallerWithContext: jest
         .fn()
         .mockImplementation(
@@ -1241,6 +1248,110 @@ describe('PlatformMcpController (HTTP)', () => {
         },
       );
       expect(res.body.result.content).toBeDefined();
+    });
+
+    /**
+     * selfSessionId（2026-11-17）：opencode 不向 MCP 透传会话身份，请求头只能承载
+     * worker 级常量 ⇒ 会话身份由 agent 带入。平台据此精确反查成员，再复用既有归属链路。
+     */
+    it('selfSessionId → 反查出成员并回填 selfInstanceId（handler 收到成员 id）', async () => {
+      await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 31,
+          method: 'tools/call',
+          params: {
+            name: 'group_post',
+            arguments: {
+              content: 'hello',
+              selfSessionId: 's_0000000057',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.resolveMemberBySession).toHaveBeenCalledWith(
+        's_0000000057',
+        { bindMemberId: undefined },
+      );
+      expect(service.groupPost).toHaveBeenCalledWith(
+        expect.objectContaining({ workerId: 'w_0001' }),
+        expect.objectContaining({
+          selfInstanceId: 'mbr_sender',
+          content: 'hello',
+        }),
+      );
+    });
+
+    it('selfSessionId 指向不存在的会话 → 403（提示首次会话改传 selfInstanceId）', async () => {
+      service.resolveMemberBySession.mockResolvedValue(null);
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 32,
+          method: 'tools/call',
+          params: {
+            name: 'group_post',
+            arguments: {
+              content: 'hi',
+              selfSessionId: 's_does_not_exist',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(res.body.error.code).toBe(-32003);
+      expect(res.body.error.message).toContain('不存在该会话');
+      expect(service.groupPost).not.toHaveBeenCalled();
+    });
+
+    it('会话存在但未绑成员且未传 selfInstanceId → 403（提示补成员 id 完成绑定）', async () => {
+      service.resolveMemberBySession.mockResolvedValue({
+        sessionId: 's_1',
+        memberId: null,
+        bound: false,
+      });
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 33,
+          method: 'tools/call',
+          params: {
+            name: 'group_post',
+            arguments: { content: 'hi', selfSessionId: 's_1' },
+          },
+        })
+        .expect(200);
+
+      expect(res.body.error.code).toBe(-32003);
+      expect(res.body.error.message).toContain('尚未绑定平台成员');
+      expect(service.groupPost).not.toHaveBeenCalled();
+    });
+
+    it('会话解析出的成员与显式 selfInstanceId 不一致 → 403（拒绝模糊身份）', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 34,
+          method: 'tools/call',
+          params: {
+            name: 'group_post',
+            arguments: {
+              content: 'hi',
+              selfSessionId: 's_1',
+              selfInstanceId: 'mbr_other',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(res.body.error.code).toBe(-32003);
+      expect(res.body.error.message).toContain('不一致');
+      expect(service.groupPost).not.toHaveBeenCalled();
     });
 
     it('channel_send → service.channelSend 收到 target/text', async () => {

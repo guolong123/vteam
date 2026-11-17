@@ -56,6 +56,17 @@ const OPTIONAL_TASK_ID_DESC =
   '任务 ID（可选；缺省时服务端按 worker 最近会话回填，taskId 优先，无 taskId 时用 teamId 定位团队会话；回填不到 → 403）';
 const TEAM_ID_DESC =
   '团队 ID（可选；缺省时服务端按 worker 最近会话回填；与 taskId 同传时 taskId 优先；回填不到 → 403）';
+/**
+ * `selfSessionId`：会话身份（2026-11-17）。
+ *
+ * opencode 不向 MCP 透传会话 id（上游 #6279/#45997 未实现），请求头只承载 worker 级常量
+ * ⇒ 会话级身份由调用方带入。传它能精确反查到「我是谁」，多会话 worker 上也不会歧义。
+ */
+const SELF_SESSION_ID_DESC =
+  '你的会话 id（可选；支持平台会话主键 s_ 前缀或引擎会话 id ses_ 前缀）。' +
+  '传它可让平台精确反查你的成员身份（多会话 worker 上也不会认错人）；' +
+  '若该会话尚未绑定成员，同时传 selfInstanceId（平台成员 id，mbr_ 前缀）即可完成绑定。' +
+  '与 selfInstanceId 同传时两者必须指向同一成员。';
 
 /** 双上下文回填提示文案（历史 refine 已删除，双空不再 -32602，改为服务端会话回填）。 */
 const REQUIRE_TASK_OR_TEAM_MSG =
@@ -97,6 +108,7 @@ const chatHistorySchema = z.object({
     .describe(
       '调用方成员 id（tmm_ 前缀）：DM 模式必填（实例级归属绑定，缺失/冒充 403）；群聊模式可选（传即按实例精确绑定）',
     ),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   sinceId: z
     .string()
     .optional()
@@ -149,6 +161,7 @@ const groupPostSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   content: z.string().describe('要发布到群聊的内容'),
   fileRef: z
     .string()
@@ -181,6 +194,7 @@ const notifyAgentSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   targetInstanceId: z
     .string()
     .describe(
@@ -251,6 +265,7 @@ const submitArtifactSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   type: z
     .enum(['text', 'doc', 'file'])
     .describe(
@@ -278,6 +293,7 @@ const issueCreateSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   title: z.string().describe('issue 标题'),
   description: z.string().optional().describe('issue 描述（可选）'),
   tags: z
@@ -298,6 +314,7 @@ const issueListSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   status: z
     .enum(['open', 'in_progress', 'resolved', 'closed'])
     .optional()
@@ -312,6 +329,7 @@ const issueGetSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   issueId: z.string().describe('issue ID'),
 });
 
@@ -323,6 +341,7 @@ const issueUpdateSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   issueId: z.string().describe('issue ID'),
   title: z.string().optional().describe('issue 标题'),
   description: z.string().optional().describe('issue 描述'),
@@ -337,6 +356,7 @@ const issueTransitionSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   issueId: z.string().describe('issue ID'),
   action: z
     .enum(['start', 'resolve', 'close', 'reopen', 'reject'])
@@ -357,6 +377,7 @@ const taskTransitionSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   action: z
     .enum(['start', 'mark-pending-review', 'reject', 'block', 'resume'])
     .describe(
@@ -383,6 +404,7 @@ const questionConfirmSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   requestId: z
     .string()
     .describe('待确认请求 id（que_/per_ 前缀，来自托管确认消息）'),
@@ -410,6 +432,7 @@ export const memorySaveSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   level: z
     .enum(['team', 'role', 'global'])
     .describe(
@@ -447,6 +470,7 @@ export const memoryUpdateSchema = z
       .string()
       .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+    selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
     memoryId: z.string().describe('记忆条目 id（me_ 前缀）'),
     content: z
       .string()
@@ -546,6 +570,7 @@ export const memoryArchiveSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   memoryId: z
     .string()
     .describe('记忆条目 id（me_ 前缀，vteam_memory_list 返回值）'),
@@ -561,6 +586,7 @@ export const memoryMergeSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   sourceId: z
     .string()
     .describe('被合并（语义重复、将被归档）的一侧记忆 id（me_ 前缀）'),
@@ -606,6 +632,7 @@ export const myGroupsSchema = z.object({
     .describe(
       '你自己的团队成员实例 id（tmm_ 前缀，可选）；不传时按 worker 最近会话推断',
     ),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
 });
 
 type MyGroupsArgs = z.infer<typeof myGroupsSchema>;
@@ -618,6 +645,7 @@ export const myProfileSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
 });
 
 type MyProfileArgs = z.infer<typeof myProfileSchema>;
@@ -636,6 +664,7 @@ export const teamAddMemberSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   agentId: z.string().describe('要加入团队的 Agent id'),
   alias: z.string().optional().describe('别名（缺省由服务端按角色生成）'),
   workDir: z.string().optional().describe('工作目录（缺省由服务端按角色生成）'),
@@ -649,6 +678,7 @@ export const planCompleteSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
 });
 
 type PlanCompleteArgs = z.infer<typeof planCompleteSchema>;
@@ -692,6 +722,7 @@ export const vteamTodoSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
 });
 
 type VteamTodoArgs = z.infer<typeof vteamTodoSchema>;
@@ -715,6 +746,7 @@ const wecomReplySchema = z
       .string()
       .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份；缺省自动解析）'),
+    selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
     msgtype: z
       .enum(['text', 'markdown', 'template_card', 'image', 'file', 'mpnews'])
       .optional()
@@ -842,6 +874,7 @@ const taskCreateSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   title: z.string().min(1).max(128).describe('任务标题（必填）'),
   description: z.string().optional().describe('任务描述（可选）'),
   priority: z
@@ -872,6 +905,7 @@ const skillCreateSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   name: z.string().min(1).describe('技能名（小写字母数字，中划线分段）'),
   description: z.string().optional().describe('技能描述（可选）'),
   content: z.string().min(1).describe('SKILL.md 全文（含 YAML frontmatter）'),
@@ -891,6 +925,7 @@ const gitReposListSchema = z.object({
     .string()
     .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
 });
 
 type GitReposListArgs = z.infer<typeof gitReposListSchema>;
@@ -912,6 +947,7 @@ const hookRegisterSchema = z
       .describe(
         '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；服务端以此作为 hook 所有者）',
       ),
+    selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
     kind: z
       .enum(['time', 'all_idle'])
       .describe(
@@ -985,6 +1021,7 @@ const hookCancelSchema = z
       .string()
       .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+    selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
     hookId: z.string().optional().describe('hook id（hks_ 前缀）'),
     dedupKey: z.string().optional().describe('注册幂等键（与 hookId 二选一）'),
   })
@@ -1026,6 +1063,7 @@ export const SECRET_COMMAND_SCHEMA = z
       .string()
       .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+    selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
     command: z
       .string()
       .min(1)

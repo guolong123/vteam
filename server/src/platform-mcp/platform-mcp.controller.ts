@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpException,
@@ -17,6 +18,7 @@ import { TASK_TRANSITIONS } from '../common/constants/task.constants';
 import { ISSUE_TRANSITIONS } from '../issues/issues.constants';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import {
+  PLATFORM_MCP_ERRORS,
   PLATFORM_MCP_READONLY_TOOLS,
   PLATFORM_MCP_SERVER_NAME,
   PLATFORM_MCP_SERVER_VERSION,
@@ -420,6 +422,7 @@ export class PlatformMcpController {
         taskId?: string;
         teamId?: string;
         selfInstanceId?: string;
+        selfSessionId?: string;
       };
       // 只读自省（`vteam_tool_schema`）**不参与归属/授权链路**：它没有 taskId/teamId，
       // 归属解析必然回退到 worker 最近会话（可能是无成员的会话）而误 403；且它不读任何
@@ -429,6 +432,50 @@ export class PlatformMcpController {
       ).includes(tool.name);
       let fromFallback = false;
       if (!readonlyTool) {
+        /**
+         * `selfSessionId` → 成员 id（2026-11-17）。
+         *
+         * opencode 不向 MCP 透传会话身份（上游 #6279/#45997 未实现），请求头只能承载
+         * worker 级常量 ⇒ 会话级身份由 agent 带入（系统提示已注入 sessionId）。
+         *
+         * 解析出的成员直接回填到 `selfInstanceId`（mbr_），后续归属校验、权限门、
+         * 落库全部复用既有链路，无需在 20+ 个工具里各改一遍签名。
+         *
+         * 首次新会话（会话已建但未绑成员）：同时传 selfInstanceId 即就地绑定。
+         */
+        const sessionRef = (input.selfSessionId ?? '').trim();
+        if (sessionRef) {
+          const bySession = await this.service.resolveMemberBySession(
+            sessionRef,
+            { bindMemberId: input.selfInstanceId },
+          );
+          if (!bySession) {
+            throw new ForbiddenException({
+              code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+              message:
+                `无法识别会话 ${sessionRef}：平台不存在该会话 id（支持 s_ 平台主键 / ses_ 引擎会话 id）。` +
+                '若这是首次会话，请改传 selfInstanceId（平台成员 id，mbr_ 前缀）。',
+            });
+          }
+          if (!bySession.memberId) {
+            throw new ForbiddenException({
+              code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+              message:
+                `会话 ${sessionRef} 尚未绑定平台成员。` +
+                '请同时传 selfInstanceId（平台成员 id，mbr_ 前缀），平台会把它绑定到该会话。',
+            });
+          }
+          const explicit = (input.selfInstanceId ?? '').trim();
+          if (explicit.startsWith('mbr_') && explicit !== bySession.memberId) {
+            throw new ForbiddenException({
+              code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+              message:
+                `selfSessionId 推断出的成员（${bySession.memberId}）与 selfInstanceId（${explicit}）不一致，` +
+                '拒绝以模糊身份调用。两者只传其一，或保持相同成员。',
+            });
+          }
+          input.selfInstanceId = bySession.memberId;
+        }
         // 回填前先记录「调用方是否显式传了上下文」——input 是 parsed.data 的同一引用，
         // 回填写入会就地改写它，故必须在此刻快照。
         fromFallback = !input.taskId && !input.teamId;

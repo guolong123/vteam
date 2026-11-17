@@ -8839,6 +8839,84 @@ export class PlatformMcpService implements OnModuleInit {
    * 不一致 → 403（与 assertWorkerTask 同风格，维度内精确匹配，维度间无回退）。
    */
   /**
+   * 按**会话 id** 反查调用方成员（2026-11-17，`selfSessionId` 的解析器）。
+   *
+   * 为什么需要它：MCP 请求头由 worker 在**写配置时**注入（`x-worker-id`），那一刻还
+   * 没有会话上下文，且 opencode 上游不向 MCP 透传 session id
+   * （opencode#6279 / #45997 均为未实现 feature request）⇒ 会话身份只能由调用方带入。
+   *
+   * 接受两种 id：
+   * - `s_xxx`（平台 Session 主键）→ 直接 `sessions.id`；
+   * - `ses_xxx`（opencode 会话 id）→ 走 `sessions.instance_ref` 反查。
+   *
+   * **首次新会话**（会话已建但未绑成员）：调用方同时传 `selfInstanceId`（mbr_）时，
+   * 就地完成绑定（写 `member_id`；`member_key` 唯一，仅当未被其它会话占用时写）。
+   *
+   * @returns null = 平台不存在该会话；memberId=null = 会话存在但未绑成员且无法绑定。
+   */
+  async resolveMemberBySession(
+    sessionRef: string,
+    opts?: { bindMemberId?: string },
+  ): Promise<{
+    sessionId: string;
+    memberId: string | null;
+    bound: boolean;
+  } | null> {
+    const ref = (sessionRef ?? '').trim();
+    if (!ref) return null;
+    const session = await (this.prisma as any).session.findFirst({
+      where: ref.startsWith('ses_') ? { instanceRef: ref } : { id: ref },
+      select: { id: true, memberId: true, teamMemberId: true },
+    });
+    if (!session) return null;
+
+    let memberId = (session.memberId ?? null) as string | null;
+    if (!memberId && session.teamMemberId) {
+      // `member_key` 可能为 NULL（历史数据），但席位行的 member_id 恒有值。
+      const seat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: session.teamMemberId },
+        select: { memberId: true },
+      });
+      memberId = (seat?.memberId ?? null) as string | null;
+    }
+    if (memberId) {
+      return { sessionId: session.id, memberId, bound: false };
+    }
+
+    // 未绑成员：仅在调用方显式给了成员 id 时绑定（首次会话路径）。
+    const bind = (opts?.bindMemberId ?? '').trim();
+    if (!bind.startsWith('mbr_')) {
+      return { sessionId: session.id, memberId: null, bound: false };
+    }
+    const member = await (this.prisma as any).member.findUnique({
+      where: { id: bind },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: `无法绑定会话 ${session.id}：成员 ${bind} 不存在`,
+      });
+    }
+    // member_key 唯一（一个成员只允许一条全局会话持有）；被占用时只写 member_id。
+    const holder = await (this.prisma as any).session.findUnique({
+      where: { memberKey: bind },
+      select: { id: true },
+    });
+    await (this.prisma as any).session.update({
+      where: { id: session.id },
+      data: {
+        memberId: bind,
+        ...(holder && holder.id !== session.id ? {} : { memberKey: bind }),
+      },
+    });
+    this.logger.log(
+      `[mcp] 会话 ${session.id} 首次绑定成员 ${bind}（selfSessionId 推断）`,
+    );
+    return { sessionId: session.id, memberId: bind, bound: true };
+  }
+
+  /**
    * 解析「调用方在目标团队的席位」—— MCP 工具身份的唯一入口（2026-11-17）。
    *
    * 对外身份从「席位 id（tmm_）」上移到「**平台成员 id（mbr_）**」：成员与群聊解耦后

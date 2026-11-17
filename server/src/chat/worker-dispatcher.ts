@@ -764,6 +764,8 @@ export interface BuildSystemInstructionsOptions {
   selfInstanceId?: string;
   /** 平台成员 id（mbr_）：优先作为 MCP 工具的调用身份；缺省回退 selfInstanceId（席位）。 */
   selfMemberId?: string | null;
+  /** 平台会话 id（s_）：注入给 agent，供其以 selfSessionId 传回、由平台精确反查身份。 */
+  selfSessionId?: string | null;
   /** 任务实例 id（TeamMember.id，tmm_ 前缀）：团队会话按团队成员（tmm_）调度时，
    * selfInstanceId 为团队成员 id，此时用本字段明确其在本任务中的实例身份。
    * 缺省表示与 selfInstanceId 一致。 */
@@ -903,6 +905,14 @@ export function buildSystemInstructions(
    * 而不是记每个群的席位 id（tmm_）。缺失（历史席位未绑成员）时回退旧文案。
    */
   const selfMemberId = opts?.selfMemberId ?? null;
+  /**
+   * 平台会话 id（2026-11-17）：注入给 agent，让它在调 MCP 工具时用 `selfSessionId` 传回来。
+   *
+   * 为什么不走请求头：worker 写 `opencode.json` 时注入 `x-worker-id`（worker 级常量），
+   * 那一刻没有会话上下文；opencode 上游也不向 MCP 透传 session id（#6279/#45997 未实现）
+   * ⇒ 会话级身份只能由 agent 带入。
+   */
+  const selfSessionId = opts?.selfSessionId ?? null;
   const selfName = opts?.selfAlias ?? agent.name ?? agent.id;
   // 装配用角色标签：dispatch 装配处已把该字段由 `agentKey` 派生，此处只读内存 DTO，
   // 不触碰任何 DB 列。解构读取以避免 `agent.role` 字面量残留（todo 10 的 grep 闸门）。
@@ -924,8 +934,14 @@ export function buildSystemInstructions(
         ? // 2026-11-17：成员与群聊解耦后，成员 id（mbr_）是平台唯一主体。
           // 调 MCP 工具只需传它（同一成员加入多个群都能用），不必记每个群的席位 id（tmm_）。
           `调用 vteam MCP 工具时 selfInstanceId 参数请填写你的**成员 id**（${selfMemberId}）；` +
-          `平台会按目标群自动解析你在该群的身份。也可省略该参数，由平台按会话推断。`
-        : `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。`);
+          `平台会按目标群自动解析你在该群的身份。也可省略该参数，由平台按会话推断。` +
+          (selfSessionId
+            ? `如需绝对精确（例如一台机器上跑着多个成员的会话），改传 selfSessionId（${selfSessionId}），平台据此反查你的身份。`
+            : '')
+        : `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。` +
+          (selfSessionId
+            ? `也可改传 selfSessionId（${selfSessionId}）由平台反查。`
+            : ''));
   // 记忆段屏蔽（agent-role-decommission todo 2）：判据 = 已解析策略 tools 是否放行
   // vteam_memory_save，**不再按角色名/duty**。`resolvedTools` 缺省（null/undefined）
   // 时不屏蔽——存量调用与未知自定义 agent 行为逐字节不变。
@@ -3395,6 +3411,8 @@ export class WorkerDispatcher
       selfInstanceId: teamMemberId,
       // 平台成员 id（席位 → 成员）：注入身份行，供 agent 调 MCP 工具时使用
       selfMemberId: seatRow?.memberId ?? null,
+      // 平台会话 id：注入身份行，供 agent 以 selfSessionId 传回（精确反查身份）
+      selfSessionId: sessionId,
       selfAlias,
       persistentWorkDir: teamWorkDir,
       // P0：企微系统段默认不注入，仅触发正文含 [WeCom:] 标记时注入。
