@@ -5315,7 +5315,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async myGroups(
     ctx: PlatformMcpContext,
-    args: { selfInstanceId?: string },
+    args: { selfInstanceId?: string; selfSessionId?: string },
   ): Promise<{
     groups: Array<{
       teamId: string;
@@ -5335,6 +5335,30 @@ export class PlatformMcpService implements OnModuleInit {
     }>;
   }> {
     let selfId = args.selfInstanceId?.trim() || null;
+    /**
+     * 本工具在只读白名单里 ⇒ 控制器**不做** selfSessionId 解析。这里自己补一次，
+     * 否则 agent 传会话 id 会被静默忽略（而其它工具都支持，行为不一致）。
+     */
+    const sessionRef = (args.selfSessionId ?? '').trim();
+    if (sessionRef) {
+      const bySession = await this.resolveMemberBySession(sessionRef, {
+        bindMemberId: args.selfInstanceId,
+      });
+      if (!bySession) {
+        throw new NotFoundException(
+          `无法识别会话 ${sessionRef}（支持 s_ 平台主键 / ses_ 引擎会话 id）`,
+        );
+      }
+      if (!bySession.memberId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message:
+            `会话 ${sessionRef} 尚未绑定平台成员；` +
+            '请同时传 selfInstanceId（平台成员 id，mbr_ 前缀）完成绑定。',
+        });
+      }
+      selfId = bySession.memberId;
+    }
     if (!selfId) {
       try {
         const sess = await (this.prisma as any).session.findFirst({

@@ -11692,6 +11692,35 @@ describe('PlatformMcpService.myGroups（成员级身份）', () => {
     );
   });
 
+  it('传 selfSessionId → 自己解析出成员（只读工具控制器不做归一）', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 's_1',
+          memberId: 'mbr_1',
+          teamMemberId: 'tmm_1',
+        }),
+        findMany: jest.fn(),
+      },
+      teamMember: {
+        findUnique: jest.fn(),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { id: 'tmm_1', alias: 'A', seq: 1, teamId: 'tm_1' },
+          ]),
+      },
+      team: { findUnique: jest.fn().mockResolvedValue({ name: 'T' }) },
+      chatChannel: { findFirst: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+      member: { findUnique: jest.fn() },
+    };
+    const res = await buildSvc(prisma).myGroups(
+      { workerId: 'w_1' },
+      { selfSessionId: 's_1' },
+    );
+    expect(res.groups.map((g) => g.seatId)).toEqual(['tmm_1']);
+  });
+
   it('传 mbr_ 但该成员不在任何团队 → 404 且提示成员维度', async () => {
     const prisma = {
       session: { findFirst: jest.fn() },
