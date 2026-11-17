@@ -8898,7 +8898,9 @@ export class PlatformMcpService implements OnModuleInit {
               '。若你只是想读**别的群**：请只传 teamId（不要传 selfInstanceId）——' +
               'selfInstanceId 必须是**当前会话**所属的席位；' +
               'vteam_my_groups 返回的 seatId 是你在那个群的席位（仅用于识别），不是可传的 selfInstanceId。'
-            : '该 worker 无此团队会话，禁止跨团队访问',
+            : '该 worker 无此团队会话，禁止跨团队访问。' +
+              '要操作**别的群**：先调 vteam_my_groups 查你在这个群的 seatId，' +
+              '再把它作为 selfInstanceId 传入（席位必须属于目标团队）。',
       });
     }
     const memberId = session.teamMemberId;
