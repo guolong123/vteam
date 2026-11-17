@@ -463,7 +463,7 @@ describe('PlatformMcpService', () => {
       // 走 session.findMany（取最近 1~2 条判唯一），不再按 (teamId, workerId) 查单条。
       expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { workerId },
+          where: expect.objectContaining({ workerId }),
         }),
       );
     });
@@ -3202,7 +3202,7 @@ describe('PlatformMcpService', () => {
       );
       expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { workerId },
+          where: expect.objectContaining({ workerId }),
         }),
       );
     });
@@ -6121,7 +6121,7 @@ describe('PlatformMcpService', () => {
         // 任务维度归属校验沿用 assertWorkerTask（tm_ 前缀误传由 resolveExecContext 拦截）
         expect(prisma.session.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { workerId },
+            where: expect.objectContaining({ workerId }),
           }),
         );
         expect(prisma.teamMember.findMany).toHaveBeenCalledWith(
@@ -6318,7 +6318,7 @@ describe('PlatformMcpService', () => {
         // team 维度校验：assertWorkerTeam（teamId + workerId 会话归属）
         expect(prisma.session.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { workerId },
+            where: expect.objectContaining({ workerId }),
           }),
         );
         // 不再读任务、不计回执
@@ -7558,7 +7558,7 @@ describe('PlatformMcpService', () => {
       expect(result).toEqual({ items: [], truncated: false, total: 0 });
       expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { workerId },
+          where: expect.objectContaining({ workerId }),
         }),
       );
     });
@@ -7597,7 +7597,7 @@ describe('PlatformMcpService', () => {
       // 双传时走任务维度：resolveCallerSeat 按 worker 会话推断身份（不再查 (teamId,workerId)）
       expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { workerId },
+          where: expect.objectContaining({ workerId }),
         }),
       );
     });
@@ -7649,7 +7649,7 @@ describe('PlatformMcpService', () => {
       expect(result).toEqual({ items: [], truncated: false, total: 0 });
       expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { workerId },
+          where: expect.objectContaining({ workerId }),
         }),
       );
     });
@@ -9464,7 +9464,7 @@ describe('PlatformMcpService', () => {
       expect(result.wecomSent).toBe(true);
       expect(result.channelId).toBe('c_team_1');
       expect(prisma.session.findFirst).toHaveBeenNthCalledWith(1, {
-        where: { workerId },
+        where: expect.objectContaining({ workerId }),
         orderBy: { createdAt: 'desc' },
         select: {
           taskId: true,
@@ -9677,7 +9677,7 @@ describe('PlatformMcpService', () => {
 
       expect(result.wecomSent).toBe(true);
       expect(prisma.session.findFirst).toHaveBeenCalledWith({
-        where: { workerId },
+        where: expect.objectContaining({ workerId }),
         orderBy: { createdAt: 'desc' },
         select: {
           taskId: true,
@@ -11363,7 +11363,9 @@ describe('PlatformMcpService.myGroups', () => {
     const res = await svc.myGroups({ workerId: 'w_1' }, {});
     // myGroups 自己按 worker 最近会话（findFirst）推断身份，不经 resolveCallerSeat
     expect(prisma.session.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { workerId: 'w_1' } }),
+      expect.objectContaining({
+        where: expect.objectContaining({ workerId: 'w_1' }),
+      }),
     );
     expect(res.groups).toHaveLength(1);
     expect(res.groups[0].seatId).toBe('tmm_9');

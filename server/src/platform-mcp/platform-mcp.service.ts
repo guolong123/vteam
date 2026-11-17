@@ -9145,12 +9145,26 @@ export class PlatformMcpService implements OnModuleInit {
 
     // C. 省略：按 worker 的会话推断「我是谁」，再映射到目标团队的席位。
     //    多会话必须报错——同一 worker 上可能有多个成员的会话在跑，猜哪个都是错。
-    const sessions = (await (this.prisma as any).session.findMany({
-      where: { workerId: ctx.workerId },
-      orderBy: { createdAt: 'desc' },
-      take: 2,
-      select: { id: true, teamMemberId: true },
-    })) as Array<{ id: string; teamMemberId: string | null }>;
+    const readSessions = (where: Record<string, unknown>) =>
+      (this.prisma as any).session.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+        select: { id: true, teamMemberId: true },
+      }) as Promise<Array<{ id: string; teamMemberId: string | null }>>;
+    /**
+     * 先按**目标团队**筛会话（2026-11-17 回归修复）。
+     *
+     * 旧实现是 `findFirst({ teamId, workerId })` —— 天然带团队约束；改成「按 worker 取全部
+     * 会话」后，同机多成员时即便**只有一条属于目标团队**也会被判成歧义，等于把原本能用的
+     * 调用变成 403。这里保留团队优先：团队内有唯一会话就用它；团队内没有才回退到
+     * worker 全部会话（支撑「成员在别群有会话、往本群发」的跨群场景）。
+     */
+    const teamScoped = await readSessions({ workerId: ctx.workerId, teamId });
+    const sessions =
+      teamScoped.length > 0
+        ? teamScoped
+        : await readSessions({ workerId: ctx.workerId });
     if (sessions.length === 0) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
