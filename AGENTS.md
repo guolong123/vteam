@@ -45,6 +45,10 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:13000/api/v1/health
 | `team_members` | **Agent 席位**（一个成员在一个团队里的身份，`tmm_`） | 团队没有 agent、无法 @、MCP 工具 403（未绑岗位） |
 | `team_user_members` | **人类用户**与该团队的关系（`user_id`，含 `role`） | 会话列表按它过滤 → 该团队的群聊**不出现在 /chat** |
 
+**注意：本地有两个管理员账号** —— `admin`（`u_admin`）和 `seed-admin`（`u_seed_admin`）。
+造数据时**两个都要加** `team_user_members`，否则用其中一个登录会看不到新团队
+（2026-11-17 实测：只给 seed-admin 加了，用 admin 登录只看到 1 个群）。
+
 另外两个容易漏的字段：
 
 - `team_members.role_id`：不绑岗位（`agent_roles.id`，如 `ar_product`）→ MCP 工具调用
