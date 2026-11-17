@@ -5309,32 +5309,53 @@ export class PlatformMcpService implements OnModuleInit {
         '无法解析你的实例 id：请显式传 selfInstanceId（tmm_ 前缀，可经 vteam_my_profile 或团队名册查询）',
       );
     }
-    const seat = await (this.prisma as any).teamMember.findUnique({
-      where: { id: selfId },
-      select: {
-        id: true,
-        alias: true,
-        seq: true,
-        teamId: true,
-        memberId: true,
-      },
-    });
-    if (!seat) {
-      throw new NotFoundException(`实例 ${selfId} 不存在或不属于任何团队`);
-    }
-    const memberId: string | null = seat.memberId ?? null;
-    const seats: Array<{
+    /**
+     * 身份入参（2026-11-17）：`mbr_`（平台成员）直接展开成**该成员在所有团队的席位**；
+     * `tmm_`（席位）沿用旧语义（找到它所属成员后同样展开）。
+     *
+     * 本工具是只读白名单工具、控制器不做身份归一，必须自己兼容两种前缀。
+     */
+    let memberId: string | null = null;
+    let seats: Array<{
       id: string;
       alias: string | null;
       seq: number;
       teamId: string;
-    }> = memberId
-      ? await (this.prisma as any).teamMember.findMany({
-          where: { memberId },
-          select: { id: true, alias: true, seq: true, teamId: true },
-          orderBy: { seq: 'asc' },
-        })
-      : [seat];
+      memberId?: string | null;
+    }>;
+    if (selfId.startsWith('mbr_')) {
+      memberId = selfId;
+      seats = await (this.prisma as any).teamMember.findMany({
+        where: { memberId: selfId },
+        select: { id: true, alias: true, seq: true, teamId: true },
+        orderBy: { seq: 'asc' },
+      });
+      if (seats.length === 0) {
+        throw new NotFoundException(`成员 ${selfId} 不在任何团队中`);
+      }
+    } else {
+      const seat = await (this.prisma as any).teamMember.findUnique({
+        where: { id: selfId },
+        select: {
+          id: true,
+          alias: true,
+          seq: true,
+          teamId: true,
+          memberId: true,
+        },
+      });
+      if (!seat) {
+        throw new NotFoundException(`实例 ${selfId} 不存在或不属于任何团队`);
+      }
+      memberId = seat.memberId ?? null;
+      seats = memberId
+        ? await (this.prisma as any).teamMember.findMany({
+            where: { memberId },
+            select: { id: true, alias: true, seq: true, teamId: true },
+            orderBy: { seq: 'asc' },
+          })
+        : [seat];
+    }
     const groups: Array<{
       teamId: string;
       teamName: string | null;

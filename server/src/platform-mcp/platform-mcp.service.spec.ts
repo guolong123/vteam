@@ -11637,3 +11637,71 @@ describe('PlatformMcpService.resolveToolCallerWithContext（成员级身份）',
     ).rejects.toMatchObject({ response: { code: 'PLATFORM_MCP_FORBIDDEN' } });
   });
 });
+
+/**
+ * `my_groups` 的成员级身份（2026-11-17）。
+ *
+ * 它是只读白名单工具，控制器不做身份归一 ⇒ 必须自己兼容 `mbr_`。
+ * 此前只按 `teamMember.id`（tmm_）查，传成员 id 会直接 404。
+ */
+describe('PlatformMcpService.myGroups（成员级身份）', () => {
+  const buildSvc = (prisma: Record<string, any>) =>
+    new PlatformMcpService(
+      prisma as any,
+      { emit: jest.fn() } as any,
+      { nextId: jest.fn().mockResolvedValue('m_1') } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+  it('传 mbr_ → 展开该成员在所有团队的席位（不再按席位 id 查）', async () => {
+    const prisma = {
+      session: { findFirst: jest.fn() },
+      teamMember: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'tmm_1', alias: '跨群成员', seq: 1, teamId: 'tm_1' },
+          { id: 'tmm_2', alias: '跨群成员', seq: 2, teamId: 'tm_2' },
+        ]),
+      },
+      team: { findUnique: jest.fn().mockResolvedValue({ name: 'T' }) },
+      chatChannel: { findFirst: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+    };
+    const res = await buildSvc(prisma).myGroups(
+      { workerId: 'w_1' },
+      { selfInstanceId: 'mbr_1' },
+    );
+    expect(res.groups.map((g) => g.seatId)).toEqual(['tmm_1', 'tmm_2']);
+    // 成员级入参无需回退会话
+    expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    expect(prisma.teamMember.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { memberId: 'mbr_1' } }),
+    );
+  });
+
+  it('传 mbr_ 但该成员不在任何团队 → 404 且提示成员维度', async () => {
+    const prisma = {
+      session: { findFirst: jest.fn() },
+      teamMember: { findMany: jest.fn().mockResolvedValue([]) },
+      team: { findUnique: jest.fn() },
+      chatChannel: { findFirst: jest.fn() },
+    };
+    await expect(
+      buildSvc(prisma).myGroups(
+        { workerId: 'w_1' },
+        { selfInstanceId: 'mbr_1' },
+      ),
+    ).rejects.toThrow(/成员 mbr_1 不在任何团队中/);
+  });
+});

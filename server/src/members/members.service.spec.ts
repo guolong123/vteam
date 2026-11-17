@@ -508,8 +508,18 @@ describe('MembersService', () => {
   it('改 defaultModelId → 重置该成员全部会话绑定（模型设置即时生效）', async () => {
     const { service, prisma, sessionLifecycle } = createService();
     prisma.member.findUnique
-      .mockResolvedValueOnce({ ...detailRow, id: 'mbr_1', name: 'x', defaultModelId: 'md_old' })
-      .mockResolvedValueOnce({ ...detailRow, id: 'mbr_1', name: 'x', defaultModelId: 'md_new' });
+      .mockResolvedValueOnce({
+        ...detailRow,
+        id: 'mbr_1',
+        name: 'x',
+        defaultModelId: 'md_old',
+      })
+      .mockResolvedValueOnce({
+        ...detailRow,
+        id: 'mbr_1',
+        name: 'x',
+        defaultModelId: 'md_new',
+      });
     prisma.model.findUnique.mockResolvedValue({ id: 'md_new' });
     prisma.member.update.mockResolvedValue({});
 
@@ -524,8 +534,18 @@ describe('MembersService', () => {
   it('改同名 defaultModelId / 仅改名 → 不触发会话重置', async () => {
     const { service, prisma, sessionLifecycle } = createService();
     prisma.member.findUnique
-      .mockResolvedValueOnce({ ...detailRow, id: 'mbr_1', name: '旧名', defaultModelId: 'md_same' })
-      .mockResolvedValueOnce({ ...detailRow, id: 'mbr_1', name: '新名', defaultModelId: 'md_same' });
+      .mockResolvedValueOnce({
+        ...detailRow,
+        id: 'mbr_1',
+        name: '旧名',
+        defaultModelId: 'md_same',
+      })
+      .mockResolvedValueOnce({
+        ...detailRow,
+        id: 'mbr_1',
+        name: '新名',
+        defaultModelId: 'md_same',
+      });
     prisma.model.findUnique.mockResolvedValue({ id: 'md_same' });
     prisma.member.update.mockResolvedValue({});
     prisma.teamMember.updateMany.mockResolvedValue({ count: 0 });
@@ -535,7 +555,8 @@ describe('MembersService', () => {
       defaultModelId: 'md_same',
     });
 
-    expect(sessionLifecycle.resetSessionBindingsByMember).not.toHaveBeenCalled();
+    expect(
+      sessionLifecycle.resetSessionBindingsByMember,
+    ).not.toHaveBeenCalled();
   });
-
 });

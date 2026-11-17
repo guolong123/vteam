@@ -485,6 +485,21 @@ export class PlatformMcpController {
         );
         if (!input.taskId && resolved.taskId) input.taskId = resolved.taskId;
         if (!input.teamId && resolved.teamId) input.teamId = resolved.teamId;
+        /**
+         * 身份归一（2026-11-17）：把「成员级身份」（mbr_）折回**目标团队内的席位**（tmm_）。
+         *
+         * 下游 handler（issues / memories / notify_agent / 落库的 sender_instance_id）一律
+         * 按「席位」语义使用 selfInstanceId —— 直接把 mbr_ 透下去会让它们拿成员 id 去查
+         * team_members.id 或比 team_main_member，从而误判「不是团队成员」
+         * （2026-11-17 线上 issue_create 实测：只传席位能成，带 selfSessionId 反而 403）。
+         */
+        if (
+          input.selfInstanceId?.startsWith('mbr_') &&
+          resolved.callerId &&
+          resolved.callerId !== input.selfInstanceId
+        ) {
+          input.selfInstanceId = resolved.callerId;
+        }
         await this.toolPermission.assertToolAllowed(
           resolved.callerId,
           tool.name,

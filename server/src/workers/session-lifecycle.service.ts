@@ -669,56 +669,60 @@ export class SessionLifecycleService implements OnModuleInit {
     reason: string | { reason?: string } = 'member_config_changed',
   ) {
     const reasonText =
-      typeof reason === 'string' ? reason : (reason.reason ?? 'member_config_changed');
+      typeof reason === 'string'
+        ? reason
+        : (reason.reason ?? 'member_config_changed');
     try {
-      return await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const seats = await tx.teamMember.findMany({
-          where: { memberId },
-          select: { id: true },
-        });
-        const seatIds = seats.map((s) => s.id);
-        // team-scope 会话（teamMemberId in 席位）+ member-scope 全局会话（memberKey）
-        const or: Array<Record<string, unknown>> = [];
-        if (seatIds.length > 0) or.push({ teamMemberId: { in: seatIds } });
-        or.push({ memberKey: memberId });
-        const sessions = await tx.session.findMany({
-          where: { OR: or },
-          select: {
-            id: true,
-            teamId: true,
-            teamMemberId: true,
-            workerId: true,
-            instanceRef: true,
-          },
-        });
-        for (const s of sessions) {
-          if (s.workerId && s.instanceRef) {
-            await tx.taskGroupInstance.updateMany({
-              where: {
-                teamId: s.teamId,
-                teamMemberId: s.teamMemberId,
-                workerId: s.workerId,
-                instanceId: s.instanceRef,
-                removedAt: null,
-              },
-              data: { removedAt: new Date() },
-            });
+      return await this.prisma.$transaction(
+        async (tx: Prisma.TransactionClient) => {
+          const seats = await tx.teamMember.findMany({
+            where: { memberId },
+            select: { id: true },
+          });
+          const seatIds = seats.map((s) => s.id);
+          // team-scope 会话（teamMemberId in 席位）+ member-scope 全局会话（memberKey）
+          const or: Array<Record<string, unknown>> = [];
+          if (seatIds.length > 0) or.push({ teamMemberId: { in: seatIds } });
+          or.push({ memberKey: memberId });
+          const sessions = await tx.session.findMany({
+            where: { OR: or },
+            select: {
+              id: true,
+              teamId: true,
+              teamMemberId: true,
+              workerId: true,
+              instanceRef: true,
+            },
+          });
+          for (const s of sessions) {
+            if (s.workerId && s.instanceRef) {
+              await tx.taskGroupInstance.updateMany({
+                where: {
+                  teamId: s.teamId,
+                  teamMemberId: s.teamMemberId,
+                  workerId: s.workerId,
+                  instanceId: s.instanceRef,
+                  removedAt: null,
+                },
+                data: { removedAt: new Date() },
+              });
+            }
           }
-        }
-        const result = await tx.session.updateMany({
-          where: { OR: or },
-          data: {
-            workerId: null,
-            instanceRef: null,
-            status: SESSION_STATUS.created,
-            busyState: 'idle',
-          },
-        });
-        this.logger.log(
-          `成员配置变更重置会话绑定 member=${memberId} reason=${reasonText} 会话数=${sessions.length} 命中=${result.count}`,
-        );
-        return { reset: result.count };
-      });
+          const result = await tx.session.updateMany({
+            where: { OR: or },
+            data: {
+              workerId: null,
+              instanceRef: null,
+              status: SESSION_STATUS.created,
+              busyState: 'idle',
+            },
+          });
+          this.logger.log(
+            `成员配置变更重置会话绑定 member=${memberId} reason=${reasonText} 会话数=${sessions.length} 命中=${result.count}`,
+          );
+          return { reset: result.count };
+        },
+      );
     } catch (err) {
       // fail-open：绑定重置失败不阻断配置更新（最坏沿用旧会话，下轮 ensure 兜底）
       this.logger.warn(

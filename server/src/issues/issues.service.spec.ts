@@ -230,6 +230,38 @@ describe('IssuesService', () => {
       });
     });
 
+    /**
+     * 回归（2026-11-17 线上）：`resolveMemberInstance` 原先只认 `tmm_`，其余前缀一律
+     * 当模板 agent id 查 `agent_id` ⇒ 传平台成员 id（mbr_）必然查不到 → 403
+     * 「不是该任务团队成员」（agent 实测：只传席位能成，带 selfSessionId 反而 403）。
+     */
+    it('成员级身份（mbr_）→ 按 member_id 匹配席位（不再当 agent id 查）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        status: 'pending',
+        teamId: 'tm_0000000001',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue({
+        id: 'tmm_product',
+        agentId: 'a_product',
+      });
+      prisma.issue.create.mockResolvedValue({ id: 'is_1' });
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({
+          createdBy: null,
+          creatorAgentId: 'a_product',
+          creatorAgent: { name: '产品经理' },
+        }),
+      );
+
+      await service.createByAgent('mbr_1', 't_0000000001', base as any);
+
+      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { teamId: 'tm_0000000001', memberId: 'mbr_1' },
+        }),
+      );
+    });
+
     it('成功：creatorAgentId=agentId、createdBy=null（Metis B1，模板 agent 归属走团队成员表）', async () => {
       prisma.task.findUnique.mockResolvedValue({
         status: 'pending',

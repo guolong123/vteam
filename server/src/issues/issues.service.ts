@@ -139,10 +139,19 @@ export class IssuesService implements OnModuleInit {
     teamId: string,
     ref: string,
   ): Promise<{ id: string; agentId: string } | null> {
+    /**
+     * 三种身份前缀（2026-11-17）：
+     * - `tmm_`：席位（团队成员行 id）→ 按 id 匹配；
+     * - `mbr_`：**平台成员 id** → 按 member_id 匹配（成员与群聊解耦后的主身份）；
+     * - 其它（`a_` 等）：模板 agent id → 按 agent_id 匹配（存量调用兼容）。
+     */
+    const where = ref.startsWith('tmm_')
+      ? { teamId, id: ref }
+      : ref.startsWith('mbr_')
+        ? { teamId, memberId: ref }
+        : { teamId, agentId: ref };
     return this.prisma.teamMember.findFirst({
-      where: ref.startsWith('tmm_')
-        ? { teamId, id: ref }
-        : { teamId, agentId: ref },
+      where,
       select: { id: true, agentId: true },
     });
   }

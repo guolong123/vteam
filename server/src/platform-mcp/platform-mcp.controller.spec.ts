@@ -1288,10 +1288,11 @@ describe('PlatformMcpController (HTTP)', () => {
         's_0000000057',
         { bindMemberId: undefined },
       );
+      // 成员级身份会被归一成「目标团队内的席位」，下游仍按席位语义使用
       expect(service.groupPost).toHaveBeenCalledWith(
         expect.objectContaining({ workerId: 'w_0001' }),
         expect.objectContaining({
-          selfInstanceId: 'mbr_sender',
+          selfInstanceId: 'tmm_sender',
           content: 'hello',
         }),
       );
@@ -1316,7 +1317,8 @@ describe('PlatformMcpController (HTTP)', () => {
         expect.objectContaining({
           teamId: 'tm_1',
           selfSessionId: 's_1',
-          selfInstanceId: 'mbr_sender',
+          // 归一为席位（mbr_ → 目标团队内的 tmm_）
+          selfInstanceId: 'tmm_sender',
         }),
       );
     });
