@@ -11151,7 +11151,7 @@ describe('PlatformMcpService.myGroups', () => {
       {
         teamId: 'tm_1',
         teamName: '团队A',
-        selfInstanceId: 'tmm_1',
+        seatId: 'tmm_1',
         alias: '平台管理',
         seq: 1,
         groupChannelId: 'c_1',
@@ -11159,7 +11159,7 @@ describe('PlatformMcpService.myGroups', () => {
       {
         teamId: 'tm_2',
         teamName: '团队B',
-        selfInstanceId: 'tmm_2',
+        seatId: 'tmm_2',
         alias: '平台管理',
         seq: 2,
         groupChannelId: 'c_2',
@@ -11191,7 +11191,7 @@ describe('PlatformMcpService.myGroups', () => {
       expect.objectContaining({ where: { workerId: 'w_1' } }),
     );
     expect(res.groups).toHaveLength(1);
-    expect(res.groups[0].selfInstanceId).toBe('tmm_9');
+    expect(res.groups[0].seatId).toBe('tmm_9');
   });
 
   it('推断不出身份 → 报错并提示显式传 selfInstanceId', async () => {

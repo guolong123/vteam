@@ -1467,7 +1467,7 @@ function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
     {
       name: 'my_groups',
       description:
-        '列出**你（当前 Agent）**所属的全部团队群聊：每个席位的 teamId/teamName/selfInstanceId/别名/序号/群聊频道 id。用于回答「我在几个群、都是哪些群」，或在 vteam_group_post 前确认目标团队。只看自己加入的群（不是团队全员视图，后者用 vteam_team_view）。返回 {groups: [...]}。',
+        '列出**你（当前 Agent）**所属的全部团队群聊：每项含 teamId/teamName/seatId/别名/序号/群聊频道 id。用于回答「我在几个群、都是哪些群」，或在 vteam_group_post 前确认目标团队。只看自己加入的群（不是团队全员视图，后者用 vteam_team_view）。⚠️ 返回的 seatId 是「你在那个群的席位」，仅用于识别是哪一位；**不要**把它当 selfInstanceId 传给其它工具（会因不是当前会话的席位被 403）——跨群调用只需传 teamId。返回 {groups: [...]}。',
       inputSchema: myGroupsSchema,
       handler: (ctx, args) => service.myGroups(ctx, args as MyGroupsArgs),
     },

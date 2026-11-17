@@ -5263,7 +5263,15 @@ export class PlatformMcpService implements OnModuleInit {
     groups: Array<{
       teamId: string;
       teamName: string | null;
-      selfInstanceId: string;
+      /**
+       * 你在**该团队**的席位 id（tmm_）。
+       *
+       * ⚠️ 字段刻意不叫 `selfInstanceId`：本工具列的是「你在每个群分别是谁」，
+       * 而调其它工具时要传的 `selfInstanceId` 是**当前会话所属的那一个**。
+       * 把这里的 seatId 拿去当 `selfInstanceId` 会因「不是该团队的会话成员」被 403
+       * （2026-11-16 线上 agent 实测踩坑）。
+       */
+      seatId: string;
       alias: string | null;
       seq: number;
       groupChannelId: string | null;
@@ -5316,7 +5324,7 @@ export class PlatformMcpService implements OnModuleInit {
     const groups: Array<{
       teamId: string;
       teamName: string | null;
-      selfInstanceId: string;
+      seatId: string;
       alias: string | null;
       seq: number;
       groupChannelId: string | null;
@@ -5340,7 +5348,7 @@ export class PlatformMcpService implements OnModuleInit {
       groups.push({
         teamId: s.teamId,
         teamName: team?.name ?? null,
-        selfInstanceId: s.id,
+        seatId: s.id,
         alias: s.alias,
         seq: s.seq,
         groupChannelId: groupChannel?.id ?? null,
@@ -8880,7 +8888,10 @@ export class PlatformMcpService implements OnModuleInit {
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
         message:
           selfInstanceId !== undefined
-            ? `selfInstanceId（${selfInstanceId}）不是该团队（${teamId}）的会话成员，禁止冒充`
+            ? `selfInstanceId（${selfInstanceId}）不是该团队（${teamId}）的会话成员，禁止冒充` +
+              '。若你只是想读**别的群**：请只传 teamId（不要传 selfInstanceId）——' +
+              'selfInstanceId 必须是**当前会话**所属的席位；' +
+              'vteam_my_groups 返回的 seatId 是你在那个群的席位（仅用于识别），不是可传的 selfInstanceId。'
             : '该 worker 无此团队会话，禁止跨团队访问',
       });
     }
