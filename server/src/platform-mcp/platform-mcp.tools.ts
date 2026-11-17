@@ -147,6 +147,7 @@ const groupPostSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   content: z.string().describe('要发布到群聊的内容'),
   fileRef: z
@@ -178,6 +179,7 @@ const notifyAgentSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   targetInstanceId: z
     .string()
@@ -247,6 +249,7 @@ const submitArtifactSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   type: z
     .enum(['text', 'doc', 'file'])
@@ -273,6 +276,7 @@ const issueCreateSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   title: z.string().describe('issue 标题'),
   description: z.string().optional().describe('issue 描述（可选）'),
@@ -292,6 +296,7 @@ const issueListSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   status: z
     .enum(['open', 'in_progress', 'resolved', 'closed'])
@@ -305,6 +310,7 @@ const issueGetSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   issueId: z.string().describe('issue ID'),
 });
@@ -315,6 +321,7 @@ const issueUpdateSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   issueId: z.string().describe('issue ID'),
   title: z.string().optional().describe('issue 标题'),
@@ -328,6 +335,7 @@ const issueTransitionSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   issueId: z.string().describe('issue ID'),
   action: z
@@ -347,6 +355,7 @@ const taskTransitionSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   action: z
     .enum(['start', 'mark-pending-review', 'reject', 'block', 'resume'])
@@ -372,6 +381,7 @@ const questionConfirmSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   requestId: z
     .string()
@@ -398,6 +408,7 @@ export const memorySaveSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   level: z
     .enum(['team', 'role', 'global'])
@@ -434,6 +445,7 @@ export const memoryUpdateSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
+      .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
     memoryId: z.string().describe('记忆条目 id（me_ 前缀）'),
     content: z
@@ -532,6 +544,7 @@ export const memoryArchiveSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   memoryId: z
     .string()
@@ -546,6 +559,7 @@ export const memoryMergeSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   sourceId: z
     .string()
@@ -602,6 +616,7 @@ export const myProfileSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
 });
 
@@ -619,6 +634,7 @@ export const teamAddMemberSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   agentId: z.string().describe('要加入团队的 Agent id'),
   alias: z.string().optional().describe('别名（缺省由服务端按角色生成）'),
@@ -631,6 +647,7 @@ export const planCompleteSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
 });
 
@@ -673,6 +690,7 @@ export const vteamTodoSchema = z.object({
     .describe('负责成员实例 id（tmm_ 前缀，可选；可经 vteam_team_view 查询）'),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，由系统提示注入）'),
 });
 
@@ -822,6 +840,7 @@ const taskCreateSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   title: z.string().min(1).max(128).describe('任务标题（必填）'),
   description: z.string().optional().describe('任务描述（可选）'),
@@ -851,6 +870,7 @@ const skillCreateSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   name: z.string().min(1).describe('技能名（小写字母数字，中划线分段）'),
   description: z.string().optional().describe('技能描述（可选）'),
@@ -869,6 +889,7 @@ const gitReposListSchema = z.object({
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
+    .optional()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
 });
 
@@ -887,6 +908,7 @@ const hookRegisterSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
+      .optional()
       .describe(
         '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；服务端以此作为 hook 所有者）',
       ),
@@ -961,6 +983,7 @@ const hookCancelSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
+      .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
     hookId: z.string().optional().describe('hook id（hks_ 前缀）'),
     dedupKey: z.string().optional().describe('注册幂等键（与 hookId 二选一）'),
@@ -1001,6 +1024,7 @@ export const SECRET_COMMAND_SCHEMA = z
       ),
     selfInstanceId: z
       .string()
+      .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
     command: z
       .string()

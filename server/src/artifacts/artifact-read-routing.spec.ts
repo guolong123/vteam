@@ -26,7 +26,8 @@ describe('产出物按 id 读取的路由与错误语义（缺陷 1）', () => {
   let service: PlatformMcpService;
   let prisma: {
     task: { findUnique: jest.Mock };
-    session: { findFirst: jest.Mock };
+    session: { findFirst: jest.Mock; findMany: jest.Mock };
+    teamMember: { findUnique: jest.Mock; findFirst: jest.Mock };
     artifact: { findUnique: jest.Mock };
     artifactVersion: { findFirst: jest.Mock; findMany: jest.Mock };
     worker: { findUnique: jest.Mock };
@@ -44,6 +45,15 @@ describe('产出物按 id 读取的路由与错误语义（缺陷 1）', () => {
           agentId: 'a_1',
           teamMemberId: 'tm_1',
         }),
+        // resolveCallerSeat（2026-11-17）：省略 selfInstanceId 时按 worker 会话推断身份
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 's_1', teamMemberId: 'tm_1' }]),
+      },
+      // 席位 → 成员 → 目标团队席位
+      teamMember: {
+        findUnique: jest.fn().mockResolvedValue({ memberId: 'mbr_1' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'tm_1' }),
       },
       artifact: { findUnique: jest.fn().mockResolvedValue(null) },
       artifactVersion: {

@@ -217,6 +217,13 @@ model TeamMember {
   @@index([roleId], map: "idx_team_members_role")
   @@index([memberId], map: "idx_team_members_member")
   @@unique([teamId, agentId, seq], map: "uk_team_members_team_agent_seq")
+  /// 一个**成员**在一个团队只能有一个席位（2026-11-17）。
+  ///
+  /// 这是 MCP 工具用「平台成员 id（mbr_）」定位席位的**前提**：没有这条约束，
+  /// 同成员同团队多席位时无法从 memberId 唯一确定用哪个身份发言。
+  /// 历史数据已核：线上 43 个席位全部绑定成员且无 (member_id, team_id) 重复。
+  /// memberId 可空（历史未绑成员的席位），NULL 不参与唯一性判断。
+  @@unique([memberId, teamId], map: "uk_team_members_member_team")
   @@map("team_members")
 }
 

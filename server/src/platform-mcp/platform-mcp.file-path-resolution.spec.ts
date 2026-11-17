@@ -22,7 +22,8 @@ import { PlatformMcpService } from './platform-mcp.service';
 describe('PlatformMcpService worker 取文件路径解析', () => {
   let service: PlatformMcpService;
   let prisma: {
-    session: { findFirst: jest.Mock };
+    session: { findFirst: jest.Mock; findMany: jest.Mock };
+    teamMember: { findUnique: jest.Mock; findFirst: jest.Mock };
     task: { findUnique: jest.Mock };
     worker: { findUnique: jest.Mock };
     artifactVersion: { findFirst: jest.Mock; findMany: jest.Mock };
@@ -40,7 +41,17 @@ describe('PlatformMcpService worker 取文件路径解析', () => {
   beforeEach(async () => {
     process.env.WORK_DIR = ROOT;
     prisma = {
-      session: { findFirst: jest.fn() },
+      session: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      // resolveCallerSeat（2026-11-17）：席位 → 成员 → 目标团队席位
+      teamMember: {
+        findUnique: jest.fn(async (q: any) => ({ memberId: 'mbr_x' })),
+        findFirst: jest.fn(async (q: any) => ({
+          id: q?.where?.id ?? 'tmm_0000000009',
+        })),
+      },
       task: { findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_1' }) },
       worker: {
         findUnique: jest
@@ -90,6 +101,10 @@ describe('PlatformMcpService worker 取文件路径解析', () => {
       agentId: 'a_x',
       teamMemberId: instanceId,
     });
+    // resolveCallerSeat（2026-11-17）：省略 selfInstanceId 时按 worker 会话推断身份。
+    prisma.session.findMany.mockResolvedValue([
+      { id: 's_1', teamMemberId: instanceId },
+    ]);
   };
 
   it('相对 fileRef → 以 <任务目录>/<ref> 取文件（agent CWD 口径）', async () => {

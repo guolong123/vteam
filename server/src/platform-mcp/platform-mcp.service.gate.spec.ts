@@ -37,7 +37,7 @@ import { createLedger, embedLedger } from '../issues/review-round-ledger';
 describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
   let service: PlatformMcpService;
   let prisma: {
-    session: { findFirst: jest.Mock };
+    session: { findFirst: jest.Mock; findMany: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     message: { create: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
@@ -77,7 +77,10 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
 
   beforeEach(async () => {
     prisma = {
-      session: { findFirst: jest.fn() },
+      session: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       chatChannel: { findFirst: jest.fn() },
       message: { create: jest.fn(), findMany: jest.fn() },
       task: { findUnique: jest.fn() },
@@ -545,6 +548,14 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
         agentId: 'a_sender',
         teamMemberId: 'tmm_sender',
       });
+      // resolveCallerSeat：省略 selfInstanceId 时按 worker 会话推断身份
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', teamMemberId: 'tmm_sender' },
+      ]);
+      prisma.teamMember.findUnique.mockResolvedValue({
+        memberId: 'mbr_sender',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_sender' });
 
       await expect(
         service.resolveToolCallerWithContext(ctx, {}),
@@ -555,6 +566,14 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     });
 
     it('(a2) 任务维缺失时回填绑定最近会话的 teamId', async () => {
+      // resolveCallerSeat：省略 selfInstanceId 时按 worker 会话推断身份
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', teamMemberId: 'tmm_sender' },
+      ]);
+      prisma.teamMember.findUnique.mockResolvedValue({
+        memberId: 'mbr_sender',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_sender' });
       prisma.session.findFirst.mockResolvedValueOnce({
         taskId: null,
         teamId: 'tm_latest',

@@ -234,9 +234,17 @@ describe('platform tool permission gate (capability model)', () => {
       prisma = {
         session: {
           findFirst: jest.fn(),
-          findMany: jest.fn().mockResolvedValue([]),
+          // resolveCallerSeat（2026-11-17）：省略 selfInstanceId 时按 worker 会话推断身份
+          findMany: jest.fn(async () => [
+            { id: 's_1', teamMemberId: 'tmm_sender' },
+          ]),
           update: jest.fn().mockResolvedValue({}),
           updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        // resolveCallerSeat：席位 → 成员 → 目标团队席位
+        teamMember: {
+          findUnique: jest.fn(async () => ({ memberId: 'mbr_sender' })),
+          findFirst: jest.fn(async () => ({ id: 'tmm_sender' })),
         },
         task: { findUnique: jest.fn() },
       };
@@ -332,6 +340,13 @@ describe('platform tool permission gate (capability model)', () => {
           teamMemberId: 'tmm_dev',
         });
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      // resolveCallerSeat（2026-11-17）：省略 selfInstanceId 时按 worker 会话推断，
+      // 最终返回**席位 id**（与旧行为一致）
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', teamMemberId: 'tmm_dev' },
+      ]);
+      prisma.teamMember.findUnique.mockResolvedValue({ memberId: 'mbr_dev' });
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_dev' });
 
       await expect(service.resolveToolCallerId(ctx, {})).resolves.toBe(
         'tmm_dev',

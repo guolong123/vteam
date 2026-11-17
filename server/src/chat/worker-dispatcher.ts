@@ -762,6 +762,8 @@ export interface BuildSystemInstructionsOptions {
   mainAgentMemberId?: string | null;
   /** 当前 agent 的实例身份（TeamMember.id，tmm_ 前缀）；缺省（存量会话未绑实例）回退 agent.id 保持兼容。 */
   selfInstanceId?: string;
+  /** 平台成员 id（mbr_）：优先作为 MCP 工具的调用身份；缺省回退 selfInstanceId（席位）。 */
+  selfMemberId?: string | null;
   /** 任务实例 id（TeamMember.id，tmm_ 前缀）：团队会话按团队成员（tmm_）调度时，
    * selfInstanceId 为团队成员 id，此时用本字段明确其在本任务中的实例身份。
    * 缺省表示与 selfInstanceId 一致。 */
@@ -895,6 +897,12 @@ export function buildSystemInstructions(
   opts?: BuildSystemInstructionsOptions,
 ): string {
   const selfInstanceId = opts?.selfInstanceId ?? agent.id;
+  /**
+   * 平台成员 id（mbr_，2026-11-17）：成员与群聊解耦后的唯一主体。
+   * 注入到身份行，让 agent 调 MCP 工具时传它（同一成员在多个群都可用），
+   * 而不是记每个群的席位 id（tmm_）。缺失（历史席位未绑成员）时回退旧文案。
+   */
+  const selfMemberId = opts?.selfMemberId ?? null;
   const selfName = opts?.selfAlias ?? agent.name ?? agent.id;
   // 装配用角色标签：dispatch 装配处已把该字段由 `agentKey` 派生，此处只读内存 DTO，
   // 不触碰任何 DB 列。解构读取以避免 `agent.role` 字面量残留（todo 10 的 grep 闸门）。
@@ -906,11 +914,18 @@ export function buildSystemInstructions(
       ? opts.taskInstanceId
       : null;
   const identityLine = taskInstanceId
-    ? `【你的身份】你是本任务的 ${selfName}（团队成员 id: ${selfInstanceId}，任务实例 id: ${taskInstanceId}，角色: ${agentRoleLabel ?? ''}）。` +
+    ? `【你的身份】你是本任务的 ${selfName}（团队成员 id: ${selfInstanceId}，任务实例 id: ${taskInstanceId}${selfMemberId ? `，成员 id: ${selfMemberId}` : ''}，角色: ${agentRoleLabel ?? ''}）。` +
       `你在本任务团队中的实例就是 ${taskInstanceId}（【团队成员】段中标"主 Agent"的那一位若是你，请直接认领）；` +
-      `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的任务实例 id（${taskInstanceId}）。`
-    : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agentRoleLabel ?? ''}）。` +
-      `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。`;
+      (selfMemberId
+        ? `调用 vteam MCP 工具时 selfInstanceId 参数请填写你的**成员 id**（${selfMemberId}），平台会按目标群/任务自动解析你的席位。`
+        : `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的任务实例 id（${taskInstanceId}）。`)
+    : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}${selfMemberId ? `，成员 id: ${selfMemberId}` : ''}，角色: ${agentRoleLabel ?? ''}）。` +
+      (selfMemberId
+        ? // 2026-11-17：成员与群聊解耦后，成员 id（mbr_）是平台唯一主体。
+          // 调 MCP 工具只需传它（同一成员加入多个群都能用），不必记每个群的席位 id（tmm_）。
+          `调用 vteam MCP 工具时 selfInstanceId 参数请填写你的**成员 id**（${selfMemberId}）；` +
+          `平台会按目标群自动解析你在该群的身份。也可省略该参数，由平台按会话推断。`
+        : `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。`);
   // 记忆段屏蔽（agent-role-decommission todo 2）：判据 = 已解析策略 tools 是否放行
   // vteam_memory_save，**不再按角色名/duty**。`resolvedTools` 缺省（null/undefined）
   // 时不屏蔽——存量调用与未知自定义 agent 行为逐字节不变。
@@ -3378,6 +3393,8 @@ export class WorkerDispatcher
       mainAgentMemberId,
       team,
       selfInstanceId: teamMemberId,
+      // 平台成员 id（席位 → 成员）：注入身份行，供 agent 调 MCP 工具时使用
+      selfMemberId: seatRow?.memberId ?? null,
       selfAlias,
       persistentWorkDir: teamWorkDir,
       // P0：企微系统段默认不注入，仅触发正文含 [WeCom:] 标记时注入。

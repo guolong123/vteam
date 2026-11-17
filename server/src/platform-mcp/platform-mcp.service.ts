@@ -1034,7 +1034,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
     },
   ): Promise<{ repos: GitRepoListItem[] }> {
     const exec = await this.resolveExecContext(ctx, args);
@@ -1124,7 +1124,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       kind: string;
       wakeText: string;
       targetInstanceId?: string;
@@ -1266,7 +1266,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       hookId?: string;
       dedupKey?: string;
     },
@@ -1586,7 +1586,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       content: string;
       fileRef?: string;
     },
@@ -1853,7 +1853,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       targetInstanceId: string;
       content: string;
       /** 可选 issue 绑定（派活归属 issue；缺省不硬拦，返回 issueBound:false 提醒）。 */
@@ -3885,7 +3885,7 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: {
       taskId: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       type: 'text' | 'doc' | 'file';
       title: string;
       content?: string;
@@ -4010,7 +4010,7 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: {
       taskId: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       title: string;
       description?: string;
       tags?: string[];
@@ -4033,7 +4033,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async issueList(
     ctx: PlatformMcpContext,
-    args: { taskId: string; selfInstanceId: string; status?: IssueStatus },
+    args: { taskId: string; selfInstanceId?: string; status?: IssueStatus },
   ) {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
     return this.issuesService.findAllByAgent(
@@ -4049,7 +4049,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async issueGet(
     ctx: PlatformMcpContext,
-    args: { taskId: string; selfInstanceId: string; issueId: string },
+    args: { taskId: string; selfInstanceId?: string; issueId: string },
   ) {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
     return this.issuesService.findOneByAgent(
@@ -4064,7 +4064,7 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: {
       taskId: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       issueId: string;
       title?: string;
       description?: string;
@@ -4089,7 +4089,7 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: {
       taskId: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       issueId: string;
       action: IssueTransitionAction;
       reason?: string;
@@ -4109,7 +4109,7 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: {
       taskId: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       action: TaskTransitionAction;
       reason?: string;
     },
@@ -4147,7 +4147,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       requestId: string;
       kind: 'question' | 'permission';
       answers?: string[][] | null;
@@ -4181,7 +4181,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       title: string;
       description?: string;
       priority?: string;
@@ -4249,7 +4249,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       name: string;
       description?: string;
       content: string;
@@ -4354,7 +4354,7 @@ export class PlatformMcpService implements OnModuleInit {
     teamId: string,
     memberId: string,
     args: {
-      selfInstanceId: string;
+      selfInstanceId?: string;
       level: MemoryLevel;
       content: string;
       description?: string;
@@ -4480,7 +4480,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       level: MemoryLevel;
       content: string;
       description?: string;
@@ -4668,7 +4668,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       memoryId: string;
       content?: string;
       description?: string;
@@ -5113,7 +5113,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       memoryId: string;
     },
   ): Promise<{
@@ -5146,7 +5146,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       sourceId: string;
       targetId: string;
     },
@@ -5491,7 +5491,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async myProfile(
     ctx: PlatformMcpContext,
-    args: { taskId: string; selfInstanceId: string },
+    args: { taskId: string; selfInstanceId?: string },
   ): Promise<{
     taskId: string;
     instanceId: string;
@@ -5645,7 +5645,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       taskId?: string;
       teamId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       agentId: string;
       alias?: string;
       workDir?: string;
@@ -5781,7 +5781,7 @@ export class PlatformMcpService implements OnModuleInit {
     args: {
       teamId?: string;
       taskId?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
       command: string;
       variables: Array<{
         name: string;
@@ -6298,7 +6298,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async planComplete(
     ctx: PlatformMcpContext,
-    args: { taskId: string; selfInstanceId: string },
+    args: { taskId: string; selfInstanceId?: string },
   ): Promise<{ taskId: string; status: string; idempotent: boolean }> {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
 
@@ -6330,7 +6330,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   private async assertManagedPlanSignOff(
     taskId: string,
-    selfInstanceId: string,
+    selfInstanceId?: string,
   ): Promise<void> {
     const teamId = await this.teamIdOfTask(taskId);
     const team = teamId
@@ -6364,7 +6364,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async planFinalize(
     ctx: PlatformMcpContext,
-    args: { taskId: string; selfInstanceId: string },
+    args: { taskId: string; selfInstanceId?: string },
   ): Promise<{
     taskId: string;
     status: string;
@@ -6402,7 +6402,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async planConfirm(
     ctx: PlatformMcpContext,
-    args: { taskId: string; selfInstanceId: string },
+    args: { taskId: string; selfInstanceId?: string },
   ): Promise<{
     taskId: string;
     status: string;
@@ -6450,7 +6450,7 @@ export class PlatformMcpService implements OnModuleInit {
       content?: string;
       status?: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped';
       assignee?: string;
-      selfInstanceId: string;
+      selfInstanceId?: string;
     },
   ): Promise<{
     action: string;
@@ -8497,14 +8497,8 @@ export class PlatformMcpService implements OnModuleInit {
         message: '缺少 x-worker-id header',
       });
     }
-    // 防冒充（is_0000000028 修复）：落库类工具（selfInstanceId 必填）须为「该 worker 当前
-    // 执行该任务」的实例——dispatcher 在 execute 下发时按实例登记、completed/error/超时注销。
-    // 内存活跃集合（activeExecutions）为**增强校验**，但可能因并发/首字超时/空闲判死的
-    // 竞态与真实会话状态不一致（间歇性误拒合法成员）。故以 **DB session 为权威**：
-    // - 该 worker+task 存在绑定 selfInstanceId 的会话 → 合法，放行（无论内存集合是否命中）；
-    // - 内存集合命中 → 直接放行（快路径，免 DB 查询）；
-    // - 内存集合未命中且 DB 无绑定会话 → 拒绝（真冒充）。
-    // 语义：注册表校验防止「旧会话实例冒充当值执行者」的漏洞，DB 会话绑定兜底防内存陈旧。
+    // 快路径（防冒充增强校验）：内存中「该 worker 正在执行该任务」的实例集合命中即放行，
+    // 省一次 DB 往返。内存集合可能因并发/判死竞态陈旧，故下面仍以 DB 为准。
     if (selfInstanceId !== undefined) {
       const active = this.workerDispatcher.isAgentExecuting(
         ctx.workerId,
@@ -8521,22 +8515,29 @@ export class PlatformMcpService implements OnModuleInit {
         message: '该 worker 无此任务会话，禁止跨任务访问',
       });
     }
+    /**
+     * 归属校验（2026-11-17 支持成员级身份，与 assertWorkerTeam 同口径）：
+     * 显式 `tmm_` 走既有 session 校验路径（历史行为不变）；
+     * `mbr_` 或省略 → resolveCallerSeat 解析到 task 所属团队的席位。
+     */
+    if (!selfInstanceId || !selfInstanceId.startsWith('tmm_')) {
+      const { seatId } = await this.resolveCallerSeat(
+        ctx,
+        authTeamId,
+        selfInstanceId,
+      );
+      return seatId;
+    }
+    // ── 以下为既有 tmm_ 路径（保持不变）────────────────────────────────────
     let session = await this.prisma.session.findFirst({
       where: {
         teamId: authTeamId,
         workerId: ctx.workerId,
-        ...(selfInstanceId !== undefined
-          ? { teamMemberId: selfInstanceId }
-          : {}),
+        teamMemberId: selfInstanceId,
       },
       select: { id: true, agentId: true, teamMemberId: true },
     });
     if (!session) {
-      // 任务完成/归档触发 resetTeamSessionsInTx 会硬删并重建会话且丢弃 workerId，
-      // 而运行中的 opencode 会话并未停止——此时该 worker 的后续工具调用会被
-      // fail-closed 403。兜底：对（teamId[+selfInstanceId]）唯一匹配的未绑定
-      // （workerId=null）会话做 adopt 回填，仅回填 workerId，instanceRef 保持
-      // 空以便下次分派仍创建全新会话；已绑定他人 worker 的会话绝不抢占。
       const adopted = await this.adoptOrphanedSession(ctx, {
         teamId: authTeamId,
         selfInstanceId,
@@ -8550,16 +8551,21 @@ export class PlatformMcpService implements OnModuleInit {
       }
     }
     if (!session) {
+      // 跨群放宽（2026-11-17）：席位属于任务所属团队即放行（不要求本 worker 有该团队会话）。
+      const seat = await (this.prisma as any).teamMember.findFirst({
+        where: { id: selfInstanceId, teamId: authTeamId },
+        select: { id: true },
+      });
+      if (seat) {
+        return selfInstanceId;
+      }
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message:
-          selfInstanceId !== undefined
-            ? `selfInstanceId（${selfInstanceId}）不在该 worker 当前执行任务（${taskId}）的活跃成员集合中，且该 worker 无绑定团队会话，禁止冒充`
-            : '该 worker 无此任务会话，禁止跨任务访问',
+        message: `selfInstanceId（${selfInstanceId}）不在该 worker 当前执行任务（${taskId}）的活跃成员集合中，且该席位不属于该任务所属团队，禁止冒充`,
       });
     }
     const instanceId = session.teamMemberId ?? session.agentId;
-    if (selfInstanceId !== undefined && instanceId !== selfInstanceId) {
+    if (instanceId !== selfInstanceId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
         message: `selfInstanceId 与执行该任务的实例（${instanceId}）不一致，禁止冒充`,
@@ -8832,6 +8838,121 @@ export class PlatformMcpService implements OnModuleInit {
    * 团队模式 selfInstanceId 即团队成员 id（session.teamMemberId）；无会话或成员
    * 不一致 → 403（与 assertWorkerTask 同风格，维度内精确匹配，维度间无回退）。
    */
+  /**
+   * 解析「调用方在目标团队的席位」—— MCP 工具身份的唯一入口（2026-11-17）。
+   *
+   * 对外身份从「席位 id（tmm_）」上移到「**平台成员 id（mbr_）**」：成员与群聊解耦后
+   * 成员是平台唯一主体，跨群调用不该让模型记每个群的 tmm_。三种入参：
+   *
+   * | 入参 | 解析 |
+   * |---|---|
+   * | `tmm_xxx` | 校验该席位属于目标团队（**兼容老调用**） |
+   * | `mbr_xxx` | 用「成员 + 目标团队」查唯一席位（依赖 uk_team_members_member_team） |
+   * | **省略** | worker 最近会话 → 席位 → `team_members.member_id` → 目标团队席位 |
+   *
+   * 为什么省略时必须走 `team_member_id → team_members.member_id` 这一跳：
+   * `sessions.member_key` 可能为 NULL（线上 s_…0057 就是），而席位行的 member_id 恒有值。
+   *
+   * 判定不出来**一律报错**（不猜）：worker 无会话 / 会话无法唯一（多成员并发）/
+   * 席位未绑成员 / 成员不属于目标团队 —— 四种情况都给出可操作的提示。
+   */
+  private async resolveCallerSeat(
+    ctx: PlatformMcpContext,
+    teamId: string,
+    selfInstanceId?: string,
+  ): Promise<{ seatId: string; memberId: string }> {
+    const raw = (selfInstanceId ?? '').trim();
+    const repo = (this.prisma as any).teamMember;
+
+    // A. 显式席位（tmm_）：兼容老调用，必须属于该团队。
+    if (raw.startsWith('tmm_')) {
+      const seat = await repo.findFirst({
+        where: { id: raw, teamId },
+        select: { id: true, memberId: true },
+      });
+      if (!seat) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `席位 ${raw} 不属于团队 ${teamId}（跨团队冒充已被拒绝）`,
+        });
+      }
+      return { seatId: seat.id, memberId: seat.memberId ?? seat.id };
+    }
+
+    // B. 显式成员（mbr_）：用「成员 + 目标团队」定位唯一席位。
+    if (raw.startsWith('mbr_')) {
+      const seat = await repo.findFirst({
+        where: { memberId: raw, teamId },
+        select: { id: true, memberId: true },
+      });
+      if (!seat) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `成员 ${raw} 不属于团队 ${teamId}（请确认该成员已加入该团队）`,
+        });
+      }
+      return { seatId: seat.id, memberId: raw };
+    }
+
+    // C. 省略：按 worker 的会话推断「我是谁」，再映射到目标团队的席位。
+    //    多会话必须报错——同一 worker 上可能有多个成员的会话在跑，猜哪个都是错。
+    const sessions = (await (this.prisma as any).session.findMany({
+      where: { workerId: ctx.workerId },
+      orderBy: { createdAt: 'desc' },
+      take: 2,
+      select: { id: true, teamMemberId: true },
+    })) as Array<{ id: string; teamMemberId: string | null }>;
+    if (sessions.length === 0) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message:
+          `无法判定调用身份：worker ${ctx.workerId} 上没有任何会话记录。` +
+          '请显式传 selfInstanceId（平台成员 id，mbr_ 前缀）',
+      });
+    }
+    if (sessions.length > 1) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message:
+          `无法判定调用身份：worker ${ctx.workerId} 上存在多个会话` +
+          `（${sessions.map((x) => x.teamMemberId ?? x.id).join('/')}），无法确定是哪一位在调用。` +
+          '请显式传 selfInstanceId（mbr_ 前缀）',
+      });
+    }
+    const selfSeatId = sessions[0].teamMemberId;
+    if (!selfSeatId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message:
+          `无法判定调用身份：worker 上的会话 ${sessions[0].id} 未绑定团队成员席位。` +
+          '请显式传 selfInstanceId（mbr_ 前缀）',
+      });
+    }
+    const selfSeat = await repo.findUnique({
+      where: { id: selfSeatId },
+      select: { memberId: true },
+    });
+    if (!selfSeat?.memberId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message:
+          `无法判定调用身份：你的席位 ${selfSeatId} 未绑定平台成员（成员库需先绑定成员）。` +
+          '请显式传 selfInstanceId（mbr_ 前缀）',
+      });
+    }
+    const target = await repo.findFirst({
+      where: { memberId: selfSeat.memberId, teamId },
+      select: { id: true },
+    });
+    if (!target) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: `成员 ${selfSeat.memberId} 不属于团队 ${teamId}（无法在该团队发言）`,
+      });
+    }
+    return { seatId: target.id, memberId: selfSeat.memberId };
+  }
+
   private async assertWorkerTeam(
     ctx: PlatformMcpContext,
     teamId: string,
@@ -8843,19 +8964,29 @@ export class PlatformMcpService implements OnModuleInit {
         message: '缺少 x-worker-id header',
       });
     }
-    let session = await this.prisma.session.findFirst({
-      where: {
+    /**
+     * 归属校验（2026-11-17 支持成员级身份）：
+     *
+     * - 显式 `tmm_`（席位）→ 走**既有** session 校验路径（历史调用行为逐字节不变）；
+     * - 显式 `mbr_`（平台成员）或**省略** → `resolveCallerSeat` 解析到目标团队席位。
+     *
+     * 返回的 `memberId` 是**席位 id**（tmm_）：调用方拿它作 `senderInstanceId` 落库，
+     * 消息归属仍精确到「该成员在该群的身份」；对外语义则是平台成员 id。
+     */
+    if (!selfInstanceId || !selfInstanceId.startsWith('tmm_')) {
+      const { seatId } = await this.resolveCallerSeat(
+        ctx,
         teamId,
-        workerId: ctx.workerId,
-        ...(selfInstanceId !== undefined
-          ? { teamMemberId: selfInstanceId }
-          : {}),
-      },
+        selfInstanceId,
+      );
+      return { memberId: seatId, sessionId: '' };
+    }
+    // ── 以下为既有 tmm_ 路径（保持不变）────────────────────────────────────
+    let session = await (this.prisma as any).session.findFirst({
+      where: { teamId, workerId: ctx.workerId, teamMemberId: selfInstanceId },
       select: { id: true, teamMemberId: true },
     });
     if (!session) {
-      // 同 assertWorkerTask 的 adopt 兜底：任务关闭后 workerId 被 reset 清空，
-      // 运行中的会话此时会被 fail-closed 403；回填唯一未绑定会话的 workerId。
       const adopted = await this.adoptOrphanedSession(ctx, {
         teamId,
         selfInstanceId,
@@ -8864,59 +8995,42 @@ export class PlatformMcpService implements OnModuleInit {
         session = { id: adopted.id, teamMemberId: adopted.teamMemberId };
       }
     }
-    // 成员全局会话（P3）：会话行只有一条，teamMemberId 是「最近席位」——成员跨群时
-    // 用另一个群的席位调工具会查不到按 (teamId, teamMemberId) 定位的会话。这里按
-    // 「席位属于同一 member + 该 member 的全局会话在本 worker」放行，callerId 仍用
-    // 本轮席位，保证消息归属到目标群的真实席位。
-    if (!session && selfInstanceId) {
-      const seat = await (this.prisma as any).teamMember.findUnique({
-        where: { id: selfInstanceId },
-        select: { teamId: true, memberId: true },
-      });
-      /**
-       * 跨群调用放宽（2026-11-17 用户实测）：只要 `selfInstanceId` 是**该团队的真实席位**，
-       * 就允许操作该群（发消息 / 读历史），**不再要求该成员在本 worker 上有 memberKey 会话**。
-       *
-       * 原条件要求 `memberKey` 能查到会话 —— 但线上 `s_…0057` 的 `member_key` 是 NULL
-       * （重置会话路径没写回），导致「平台管理」在另外两个群（ketacli维护团队 / 值班群）
-       * 发消息一律 403「不是这个群的会话成员」，而它明明是这两个群的成员。
-       *
-       * 安全性：`selfInstanceId` 由 worker（token 认证）上报，且此处额外校验
-       * `seat.teamId === teamId` —— 即「这个席位确实属于目标团队」，不存在跨团队冒充。
-       * 调用方只消费返回的 `memberId`（senderInstanceId），sessionId 未使用。
-       */
-      if (seat && seat.teamId === teamId) {
-        session = { id: '', teamMemberId: selfInstanceId };
-      }
-    }
     if (!session) {
+      /**
+       * 跨群放宽（2026-11-17，与 v1.6.17 同口径）：只要 `tmm_` 是**该团队的真实席位**
+       * 就放行，不再要求本 worker 上有该团队的会话。
+       *
+       * 否则「成员在自己所属的其它群」永远发不了消息（该群没有他的 worker 会话），
+       * 线上表现为 403「不是这个群的会话成员」，而它明明是成员。
+       */
+      const seat = await (this.prisma as any).teamMember.findFirst({
+        where: { id: selfInstanceId, teamId },
+        select: { id: true },
+      });
+      if (seat) {
+        return { memberId: selfInstanceId, sessionId: '' };
+      }
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
         message:
-          selfInstanceId !== undefined
-            ? `selfInstanceId（${selfInstanceId}）不是该团队（${teamId}）的会话成员，禁止冒充` +
-              '。若你只是想读**别的群**：请只传 teamId（不要传 selfInstanceId）——' +
-              'selfInstanceId 必须是**当前会话**所属的席位；' +
-              'vteam_my_groups 返回的 seatId 是你在那个群的席位（仅用于识别），不是可传的 selfInstanceId。'
-            : '该 worker 无此团队会话，禁止跨团队访问。' +
-              '要操作**别的群**：先调 vteam_my_groups 查你在这个群的 seatId，' +
-              '再把它作为 selfInstanceId 传入（席位必须属于目标团队）。',
+          `selfInstanceId（${selfInstanceId}）不是该团队（${teamId}）的会话成员，禁止冒充。` +
+          '跨群调用请传平台成员 id（mbr_ 前缀）或省略 selfInstanceId。',
       });
     }
-    const memberId = session.teamMemberId;
-    if (!memberId) {
+    if (!session.teamMemberId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
         message: '该团队会话未绑定团队成员，禁止访问',
       });
     }
-    if (selfInstanceId !== undefined && memberId !== selfInstanceId) {
+    // 防冒充（与 assertWorkerTask 同口径）：会话所属席位必须就是声明的席位。
+    if (session.teamMemberId !== selfInstanceId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `selfInstanceId 与该团队会话成员（${memberId}）不一致，禁止冒充`,
+        message: `selfInstanceId 与团队会话成员（${session.teamMemberId}）不一致，禁止冒充`,
       });
     }
-    return { memberId, sessionId: session.id };
+    return { memberId: session.teamMemberId, sessionId: session.id };
   }
 
   /**

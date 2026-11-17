@@ -43,22 +43,17 @@ describe('vteam_tool_schema introspection', () => {
     expect(result.truncated).toBeUndefined();
   });
 
-  it('每个清单行含 required：issue_transition 的 selfInstanceId 是必填', () => {
+  it('每个清单行含 required：issue_transition 只列真正必填的参数（selfInstanceId 已可选）', () => {
     const lines = asResult().tools as string[];
     const line = lines.find((l) => l.startsWith('issue_transition ')) as string;
     expect(line).toContain('issue_transition — ');
-    expect(line).toContain('(required: taskId,selfInstanceId,issueId,action)');
+    expect(line).toContain('(required: taskId,issueId,action)');
   });
 
   it('name=issue_transition ⇒ required / 枚举全集 / 状态机全表（与 ISSUE_TRANSITIONS 同源）', () => {
     const result = asResult('issue_transition');
     expect(result.name).toBe('issue_transition');
-    expect(result.required).toEqual([
-      'taskId',
-      'selfInstanceId',
-      'issueId',
-      'action',
-    ]);
+    expect(result.required).toEqual(['taskId', 'issueId', 'action']);
     expect(result.enums).toMatchObject({
       action: ['start', 'resolve', 'close', 'reopen', 'reject'],
     });

@@ -232,6 +232,13 @@ describe('PlatformMcpService', () => {
   const denyWorker = () => {
     prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
     prisma.session.findFirst.mockResolvedValue(null);
+    prisma.teamMember.findFirst.mockResolvedValue(null);
+    prisma.session.findMany.mockResolvedValue([]);
+    // resolveCallerSeat：worker 上没有任何会话 → 无法判定身份
+    prisma.session.findMany.mockResolvedValue([]);
+    // tmm_ 路径的跨群放宽要求「席位属于该团队」；这里显式置空 = 不属于 → 仍 403
+    prisma.teamMember.findFirst.mockResolvedValue(null);
+    prisma.teamMember.findUnique.mockResolvedValue(null);
   };
 
   beforeEach(async () => {
@@ -240,7 +247,11 @@ describe('PlatformMcpService', () => {
         findFirst: jest.fn(),
         // 批次 A1：目标团队会话状态探针（uk_sessions_team_member = teamId|memberId）。
         findUnique: jest.fn().mockResolvedValue({ status: 'running' }),
-        findMany: jest.fn().mockResolvedValue([]),
+        // resolveCallerSeat（2026-11-17）：省略 selfInstanceId 时按 worker 会话推断身份。
+        // 默认给一条「tmm_sender 的会话」让主路径走通；「无会话 → 403」的用例用 denyWorker() 置空。
+        findMany: jest.fn(async () => [
+          { id: 's_default', teamMemberId: 'tmm_sender' },
+        ]),
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
@@ -279,9 +290,18 @@ describe('PlatformMcpService', () => {
       task: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
       team: { findUnique: jest.fn() },
       teamMember: {
-        findFirst: jest.fn(),
+        // resolveCallerSeat（2026-11-17）：席位/成员两种显式入参都要能定位到席位。
+        // 默认按查询条件回显（tmm_ 用 id、mbr_ 用 memberId），并挂一个稳定 memberId，
+        // 使既有用例（传 tmm_sender）语义不变；需要「不属于该团队」的用例自行覆盖为 null。
+        findFirst: jest.fn(async (q: any) => ({
+          id: q?.where?.id ?? 'tmm_sender',
+          memberId: q?.where?.memberId ?? 'mbr_sender',
+        })),
         findMany: jest.fn(),
-        findUnique: jest.fn(),
+        findUnique: jest.fn(async (q: any) => ({
+          id: q?.where?.id ?? 'tmm_sender',
+          memberId: 'mbr_sender',
+        })),
         update: jest.fn(),
       },
       teamUserMember: { findMany: jest.fn() },
@@ -439,9 +459,11 @@ describe('PlatformMcpService', () => {
         ForbiddenException,
         PLATFORM_MCP_ERRORS.FORBIDDEN,
       );
-      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      // resolveCallerSeat（2026-11-17）：省略 selfInstanceId 时按 worker 会话推断身份，
+      // 走 session.findMany（取最近 1~2 条判唯一），不再按 (teamId, workerId) 查单条。
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { teamId: 'tm_1', workerId },
+          where: { workerId },
         }),
       );
     });
@@ -1787,6 +1809,8 @@ describe('PlatformMcpService', () => {
       );
       // DB 无该 worker 绑定 selfInstanceId 的会话
       prisma.session.findFirst.mockResolvedValue(null);
+      prisma.teamMember.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([]);
 
       await expectCode(
         service.groupPost(ctx, {
@@ -3176,9 +3200,9 @@ describe('PlatformMcpService', () => {
         ForbiddenException,
         PLATFORM_MCP_ERRORS.FORBIDDEN,
       );
-      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { teamId: 'tm_1', workerId },
+          where: { workerId },
         }),
       );
     });
@@ -5666,6 +5690,8 @@ describe('PlatformMcpService', () => {
 
         it('冒充 403：无会话归属 → PLATFORM_MCP_FORBIDDEN（不读行）', async () => {
           prisma.session.findFirst.mockResolvedValue(null);
+          prisma.teamMember.findFirst.mockResolvedValue(null);
+          prisma.session.findMany.mockResolvedValue([]);
           rows({ me_a: teamRow('me_a') });
 
           await expectCode(
@@ -5942,9 +5968,20 @@ describe('PlatformMcpService', () => {
               sourceId: 'me_a',
             }).success,
           ).toBe(false);
+          // 2026-11-17：selfInstanceId 已可选（平台按会话推断身份）→ 省略也合法
           expect(
             memoryArchiveSchema.safeParse({ teamId, memoryId: 'me_a' }).success,
-          ).toBe(false);
+          ).toBe(true);
+          // 只读字段由服务端决定：schema 层面 strip（不由 Agent 写入），此处仅断言解析成功
+          const withReadonly = memoryArchiveSchema.safeParse({
+            teamId,
+            memoryId: 'me_a',
+            refCount: 99,
+          });
+          expect(withReadonly.success).toBe(true);
+          expect(
+            (withReadonly as { data?: Record<string, unknown> }).data,
+          ).not.toHaveProperty('refCount');
         });
 
         it('归档后不再出现在 memoryList 结果（source 软删、target 留存且引用计数已转移）', async () => {
@@ -6082,9 +6119,9 @@ describe('PlatformMcpService', () => {
         const out = await service.teamView(ctx, { taskId });
 
         // 任务维度归属校验沿用 assertWorkerTask（tm_ 前缀误传由 resolveExecContext 拦截）
-        expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect(prisma.session.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { teamId: 'tm_1', workerId },
+            where: { workerId },
           }),
         );
         expect(prisma.teamMember.findMany).toHaveBeenCalledWith(
@@ -6181,10 +6218,17 @@ describe('PlatformMcpService', () => {
        */
       it('跨群：席位属于目标团队但无该成员会话 → 放行', async () => {
         prisma.session.findFirst.mockResolvedValue(null);
+        prisma.teamMember.findFirst.mockResolvedValue(null);
+        prisma.session.findMany.mockResolvedValue([]);
+        // resolveCallerSeat：worker 会话 → 席位 tmm_2 → 成员 mbr_1 → tm_2 的席位
+        prisma.session.findMany.mockResolvedValue([
+          { id: 's_2', teamMemberId: 'tmm_2' },
+        ]);
         prisma.teamMember.findUnique.mockResolvedValue({
           teamId: 'tm_2',
           memberId: 'mbr_1',
         });
+        prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_2' });
         await expect(
           (service as any).assertWorkerTeam(ctx, 'tm_2', 'tmm_2'),
         ).resolves.toMatchObject({ memberId: 'tmm_2' });
@@ -6192,10 +6236,16 @@ describe('PlatformMcpService', () => {
 
       it('跨群：席位不属于目标团队 → 仍 403（防跨团队冒充）', async () => {
         prisma.session.findFirst.mockResolvedValue(null);
+        prisma.teamMember.findFirst.mockResolvedValue(null);
+        prisma.session.findMany.mockResolvedValue([]);
+        // 该 worker 上没有会话（否则 adoptOrphanedSession 会把 findMany 的结果当成孤儿会话收养）
+        prisma.session.findMany.mockResolvedValue([]);
         prisma.teamMember.findUnique.mockResolvedValue({
           teamId: 'tm_other',
           memberId: 'mbr_1',
         });
+        // 目标团队里没有该成员的席位 → 403
+        prisma.teamMember.findFirst.mockResolvedValue(null);
         await expect(
           (service as any).assertWorkerTeam(ctx, 'tm_2', 'tmm_2'),
         ).rejects.toMatchObject({
@@ -6232,12 +6282,20 @@ describe('PlatformMcpService', () => {
         ]);
         prisma.externalUser.findMany.mockResolvedValue([directoryUser]);
 
+        // teamView 会用 session.findMany 批量查成员会话状态；这里只要身份解析那条有值，
+        // 成员状态查询返回空（否则 members[].sessionId 会带出默认 mock 的会话）
+        prisma.session.findMany.mockImplementation(async (q: any) =>
+          q?.where?.workerId
+            ? [{ id: 's_default', teamMemberId: 'tmm_sender' }]
+            : [],
+        );
+
         const out = await service.teamView(ctx, { teamId: 'tm_1' });
 
         // team 维度校验：assertWorkerTeam（teamId + workerId 会话归属）
-        expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect(prisma.session.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { teamId: 'tm_1', workerId },
+            where: { workerId },
           }),
         );
         // 不再读任务、不计回执
@@ -6336,6 +6394,8 @@ describe('PlatformMcpService', () => {
 
       it('teamId 只读归属校验：无团队 Session → 403 PLATFORM_MCP_FORBIDDEN（防越权）', async () => {
         prisma.session.findFirst.mockResolvedValue(null);
+        prisma.teamMember.findFirst.mockResolvedValue(null);
+        prisma.session.findMany.mockResolvedValue([]);
         await expectCode(
           service.teamView(ctx, { teamId: 'tm_999' }),
           ForbiddenException,
@@ -7426,9 +7486,9 @@ describe('PlatformMcpService', () => {
       const result = await service.chatHistory(ctx, { taskId });
 
       expect(result).toEqual({ items: [], truncated: false, total: 0 });
-      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { teamId: 'tm_1', workerId },
+          where: { workerId },
         }),
       );
     });
@@ -7445,9 +7505,9 @@ describe('PlatformMcpService', () => {
       const result = await service.chatHistory(ctx, { teamId: 'tm_1' });
 
       expect(result).toEqual({ items: [], truncated: false, total: 0 });
-      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ teamId: 'tm_1', workerId }),
+          where: expect.objectContaining({ workerId }),
         }),
       );
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith(
@@ -7464,10 +7524,10 @@ describe('PlatformMcpService', () => {
 
       await service.chatHistory(ctx, { taskId, teamId: 'tm_1' });
 
-      expect(prisma.session.findFirst).toHaveBeenCalledTimes(1);
-      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      // 双传时走任务维度：resolveCallerSeat 按 worker 会话推断身份（不再查 (teamId,workerId)）
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { teamId: 'tm_1', workerId },
+          where: { workerId },
         }),
       );
     });
@@ -7517,15 +7577,17 @@ describe('PlatformMcpService', () => {
       const result = await service.chatHistory(ctx, { taskId });
 
       expect(result).toEqual({ items: [], truncated: false, total: 0 });
-      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { teamId: 'tm_1', workerId },
+          where: { workerId },
         }),
       );
     });
 
     it('团队维度归属不匹配 → 403（维度间无回退）', async () => {
       prisma.session.findFirst.mockResolvedValue(null);
+      prisma.teamMember.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([]);
 
       await expectCode(
         service.chatHistory(ctx, { teamId: 'tm_other' }),
@@ -9373,6 +9435,8 @@ describe('PlatformMcpService', () => {
 
     it('无团队上下文返回新错误文案，不触达旧 taskId 门', async () => {
       prisma.session.findFirst.mockResolvedValue(null);
+      prisma.teamMember.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([]);
 
       const result = await service.wecomReply(ctx, { text: 'hello' });
 
@@ -11202,6 +11266,10 @@ describe('PlatformMcpService.myGroups', () => {
     const prisma: any = {
       session: {
         findFirst: jest.fn().mockResolvedValue({ teamMemberId: 'tmm_9' }),
+        // resolveCallerSeat：按 worker 会话推断身份
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 's_9', teamMemberId: 'tmm_9' }]),
       },
       teamMember: {
         findUnique: jest.fn().mockResolvedValue({
@@ -11209,15 +11277,21 @@ describe('PlatformMcpService.myGroups', () => {
           alias: 'A',
           seq: 1,
           teamId: 'tm_9',
-          memberId: null,
+          memberId: 'mbr_9',
         }),
-        findMany: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue({ id: 'tmm_9' }),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { id: 'tmm_9', alias: 'A', seq: 1, teamId: 'tm_9' },
+          ]),
       },
       team: { findUnique: jest.fn().mockResolvedValue({ name: 'T9' }) },
       chatChannel: { findFirst: jest.fn().mockResolvedValue({ id: 'c_9' }) },
     };
     const svc = build(prisma);
     const res = await svc.myGroups({ workerId: 'w_1' }, {});
+    // myGroups 自己按 worker 最近会话（findFirst）推断身份，不经 resolveCallerSeat
     expect(prisma.session.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { workerId: 'w_1' } }),
     );
