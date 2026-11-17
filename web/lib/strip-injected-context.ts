@@ -11,7 +11,14 @@
  */
 export function stripInjectedContext(text: string): string {
   if (!text) return text;
-  let out = text;
+  /**
+   * 先反转义**字面**换行（2026-11-17 实测）。
+   *
+   * worker/opencode 上报的正文里换行可能是 `\n` 两个字面字符（DB 里 HEX `5C6E`，
+   * 不是 `0A`）—— 整段 Markdown 退化成一行：表格 `|---|` 不渲染、列表/代码块全失效，
+   * 用户看到的是一坨 `| # | 团队 | teamId |` 原文。
+   */
+  let out = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
   // <doclib>...</doclib> 整体块 + 紧随其后的历史残留行（</doclib> 后若紧跟 `用户:/Agent:` 行）
   out = out.replace(/<doclib>[\s\S]*?<\/doclib>[ \t]*(?:\n?[ \t]*(?:用户|Agent|agent):[^\n]*)*/g, "");
   // 行首 [群聊历史消息] 标记行 + 其后的 用户:/Agent: 历史行（到下一个非历史行边界）
