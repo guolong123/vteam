@@ -1412,7 +1412,11 @@ export class PlatformMcpService implements OnModuleInit {
       selfInstanceId?: string;
     },
   ): Promise<unknown> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
 
     if (!args.artifactId) {
       const artifacts = await this.prisma.artifact.findMany({
@@ -1489,7 +1493,11 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: { taskId: string; selfInstanceId?: string },
   ) {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
     const task = await this.prisma.task.findUnique({
       where: { id: args.taskId },
       select: {
@@ -1605,6 +1613,10 @@ export class PlatformMcpService implements OnModuleInit {
     attachment: GroupPostAttachment | null;
   }> {
     const exec = await this.resolveExecContext(ctx, args);
+    // 身份归一（2026-11-17）：args.selfInstanceId 现已可选，而后续逻辑（发送者、
+    // team_main 比对、落库 senderInstanceId）一律按「席位」语义使用它
+    // ⇒ 用解析结果回写，避免 undefined 透传。
+    args.selfInstanceId = exec.callerId;
     const isTeam = exec.kind === 'team';
     // 任务维度 taskId 透传；团队维度无任务（Message.taskId 可空，落库 taskId: null）。
     const effTaskId: string | null = isTeam ? null : exec.taskId;
@@ -3829,7 +3841,11 @@ export class PlatformMcpService implements OnModuleInit {
       selfInstanceId?: string;
     },
   ): Promise<ReadFileResult> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
     const maxBytes = this.normalizeMaxBytes(args.maxBytes);
     if (args.fileRef.startsWith('art_')) {
       const artifactId = args.fileRef.split('@')[0].split('/')[0].split('?')[0];
@@ -4031,8 +4047,12 @@ export class PlatformMcpService implements OnModuleInit {
       assigneeInstanceId?: string;
     },
   ) {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    return this.issuesService.createByAgent(args.selfInstanceId, args.taskId, {
+    const callerInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
+    return this.issuesService.createByAgent(callerInstanceId, args.taskId, {
       taskId: args.taskId,
       title: args.title,
       description: args.description,
@@ -4049,9 +4069,13 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: { taskId: string; selfInstanceId?: string; status?: IssueStatus },
   ) {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    return this.issuesService.findAllByAgent(
+    const callerInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
       args.selfInstanceId,
+    );
+    return this.issuesService.findAllByAgent(
+      callerInstanceId,
       args.taskId,
       args.status,
     );
@@ -4065,9 +4089,13 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: { taskId: string; selfInstanceId?: string; issueId: string },
   ) {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    return this.issuesService.findOneByAgent(
+    const callerInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
       args.selfInstanceId,
+    );
+    return this.issuesService.findOneByAgent(
+      callerInstanceId,
       args.taskId,
       args.issueId,
     );
@@ -4085,9 +4113,13 @@ export class PlatformMcpService implements OnModuleInit {
       tags?: string[];
     },
   ) {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    return this.issuesService.updateByAgent(
+    const callerInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
       args.selfInstanceId,
+    );
+    return this.issuesService.updateByAgent(
+      callerInstanceId,
       args.taskId,
       args.issueId,
       {
@@ -4109,9 +4141,13 @@ export class PlatformMcpService implements OnModuleInit {
       reason?: string;
     },
   ) {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    return this.issuesService.transitionByAgent(
+    const callerInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
       args.selfInstanceId,
+    );
+    return this.issuesService.transitionByAgent(
+      callerInstanceId,
       args.taskId,
       args.issueId,
       args.action,
@@ -4135,7 +4171,11 @@ export class PlatformMcpService implements OnModuleInit {
           '仅人类用户可在管理界面验收完成/归档任务，Agent 不可调用 accept/archive；请向用户报告任务已就绪、等待人工验收，不要重复调用',
       });
     }
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
     // start 无平台侧计划门：是否先出计划由所绑定 agent 的 prompt 表达；执行确认走
     // opencode question/permission → QuestionModal 由用户明确批准（见 P4）。
     return this.tasksService.transitionByAgent(
@@ -4507,6 +4547,9 @@ export class PlatformMcpService implements OnModuleInit {
     status: MemorySaveStatus;
   }> {
     const exec = await this.resolveExecContext(ctx, args);
+    // 身份归一（2026-11-17）：后续按「席位」语义使用 args.selfInstanceId
+    // （createdBy / team_main 比对 / 席位查询），用解析结果回写避免 undefined。
+    args.selfInstanceId = exec.callerId;
     // 团队维度：task 级记忆必须有任务锚点（干净 400 指引传 taskId）；
     // team/global 级走团队分支（team.mainAgentMemberId 仅约束 global）。
     if (exec.kind === 'team') {
@@ -6342,7 +6385,11 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: { taskId: string; selfInstanceId?: string },
   ): Promise<{ taskId: string; status: string; idempotent: boolean }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
 
     if (!this.planLifecycle) {
       throw new ServiceUnavailableException({
@@ -6413,7 +6460,11 @@ export class PlatformMcpService implements OnModuleInit {
     idempotent: boolean;
     action: string;
   }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
     if (!this.planLifecycle) {
       throw new ServiceUnavailableException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
@@ -6451,7 +6502,11 @@ export class PlatformMcpService implements OnModuleInit {
     idempotent: boolean;
     action: string;
   }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
     if (!this.planLifecycle) {
       throw new ServiceUnavailableException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
@@ -6502,7 +6557,11 @@ export class PlatformMcpService implements OnModuleInit {
     assignee?: string | null;
     steps?: unknown[];
   }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    args.selfInstanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
     if (!this.planSteps) {
       throw new ServiceUnavailableException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,

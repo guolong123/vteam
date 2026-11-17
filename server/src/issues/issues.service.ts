@@ -137,8 +137,10 @@ export class IssuesService implements OnModuleInit {
    */
   private async resolveMemberInstance(
     teamId: string,
-    ref: string,
+    ref: string | null | undefined,
   ): Promise<{ id: string; agentId: string } | null> {
+    // selfInstanceId 已改为可选：缺省时不要抛 TypeError，交给调用方按「不在团队」处理
+    if (!ref) return null;
     /**
      * 三种身份前缀（2026-11-17）：
      * - `tmm_`：席位（团队成员行 id）→ 按 id 匹配；
