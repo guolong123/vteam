@@ -6172,6 +6172,37 @@ describe('PlatformMcpService', () => {
         expect(prisma.chatChannel.findMany).not.toHaveBeenCalled();
       });
 
+      /**
+       * 跨群调用放宽（2026-11-17 用户实测）：成员在多个群都有席位，但只有「当前会话」
+       * 那个群有 memberKey 会话。旧实现要求 memberKey 能查到会话 ⇒ 其它群一律 403
+       * 「不是这个群的会话成员」——明明是该群成员却发不了消息（group_post 场景）。
+       *
+       * 新口径：`selfInstanceId` 是**目标团队的真实席位**即放行。
+       */
+      it('跨群：席位属于目标团队但无该成员会话 → 放行', async () => {
+        prisma.session.findFirst.mockResolvedValue(null);
+        prisma.teamMember.findUnique.mockResolvedValue({
+          teamId: 'tm_2',
+          memberId: 'mbr_1',
+        });
+        await expect(
+          (service as any).assertWorkerTeam(ctx, 'tm_2', 'tmm_2'),
+        ).resolves.toMatchObject({ memberId: 'tmm_2' });
+      });
+
+      it('跨群：席位不属于目标团队 → 仍 403（防跨团队冒充）', async () => {
+        prisma.session.findFirst.mockResolvedValue(null);
+        prisma.teamMember.findUnique.mockResolvedValue({
+          teamId: 'tm_other',
+          memberId: 'mbr_1',
+        });
+        await expect(
+          (service as any).assertWorkerTeam(ctx, 'tm_2', 'tmm_2'),
+        ).rejects.toMatchObject({
+          response: { code: 'PLATFORM_MCP_FORBIDDEN' },
+        });
+      });
+
       it('teamId 模式：经 assertWorkerTeam 校验后返回 teamId + 成员 + 外部用户（pendingReceipts 恒零）', async () => {
         // 团队维度归属：worker 有该团队会话（绑定成员）
         prisma.session.findFirst.mockResolvedValue({

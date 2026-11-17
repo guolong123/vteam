@@ -8873,14 +8873,20 @@ export class PlatformMcpService implements OnModuleInit {
         where: { id: selfInstanceId },
         select: { teamId: true, memberId: true },
       });
-      if (seat && seat.teamId === teamId && seat.memberId) {
-        const memberSession = await (this.prisma as any).session.findFirst({
-          where: { memberKey: seat.memberId, workerId: ctx.workerId },
-          select: { id: true },
-        });
-        if (memberSession) {
-          session = { id: memberSession.id, teamMemberId: selfInstanceId };
-        }
+      /**
+       * 跨群调用放宽（2026-11-17 用户实测）：只要 `selfInstanceId` 是**该团队的真实席位**，
+       * 就允许操作该群（发消息 / 读历史），**不再要求该成员在本 worker 上有 memberKey 会话**。
+       *
+       * 原条件要求 `memberKey` 能查到会话 —— 但线上 `s_…0057` 的 `member_key` 是 NULL
+       * （重置会话路径没写回），导致「平台管理」在另外两个群（ketacli维护团队 / 值班群）
+       * 发消息一律 403「不是这个群的会话成员」，而它明明是这两个群的成员。
+       *
+       * 安全性：`selfInstanceId` 由 worker（token 认证）上报，且此处额外校验
+       * `seat.teamId === teamId` —— 即「这个席位确实属于目标团队」，不存在跨团队冒充。
+       * 调用方只消费返回的 `memberId`（senderInstanceId），sessionId 未使用。
+       */
+      if (seat && seat.teamId === teamId) {
+        session = { id: '', teamMemberId: selfInstanceId };
       }
     }
     if (!session) {
