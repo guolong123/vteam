@@ -750,6 +750,11 @@ type VteamTodoArgs = z.infer<typeof vteamTodoSchema>;
 const channelSendSchema = z.object({
   // team-free-chat todo-4：channel_send 无 taskId 入参（任务上下文由服务端按 worker 会话
   // 自动解析），不在可选 5 工具之列，保持原样。
+  //
+  // 2026-11-17：补身份字段。原先只有 target/text，多会话 worker 上平台上判不出调用方
+  // （agent 实测 403 且无处可传 → 无解）。selfSessionId 还能精确指定用哪个会话的通知渠道。
+  selfInstanceId: z.string().optional().describe(SELF_INSTANCE_ID_DESC),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   target: z
     .string()
     .min(1)

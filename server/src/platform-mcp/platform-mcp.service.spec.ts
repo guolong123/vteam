@@ -6234,6 +6234,29 @@ describe('PlatformMcpService', () => {
         ).resolves.toMatchObject({ memberId: 'tmm_2' });
       });
 
+      /**
+       * 回归（2026-11-17 agent 实测）：team_view 此前**不把 selfInstanceId 透传给
+       * resolveExecContext**，多会话 worker 上无论传 mbr_/tmm_/s_ 组合一律 403。
+       */
+      it('多会话 worker：显式 selfInstanceId 透传到归属校验（不被会话歧义卡住）', async () => {
+        // worker 上有两个会话 → 省略身份必然歧义
+        prisma.session.findMany.mockResolvedValue([
+          { id: 's_other', teamMemberId: 'tmm_other' },
+          { id: 's_2', teamMemberId: 'tmm_2' },
+        ]);
+        prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_2' });
+        prisma.team.findUnique.mockResolvedValue({ name: '另一个群' });
+        prisma.teamMember.findMany.mockResolvedValue([]);
+        prisma.message.groupBy.mockResolvedValue([]);
+        prisma.externalUser.findMany.mockResolvedValue([]);
+
+        const out = await service.teamView(ctx, {
+          teamId: 'tm_2',
+          selfInstanceId: 'tmm_2',
+        });
+        expect(out.teamId).toBe('tm_2');
+      });
+
       it('跨群：席位不属于目标团队 → 仍 403（防跨团队冒充）', async () => {
         prisma.session.findFirst.mockResolvedValue(null);
         prisma.teamMember.findFirst.mockResolvedValue(null);
@@ -7179,11 +7202,10 @@ describe('PlatformMcpService', () => {
   describe('channel_send（通知渠道推送，T12）', () => {
     it('成功：解析当前任务上下文并调用 outboundDispatcher → 返回已发送文本，不抛异常', async () => {
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId,
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
-      });
+      // channel_send 改为按 worker 会话列表判定歧义（2026-11-17）
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', taskId, teamId: null, teamMemberId: senderInstanceId },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -7214,11 +7236,10 @@ describe('PlatformMcpService', () => {
     it('成功：长文本截断预览 100 字符', async () => {
       const longText = 'a'.repeat(150);
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId,
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
-      });
+      // channel_send 改为按 worker 会话列表判定歧义（2026-11-17）
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', taskId, teamId: null, teamMemberId: senderInstanceId },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -7239,11 +7260,10 @@ describe('PlatformMcpService', () => {
 
     it('失败：dispatcher 抛 channel not found → 返回 发送失败: xxx, isError true, 不抛异常', async () => {
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId,
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
-      });
+      // channel_send 改为按 worker 会话列表判定歧义（2026-11-17）
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', taskId, teamId: null, teamMemberId: senderInstanceId },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -7264,11 +7284,10 @@ describe('PlatformMcpService', () => {
 
     it('失败：direction 不支持 outbound → 返回 发送失败: channel direction does not support outbound', async () => {
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId,
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
-      });
+      // channel_send 改为按 worker 会话列表判定歧义（2026-11-17）
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', taskId, teamId: null, teamMemberId: senderInstanceId },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -7291,11 +7310,10 @@ describe('PlatformMcpService', () => {
 
     it('失败：project 隔离 Forbidden → 返回 发送失败, 不抛异常', async () => {
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId,
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
-      });
+      // channel_send 改为按 worker 会话列表判定歧义（2026-11-17）
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', taskId, teamId: null, teamMemberId: senderInstanceId },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -7346,12 +7364,14 @@ describe('PlatformMcpService', () => {
     // 缺陷 2：channel_send 报错文案误导 —— 「渠道未绑定」与「渠道名不存在」此前
     // 被笼统报成「无法解析当前任务上下文」，模型无从判断该去查任务上下文还是渠道绑定。
     it('失败：团队未绑定任何通知渠道 → 报错点名「未绑定」且不再提任务上下文', async () => {
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId: null,
-        teamId: 'tm_1',
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
-      });
+      prisma.session.findMany.mockResolvedValue([
+        {
+          id: 's_1',
+          taskId: null,
+          teamId: 'tm_1',
+          teamMemberId: senderInstanceId,
+        },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -7372,12 +7392,14 @@ describe('PlatformMcpService', () => {
     });
 
     it('失败：渠道名不存在 → 报错与「未绑定」不同，且列出该团队可用渠道', async () => {
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId: null,
-        teamId: 'tm_1',
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
-      });
+      prisma.session.findMany.mockResolvedValue([
+        {
+          id: 's_1',
+          taskId: null,
+          teamId: 'tm_1',
+          teamMemberId: senderInstanceId,
+        },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -7403,13 +7425,61 @@ describe('PlatformMcpService', () => {
       expect(result.content[0].text).not.toContain('未绑定任何通知渠道');
     });
 
-    it('成功：团队会话（无任务）→ 按团队作用域发送，不再要求任务上下文', async () => {
-      prisma.session.findFirst.mockResolvedValueOnce({
-        taskId: null,
-        teamId: 'tm_1',
-        agentId: senderAgentId,
-        teamMemberId: senderInstanceId,
+    /**
+     * 回归（2026-11-17 agent 实测）：channel_send 原先 schema 里**没有任何身份字段**，
+     * 多会话 worker 上服务端判不出调用方 → 403 且 agent 无处可传（无解）。
+     */
+    it('多会话 worker 且未传 selfSessionId → 明确报错要求指定会话（不再让 agent 无解）', async () => {
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', taskId, teamId: 'tm_1', teamMemberId: senderInstanceId },
+        { id: 's_2', taskId: null, teamId: 'tm_2', teamMemberId: 'tmm_other' },
+      ]);
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_0000000001',
+        text: 'hello',
       });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('多个会话');
+      expect(result.content[0].text).toContain('selfSessionId');
+      expect(outboundDispatcher.sendToChannelByIdOrName).not.toHaveBeenCalled();
+    });
+
+    it('传 selfSessionId → 精确取该会话的任务上下文（不猜最近会话）', async () => {
+      // 归属校验需要任务所属团队
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
+      prisma.session.findFirst.mockResolvedValue({
+        taskId,
+        teamId: null,
+        memberId: 'mbr_sender',
+      });
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_1', teamMemberId: senderInstanceId },
+      ]);
+      outboundDispatcher.sendToChannelByIdOrName.mockResolvedValue(undefined);
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_0000000001',
+        text: 'hello',
+        selfSessionId: 's_specific',
+      });
+
+      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 's_specific' } }),
+      );
+      expect(result.isError).toBe(false);
+    });
+
+    it('成功：团队会话（无任务）→ 按团队作用域发送，不再要求任务上下文', async () => {
+      prisma.session.findMany.mockResolvedValue([
+        {
+          id: 's_1',
+          taskId: null,
+          teamId: 'tm_1',
+          teamMemberId: senderInstanceId,
+        },
+      ]);
       prisma.session.findFirst.mockResolvedValueOnce({
         id: 's_1',
         agentId: senderAgentId,
@@ -11477,5 +11547,93 @@ describe('PlatformMcpService.resolveMemberBySession', () => {
       where: { id: 's_new' },
       data: { memberId: 'mbr_1' },
     });
+  });
+});
+
+/**
+ * 回退路径上的成员级身份（2026-11-17）。
+ *
+ * `selfInstanceId` 现在可能是平台成员 id（mbr_）。回退路径原先直接拿它和会话的
+ * `team_member_id` 比字符串，必然判成"冒充" —— 线上表现为 agent 传 mbr_ 反而被拒。
+ */
+describe('PlatformMcpService.resolveToolCallerWithContext（成员级身份）', () => {
+  const buildSvc = (prisma: Record<string, any>) =>
+    new PlatformMcpService(
+      prisma as any,
+      { emit: jest.fn() } as any,
+      { nextId: jest.fn().mockResolvedValue('m_1') } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+  it('传 mbr_ 且最近会话属于该成员的席位 → 正常解析（不被当成冒充）', async () => {
+    const prisma = {
+      session: {
+        findFirst: jest.fn().mockResolvedValue({
+          taskId: null,
+          teamId: 'tm_1',
+          teamMemberId: 'tmm_1',
+          agentId: 'a_1',
+          memberId: 'mbr_1',
+        }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      teamMember: {
+        // 该成员在 tmm_1 有席位
+        findMany: jest.fn().mockResolvedValue([{ id: 'tmm_1' }]),
+        findFirst: jest.fn().mockResolvedValue({ id: 'tmm_1' }),
+        findUnique: jest.fn().mockResolvedValue({ memberId: 'mbr_1' }),
+      },
+      task: { findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_1' }) },
+    };
+    const out = await buildSvc(prisma).resolveToolCallerWithContext(
+      { workerId: 'w_1' },
+      { selfInstanceId: 'mbr_1' },
+    );
+    expect(out).toMatchObject({ callerId: 'tmm_1', teamId: 'tm_1' });
+  });
+
+  it('传 mbr_ 但最近会话属于**别的**成员 → 仍 fail-closed 403', async () => {
+    const prisma = {
+      session: {
+        // 「我自己的会话」查不到（按席位集合过滤）→ 回退到别人的最近会话
+        findFirst: jest.fn().mockImplementation(async (q: any) =>
+          q?.where?.teamMemberId?.in
+            ? null
+            : {
+                taskId: null,
+                teamId: 'tm_1',
+                teamMemberId: 'tmm_other',
+                agentId: 'a_1',
+                memberId: 'mbr_other',
+              },
+        ),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      teamMember: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'tmm_1' }]),
+        findFirst: jest.fn().mockResolvedValue({ id: 'tmm_1' }),
+        findUnique: jest.fn().mockResolvedValue({ memberId: 'mbr_1' }),
+      },
+      task: { findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_1' }) },
+    };
+    await expect(
+      buildSvc(prisma).resolveToolCallerWithContext(
+        { workerId: 'w_1' },
+        { selfInstanceId: 'mbr_1' },
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PLATFORM_MCP_FORBIDDEN' } });
   });
 });

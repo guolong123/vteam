@@ -171,7 +171,11 @@ describe('platform-mcp tool naming contract', () => {
         taskId: REQUIRED,
       },
       todo: { selfInstanceId: OPTIONAL, teamId: ABSENT, taskId: REQUIRED },
-      channel_send: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: ABSENT },
+      channel_send: {
+        selfInstanceId: OPTIONAL,
+        teamId: ABSENT,
+        taskId: ABSENT,
+      },
       wecom_reply: {
         selfInstanceId: OPTIONAL,
         teamId: OPTIONAL,

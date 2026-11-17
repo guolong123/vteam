@@ -896,7 +896,8 @@ export class PlatformMcpService implements OnModuleInit {
         message: '私聊历史需要团队上下文，禁止跨团队访问',
       });
     }
-    await this.assertWorkerTeam(ctx, execTeamId);
+    // 复核沿用已解析出的调用方身份（不传会让多会话 worker 上二次判定失败）
+    await this.assertWorkerTeam(ctx, execTeamId, exec.callerId);
     const channel = await this.prisma.chatChannel.findFirst({
       where: {
         teamMemberId: peerMemberId,
@@ -5372,7 +5373,12 @@ export class PlatformMcpService implements OnModuleInit {
 
   async teamView(
     ctx: PlatformMcpContext,
-    args: { taskId?: string; teamId?: string; externalUserName?: string },
+    args: {
+      taskId?: string;
+      teamId?: string;
+      externalUserName?: string;
+      selfInstanceId?: string;
+    },
   ): Promise<{
     taskId: string | null;
     teamId: string | null;
@@ -5403,6 +5409,8 @@ export class PlatformMcpService implements OnModuleInit {
     const exec = await this.resolveExecContext(ctx, {
       ...(hasTaskId ? { taskId: args.taskId } : {}),
       ...(hasTeamId ? { teamId: args.teamId } : {}),
+      // 2026-11-17：身份必须透传，否则多会话 worker 上恒 403（agent 已实测）
+      ...(args.selfInstanceId ? { selfInstanceId: args.selfInstanceId } : {}),
     });
     let taskId: string | null = null;
     let viewTeamId: string | null = null;
@@ -8212,7 +8220,12 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async channelSend(
     ctx: PlatformMcpContext,
-    args: { target: string; text: string },
+    args: {
+      target: string;
+      text: string;
+      selfInstanceId?: string;
+      selfSessionId?: string;
+    },
   ): Promise<{
     content: Array<{ type: string; text: string }>;
     isError?: boolean;
@@ -8247,11 +8260,95 @@ export class PlatformMcpService implements OnModuleInit {
     let teamId: string | null = null;
     let memberId: string | null = null;
     try {
-      const session = await (this.prisma as any).session.findFirst({
-        where: { workerId: ctx.workerId },
-        orderBy: { createdAt: 'desc' },
-        select: { taskId: true, teamId: true, memberId: true },
-      });
+      /**
+       * 上下文来源：优先**指定会话**（`selfSessionId`），否则按 worker 会话推断。
+       *
+       * 2026-11-17：原先无条件取「最近一条会话」，一台 worker 挂多个成员会话时必然取错或
+       * 判不出（agent 实测 403 且 schema 里没有可传的身份字段 → 无解）。现在：
+       * - 传了 `selfSessionId` → 精确定位该会话；
+       * - 没传且 worker 上有多条会话 → 明确报错要求指定（不猜）。
+       */
+      const ref = (args.selfSessionId ?? '').trim();
+      let session: {
+        taskId: string | null;
+        teamId: string | null;
+        memberId: string | null;
+      } | null = null;
+      if (ref) {
+        session = await (this.prisma as any).session.findFirst({
+          where: ref.startsWith('ses_') ? { instanceRef: ref } : { id: ref },
+          select: { taskId: true, teamId: true, memberId: true },
+        });
+        if (!session) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `发送失败: 无法识别会话 ${ref}（支持 s_ 平台主键 / ses_ 引擎会话 id）。` +
+                  '请改用 group_post/notify_agent，或不传 selfSessionId 由平台按会话推断。',
+              },
+            ],
+            isError: true,
+          };
+        }
+      } else {
+        /**
+         * 没指定会话时按调用方缩小范围（2026-11-17）：传了 `selfInstanceId`（mbr_）就先
+         * 展开该成员的席位，只在这些席位对应的会话里选 —— 否则同机别的成员的会话会被
+         * 误当成"多会话歧义"。
+         */
+        const self = (args.selfInstanceId ?? '').trim();
+        let scopeWhere: Record<string, unknown> = { workerId: ctx.workerId };
+        if (self.startsWith('mbr_')) {
+          const seats = ((await (this.prisma as any).teamMember.findMany({
+            where: { memberId: self },
+            select: { id: true },
+          })) ?? []) as Array<{ id: string }>;
+          const seatIds = seats.map((x) => x.id);
+          if (seatIds.length === 0) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `发送失败: 成员 ${self} 在任何团队都没有席位，无法定位通知渠道。`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          scopeWhere = {
+            workerId: ctx.workerId,
+            teamMemberId: { in: seatIds },
+          };
+        } else if (self.startsWith('tmm_')) {
+          scopeWhere = { workerId: ctx.workerId, teamMemberId: self };
+        }
+        const recent = (await (this.prisma as any).session.findMany({
+          where: scopeWhere,
+          orderBy: { createdAt: 'desc' },
+          take: 2,
+          select: { taskId: true, teamId: true, memberId: true },
+        })) as Array<{
+          taskId: string | null;
+          teamId: string | null;
+          memberId: string | null;
+        }>;
+        if (recent.length > 1) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `发送失败: worker ${ctx.workerId} 上存在多个会话，无法确定用哪个通知渠道。` +
+                  '请传 selfSessionId（你的会话 id）指定；或改用 group_post/notify_agent。',
+              },
+            ],
+            isError: true,
+          };
+        }
+        session = recent[0] ?? null;
+      }
       taskId = session?.taskId ?? null;
       teamId = session?.teamId ?? null;
       // P5：成员全局会话优先按成员绑定解析通知渠道（D16/Q26）。
@@ -8273,9 +8370,9 @@ export class PlatformMcpService implements OnModuleInit {
     }
     try {
       if (taskId) {
-        await this.assertWorkerTask(ctx, taskId);
+        await this.assertWorkerTask(ctx, taskId, args.selfInstanceId);
       } else {
-        await this.assertWorkerTeam(ctx, teamId as string);
+        await this.assertWorkerTeam(ctx, teamId as string, args.selfInstanceId);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -8687,21 +8784,45 @@ export class PlatformMcpService implements OnModuleInit {
       teamId: true,
       teamMemberId: true,
       agentId: true,
+      // 2026-11-17：身份可能以**平台成员 id**（mbr_）传入，需与会话的 memberId 比对
+      memberId: true,
     } as const;
+    /**
+     * 调用方身份解析（2026-11-17）：`selfInstanceId` 既可能是席位 id（tmm_，旧）也可能是
+     * 平台成员 id（mbr_，新）。mbr_ 不能直接和会话的 `team_member_id` 比字符串，
+     * 否则「成员级身份」在回退路径上必然被误判成冒充 —— 这里先把它展开成席位集合。
+     */
+    const rawSelf = (args.selfInstanceId ?? '').trim();
+    const isMemberId = rawSelf.startsWith('mbr_');
+    const memberSeatIds: string[] = isMemberId
+      ? (
+          ((await (this.prisma as any).teamMember.findMany({
+            where: { memberId: rawSelf },
+            select: { id: true },
+          })) ?? []) as Array<{ id: string }>
+        ).map((x) => x.id)
+      : [];
 
     // ① selfInstanceId 精确维度（治本）：先按调用方**自己的**会话解析上下文。
     //    跨团队 worker 上「最近会话」可能属于别的成员/团队——线上事故 2026-10-13：
     //    值班群 tm_0000000002 的企微回复被回填成 tm_0000000008（该团队无企微绑定），
     //    报错却写成「当前团队未绑定企业微信渠道」，把模型引向完全错误的方向。
     //    有 selfInstanceId 时优先自己的会话，团队必然正确（成员跨团队多会话时取最近）。
-    if (args.selfInstanceId) {
-      const own = await this.prisma.session.findFirst({
-        where: { teamMemberId: args.selfInstanceId, workerId: ctx.workerId },
-        orderBy: { createdAt: 'desc' },
-        select: sessionSelect,
-      });
+    if (rawSelf) {
+      const ownWhere = isMemberId
+        ? memberSeatIds.length > 0
+          ? { workerId: ctx.workerId, teamMemberId: { in: memberSeatIds } }
+          : null
+        : { workerId: ctx.workerId, teamMemberId: rawSelf };
+      const own = ownWhere
+        ? await this.prisma.session.findFirst({
+            where: ownWhere,
+            orderBy: { createdAt: 'desc' },
+            select: sessionSelect,
+          })
+        : null;
       if (own) {
-        return this.resolveSessionToCaller(ctx, own, args.selfInstanceId);
+        return this.resolveSessionToCaller(ctx, own, rawSelf);
       }
     }
 
@@ -8713,20 +8834,27 @@ export class PlatformMcpService implements OnModuleInit {
     // 任务关闭后会话 workerId 被 reset 清空，回退路径同样兜底 adopt 一次
     // （teamMemberId 全局唯一，按 selfInstanceId 精确匹配且必须唯一）。
     let fallbackSession = session;
-    if (!fallbackSession && args.selfInstanceId !== undefined) {
-      const orphans = await this.prisma.session.findMany({
-        where: { teamMemberId: args.selfInstanceId, workerId: null },
-        select: sessionSelect,
-        take: 2,
-      });
+    if (!fallbackSession && rawSelf) {
+      const orphanWhere = isMemberId
+        ? memberSeatIds.length > 0
+          ? { teamMemberId: { in: memberSeatIds }, workerId: null }
+          : null
+        : { teamMemberId: rawSelf, workerId: null };
+      const orphans = orphanWhere
+        ? await this.prisma.session.findMany({
+            where: orphanWhere,
+            select: sessionSelect,
+            take: 2,
+          })
+        : [];
       if (orphans.length === 1) {
         fallbackSession = orphans[0];
         await this.prisma.session.updateMany({
-          where: { teamMemberId: args.selfInstanceId, workerId: null },
+          where: orphanWhere,
           data: { workerId: ctx.workerId },
         });
         this.logger.log(
-          `[mcp] adopt 未绑定会话(双空上下文) member=${args.selfInstanceId} worker=${ctx.workerId}`,
+          `[mcp] adopt 未绑定会话(双空上下文) member=${rawSelf} worker=${ctx.workerId}`,
         );
       }
     }
@@ -8734,17 +8862,26 @@ export class PlatformMcpService implements OnModuleInit {
     // ② 防误归属（治本）：显式给了 selfInstanceId，但回退命中的会话属于**别的成员**
     //    ——宁可 fail-closed 要求显式传参，也不静默把调用归属到他人/他的团队
     //    （归属错误会连带误导后续所有权限判定与业务动作）。
-    if (
-      args.selfInstanceId &&
-      effectiveSession?.teamMemberId &&
-      effectiveSession.teamMemberId !== args.selfInstanceId
-    ) {
+    const ownerMismatch = isMemberId
+      ? Boolean(
+          effectiveSession?.memberId && effectiveSession.memberId !== rawSelf,
+        ) ||
+        Boolean(
+          effectiveSession?.teamMemberId &&
+          memberSeatIds.length > 0 &&
+          !memberSeatIds.includes(effectiveSession.teamMemberId),
+        )
+      : Boolean(
+          effectiveSession?.teamMemberId &&
+          effectiveSession.teamMemberId !== rawSelf,
+        );
+    if (rawSelf && effectiveSession && ownerMismatch) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
         message:
           `无法可靠解析调用上下文：该 worker 最近会话属于成员 ${effectiveSession.teamMemberId}` +
           `${effectiveSession.teamId ? `（团队 ${effectiveSession.teamId}）` : ''}，` +
-          `与调用方 ${args.selfInstanceId} 不一致。请显式传 teamId（建议同时传 selfInstanceId）后重试。`,
+          `与调用方 ${rawSelf} 不一致。请显式传 teamId（建议同时传 selfInstanceId / selfSessionId）后重试。`,
       });
     }
     return this.resolveSessionToCaller(
