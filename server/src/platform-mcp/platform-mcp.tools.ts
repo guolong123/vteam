@@ -62,6 +62,16 @@ const TEAM_ID_DESC =
  * opencode 不向 MCP 透传会话 id（上游 #6279/#45997 未实现），请求头只承载 worker 级常量
  * ⇒ 会话级身份由调用方带入。传它能精确反查到「我是谁」，多会话 worker 上也不会歧义。
  */
+/**
+ * `selfInstanceId`：调用身份（2026-11-17 起可选）。
+ *
+ * 平台成员 id（mbr_）是唯一主体；仍兼容旧席位 id（tmm_）。与 `selfSessionId` 同传时
+ * 两者必须指向同一成员 —— 不一致直接 403，避免"以模糊身份调用"。
+ */
+const SELF_INSTANCE_ID_DESC =
+  '你的调用身份（可选；平台成员 id，mbr_ 前缀；兼容旧席位 id，tmm_ 前缀）。' +
+  '与 selfSessionId 同传时必须指向同一成员；都不传时按你在本 worker 的会话推断' +
+  '（该 worker 上有多个会话时会报错，请显式传）。';
 const SELF_SESSION_ID_DESC =
   '你的会话 id（可选；支持平台会话主键 s_ 前缀或引擎会话 id ses_ 前缀）。' +
   '传它可让平台精确反查你的成员身份（多会话 worker 上也不会认错人）；' +
@@ -133,6 +143,8 @@ const chatHistorySchema = z.object({
 type ChatHistoryArgs = z.infer<typeof chatHistorySchema>;
 
 const doclibSchema = z.object({
+  selfInstanceId: z.string().optional().describe(SELF_INSTANCE_ID_DESC),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   taskId: z.string().describe('任务 ID'),
   artifactId: z
     .string()
@@ -149,6 +161,8 @@ const doclibSchema = z.object({
 type DoclibArgs = z.infer<typeof doclibSchema>;
 
 const taskContextSchema = z.object({
+  selfInstanceId: z.string().optional().describe(SELF_INSTANCE_ID_DESC),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   taskId: z.string().describe('任务 ID'),
 });
 
@@ -172,6 +186,8 @@ const groupPostSchema = z.object({
 type GroupPostArgs = z.infer<typeof groupPostSchema>;
 
 const readFileSchema = z.object({
+  selfInstanceId: z.string().optional().describe(SELF_INSTANCE_ID_DESC),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   taskId: z.string().describe('任务 ID'),
   fileRef: z
     .string()
@@ -522,6 +538,8 @@ export const memoryUpdateSchema = z
 type MemoryUpdateArgs = z.infer<typeof memoryUpdateSchema>;
 
 const memoryListSchema = z.object({
+  selfInstanceId: z.string().optional().describe(SELF_INSTANCE_ID_DESC),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   query: z
@@ -607,6 +625,8 @@ type MemoryMergeArgs = z.infer<typeof memoryMergeSchema>;
  * - externalUserName 只过滤返回的 externalUsers，不影响 members。
  */
 export const teamViewSchema = z.object({
+  selfInstanceId: z.string().optional().describe(SELF_INSTANCE_ID_DESC),
+  selfSessionId: z.string().optional().describe(SELF_SESSION_ID_DESC),
   taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   externalUserName: z

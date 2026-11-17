@@ -1404,9 +1404,14 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async doclib(
     ctx: PlatformMcpContext,
-    args: { taskId: string; artifactId?: string; version?: number },
+    args: {
+      taskId: string;
+      artifactId?: string;
+      version?: number;
+      selfInstanceId?: string;
+    },
   ): Promise<unknown> {
-    await this.assertWorkerTask(ctx, args.taskId);
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
 
     if (!args.artifactId) {
       const artifacts = await this.prisma.artifact.findMany({
@@ -1479,8 +1484,11 @@ export class PlatformMcpService implements OnModuleInit {
    * + 群聊频道 id + 团队 agentMembers（团队成员列表，实例形状
    * {id: 成员 id, alias, agentId, name, role, main}，main 按 team.mainAgentMemberId 判定）。
    */
-  async taskContext(ctx: PlatformMcpContext, args: { taskId: string }) {
-    await this.assertWorkerTask(ctx, args.taskId);
+  async taskContext(
+    ctx: PlatformMcpContext,
+    args: { taskId: string; selfInstanceId?: string },
+  ) {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
     const task = await this.prisma.task.findUnique({
       where: { id: args.taskId },
       select: {
@@ -3813,9 +3821,14 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async readFile(
     ctx: PlatformMcpContext,
-    args: { taskId: string; fileRef: string; maxBytes?: number },
+    args: {
+      taskId: string;
+      fileRef: string;
+      maxBytes?: number;
+      selfInstanceId?: string;
+    },
   ): Promise<ReadFileResult> {
-    await this.assertWorkerTask(ctx, args.taskId);
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
     const maxBytes = this.normalizeMaxBytes(args.maxBytes);
     if (args.fileRef.startsWith('art_')) {
       const artifactId = args.fileRef.split('@')[0].split('/')[0].split('?')[0];
@@ -8985,7 +8998,7 @@ export class PlatformMcpService implements OnModuleInit {
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
         message:
           `无法判定调用身份：worker ${ctx.workerId} 上没有任何会话记录。` +
-          '请显式传 selfInstanceId（平台成员 id，mbr_ 前缀）',
+          '请显式传 selfSessionId（你的会话 id）或 selfInstanceId（平台成员 id，mbr_ 前缀）',
       });
     }
     if (sessions.length > 1) {
@@ -8994,7 +9007,7 @@ export class PlatformMcpService implements OnModuleInit {
         message:
           `无法判定调用身份：worker ${ctx.workerId} 上存在多个会话` +
           `（${sessions.map((x) => x.teamMemberId ?? x.id).join('/')}），无法确定是哪一位在调用。` +
-          '请显式传 selfInstanceId（mbr_ 前缀）',
+          '请显式传 selfSessionId（你自己的会话 id，最精确）或 selfInstanceId（平台成员 id，mbr_ 前缀）',
       });
     }
     const selfSeatId = sessions[0].teamMemberId;
@@ -9003,7 +9016,7 @@ export class PlatformMcpService implements OnModuleInit {
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
         message:
           `无法判定调用身份：worker 上的会话 ${sessions[0].id} 未绑定团队成员席位。` +
-          '请显式传 selfInstanceId（mbr_ 前缀）',
+          '请显式传 selfInstanceId（平台成员 id，mbr_ 前缀），平台会把它绑定到该会话',
       });
     }
     const selfSeat = await repo.findUnique({

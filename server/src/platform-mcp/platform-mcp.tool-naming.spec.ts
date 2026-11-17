@@ -61,9 +61,9 @@ describe('platform-mcp tool naming contract', () => {
         teamId: ABSENT,
         taskId: ABSENT,
       },
-      doclib: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: REQUIRED },
+      doclib: { selfInstanceId: OPTIONAL, teamId: ABSENT, taskId: REQUIRED },
       task_context: {
-        selfInstanceId: ABSENT,
+        selfInstanceId: OPTIONAL,
         teamId: ABSENT,
         taskId: REQUIRED,
       },
@@ -72,7 +72,7 @@ describe('platform-mcp tool naming contract', () => {
         teamId: OPTIONAL,
         taskId: OPTIONAL,
       },
-      read_file: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: REQUIRED },
+      read_file: { selfInstanceId: OPTIONAL, teamId: ABSENT, taskId: REQUIRED },
       notify_agent: {
         selfInstanceId: OPTIONAL,
         teamId: OPTIONAL,
@@ -125,7 +125,7 @@ describe('platform-mcp tool naming contract', () => {
         taskId: OPTIONAL,
       },
       memory_list: {
-        selfInstanceId: ABSENT,
+        selfInstanceId: OPTIONAL,
         teamId: OPTIONAL,
         taskId: OPTIONAL,
       },
@@ -140,7 +140,11 @@ describe('platform-mcp tool naming contract', () => {
         taskId: OPTIONAL,
       },
       // task-4：team_view 改为任务/团队双作用域（至少一个，service 层校验）
-      team_view: { selfInstanceId: ABSENT, teamId: OPTIONAL, taskId: OPTIONAL },
+      team_view: {
+        selfInstanceId: OPTIONAL,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
       my_profile: {
         selfInstanceId: OPTIONAL,
         teamId: ABSENT,

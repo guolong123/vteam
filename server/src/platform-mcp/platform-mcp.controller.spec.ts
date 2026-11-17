@@ -34,6 +34,7 @@ describe('PlatformMcpController (HTTP)', () => {
     resolveToolCallerWithContext: jest.Mock;
     resolveMemberBySession: jest.Mock;
     chatHistory: jest.Mock;
+    memoryList: jest.Mock;
     doclib: jest.Mock;
     taskContext: jest.Mock;
     groupPost: jest.Mock;
@@ -92,6 +93,7 @@ describe('PlatformMcpController (HTTP)', () => {
           }),
         ),
       chatHistory: jest.fn().mockResolvedValue([]),
+      memoryList: jest.fn().mockResolvedValue([]),
       doclib: jest.fn().mockResolvedValue({ artifacts: [] }),
       taskContext: jest.fn().mockResolvedValue({}),
       groupPost: jest
@@ -481,6 +483,17 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(memoryList.inputSchema.required).toEqual([]);
       expect(memoryList.inputSchema.properties.limit).toEqual({
         type: 'number',
+      });
+      /**
+       * 回归（2026-11-17 线上实测）：memory_list 原先**没有**身份字段，但多会话 worker
+       * 上归属校验会报「请显式传 selfInstanceId」—— 传了却被 zod strip 掉，形成死循环。
+       * 身份字段必须真实存在于 schema 里，agent 才有解。
+       */
+      expect(memoryList.inputSchema.properties.selfInstanceId).toEqual({
+        type: 'string',
+      });
+      expect(memoryList.inputSchema.properties.selfSessionId).toEqual({
+        type: 'string',
       });
       // memory_update：selfInstanceId/memoryId 必填，taskId/teamId 双可选，content/description/tags 可选（至少一个）
       const memoryUpdate = tools.find((t) => t.name === 'memory_update')!;
@@ -1280,6 +1293,30 @@ describe('PlatformMcpController (HTTP)', () => {
         expect.objectContaining({
           selfInstanceId: 'mbr_sender',
           content: 'hello',
+        }),
+      );
+    });
+
+    it('memory_list 接受 selfSessionId（回归：此前 schema 无该字段，传了被 strip → 死循环）', async () => {
+      await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 35,
+          method: 'tools/call',
+          params: {
+            name: 'memory_list',
+            arguments: { teamId: 'tm_1', selfSessionId: 's_1' },
+          },
+        })
+        .expect(200);
+
+      expect(service.memoryList).toHaveBeenCalledWith(
+        expect.objectContaining({ workerId: 'w_0001' }),
+        expect.objectContaining({
+          teamId: 'tm_1',
+          selfSessionId: 's_1',
+          selfInstanceId: 'mbr_sender',
         }),
       );
     });
