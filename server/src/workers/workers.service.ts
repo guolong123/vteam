@@ -488,7 +488,26 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
      * 失败不阻断注册（能力同步是增强）；已自定义能力的行默认不覆盖。
      */
     try {
-      await this.modelsService.syncCapabilitiesFromModelsDev();
+      /**
+       * 只同步**该 worker 上报的 provider**（2026-11-18 修订）。
+       *
+       * 初版无条件同步全库：dev 日志实测「provider 227 个、命中 8285 个模型」——
+       * 一次注册做了 8285 次 UPDATE，且每个 worker 注册都重复做一遍，纯属浪费。
+       * 而本次注册刚 upsert 的模型只属于它上报的那几个 provider ⇒ 按 provider 收窄即可，
+       * 语义不变（其它 provider 的能力在它们各自的 worker 注册/手动触发时同步）。
+       */
+      const reportedProviders = [
+        ...new Set(
+          (dto.capabilities?.models ?? [])
+            .map((raw) => (typeof raw === 'string' ? raw.split('/')[0] : ''))
+            .filter((p) => p.length > 0),
+        ),
+      ];
+      if (reportedProviders.length > 0) {
+        await this.modelsService.syncCapabilitiesFromModelsDev({
+          providerIDs: reportedProviders,
+        });
+      }
     } catch (e) {
       this.logger.warn(
         `worker ${worker.id} 注册后模型能力同步失败（不阻断注册）: ${e}`,
