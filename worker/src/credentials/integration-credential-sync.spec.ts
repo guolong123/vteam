@@ -192,7 +192,7 @@ describe('syncIntegrationCredentials（v2 integration 维度凭据 ↔ serve /ap
     expect(state.calls.filter((c) => c.method === 'POST')).toEqual([]);
   });
 
-  it('providerConfigs 里的 provider（有 baseUrl，走 opencode.json）完全不进 credential store；其吊销也交给配置段处理', async () => {
+  it('providerConfigs 里的 provider 不写 store；store 无残留时不产生任何写操作', async () => {
     const { state, requestServe } = makeFakeServe();
 
     const result = await syncIntegrationCredentials(
@@ -205,8 +205,76 @@ describe('syncIntegrationCredentials（v2 integration 维度凭据 ↔ serve /ap
     );
 
     expect(result).toMatchObject({ ok: true, changed: false });
-    expect(requestServe).not.toHaveBeenCalled();
-    expect(state.calls).toEqual([]);
+    // 只读一次（用于判断有无残留行），不产生任何写
+    expect(state.calls).toEqual([{ path: '/api/credential', method: 'GET', body: undefined }]);
+    expect(state.credentials).toEqual([]);
+  });
+
+  /**
+   * 2026-11-18 线上故障：commandcode 早期没有 baseUrl → 走 integration 维度写进 store；
+   * 后补 baseUrl 进入配置段，但 store 残留行从未清理 ⇒ **store 权重高于配置段**，
+   * 旧 key 长期压住配置段的新 key（改 key 后一直报 insufficient credits，而直接 curl
+   * 上游同一把新 key 却成功 —— 极难定位）。
+   */
+  it('配置段 provider 的 store 残留行 → 删除（否则旧 key 压住配置段新 key）', async () => {
+    const { state, requestServe } = makeFakeServe();
+    state.credentials.push({
+      id: 'cred_stale',
+      integrationID: 'commandcode',
+      label: 'default',
+      active: true,
+      value: { type: 'api', key: 'user_OLDKEY' },
+    });
+
+    const result = await syncIntegrationCredentials(
+      {
+        providerKeys: [{ providerID: 'commandcode', key: 'user_NEWKEY' }],
+        providerConfigs: { commandcode: {} },
+      },
+      makeDeps(requestServe),
+    );
+
+    expect(result.purged).toEqual(['commandcode']);
+    expect(result.changed).toBe(true);
+    expect(state.credentials).toEqual([]);
+    expect(state.calls).toContainEqual({
+      path: '/api/credential/cred_stale',
+      method: 'DELETE',
+      body: undefined,
+    });
+  });
+
+  it('残留行清理失败 → failures 记录 + warn，不中断其它 provider 的同步', async () => {
+    const { state, requestServe } = makeFakeServe();
+    state.credentials.push({
+      id: 'cred_stale',
+      integrationID: 'commandcode',
+      label: 'default',
+      active: true,
+      value: { type: 'api', key: 'user_OLDKEY' },
+    });
+    const original = requestServe.getMockImplementation()!;
+    requestServe.mockImplementation(async (endpoint, path, options = {}) => {
+      if (path.startsWith('/api/credential/') && (options.method ?? 'GET') === 'DELETE') {
+        state.calls.push({ path, method: 'DELETE', body: options.body });
+        return { status: 500, ok: false, text: '', json: undefined };
+      }
+      return original(endpoint, path, options);
+    });
+
+    const result = await syncIntegrationCredentials(
+      {
+        providerKeys: [
+          { providerID: 'commandcode', key: 'user_NEWKEY' },
+          { providerID: 'other', key: 'other_key' },
+        ],
+        providerConfigs: { commandcode: {} },
+      },
+      makeDeps(requestServe),
+    );
+
+    expect(result.failures).toContain('commandcode');
+    expect(result.created).toContain('other');
   });
 
   it('写入后 provider 仍不在注册表 → missing + warn（静默失败必须显式暴露）', async () => {

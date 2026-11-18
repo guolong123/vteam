@@ -64,6 +64,8 @@ export interface IntegrationCredentialSyncSummary {
   created: string[];
   /** 值变更（DELETE + POST 重建）的 integrationID。 */
   updated: string[];
+  /** 配置段 provider 的 store 残留行清理（2026-11-18：store 权重高于配置段）。 */
+  purged: string[];
   /** 因吊销删除的 integrationID。 */
   removed: string[];
   /** 值已一致、无需写入的条目数。 */
@@ -110,6 +112,7 @@ function emptySummary(ok: boolean): IntegrationCredentialSyncSummary {
     ok,
     created: [],
     updated: [],
+    purged: [],
     removed: [],
     unchanged: 0,
     missing: [],
@@ -136,8 +139,32 @@ export async function syncIntegrationCredentials(
   const warn = deps.warn ?? ((): void => undefined);
   const doRequest: ServeRequester = deps.requestServe ?? defaultRequestServe;
 
-  // 配置段 provider（有 baseUrl 走 opencode.json 的 settings.apiKey）不归本模块管。
+  // 配置段 provider（有 baseUrl 走 opencode.json 的 settings.apiKey）不归本模块**写入**。
   const configIds = new Set(Object.keys(request.providerConfigs ?? {}));
+  /**
+   * 配置段 provider 的 credential store **残留行必须清理**（2026-11-18 线上故障）。
+   *
+   * 原实现假设「配置段」与「credential store」互不覆盖 ⇒ 对 configIds 一律 `continue`，
+   * 谁都不去动 store 里的行。实测证伪：opencode v2 推理取 key 时 **credential store 优先
+   * 于配置段**，于是组建配置段时留下的历史行（provider 早期没有 baseUrl 时走的
+   * integration 维度）会永久压住配置段里的新 key。
+   *
+   * 线上表现：平台改了 commandcode 的 key、worker 也热重载成功、`GET /api/provider`
+   * 与 `auth.json` 都是新 key，**但实际出站请求用的是 store 里的旧 key**，一直报
+   * `insufficient credits`（旧 key 所属账号已欠费），而把同一把新 key 直接 curl
+   * 上游却是成功的 —— 极难定位。
+   *
+   * 语义：provider 只要出现在配置段，配置段就是它唯一的凭据载体 ⇒ store 行属于残留，
+   * 删除。取 `providerKeys` 与 `configIds` 的交集（只清理 vteam 确实在管的 provider，
+   * 不碰用户自建的其它 integration）。
+   */
+  const purgeConfigScoped = new Set<string>();
+  for (const entry of request.providerKeys ?? []) {
+    const providerID = str(entry?.providerID);
+    if (providerID && entry?.key && configIds.has(providerID)) {
+      purgeConfigScoped.add(providerID);
+    }
+  }
   const desired = new Map<string, string>();
   for (const entry of request.providerKeys ?? []) {
     const providerID = str(entry?.providerID);
@@ -152,7 +179,7 @@ export async function syncIntegrationCredentials(
     if (!providerID || configIds.has(providerID) || desired.has(providerID)) continue;
     revoked.add(providerID);
   }
-  if (desired.size === 0 && revoked.size === 0) {
+  if (desired.size === 0 && revoked.size === 0 && purgeConfigScoped.size === 0) {
     return emptySummary(true);
   }
 
@@ -234,10 +261,42 @@ export async function syncIntegrationCredentials(
     }
   }
 
+  // 配置段 provider 的 store 残留行：删除（配置段是唯一凭据载体）。
+  if (purgeConfigScoped.size > 0) {
+    for (const row of rows) {
+      const providerID = str(row.integrationID);
+      const rowId = str(row.id);
+      if (!providerID || !rowId || !purgeConfigScoped.has(providerID)) continue;
+      try {
+        const del = await doRequest(deps.endpoint, `/api/credential/${rowId}`, {
+          method: 'DELETE',
+        });
+        if (del.ok) {
+          summary.purged.push(providerID);
+          log(
+            `[worker] credential store：provider=${providerID} 已归档进配置段，` +
+              '清理 store 残留行（否则旧 key 会压住配置段的新 key）',
+          );
+        } else {
+          summary.failures.push(providerID);
+          warn(
+            `[worker] credential store：provider=${providerID} 残留行清理失败 HTTP ${del.status}`,
+          );
+        }
+      } catch (err) {
+        summary.failures.push(providerID);
+        warn(
+          `[worker] credential store：provider=${providerID} 残留行清理失败: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
   summary.changed =
     summary.created.length > 0 ||
     summary.updated.length > 0 ||
-    summary.removed.length > 0;
+    summary.removed.length > 0 ||
+    summary.purged.length > 0;
 
   if (summary.changed) {
     log(
