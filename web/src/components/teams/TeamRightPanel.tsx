@@ -18,6 +18,7 @@ import { ArtifactDocModal } from "@/src/components/teams/ArtifactDocModal";
 import { TriggerDetailModal } from "@/src/components/teams/TriggerDetailModal";
 import { TeamMemoriesTab } from "@/src/components/teams/TeamMemoriesTab";
 import { TeamStatsTab } from "@/src/components/teams/TeamStatsTab";
+import { TeamMembersTab } from "@/src/components/teams/TeamMembersTab";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -740,7 +741,7 @@ const subTabStyle = (active: boolean): CSSProperties => ({
 /* ------------------------------------------------------------------ */
 /* 团队子 Tab                                                          */
 /* ------------------------------------------------------------------ */
-type TeamSubTab = "overview" | "channels" | "memories" | "stats";
+type TeamSubTab = "overview" | "members" | "channels" | "memories" | "stats";
 
 /** 角色字符串 → RoleKey（团队成员的角色在 m.agent.role，非法值归一 developer） */
 function toRoleKey(role: string | null | undefined): RoleKey {
@@ -1100,6 +1101,7 @@ function TeamSubTabs({
       >
         {[
           { key: "overview" as const, label: "概览" },
+          { key: "members" as const, label: "成员" },
           { key: "channels" as const, label: "渠道" },
           { key: "memories" as const, label: "记忆" },
           { key: "stats" as const, label: "统计" },
@@ -1107,7 +1109,10 @@ function TeamSubTabs({
           <button
             key={tab.key}
             type="button"
-            onClick={() => setSubTab(tab.key)}
+            onClick={() => {
+              setSettingError(null);
+              setSubTab(tab.key);
+            }}
             style={subTabStyle(subTab === tab.key)}
           >
             {tab.label}
@@ -1126,6 +1131,28 @@ function TeamSubTabs({
           gap: space.lg,
         }}
       >
+        {/*
+          跨子页提示条：成员子页的「已移出团队」等操作结果必须在这里也能看到。
+          原先只在概览子页内渲染 settingError，成员子页踢人成功后是一点反馈都没有
+          （操作确实生效，但用户以为没反应）。放在滚动区顶部，各子页共享。
+        */}
+        {settingError && subTab !== "overview" && (
+          <div
+            role="status"
+            data-testid="team-subtab-notice"
+            style={{
+              padding: `${space.xs}px ${space.sm}px`,
+              borderRadius: radius.sm,
+              backgroundColor: "rgba(13,148,136,0.08)",
+              border: "1px solid rgba(13,148,136,0.22)",
+              color: "#0F766E",
+              fontSize: fontSize.xs,
+              lineHeight: 1.5,
+            }}
+          >
+            {settingError}
+          </div>
+        )}
         {subTab === "overview" && (
           <div
             style={{ display: "flex", flexDirection: "column", gap: space.md }}
@@ -1460,9 +1487,15 @@ function TeamSubTabs({
                 lineHeight: 1.5,
               }}
             >
-              成员管理在左侧面板
+              成员的新增/移除/模型与节点配置在「成员」子页
             </div>
           </div>
+        )}
+        {subTab === "members" && (
+          <TeamMembersTab
+            team={team}
+            onToast={(text) => setSettingError(text)}
+          />
         )}
         {subTab === "channels" && (
           <div

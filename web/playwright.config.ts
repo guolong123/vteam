@@ -155,6 +155,13 @@ export default defineConfig({
       use: { storageState: ".auth/user.json" },
     },
     {
+      // 团队右栏「成员」子页（列表 + 模型/节点配置 + 添加/踢出团队语义）。
+      // 全 route-mock；重点锁「移除只删席位、不删平台成员」。
+      name: "team-members-tab",
+      testMatch: /team-members-tab\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+    },
+    {
       // 小屏适配视觉证据（只落截图，不断言布局数值）；与 small-screen-panels 同套 mock。
       name: "small-screen-evidence",
       testMatch: /small-screen-evidence\.spec\.ts/,
