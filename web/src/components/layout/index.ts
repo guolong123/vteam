@@ -18,3 +18,6 @@ export {
   DEFAULT_CMDK_ACTION_ITEMS,
 } from "./cmdk-panel";
 export type { CmdKPanelProps, CmdKItem } from "./cmdk-panel";
+export { PanelExpandRail } from "./panel-collapse";
+export { PanelGutter } from "./panel-gutter";
+export { PanelShell } from "./panel-shell";

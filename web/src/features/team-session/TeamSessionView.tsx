@@ -6,7 +6,7 @@
  * =============================================
  * - 常驻团队群聊（team_group 频道一团队一群）+ 私聊 Tabs（teamMember 维度 /dm-channels）
  * - 左侧完整成员面板（model chip/启用禁用/重置会话/添加实例/更多菜单，共享 TeamMembersPanel）
- * - 可拖拽面板（useResizableWidth 左 224 / 右 300 + ResizeHandle，宽度持久化）
+ * - 可拖拽 + 可收起面板（useSidePanel 左 224 / 右 300 + PanelGutter，宽度与收起态持久化）
  * - 弹窗：QuestionModal / IssueDetailModal / TaskInfoEditModal（评审与计划内联于右侧三 Tab，不再单独成区）
  * - 右侧 TaskRightTabs（状态/配置/产出三 Tab，effectivePanelTaskId 驱动；队列与记忆已在状态 Tab 内展示）
  * - 实时：team: + channel:（群聊/私聊） + global（会话统一团队域后不再订阅 task:）
@@ -36,14 +36,14 @@ import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
 import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem, type AddInstancePayload } from "@/src/components/teams/TeamMembersPanel";
-import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
+import { PanelGutter, PanelExpandRail } from "@/src/components/layout";
 import { TeamSwitcher } from "@/src/components/teams/TeamSwitcher";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
 import { stripExternalChannelPrefix } from "@/lib/strip-external-channel";
 import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRightPanel";
 import { MemberProcessAggregate } from "@/src/components/chat/dsh/member-process-aggregate";
 import { MessageNavigator, type MessageNavAnchor } from "@/src/components/chat/message-navigator";
-import { useResizableWidth } from "@/src/hooks/use-resizable";
+import { useSidePanel } from "@/src/hooks/use-side-panel";
 import type {
   TaskDetail,
   TaskInstance,
@@ -302,19 +302,27 @@ export function TeamSessionView({
     return () => clearTimeout(t);
   }, [notice]);
 
-  const membersPanel = useResizableWidth({
+  /**
+   * 左右两侧面板：拖拽调宽 + 收起（2026-11-18 小屏适配）。
+   * 左成员面板只在非 embedded（旧页布局）时渲染；右任务面板在 /chat 群聊态由这里渲染。
+   * compactBreakpoint 取 1180：标准 1280 桌面保持展开，更窄的屏默认收起右栏，
+   * 把空间还给「消息 + 输入框」两列。
+   */
+  const membersPanel = useSidePanel({
     storageKey: "team-session-members-width",
     defaultWidth: 224,
     min: 160,
     max: 400,
     direction: "normal",
+    compactBreakpoint: 1180,
   });
-  const taskPanel = useResizableWidth({
+  const taskPanel = useSidePanel({
     storageKey: "team-session-right-width",
     defaultWidth: 300,
     min: 240,
     max: 520,
     direction: "inverse",
+    compactBreakpoint: 1180,
   });
 
   /* ---------- 团队 + 任务列表 + 聚焦任务 ---------- */
@@ -1930,6 +1938,16 @@ export function TeamSessionView({
         {/* 左侧完整成员面板（embedded 由 /chat 左列表承担，隐藏） */}
         {!embedded && (
         <>
+        {membersPanel.collapsed ? (
+          <PanelExpandRail
+            side="left"
+            label="展开成员面板"
+            hint="成员"
+            testId="members-panel-rail"
+            onExpand={membersPanel.expand}
+          />
+        ) : (
+        <>
         <TeamMembersPanel
           agents={teamAgentMembers}
           loadingAgentIds={loadingAgentIds}
@@ -1952,7 +1970,17 @@ export function TeamSessionView({
           selectedKey={selectedMemberKey}
           footerText={dmError ?? "点击成员进入与该实例的私聊"}
         />
-        <ResizeHandle label="调整成员面板宽度" onResizeStart={membersPanel.onResizeStart} />
+        <PanelGutter
+          side="left"
+          testId="members-panel-gutter"
+          label="调整成员面板宽度"
+          width={membersPanel.width}
+          onResizeStart={membersPanel.onResizeStart}
+          onNudge={membersPanel.nudge}
+          onCollapse={membersPanel.collapse}
+        />
+        </>
+        )}
         </>
         )}
 
@@ -2322,7 +2350,25 @@ export function TeamSessionView({
 
         {!hideRightPanel && (
         <>
-        <ResizeHandle label="调整任务面板宽度" onResizeStart={taskPanel.onResizeStart} />
+        {taskPanel.collapsed ? (
+          <PanelExpandRail
+            side="right"
+            label="展开任务面板"
+            hint="团队/任务"
+            testId="task-panel-rail"
+            onExpand={taskPanel.expand}
+          />
+        ) : (
+        <>
+        <PanelGutter
+          side="right"
+          testId="task-panel-gutter"
+          label="调整任务面板宽度"
+          width={taskPanel.width}
+          onResizeStart={taskPanel.onResizeStart}
+          onNudge={taskPanel.nudge}
+          onCollapse={taskPanel.collapse}
+        />
 
         {/* 右侧双 Tab（团队 / 任务，团队常显，任务有当前任务时显示） */}
         <div data-testid="task-panel" style={{ width: taskPanel.width, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
@@ -2381,6 +2427,8 @@ export function TeamSessionView({
             }}
           />
         </div>
+        </>
+        )}
         </>
         )}
 

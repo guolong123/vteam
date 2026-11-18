@@ -84,21 +84,35 @@ const readonlyRowStyle: CSSProperties = {
   fontSize: fontSize.xs,
 };
 
-/** 右侧面板外框：与成员私聊右栏（MemberContextPanel）同宽同构。 */
-const panelStyle: CSSProperties = {
-  width: 300,
-  flexShrink: 0,
-  minHeight: 0,
-  overflow: "auto",
-  backgroundColor: "var(--color-surface)",
-  borderLeft: `1px solid ${neutral[200]}`,
-  padding: space.lg,
-  display: "flex",
-  flexDirection: "column",
-  gap: space.md,
-};
+/**
+ * 右侧面板外框：与成员私聊右栏（MemberContextPanel）同宽同构。
+ * 宽度由外层 PanelShell 传入（可拖拽 + 可收起，2026-11-18 小屏适配），
+ * 这里只保留「不传宽度时」的兜底值。
+ */
+function panelStyleOf(width: number): CSSProperties {
+  return {
+    width,
+    flexShrink: 0,
+    minHeight: 0,
+    overflow: "auto",
+    backgroundColor: "var(--color-surface)",
+    borderLeft: `1px solid ${neutral[200]}`,
+    padding: space.lg,
+    display: "flex",
+    flexDirection: "column",
+    gap: space.md,
+  };
+}
 
-export function ExternalUserProfilePanel({ userId }: { userId: string }) {
+export function ExternalUserProfilePanel({
+  userId,
+  width = 300,
+}: {
+  userId: string;
+  /** 面板宽度（由外层 PanelShell 的可拖拽宽度驱动）。 */
+  width?: number;
+}) {
+  const panelStyle = panelStyleOf(width);
   const queryClient = useQueryClient();
   const detailQuery = useQuery({
     queryKey: ["external-user", userId],

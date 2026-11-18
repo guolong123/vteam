@@ -208,9 +208,20 @@ export function QuestionModal({
         inset: 0,
         zIndex: 60,
         display: "flex",
+        /*
+         * 小屏（2026-11-18）：原来只有 paddingTop 10% 且卡片不限高 →
+         * 敏感输入弹窗内容一长就把「确认」按钮顶到宿主容器外，点不到也滚不动。
+         * 改为「整层可滚动 + 卡片自身限高」：
+         * - 外层 overflowY:auto，卡片比视口高时整层可滚（遮罩仍固定铺满，点击关闭不受影响）；
+         * - alignItems:flex-start + 纵向 padding，滚动到顶/底都留呼吸位；
+         * - 卡片 maxHeight + 内部 flex 分区（头部固定 / 主体滚动 / 按钮固定），
+         *   保证「确认 / 取消」在任何高度下都常驻可见。
+         */
         alignItems: "flex-start",
         justifyContent: "center",
-        paddingTop: "10%",
+        padding: "24px 0",
+        overflowY: "auto",
+        overscrollBehavior: "contain",
         ...baseFont,
       }}
     >
@@ -233,7 +244,13 @@ export function QuestionModal({
         style={{
           position: "relative",
           width: 440,
-          maxWidth: "calc(100% - 48px)",
+          maxWidth: "calc(100% - 32px)",
+          /*
+           * 限高而非固定高度：内容短时卡片自然收缩；内容长时卡片最多占满可视高度，
+           * 主体区（下方 question-modal-body）内部滚动，操作按钮行始终留在底部。
+           * 减去 48px 给整层 padding 与遮罩留边，避免卡片贴边。
+           */
+          maxHeight: "calc(100% - 48px)",
           display: "flex",
           flexDirection: "column",
           gap: space.md,
@@ -242,9 +259,10 @@ export function QuestionModal({
           backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
+          overflow: "hidden",
         }}
       >
-        <div>
+        <div style={{ flexShrink: 0 }}>
           <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
             {isPermission ? "工具权限确认" : isSecret ? "填写敏感信息" : "Agent 需要您的确认"}
           </div>
@@ -274,6 +292,26 @@ export function QuestionModal({
           )}
         </div>
 
+        {/*
+          主体区：唯一可滚动区域（flex:1 + minHeight:0）。
+          头部标题与底部按钮行不参与滚动，所以小屏/矮窗口下「确认」始终可点。
+          overscrollBehavior:contain 防止滚到底后把滚动传给外层页面。
+        */}
+        <div
+          data-testid="question-modal-body"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            display: "flex",
+            flexDirection: "column",
+            gap: space.md,
+            // 卡片有 padding，滚动条贴内容右缘更自然
+            marginRight: space.xs,
+            paddingRight: space.xs,
+          }}
+        >
         {!isPermission && !isSecret && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
             {questions.length === 0 && (
@@ -422,7 +460,21 @@ export function QuestionModal({
           </div>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
+        </div>
+
+        {/* 操作区：不滚动、常驻卡片底部（小屏「点不到确认」的根因修复） */}
+        <div
+          data-testid="question-modal-actions"
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            flexWrap: "wrap",
+            gap: space.sm,
+            flexShrink: 0,
+            paddingTop: space.sm,
+            borderTop: `1px solid ${neutral[100]}`,
+          }}
+        >
           {isSecret ? (
             <>
               <button

@@ -148,6 +148,19 @@ export default defineConfig({
       use: { storageState: ".auth/user.json" },
     },
     {
+      // 小屏适配回归（2026-11-18）：面板收起/拖拽调宽 + 敏感输入弹窗按钮可达。
+      // 全 route-mock，零后端接触；viewport 由用例内 setViewportSize 控制。
+      name: "small-screen-panels",
+      testMatch: /small-screen-panels\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+    },
+    {
+      // 小屏适配视觉证据（只落截图，不断言布局数值）；与 small-screen-panels 同套 mock。
+      name: "small-screen-evidence",
+      testMatch: /small-screen-evidence\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+    },
+    {
       // 外部渠道用户管理（external-users 契约 §4）：纯 API 造数（webhook 入站）→
       // 真后端 + 真 MySQL 端到端；与 pages 同属数据型 E2E，复用 setup 登录态。
       name: "external-users",

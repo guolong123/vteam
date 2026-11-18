@@ -36,6 +36,8 @@ import {
   type MemberPresence,
 } from "@/lib/member-presence";
 import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
+import { PanelExpandRail, PanelGutter, PanelShell } from "@/src/components/layout";
+import { useSidePanel } from "@/src/hooks/use-side-panel";
 import {
   ExternalUserConversation,
   ExternalUserList,
@@ -119,6 +121,29 @@ function ChatPageContent() {
   const [groupError, setGroupError] = useState<string | null>(null);
   const [showMembersDrawer, setShowMembersDrawer] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 会话列表（左栏）：可拖拽调宽 + 可收起（2026-11-18 小屏适配）。
+   * 小屏默认收起，让中间聊天区先拿到空间；用户手动切过后按用户选择持久化。
+   */
+  const convPanel = useSidePanel({
+    storageKey: "chat-conversation-list-width",
+    defaultWidth: 300,
+    min: 220,
+    max: 460,
+    direction: "normal",
+    compactBreakpoint: 1100,
+  });
+  /** 右侧信息栏（群信息/成员信息/外部用户资料）：同样可拖拽 + 可收起。 */
+  const rightSidePanel = useSidePanel({
+    storageKey: "chat-right-panel-width",
+    defaultWidth: 300,
+    min: 240,
+    max: 520,
+    direction: "inverse",
+    // 1180 而非 1280：标准 1280 桌面上两块面板保持展开（既有 e2e 与用户习惯不变），
+    // 900~1180 这类小屏才默认收起右栏，把空间还给聊天区。
+    compactBreakpoint: 1180,
+  });
 
   const conversationsQuery = useQuery({
     queryKey: ["conversations"],
@@ -557,77 +582,100 @@ function ChatPageContent() {
 
   return (
     <main style={{ flex: 1, minHeight: 0, display: "flex", position: "relative", backgroundColor: "var(--color-bg, #F8FAFC)" }}>
-      {/* 左侧会话列表 */}
-      <aside style={{ width: 300, flexShrink: 0, borderRight: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div style={{ padding: `${space.lg}px ${space.lg}px ${space.sm}px`, display: "flex", flexDirection: "column", gap: space.sm }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>会话</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button type="button" data-testid="new-group-chat" title="新建群聊" onClick={() => setShowNewGroup(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 群聊</button>
-              <button type="button" data-testid="new-dm-button" title="发起新私聊" onClick={() => setShowDmPicker(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 私聊</button>
-            </div>
-          </div>
-          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            {groupCount} 个群聊 · {dmCount} 位成员
-          </div>
-          <input
-            data-testid="conversation-search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索群聊 / 成员 / 外部用户"
-            style={{ width: "100%", boxSizing: "border-box", padding: `6px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, fontFamily: fontFamily.body, outline: "none", backgroundColor: neutral[50] }}
-          />
-          <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
-            {([
-              { key: "all", label: "全部", count: items.length },
-              { key: "group", label: "群聊", count: groupCount },
-              { key: "dm", label: "成员", count: dmCount },
-              { key: "external", label: "外部用户", count: externalTotal },
-            ] as const).map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                data-testid={`conversation-filter-${tab.key}`}
-                onClick={() => setConvFilter(tab.key)}
-                style={{ flex: 1, padding: "4px 0", border: "none", borderRadius: radius.sm, cursor: "pointer", fontSize: fontSize.xs, fontWeight: 600, fontFamily: fontFamily.body, backgroundColor: convFilter === tab.key ? "var(--color-surface)" : "transparent", color: convFilter === tab.key ? "#0F766E" : neutral[500], boxShadow: convFilter === tab.key ? shadow.sm : undefined }}
-              >
-                {tab.label} {tab.count}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `0 8px ${space.md}px` }}>
-          {convFilter === "external" ? (
-            externalUsersQuery.isPending ? (
-              <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
-            ) : filteredExternalUsers.length === 0 ? (
-              <div data-testid="external-user-empty" style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm, lineHeight: 1.7 }}>
-                {externalUsers.length === 0
-                  ? "暂无外部用户：外部渠道（企微等）用户发消息后会自动汇总到这里。"
-                  : "没有匹配的外部用户"}
+      {/* 左侧会话列表：可拖拽调宽（PanelGutter 的分隔条）+ 可收起（‹ 按钮 / 窄屏默认收起） */}
+      {convPanel.collapsed ? (
+        <PanelExpandRail
+          side="left"
+          label="展开会话列表"
+          hint="会话列表"
+          testId="conversation-list-rail"
+          onExpand={convPanel.expand}
+        />
+      ) : (
+        <>
+          <aside data-testid="conversation-list-panel" style={{ width: convPanel.width, flexShrink: 0, borderRight: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div style={{ padding: `${space.lg}px ${space.lg}px ${space.sm}px`, display: "flex", flexDirection: "column", gap: space.sm }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>会话</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" data-testid="new-group-chat" title="新建群聊" onClick={() => setShowNewGroup(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 群聊</button>
+                  <button type="button" data-testid="new-dm-button" title="发起新私聊" onClick={() => setShowDmPicker(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 私聊</button>
+                </div>
               </div>
-            ) : (
-              <ExternalUserList
-                items={filteredExternalUsers}
-                activeId={externalUserId || null}
-                onSelect={(id) => {
-                  setSendError(null);
-                  router.replace(`/chat?c=${encodeURIComponent(`external:${id}`)}`);
-                }}
+              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                {groupCount} 个群聊 · {dmCount} 位成员
+              </div>
+              <input
+                data-testid="conversation-search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索群聊 / 成员 / 外部用户"
+                style={{ width: "100%", boxSizing: "border-box", padding: `6px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, fontFamily: fontFamily.body, outline: "none", backgroundColor: neutral[50] }}
               />
-            )
-          ) : conversationsQuery.isPending ? (
-            <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
-          ) : filteredItems.length === 0 ? (
-            <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>
-              {items.length === 0 ? "还没有会话：先加入一个团队，或在成员库中发起私聊。" : "没有匹配的会话"}
+              <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
+                {([
+                  { key: "all", label: "全部", count: items.length },
+                  { key: "group", label: "群聊", count: groupCount },
+                  { key: "dm", label: "成员", count: dmCount },
+                  { key: "external", label: "外部用户", count: externalTotal },
+                ] as const).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    data-testid={`conversation-filter-${tab.key}`}
+                    onClick={() => setConvFilter(tab.key)}
+                    style={{ flex: 1, padding: "4px 0", border: "none", borderRadius: radius.sm, cursor: "pointer", fontSize: fontSize.xs, fontWeight: 600, fontFamily: fontFamily.body, backgroundColor: convFilter === tab.key ? "var(--color-surface)" : "transparent", color: convFilter === tab.key ? "#0F766E" : neutral[500], boxShadow: convFilter === tab.key ? shadow.sm : undefined }}
+                  >
+                    {tab.label} {tab.count}
+                  </button>
+                ))}
+              </div>
             </div>
-          ) : (
-            <>
-              {pinnedItems.length > 0 && (
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: `0 8px ${space.md}px` }}>
+              {convFilter === "external" ? (
+                externalUsersQuery.isPending ? (
+                  <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
+                ) : filteredExternalUsers.length === 0 ? (
+                  <div data-testid="external-user-empty" style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm, lineHeight: 1.7 }}>
+                    {externalUsers.length === 0
+                      ? "暂无外部用户：外部渠道（企微等）用户发消息后会自动汇总到这里。"
+                      : "没有匹配的外部用户"}
+                  </div>
+                ) : (
+                  <ExternalUserList
+                    items={filteredExternalUsers}
+                    activeId={externalUserId || null}
+                    onSelect={(id) => {
+                      setSendError(null);
+                      router.replace(`/chat?c=${encodeURIComponent(`external:${id}`)}`);
+                    }}
+                  />
+                )
+              ) : conversationsQuery.isPending ? (
+                <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
+              ) : filteredItems.length === 0 ? (
+                <div style={{ padding: space.lg, color: neutral[400], fontSize: fontSize.sm }}>
+                  {items.length === 0 ? "还没有会话：先加入一个团队，或在成员库中发起私聊。" : "没有匹配的会话"}
+                </div>
+              ) : (
                 <>
-                  <div style={{ padding: `${space.sm}px ${space.sm}px 4px`, fontSize: 10, color: neutral[400], fontWeight: 600 }}>置顶</div>
-                  {pinnedItems.map((item) => (
+                  {pinnedItems.length > 0 && (
+                    <>
+                      <div style={{ padding: `${space.sm}px ${space.sm}px 4px`, fontSize: 10, color: neutral[400], fontWeight: 600 }}>置顶</div>
+                      {pinnedItems.map((item) => (
+                        <ConversationRow
+                          key={item.id}
+                          item={item}
+                          active={active?.id === item.id}
+                          roleKey={conversationRole(item, memberById)}
+                          busy={item.type === "dm" && (item.processing === true || memberById.get(item.id.replace("dm:", ""))?.session?.busyState === "running")}
+                          onClick={() => { setSendError(null); router.replace(`/chat?c=${encodeURIComponent(item.id)}`); }}
+                        />
+                      ))}
+                    </>
+                  )}
+                  <div style={{ padding: `${space.sm}px ${space.sm}px 4px`, fontSize: 10, color: neutral[400], fontWeight: 600 }}>{pinnedItems.length > 0 ? "全部会话" : "会话"}</div>
+                  {restItems.map((item) => (
                     <ConversationRow
                       key={item.id}
                       item={item}
@@ -639,21 +687,19 @@ function ChatPageContent() {
                   ))}
                 </>
               )}
-              <div style={{ padding: `${space.sm}px ${space.sm}px 4px`, fontSize: 10, color: neutral[400], fontWeight: 600 }}>{pinnedItems.length > 0 ? "全部会话" : "会话"}</div>
-              {restItems.map((item) => (
-                <ConversationRow
-                  key={item.id}
-                  item={item}
-                  active={active?.id === item.id}
-                  roleKey={conversationRole(item, memberById)}
-                  busy={item.type === "dm" && (item.processing === true || memberById.get(item.id.replace("dm:", ""))?.session?.busyState === "running")}
-                  onClick={() => { setSendError(null); router.replace(`/chat?c=${encodeURIComponent(item.id)}`); }}
-                />
-              ))}
-            </>
-          )}
-        </div>
-      </aside>
+            </div>
+          </aside>
+          <PanelGutter
+            side="left"
+            testId="conversation-list-gutter"
+            label="调整会话列表宽度"
+            width={convPanel.width}
+            onResizeStart={convPanel.onResizeStart}
+            onNudge={convPanel.nudge}
+            onCollapse={convPanel.collapse}
+          />
+        </>
+      )}
 
       {isGroup && teamId ? (
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
@@ -801,26 +847,51 @@ function ChatPageContent() {
           {/*
             右栏优先级：选中成员 → 成员信息面板（成员视角）；否则按面板密度显示
             团队面板（compact）或由 TeamSessionView 内部渲染团队/任务 Tab（full）。
+            两者都套在 PanelShell 里：可收起、可拖宽（小屏默认收起，见 useSidePanel）。
           */}
           {selectedSeat && selectedSeatPresence ? (
-            <GroupMemberContextPanel
-              seat={selectedSeat}
-              presence={selectedSeatPresence}
-              isMainAgent={team?.mainAgentMemberId === selectedSeat.id}
-              roleKey={selectedSeatRoleKey}
-              onClose={() => setFilterMemberId(null)}
-            />
+            <PanelShell
+              side="right"
+              controller={rightSidePanel}
+              label="调整成员信息栏宽度"
+              testId="group-member-context-shell"
+              railHint="成员信息"
+            >
+              {(width) => (
+                <GroupMemberContextPanel
+                  width={width}
+                  seat={selectedSeat}
+                  presence={selectedSeatPresence}
+                  isMainAgent={team?.mainAgentMemberId === selectedSeat.id}
+                  roleKey={selectedSeatRoleKey}
+                  onClose={() => setFilterMemberId(null)}
+                />
+              )}
+            </PanelShell>
           ) : (
-            rightPanelMode === "compact" && <GroupContextPanel
-              team={team}
-              active={active}
-              tasks={teamTasks}
-              tasksLoading={teamTasksQuery.isPending}
-              roleKeyById={roleKeyById}
-              memberById={memberById}
-              filterMemberId={filterMemberId}
-              onFilterMember={(seatId: string | null) => setFilterMemberId(seatId)}
-            />
+            rightPanelMode === "compact" && (
+              <PanelShell
+                side="right"
+                controller={rightSidePanel}
+                label="调整群信息栏宽度"
+                testId="group-context-shell"
+                railHint="群信息"
+              >
+                {(width) => (
+                  <GroupContextPanel
+                    width={width}
+                    team={team}
+                    active={active}
+                    tasks={teamTasks}
+                    tasksLoading={teamTasksQuery.isPending}
+                    roleKeyById={roleKeyById}
+                    memberById={memberById}
+                    filterMemberId={filterMemberId}
+                    onFilterMember={(seatId: string | null) => setFilterMemberId(seatId)}
+                  />
+                )}
+              </PanelShell>
+            )
           )}
         </div>
       ) : memberId && dmTeamId ? (
@@ -854,19 +925,38 @@ function ChatPageContent() {
               <TeamSessionView teamId={dmTeamId} embedded hideRightPanel privateMemberId={memberId} hideInlineStatus />
             </div>
           </div>
-          <MemberContextPanel
-            member={member}
-            session={member?.session ?? null}
-            teamName={dmTeamName}
-            onReset={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }}
-            resetting={resetSessionMutation.isPending}
-          />
+          <PanelShell
+            side="right"
+            controller={rightSidePanel}
+            label="调整成员信息栏宽度"
+            testId="member-context-shell"
+            railHint="成员信息"
+          >
+            {(width) => (
+              <MemberContextPanel
+                width={width}
+                member={member}
+                session={member?.session ?? null}
+                teamName={dmTeamName}
+                onReset={() => { if (window.confirm("确认重置该成员的全局会话？消息与记忆不受影响。")) resetSessionMutation.mutate(); }}
+                resetting={resetSessionMutation.isPending}
+              />
+            )}
+          </PanelShell>
         </div>
       ) : externalUserId ? (
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
           {/* 外部用户：中间只读消息回看，右侧资料维护（布局同私聊分支） */}
           <ExternalUserConversation userId={externalUserId} />
-          <ExternalUserProfilePanel userId={externalUserId} />
+          <PanelShell
+            side="right"
+            controller={rightSidePanel}
+            label="调整外部用户资料栏宽度"
+            testId="external-user-profile-shell"
+            railHint="用户资料"
+          >
+            {(width) => <ExternalUserProfilePanel userId={externalUserId} width={width} />}
+          </PanelShell>
         </div>
       ) : (
       <>
@@ -977,10 +1067,20 @@ function ChatPageContent() {
         </footer>
       </section>
 
-      {/* 右侧栏 */}
-      <aside style={{ width: 280, flexShrink: 0, borderLeft: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", minHeight: 0, overflow: "auto", padding: space.lg }}>
-        <MemberSidePanel member={member} fallbackTitle={title} />
-      </aside>
+      {/* 右侧栏（无选中会话时的兜底成员概览）：同样可收起 + 可拖宽 */}
+      <PanelShell
+        side="right"
+        controller={rightSidePanel}
+        label="调整成员概览宽度"
+        testId="member-side-shell"
+        railHint="成员概览"
+      >
+        {(width) => (
+          <aside style={{ width, flexShrink: 0, borderLeft: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", minHeight: 0, overflow: "auto", padding: space.lg }}>
+            <MemberSidePanel member={member} fallbackTitle={title} />
+          </aside>
+        )}
+      </PanelShell>
 
       </>
       )}
@@ -1291,6 +1391,7 @@ function GroupContextPanel({
   memberById,
   filterMemberId,
   onFilterMember,
+  width = 300,
 }: {
   team?: TeamDto;
   active: ConversationItemDto | null;
@@ -1300,6 +1401,8 @@ function GroupContextPanel({
   memberById: Map<string, MemberDto>;
   filterMemberId: string | null;
   onFilterMember: (seatId: string | null) => void;
+  /** 面板宽度（由外层 PanelShell 的可拖拽宽度驱动）。 */
+  width?: number;
 }) {
   const [tab, setTab] = useState<"tasks" | "members" | "outputs">("tasks");
   const activeTask = tasks.find(
@@ -1319,7 +1422,7 @@ function GroupContextPanel({
     { key: "outputs", label: "产出" },
   ];
   return (
-    <aside data-testid="group-context-panel" style={{ width: 300, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
+    <aside data-testid="group-context-panel" style={{ width, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
       <div style={{ display: "flex", borderBottom: `1px solid ${neutral[100]}`, flexShrink: 0 }}>
         {tabs.map((t) => (
           <button key={t.key} type="button" data-testid={`group-context-tab-${t.key}`} onClick={() => setTab(t.key)} style={{ flex: 1, padding: `${space.md}px 0`, border: "none", borderBottom: tab === t.key ? "2px solid #0D9488" : "2px solid transparent", background: "none", cursor: "pointer", fontSize: fontSize.sm, fontWeight: tab === t.key ? 700 : 500, color: tab === t.key ? "#0F766E" : neutral[500], fontFamily: fontFamily.body }}>{t.label}</button>
@@ -1416,12 +1519,15 @@ function GroupMemberContextPanel({
   isMainAgent,
   roleKey,
   onClose,
+  width = 300,
 }: {
   seat: TeamMemberDto;
   presence: MemberPresence;
   isMainAgent: boolean;
   roleKey: RoleKey;
   onClose: () => void;
+  /** 面板宽度（由外层 PanelShell 的可拖拽宽度驱动）。 */
+  width?: number;
 }) {
   const name = seat.member?.name ?? seat.alias ?? "成员";
   const roleLabel = roles[roleKey]?.label ?? "成员";
@@ -1454,7 +1560,7 @@ function GroupMemberContextPanel({
     <aside
       data-testid="group-member-context-panel"
       style={{
-        width: 300,
+        width,
         flexShrink: 0,
         minHeight: 0,
         overflow: "auto",
@@ -1571,12 +1677,15 @@ function MemberContextPanel({
   teamName,
   onReset,
   resetting,
+  width = 300,
 }: {
   member?: MemberDetailDto;
   session?: MemberDetailDto["session"];
   teamName: string | null;
   onReset: () => void;
   resetting: boolean;
+  /** 面板宽度（由外层 PanelShell 的可拖拽宽度驱动）。 */
+  width?: number;
 }) {
   const qc = useQueryClient();
   const [agentId, setAgentId] = useState(member?.agentId ?? "");
@@ -1615,7 +1724,7 @@ function MemberContextPanel({
 
 
   return (
-    <aside data-testid="member-context-panel" style={{ width: 300, flexShrink: 0, minHeight: 0, overflow: "auto", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}`, padding: space.lg, display: "flex", flexDirection: "column", gap: space.md }}>
+    <aside data-testid="member-context-panel" style={{ width, flexShrink: 0, minHeight: 0, overflow: "auto", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}`, padding: space.lg, display: "flex", flexDirection: "column", gap: space.md }}>
       <div style={{ display: "flex", alignItems: "center", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
         <AgentAvatar role={toRoleKey(member?.role?.key ?? null)} size="md" />
         <div style={{ minWidth: 0 }}>
