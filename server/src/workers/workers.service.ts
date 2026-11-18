@@ -476,6 +476,24 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         `worker ${worker.id} 注册后可见性重收敛失败（不阻断注册）: ${e}`,
       );
     }
+    /**
+     * 逐模型能力回填（2026-11-18）：刚入库的新模型 `capabilities` 为空
+     * （worker 只上报 id 字符串，上游 `/models` 不返回能力）⇒ 不补的话
+     * worker 写 opencode 配置时 `input: ["text"]`，agent 读不了图片。
+     *
+     * 数据源 models.dev（opencode 生态的权威模型目录，opencode 文档明说能力取自它）。
+     * **逐模型**取，绝不做 provider 级拉平（同 provider 内差异很大：
+     * commandcode 93 个模型里 73 个支持 image、20 个不支持）。
+     *
+     * 失败不阻断注册（能力同步是增强）；已自定义能力的行默认不覆盖。
+     */
+    try {
+      await this.modelsService.syncCapabilitiesFromModelsDev();
+    } catch (e) {
+      this.logger.warn(
+        `worker ${worker.id} 注册后模型能力同步失败（不阻断注册）: ${e}`,
+      );
+    }
     // C5（R5）：注册后回放全部未吊销凭据。无条件调用（见上方 C5b 说明：容器重启
     // 后 auth.json 已被删除且 DB status 仍 ONLINE，必须每次启动回放）。回放失败
     // （解密错/DB 错）不阻断注册，只打 warn 日志。

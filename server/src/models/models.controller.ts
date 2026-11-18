@@ -156,6 +156,36 @@ export class ModelsController {
   }
 
   /**
+   * 从 models.dev 同步**逐模型**能力（AdminGuard）。
+   * POST /api/v1/models/sync-capabilities {providerIDs?: string[], overwrite?: boolean}
+   *
+   * 为什么需要：模型能力（是否支持图片等）**逐模型不同**（同 provider 内也有差异），
+   * 而自动入库路径拿不到能力、上游 `/models` 也不返回。opencode 生态的权威来源是
+   * models.dev（opencode 文档明说模型能力取自它）。本端点按模型逐个回填，不做 provider 级拉平。
+   *
+   * 缺省只补空缺（不动管理员已显式配置的能力）；`overwrite:true` 强制覆盖。
+   * 返回 {catalogFetched, providers, matched, updated, skippedCustom, missing}。
+   */
+  @Post('sync-capabilities')
+  @UseGuards(AdminGuard)
+  @ApiOperation({
+    summary:
+      '从 models.dev 同步逐模型能力（modalities/toolCall/limit，AdminGuard）',
+  })
+  syncCapabilities(
+    @Body()
+    dto: {
+      providerIDs?: string[];
+      overwrite?: boolean;
+    },
+  ) {
+    return this.modelsService.syncCapabilitiesFromModelsDev({
+      providerIDs: dto?.providerIDs,
+      overwrite: dto?.overwrite === true,
+    });
+  }
+
+  /**
    * Provider 级配置更新（AdminGuard）：一次原子重写该 provider 全部模型行的
    * providerType + baseUrl。
    * PATCH /api/v1/models/providers/:providerID {providerType?, baseUrl?} → 200 + ProviderSummary

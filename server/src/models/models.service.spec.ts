@@ -1,4 +1,3 @@
-import { Prisma } from '@prisma/client';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
@@ -17,7 +16,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       count: jest.Mock;
       findMany: jest.Mock;
       findUnique: jest.Mock;
-      findFirst: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
@@ -107,8 +105,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         count: jest.fn(),
         findMany: jest.fn(),
         findUnique: jest.fn(),
-        // provider 级能力模板查询（2026-11-18）：默认无模板 → 继承为空，保持旧行为
-        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -442,7 +438,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         {
           providerID: 'vllm',
           providerType: 'local',
-          providerCapabilities: null,
           baseUrl: 'http://vllm:8000/v1',
         },
       ]);
@@ -781,55 +776,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
   });
 
-  /**
-   * 新模型自动继承 provider 能力模板（2026-11-18）。
-   *
-   * 这是本功能的**核心场景**：worker 注册/心跳上报 capabilities.models（纯 id 字符串）
-   * → 平台 upsertCatalogModel 建行。那一刻拿不到任何能力信息，若不继承模板，
-   * 新模型又是 capabilities=NULL、又是 agent 读不了图片（93 个模型 92 个空就是这么来的）。
-   */
-  describe('新模型入库继承 provider 能力模板', () => {
-    it('provider 已配模板 → 新建模型行直接继承 capabilities', async () => {
-      const caps = {
-        modalities: { input: ['text', 'image'], output: ['text'] },
-      };
-      prisma.model.findFirst.mockResolvedValue({ providerCapabilities: caps });
-      prisma.model.findUnique.mockResolvedValue(null); // 目录里还没有
-      prisma.model.create.mockImplementation(async ({ data }: any) => ({
-        id: 'md_new',
-        ...data,
-      }));
-      prisma.workerModelAvailability.upsert.mockResolvedValue({});
-      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
-
-      await service.syncFromWorkerCapabilities('w_1', [
-        'commandcode/new-vision-model',
-      ]);
-
-      expect(prisma.model.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ capabilities: caps }),
-        }),
-      );
-    });
-
-    it('provider 无模板 → capabilities 留空（保持旧行为，不凭空造能力）', async () => {
-      prisma.model.findFirst.mockResolvedValue(null);
-      prisma.model.findUnique.mockResolvedValue(null);
-      prisma.model.create.mockImplementation(async ({ data }: any) => ({
-        id: 'md_new2',
-        ...data,
-      }));
-      prisma.workerModelAvailability.upsert.mockResolvedValue({});
-      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
-
-      await service.syncFromWorkerCapabilities('w_1', ['plain/new-model']);
-
-      const call = prisma.model.create.mock.calls[0][0];
-      expect(call.data).not.toHaveProperty('capabilities');
-    });
-  });
-
   describe('updateProvider（Provider 级配置：全模型行原子重写 + C6 门控下发）', () => {
     /* updateProvider 链路里 model.findMany 有三处用途，按 select 形态路由：
      * provider 行（{providerType, baseUrl}）、getLocalProviderConfigs
@@ -839,7 +785,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         providerType: string;
         baseUrl: string | null;
         headers?: unknown;
-        providerCapabilities?: unknown;
       }>;
       configRows?: Array<{
         providerID: string;
@@ -863,83 +808,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         },
       );
     };
-
-    /**
-     * provider 级能力模板（2026-11-18）：模型入库是自动的、拿不到能力信息
-     * （worker 只报 id 字符串，上游 /models 也不保证返回 vision），导致 93 个
-     * commandcode 模型里 92 个 capabilities=NULL、agent 读不了图片、只能人工逐个补。
-     */
-    it('设置 providerCapabilities → 写入全部行 + 回填未声明能力的模型', async () => {
-      prisma.model.findMany.mockResolvedValue([
-        {
-          providerType: 'cloud',
-          baseUrl: null,
-          headers: null,
-          providerCapabilities: null,
-        },
-      ]);
-      prisma.model.updateMany.mockResolvedValue({ count: 7 });
-      prisma.model.groupBy.mockResolvedValue([]);
-      prisma.modelCredential.findMany.mockResolvedValue([]);
-      prisma.worker.findMany.mockResolvedValue([]);
-
-      const caps = {
-        modalities: { input: ['text', 'image'], output: ['text'] },
-        toolCall: true,
-      };
-      await service.updateProvider('commandcode', {
-        providerCapabilities: caps,
-      });
-
-      // ① provider 级字段原子写入全部行
-      expect(prisma.model.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { providerID: 'commandcode' },
-          data: expect.objectContaining({ providerCapabilities: caps }),
-        }),
-      );
-      // ② 只回填「自身未声明 capabilities」的行（已自定义的不覆盖）
-      expect(prisma.model.updateMany).toHaveBeenCalledWith({
-        // Prisma.DbNull 是哨兵对象（表示 SQL NULL），不是 JS null
-        where: {
-          providerID: 'commandcode',
-          capabilities: { equals: Prisma.DbNull },
-        },
-        data: { capabilities: caps },
-      });
-    });
-
-    it('providerCapabilities 缺省 → 保持原值，不触发回填', async () => {
-      prisma.model.findMany.mockResolvedValue([
-        {
-          providerType: 'cloud',
-          baseUrl: null,
-          headers: null,
-          providerCapabilities: { toolCall: false },
-        },
-      ]);
-      prisma.model.updateMany.mockResolvedValue({ count: 0 });
-      prisma.model.groupBy.mockResolvedValue([]);
-      prisma.modelCredential.findMany.mockResolvedValue([]);
-      prisma.worker.findMany.mockResolvedValue([]);
-
-      await service.updateProvider('gw', { baseUrl: null });
-
-      // 原模板保持
-      expect(prisma.model.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            providerCapabilities: { toolCall: false },
-          }),
-        }),
-      );
-      // 未传 providerCapabilities → 不回填
-      expect(prisma.model.updateMany).not.toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ capabilities: { equals: null } }),
-        }),
-      );
-    });
 
     it('providerType+baseUrl 原子重写（updateMany）+ 有活跃凭据 → C6 全量下发携带新配置', async () => {
       routeFindMany({
@@ -982,7 +850,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           providerType: 'local',
           baseUrl: 'http://new:8000/v1',
           headers: null,
-          providerCapabilities: null,
         },
       });
       expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
@@ -1017,12 +884,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(prisma.model.updateMany).toHaveBeenCalledWith({
         where: { providerID: 'p' },
-        data: {
-          providerType: 'cloud',
-          baseUrl: null,
-          headers: null,
-          providerCapabilities: null,
-        },
+        data: { providerType: 'cloud', baseUrl: null, headers: null },
       });
       expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
     });
@@ -1114,10 +976,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(prisma.model.updateMany).toHaveBeenCalledWith({
         where: { providerID: 'gw' },
-        data: expect.objectContaining({
-          headers: null,
-          providerCapabilities: null,
-        }),
+        data: expect.objectContaining({ headers: null }),
       });
     });
 
@@ -1179,7 +1038,6 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           providerType: 'cloud',
           baseUrl: 'http://y:8000/v1',
           headers: null,
-          providerCapabilities: null,
         },
       });
       expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();

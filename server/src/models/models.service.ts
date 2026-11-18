@@ -1,4 +1,9 @@
 import {
+  extractProviderCapabilities,
+  fetchModelsDevCatalog,
+  type SyncedModelCapabilities,
+} from './models-dev-sync';
+import {
   BadRequestException,
   ConflictException,
   forwardRef,
@@ -535,23 +540,16 @@ export class ModelsService implements OnModuleInit {
     if (
       dto.providerType === undefined &&
       dto.baseUrl === undefined &&
-      dto.headers === undefined &&
-      dto.providerCapabilities === undefined
+      dto.headers === undefined
     ) {
       throw new BadRequestException({
         code: 'MODEL_PROVIDER_UPDATE_EMPTY',
-        message:
-          'providerType、baseUrl、headers 与 providerCapabilities 至少需提供一项',
+        message: 'providerType、baseUrl 与 headers 至少需提供一项',
       });
     }
     const rows = await this.prisma.model.findMany({
       where: { providerID },
-      select: {
-        providerType: true,
-        baseUrl: true,
-        headers: true,
-        providerCapabilities: true,
-      },
+      select: { providerType: true, baseUrl: true, headers: true },
     });
     if (rows.length === 0) {
       throw new NotFoundException({
@@ -576,44 +574,14 @@ export class ModelsService implements OnModuleInit {
         : dto.headers === null || Object.keys(dto.headers).length === 0
           ? null
           : (dto.headers as Prisma.InputJsonValue);
-    /**
-     * provider 级能力模板（2026-11-18）：显式 null/{} = 清空；缺省 = 保持原值
-     * （与 headers 同语义）。
-     *
-     * **回填语义**：模板变更时，把所有「自身未声明 capabilities」的行同步成新模板；
-     * 已自定义能力的行**不动**（管理员对单模型的显式覆盖优先）。
-     */
-    const effectiveProviderCaps =
-      dto.providerCapabilities === undefined
-        ? ((rows[0] as { providerCapabilities?: unknown })
-            .providerCapabilities ?? null)
-        : dto.providerCapabilities === null ||
-            Object.keys(dto.providerCapabilities).length === 0
-          ? null
-          : (dto.providerCapabilities as Prisma.InputJsonValue);
-
     await this.prisma.model.updateMany({
       where: { providerID },
       data: {
         providerType: effectiveType,
         baseUrl: effectiveBaseUrl,
         headers: effectiveHeaders as never,
-        providerCapabilities: effectiveProviderCaps as never,
       },
     });
-
-    // 模板变更 → 回填未自定义能力的行（只填空白，不覆盖显式覆盖）。
-    if (dto.providerCapabilities !== undefined) {
-      const backfilled = await this.prisma.model.updateMany({
-        where: { providerID, capabilities: { equals: Prisma.DbNull } },
-        data: { capabilities: effectiveProviderCaps as never },
-      });
-      if (backfilled.count > 0) {
-        this.logger.log(
-          `provider ${providerID} 能力模板已回填 ${backfilled.count} 个未声明能力的模型`,
-        );
-      }
-    }
     await this.maybeDispatchAfterShapeChange(providerID);
     const summary = await this.listProviders();
     return (
@@ -1165,22 +1133,127 @@ export class ModelsService implements OnModuleInit {
   }
 
   /**
+   * 从 models.dev 同步**逐模型**能力（2026-11-18）。
+   *
+   * 为什么是 models.dev：opencode 文档明确「模型能力来自 models.dev」，且对不在目录里的
+   * 模型只做**假设**（原话 "These are fallback assumptions, not detected capabilities"）。
+   * 上游 `/models` 不提供能力——实测 commandcode 对每个模型返回完全相同的字段
+   * （id/name/context_length/supported_endpoints），看不出 vision。
+   *
+   * **能力必须逐模型取**：同 provider 内差异巨大。commandcode 93 个模型里 73 个支持 image、
+   * 20 个不支持（`deepseek-v4.1-flash` 支持，而 `deepseek-v4-pro` / `deepseek-v4-flash` /
+   * `Qwen/Qwen3.7-Max` 不支持）。任何"provider 级拉平"都会把不支持的说成支持。
+   *
+   * 语义：
+   * - 只写 models.dev 明确给出能力的行；库里已有 capabilities 的默认**不覆盖**
+   *   （管理员显式配置优先），`overwrite: true` 才覆盖；
+   * - 目录里没有的模型**保持原样**（不猜、不清空）；
+   * - 目录拉取失败 → `catalogFetched: false`，一行都不写（能力同步是增强，
+   *   不能因外部服务不可用而影响平台功能）。
+   */
+  async syncCapabilitiesFromModelsDev(options?: {
+    /** 仅同步这些 provider（缺省 = 库内全部）。 */
+    providerIDs?: string[];
+    /** 覆盖管理员已显式配置的 capabilities（默认 false：只补空缺）。 */
+    overwrite?: boolean;
+  }): Promise<{
+    catalogFetched: boolean;
+    providers: number;
+    matched: number;
+    updated: number;
+    skippedCustom: number;
+    missing: number;
+  }> {
+    const empty = {
+      catalogFetched: false,
+      providers: 0,
+      matched: 0,
+      updated: 0,
+      skippedCustom: 0,
+      missing: 0,
+    };
+    const catalog = await fetchModelsDevCatalog();
+    if (!catalog) {
+      this.logger.warn(
+        'models.dev 目录拉取失败（网络/超时），本次跳过模型能力同步',
+      );
+      return empty;
+    }
+
+    const where =
+      options?.providerIDs && options.providerIDs.length > 0
+        ? { providerID: { in: options.providerIDs } }
+        : {};
+    const rows = (await this.prisma.model.findMany({
+      where: where as never,
+      select: {
+        id: true,
+        providerID: true,
+        modelID: true,
+        baseUrl: true,
+        capabilities: true,
+      },
+    } as never)) as unknown as {
+      id: string;
+      providerID: string;
+      modelID: string;
+      baseUrl: string | null;
+      capabilities: unknown;
+    }[];
+
+    // provider → baseUrl（同行一致，取首个非空值即可）
+    const baseUrlByProvider = new Map<string, string | null>();
+    for (const row of rows) {
+      const current = baseUrlByProvider.get(row.providerID);
+      if (current === undefined || (current === null && row.baseUrl)) {
+        baseUrlByProvider.set(row.providerID, row.baseUrl ?? null);
+      }
+    }
+
+    const summary = { ...empty, catalogFetched: true };
+    const perProvider = new Map<string, Map<string, SyncedModelCapabilities>>();
+    for (const [providerID, baseUrl] of baseUrlByProvider) {
+      const caps = extractProviderCapabilities(catalog, providerID, baseUrl);
+      if (caps.size > 0) perProvider.set(providerID, caps);
+    }
+    summary.providers = perProvider.size;
+
+    for (const row of rows) {
+      const caps = perProvider.get(row.providerID)?.get(row.modelID);
+      if (!caps) {
+        summary.missing += 1;
+        continue;
+      }
+      summary.matched += 1;
+      const hasOwn =
+        row.capabilities !== null &&
+        typeof row.capabilities === 'object' &&
+        Object.keys(row.capabilities as object).length > 0;
+      if (hasOwn && options?.overwrite !== true) {
+        summary.skippedCustom += 1;
+        continue;
+      }
+      await this.prisma.model.update({
+        where: { id: row.id },
+        data: { capabilities: caps as unknown as Prisma.InputJsonValue },
+      });
+      summary.updated += 1;
+    }
+
+    this.logger.log(
+      `models.dev 能力同步：provider ${summary.providers} 个、命中 ${summary.matched} 个模型、` +
+        `写入 ${summary.updated} 个（跳过已自定义 ${summary.skippedCustom}、目录未收录 ${summary.missing}）`,
+    );
+    return summary;
+  }
+
+  /**
    * 目录 upsert（worker 注册快照路径专用）：按 (providerID, modelID) 唯一键查，
    * 存在复用（不碰 enabled）；否则新建。
    * models-sync 可见性权威：快照上报 ≠ live 确认——新建的 opencode/* 行
    * `enabled:false`（候选登记，不进 available-models/dropdown），可见性唯一由
    * syncLiveModels 经 upsertAndEnableCatalogModel 授予；非 opencode 行保持
    * `enabled` 缺省（local/custom/凭据模型的既有语义不动）。
-   */
-  /**
-   * 模型入库（worker 上报 / sync 共用）。
-   *
-   * **能力继承（2026-11-18）**：自动入库这一刻拿不到任何能力信息（worker 只报 id 字符串，
-   * 上游 `/models` 也不保证返回 vision 能力）。故新行若该 provider 已配
-   * `providerCapabilities` 模板 → 直接继承，否则 `capabilities` 留空。
-   *
-   * 已存在的行不在此处改能力（避免覆盖管理员对单模型的显式覆盖）——批量回填由
-   * `updateProvider` 在模板变更时执行。
    */
   private async upsertCatalogModel(
     providerID: string,
@@ -1193,27 +1266,12 @@ export class ModelsService implements OnModuleInit {
     if (existing) {
       return existing.id;
     }
-    // 同 provider 任一已有行上的模板即代表该 provider 的模板（updateProvider 原子重写）。
-    // 查询失败/无模板都不影响入库（模板是增强，缺失就保持旧行为 capabilities=null）。
-    let inherited: unknown = null;
-    try {
-      const template = await this.prisma.model.findFirst({
-        where: { providerID, providerCapabilities: { not: Prisma.DbNull } },
-        select: { providerCapabilities: true },
-      });
-      inherited = template?.providerCapabilities ?? null;
-    } catch {
-      inherited = null;
-    }
     const row = await this.prisma.model.create({
       data: {
         id: await this.idGen.nextId(MODEL_ID_PREFIX),
         providerID,
         modelID,
         name: modelID,
-        ...(inherited !== null
-          ? { capabilities: inherited as Prisma.InputJsonValue }
-          : {}),
         ...(providerID === 'opencode' ? { enabled: false } : {}),
       },
     });

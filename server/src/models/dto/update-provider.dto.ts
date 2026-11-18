@@ -54,24 +54,4 @@ export class UpdateProviderDto {
   @IsOptional()
   @IsObject()
   headers?: Record<string, string> | null;
-
-  /**
-   * provider 级**默认模型能力模板**（JSON）。null/{} = 清空。
-   *
-   * 为什么需要：模型入库是自动的（worker 上报 id 字符串数组），那一刻拿不到能力信息，
-   * 上游 `/models` 也不保证返回（commandcode 只有 id/context_length/supported_endpoints）。
-   * 结果模型 `capabilities` 为空 ⇒ worker 写 opencode 配置 `input: ["text"]` ⇒ agent 读不了图片。
-   *
-   * 配一次覆盖该 provider 全系模型；模型行自身 `capabilities` 仍可作例外覆盖。
-   * 例：`{"modalities":{"input":["text","image"],"output":["text"]},"toolCall":true}`
-   */
-  @ApiPropertyOptional({
-    description:
-      'provider 级默认模型能力模板，如 {"modalities":{"input":["text","image"],"output":["text"]}}；null/{} = 清空。变更会回填未自定义能力的模型',
-    type: 'object',
-    additionalProperties: true,
-  })
-  @IsOptional()
-  @IsObject()
-  providerCapabilities?: Record<string, unknown> | null;
 }

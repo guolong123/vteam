@@ -434,15 +434,25 @@ assert_worker_bundle_version() {
     return 0
   fi
 
-  # --no-build 部署「已发布镜像」时，本地 json 可能落后于镜像内的真实发布包。
-  # 这种情况必须**以镜像内的文件为准**：直接向 registry 上的 web 镜像取一份出来读，
-  # 不能拿本地文件误杀合法部署，也不能像上一版那样直接跳过（事故正是这么漏掉的）。
+  # --no-build 部署「已发布镜像」时，本地 json 可能落后于镜像内的真实发布包
+  # （本地文件只反映上次本地打包，镜像里的才是运行时真正对外提供的）。
+  #
+  # 判定顺序（2026-11-18 修订）：
+  #   1. 能从 registry 读出镜像内版本 → 以镜像为准（最可信）；
+  #   2. 读不出（本机拉不动镜像/网络受限）→ 回退信任 tag：
+  #      CI（release-images.yml）构建时把 `CODE_VERSION=<version>` 传给 pack-worker，
+  #      **同一个 tag 的发布包版本必然等于该 tag**。此时 warn 说明依据，
+  #      不用本地旧 json 误杀合法部署。
+  #   3. 显式跳过（--skip-version-gate）仍然保留给特殊场景。
   if [[ $NO_BUILD -eq 1 && "$bundle_ver" != "$TAG" ]]; then
     local img_ver
     img_ver=$(read_image_bundle_version || true)
     if [[ -n "$img_ver" ]]; then
       log "本地 json=${bundle_ver}，镜像内发布包=${img_ver}（以镜像为准）"
       bundle_ver="$img_ver"
+    else
+      warn "读不到镜像内发布包版本（本机拉不动 $REGISTRY/vteam-web:${TAG}）——按 CI 约定信任 tag：$TAG"
+      bundle_ver="$TAG"
     fi
   fi
 
