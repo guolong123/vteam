@@ -59,6 +59,8 @@ import {
 } from './protocol/worker-protocol';
 import { OpencodeServer } from './runtime/opencode-server';
 import { spawnCliSync } from './runtime/cli-command';
+import { ServeWatchdog } from './runtime/serve-watchdog';
+import { requestServe } from './reload/config-reloader';
 import {
   assertOpencodeVersionSupported,
   formatOpencodeVersion,
@@ -2048,15 +2050,69 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // 心跳单次发送（worker-self-update Todo 4 抽出）：定时器与「自更新执行完毕补报状态」
   // 共用同一条路径，保证两处上报字段与失败处理完全一致。
+  /**
+   * serve 健康看门狗（2026-11-18）：修「心跳正常但发消息 502」。
+   *
+   * 旧判据 `serveServer.isRunning` 只看 `process.exitCode === null`——serve **僵死**
+   * （端口不再监听/内部崩溃但进程未退出）时仍为 true ⇒ 心跳报 ok ⇒ 平台继续派单
+   * ⇒ 用户撞 502，且永不自愈（没有任何代码会重启僵死的 serve）。
+   *
+   * 现在每轮心跳前做一次 **HTTP 级**探测：连续失败 ≥3 次判定僵死 → 走
+   * RestartCoordinator 重启（有活跃会话则排队，绝不打断在跑的 agent）；
+   * 探测失败期间 health 立即 degraded ⇒ 平台停止派单，不再放大故障。
+   */
+  const serveWatchdog =
+    config.engine === 'dsh'
+      ? null // dsh 无 serve 进程（驱动按需 spawn），不适用
+      : new ServeWatchdog({
+          probe: async () => {
+            const baseUrl = serveServer.baseUrl;
+            // 进程刚起/已停：baseUrl 为空 → 不可用（不重启，start 流程自己会处理）
+            if (!baseUrl) return 'unreachable';
+            try {
+              // ⚠️ requestServe 在 HTTP 非 2xx 时**不抛错**（只返回 ok:false），
+              // 只有网络层失败才 throw。所以必须显式判 ok——僵死/半死状态下
+              // 常见"能连上但返回 502/500"，那同样不可用。
+              const res = await requestServe(
+                { baseUrl, password: serveServer.effectiveServerPassword },
+                '/api/config',
+                { method: 'GET', timeoutMs: 5_000 },
+              );
+              return res.ok ? 'ok' : 'unreachable';
+            } catch {
+              return 'unreachable';
+            }
+          },
+          requestRestart: async (reason: string) =>
+            restartCoordinator.requestRestart(reason),
+          logger: {
+            info: (message: string) => console.log(`[worker] ${message}`),
+            warn: (message: string) => console.warn(`[worker] ${message}`),
+          },
+        });
+
   const sendHeartbeatOnce = async (): Promise<void> => {
     // F2 M4：load 上报真实活动会话数（instance-tracker 计数，
     // T10 会话执行接线后由驱动调用点 trackInstanceStart/End 驱动）
     const load: WorkerLoad = getLoad(config.workerMaxInstances);
+    // serve 自愈探测（dsh 引擎无 serve，跳过）：失败即降级 + 达阈值自动重启。
+    if (serveWatchdog) {
+      try {
+        await serveWatchdog.check();
+      } catch {
+        // 看门狗自身异常绝不影响心跳（否则"修故障的代码"反而拖垮上报）
+      }
+    }
     // P4：dsh 模式**没有 serve 进程** ⇒ 健康判据不能看 serveServer.isRunning
     // （恒 false ⇒ worker 永远 degraded ⇒ server 不派单）。dsh 的健康 = 进程在跑
     // （驱动按需 spawn 子进程；未 spawn 也算健康——懒启动是设计而非故障）。
+    // opencode：进程还在 **且** 看门狗没判不健康 ⇒ ok（HTTP 级可用才算健康）。
     const health: WorkerHealth =
-      config.engine === 'dsh' ? 'ok' : serveServer.isRunning ? 'ok' : 'degraded';
+      config.engine === 'dsh'
+        ? 'ok'
+        : serveServer.isRunning && !(serveWatchdog?.isUnhealthy ?? false)
+          ? 'ok'
+          : 'degraded';
     try {
       // 回滚判定排在心跳之前：真触发回滚时，rolledback 状态要在**这一轮**就报上去，
       // server 的指令收敛（convergePendingUpdateCommand）才能及时清掉 pending。
