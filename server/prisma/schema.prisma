@@ -998,6 +998,24 @@ model Model {
    * updateProvider 会按 providerID 原子重写全部行。
    */
   headers      Json?    @map("headers")
+  /**
+   * provider 级**默认模型能力模板**（JSON，如
+   * `{"modalities":{"input":["text","image"],"output":["text"]},"toolCall":true}`）。
+   *
+   * 为什么需要 provider 级：模型入库是**自动**的（worker 注册上报
+   * `capabilities.models: string[]` → `upsertCatalogModel` 逐条 upsert），那一刻拿不到
+   * 任何能力信息；上游 `/models` 也不保证返回（commandcode 只返回 id/context_length/
+   * supported_endpoints，看不出 vision 能力）。结果：93 个模型里 92 个 capabilities=NULL
+   * ⇒ worker 写 opencode 配置时 `input: ["text"]` ⇒ **agent 侧读不了图片**，只能人工逐个
+   * 模型补，不可接受。
+   *
+   * 语义（与 baseUrl/providerType/headers 同一套「provider 级字段」模式，
+   * `updateProvider` 按 providerID 原子重写全部行）：
+   * - 新建模型行时若自身未声明 capabilities → **继承本模板**；
+   * - 模型行自身 capabilities **优先**于模板（作为例外覆盖）；
+   * - 修改模板时**回填**所有「自身未声明 capabilities」的行（已自定义的行不动）。
+   */
+  providerCapabilities Json? @map("provider_capabilities")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

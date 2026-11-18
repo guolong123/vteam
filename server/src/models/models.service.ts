@@ -535,16 +535,23 @@ export class ModelsService implements OnModuleInit {
     if (
       dto.providerType === undefined &&
       dto.baseUrl === undefined &&
-      dto.headers === undefined
+      dto.headers === undefined &&
+      dto.providerCapabilities === undefined
     ) {
       throw new BadRequestException({
         code: 'MODEL_PROVIDER_UPDATE_EMPTY',
-        message: 'providerType、baseUrl 与 headers 至少需提供一项',
+        message:
+          'providerType、baseUrl、headers 与 providerCapabilities 至少需提供一项',
       });
     }
     const rows = await this.prisma.model.findMany({
       where: { providerID },
-      select: { providerType: true, baseUrl: true, headers: true },
+      select: {
+        providerType: true,
+        baseUrl: true,
+        headers: true,
+        providerCapabilities: true,
+      },
     });
     if (rows.length === 0) {
       throw new NotFoundException({
@@ -569,14 +576,44 @@ export class ModelsService implements OnModuleInit {
         : dto.headers === null || Object.keys(dto.headers).length === 0
           ? null
           : (dto.headers as Prisma.InputJsonValue);
+    /**
+     * provider 级能力模板（2026-11-18）：显式 null/{} = 清空；缺省 = 保持原值
+     * （与 headers 同语义）。
+     *
+     * **回填语义**：模板变更时，把所有「自身未声明 capabilities」的行同步成新模板；
+     * 已自定义能力的行**不动**（管理员对单模型的显式覆盖优先）。
+     */
+    const effectiveProviderCaps =
+      dto.providerCapabilities === undefined
+        ? ((rows[0] as { providerCapabilities?: unknown })
+            .providerCapabilities ?? null)
+        : dto.providerCapabilities === null ||
+            Object.keys(dto.providerCapabilities).length === 0
+          ? null
+          : (dto.providerCapabilities as Prisma.InputJsonValue);
+
     await this.prisma.model.updateMany({
       where: { providerID },
       data: {
         providerType: effectiveType,
         baseUrl: effectiveBaseUrl,
         headers: effectiveHeaders as never,
+        providerCapabilities: effectiveProviderCaps as never,
       },
     });
+
+    // 模板变更 → 回填未自定义能力的行（只填空白，不覆盖显式覆盖）。
+    if (dto.providerCapabilities !== undefined) {
+      const backfilled = await this.prisma.model.updateMany({
+        where: { providerID, capabilities: { equals: Prisma.DbNull } },
+        data: { capabilities: effectiveProviderCaps as never },
+      });
+      if (backfilled.count > 0) {
+        this.logger.log(
+          `provider ${providerID} 能力模板已回填 ${backfilled.count} 个未声明能力的模型`,
+        );
+      }
+    }
     await this.maybeDispatchAfterShapeChange(providerID);
     const summary = await this.listProviders();
     return (
@@ -1135,6 +1172,16 @@ export class ModelsService implements OnModuleInit {
    * syncLiveModels 经 upsertAndEnableCatalogModel 授予；非 opencode 行保持
    * `enabled` 缺省（local/custom/凭据模型的既有语义不动）。
    */
+  /**
+   * 模型入库（worker 上报 / sync 共用）。
+   *
+   * **能力继承（2026-11-18）**：自动入库这一刻拿不到任何能力信息（worker 只报 id 字符串，
+   * 上游 `/models` 也不保证返回 vision 能力）。故新行若该 provider 已配
+   * `providerCapabilities` 模板 → 直接继承，否则 `capabilities` 留空。
+   *
+   * 已存在的行不在此处改能力（避免覆盖管理员对单模型的显式覆盖）——批量回填由
+   * `updateProvider` 在模板变更时执行。
+   */
   private async upsertCatalogModel(
     providerID: string,
     modelID: string,
@@ -1146,12 +1193,27 @@ export class ModelsService implements OnModuleInit {
     if (existing) {
       return existing.id;
     }
+    // 同 provider 任一已有行上的模板即代表该 provider 的模板（updateProvider 原子重写）。
+    // 查询失败/无模板都不影响入库（模板是增强，缺失就保持旧行为 capabilities=null）。
+    let inherited: unknown = null;
+    try {
+      const template = await this.prisma.model.findFirst({
+        where: { providerID, providerCapabilities: { not: Prisma.DbNull } },
+        select: { providerCapabilities: true },
+      });
+      inherited = template?.providerCapabilities ?? null;
+    } catch {
+      inherited = null;
+    }
     const row = await this.prisma.model.create({
       data: {
         id: await this.idGen.nextId(MODEL_ID_PREFIX),
         providerID,
         modelID,
         name: modelID,
+        ...(inherited !== null
+          ? { capabilities: inherited as Prisma.InputJsonValue }
+          : {}),
         ...(providerID === 'opencode' ? { enabled: false } : {}),
       },
     });
