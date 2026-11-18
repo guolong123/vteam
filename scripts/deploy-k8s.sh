@@ -403,6 +403,71 @@ if kubectl get job "${RELEASE}-init" -n "$NAMESPACE" >/dev/null 2>&1; then
   log "删除旧 init Job (${RELEASE}-init，spec.template 不可变，升级需重建)..."
   kubectl delete job "${RELEASE}-init" -n "$NAMESPACE" --ignore-not-found=true
 fi
+# ------------------------------------------------------------
+# 5a. 版本一致性闸门（2026-11-18 线上事故）
+#
+# worker 自更新的第一步是「发布包版本 vs 指令目标版本」一致性校验：
+#
+#   [worker-update] 发布包版本 v1.6.19 与指令目标版本 v1.6.18 不一致，放弃本轮
+#
+# 「指令目标版本」= server env CODE_VERSION（本脚本 --set server.env.codeVersion=$TAG），
+# 「发布包版本」= web/public/worker-src.version.json（由镜像构建时的 pack-worker 写入）。
+# 两者必须同源同值，否则**每台 worker 的「更新」按钮都会静默失效**（点完没反应，
+# 只在 worker 本地日志里留一行「放弃本轮」）。
+#
+# 事故成因：上一版用 `kubectl set image` 按 digest 绕过了本脚本 ⇒ CODE_VERSION 停在
+# v1.6.18，而镜像里的发布包已是 v1.6.19。故这里在 helm upgrade 之前显式比对。
+# ------------------------------------------------------------
+assert_worker_bundle_version() {
+  local version_json="$REPO_ROOT/web/public/worker-src.version.json"
+
+  # 本地没有该文件（例如只部署未打包的仓库）→ 无法比对，明确跳过而不是假装通过。
+  if [[ ! -f "$version_json" ]]; then
+    warn "worker-src.version.json 不存在，跳过发布包版本校验（无法确认 worker 自更新可用）"
+    return 0
+  fi
+
+  local bundle_ver
+  bundle_ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$version_json" | head -1)
+  if [[ -z "$bundle_ver" ]]; then
+    warn "worker-src.version.json 解析不出 version，跳过校验"
+    return 0
+  fi
+
+  # --no-build 部署「已发布镜像」时，本地 json 可能落后于镜像内的真实发布包。
+  # 这种情况必须**以镜像内的文件为准**：直接向 registry 上的 web 镜像取一份出来读，
+  # 不能拿本地文件误杀合法部署，也不能像上一版那样直接跳过（事故正是这么漏掉的）。
+  if [[ $NO_BUILD -eq 1 && "$bundle_ver" != "$TAG" ]]; then
+    local img_ver
+    img_ver=$(read_image_bundle_version || true)
+    if [[ -n "$img_ver" ]]; then
+      log "本地 json=${bundle_ver}，镜像内发布包=${img_ver}（以镜像为准）"
+      bundle_ver="$img_ver"
+    fi
+  fi
+
+  if [[ "$bundle_ver" != "$TAG" ]]; then
+    die "版本不一致：CODE_VERSION(tag)=$TAG 但 worker 发布包=$bundle_ver
+     ⇒ 每台 worker 的「更新」按钮都会因版本不符而静默失效（点更新没反应）。
+     修复：改用发布包对应的 tag 部署（--tag ${bundle_ver}），或重新打包发布物。"
+  fi
+  ok "版本一致性校验通过：CODE_VERSION = worker 发布包 = $TAG"
+}
+
+# 从 registry 上的 web 镜像里读出真实 worker 发布包版本（--no-build 场景的唯一可信来源）。
+# 失败（镜像不可达/无 docker）返回空串，由调用方决定如何降级。
+read_image_bundle_version() {
+  local web_repo="$REGISTRY/vteam-web"
+  command -v docker >/dev/null 2>&1 || return 0
+  local cid
+  cid=$(docker create "$web_repo:$TAG" 2>/dev/null) || return 0
+  local out
+  out=$(docker cp "$cid:/app/public/worker-src.version.json" - 2>/dev/null | tar -xO 2>/dev/null || true)
+  docker rm -f "$cid" >/dev/null 2>&1 || true
+  printf '%s' "$out" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+assert_worker_bundle_version
 hdr "5/6 helm upgrade ($RELEASE in $NAMESPACE)"
 
 # 拆分 image = repository / tag

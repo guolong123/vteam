@@ -128,7 +128,8 @@ interface HarnessOptions {
   /** 远端包内 package-lock.json 内容（默认与本地一致 → 不触发 npm ci）。 */
   remoteLock?: Buffer;
   npmCiExitCode?: number;
-  systemctlExitCode?: number;
+  /** systemctl 退出码；`null` = 进程被信号终止（restart 给自身发 SIGTERM 的真实形态）。 */
+  systemctlExitCode?: number | null;
   hasSystemctl?: boolean;
   versionJson?: string;
   tarballSha?: string;
@@ -167,7 +168,7 @@ function createHarness(options: HarnessOptions = {}) {
 
   const run: CommandRunner = async (command, args, runOptions) => {
     calls.push({ command, args, options: runOptions });
-    const outcome = (code: number, stderr = ''): CommandOutcome => ({ code, stdout: '', stderr });
+    const outcome = (code: number | null, stderr = ''): CommandOutcome => ({ code, stdout: '', stderr });
     if (command === 'tar') {
       const target = args[args.indexOf('-C') + 1];
       stagingDir = target;
@@ -649,6 +650,25 @@ describe('WorkerUpdater 无 systemd（决策⑤：只标记不退出）', () => 
 
     expect(outcome).toBe('applied-ready-manual');
     expect(h.updater.state).toBe('ready-manual');
+  });
+
+  /**
+   * 回归（2026-11-18 线上）：`systemctl restart <自身 unit>` 会给本进程发 SIGTERM，
+   * `close` 事件此时 code 为 **null**。旧实现把 null 判成失败 ⇒ 落 ready-manual +
+   * 每轮心跳重复提示「已下载待手动重启」，运维看到的正是「点更新没反应」。
+   * 实际重启已经发生、新码已经在跑。
+   */
+  it('systemctl restart 被 SIGTERM 终止（退出码 null）→ 视为重启已生效，落 restarting', async () => {
+    const h = createHarness({ systemctlExitCode: null });
+    h.fsImpl.dirs.add('/run/systemd/system');
+    h.fsImpl.files.set(USER_UNIT, Buffer.from('[Unit]'));
+
+    const outcome = await h.updater.handleCommand({ ...UPDATE_CMD });
+
+    expect(outcome).toBe('applied-restarting');
+    expect(h.updater.state).toBe('restarting');
+    // 新码已覆盖
+    expect(h.fsImpl.files.get(`${INSTALL_DIR}/dist/index.js`)?.toString()).toBe('new-code');
   });
 
   it('systemctl 不存在（无二进制）：探测直接判否', async () => {

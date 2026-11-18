@@ -313,6 +313,23 @@ export const spawnCommandRunner: CommandRunner = (command, args, options = {}) =
     });
   });
 
+/**
+ * `systemctl restart` 的成败判定（2026-11-18）。
+ *
+ * **`code === null` 必须算成功**：`systemctl restart <自身 unit>` 会给本进程发 SIGTERM，
+ * `child.on('close')` 在信号终止时 code 为 null。线上实测（keta 的 worker-37）就栽在这里：
+ * 重启实际已经发生、新码已在跑，但代码把 null 判成失败 → 落 `ready-manual` +
+ * 每轮心跳重复提示「已下载待手动重启」，运维看到的就是「点更新没反应」。
+ *
+ * 按信号语义区分「被谁杀」：
+ * - 被信号终止且**有信号值** → restart 生效，我们是被重启的一方 ⇒ 成功；
+ * - `code === 0` → systemctl 正常返回 ⇒ 成功；
+ * - 其它非零退出码 → 真失败（unit 不存在 / 权限不足），如实报错。
+ */
+function isRestartAccepted(outcome: CommandOutcome): boolean {
+  return outcome.code === 0 || outcome.code === null;
+}
+
 /** systemctl 调用上下文（用户级 / 系统级）。 */
 export interface SystemdTarget {
   scope: 'user' | 'system';
@@ -689,13 +706,19 @@ export class WorkerUpdater {
       env: this.systemctlEnv(systemd.scope),
       timeoutMs: 120_000,
     });
-    if (restart.code !== 0) {
+    if (!isRestartAccepted(restart)) {
       this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
       this.pendingRestart = true;
       this.logger.warn(
         `systemctl restart ${systemd.unit} 失败（退出码 ${restart.code}）：${(restart.stderr || restart.stdout).trim()}——已下载待手动重启`,
       );
       return 'applied-ready-manual';
+    }
+    if (restart.code === null) {
+      // 被 SIGTERM 终止 = 重启已生效（本进程正在被换掉），不是失败。
+      this.logger.info(
+        `[worker-update] systemctl restart ${systemd.unit} 已生效（本进程随重启被终止，退出码 null 属正常）`,
+      );
     }
     this.pendingRestart = false;
     this.setState(WORKER_UPDATE_STATES.RESTARTING);
@@ -810,7 +833,7 @@ export class WorkerUpdater {
         [...systemd.ctlArgs, 'restart', systemd.unit],
         { env: this.systemctlEnv(systemd.scope), timeoutMs: 120_000 },
       );
-      restarted = restart.code === 0;
+      restarted = isRestartAccepted(restart);
       if (!restarted) {
         this.logger.warn(
           `systemctl restart ${systemd.unit} 失败（退出码 ${restart.code}）：${(restart.stderr || restart.stdout).trim()}`,
