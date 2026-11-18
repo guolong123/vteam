@@ -982,6 +982,19 @@ model Model {
   modelID      String   @map("model_id")
   name         String
   capabilities Json?
+  /**
+   * `capabilities` 的**来源**（2026-11-18）：`modelsdev` = 自动从 models.dev 同步；
+   * `manual` = 管理员通过接口显式设置；`null` = 未知（历史数据/自动入库未填）。
+   *
+   * 为什么需要：自动同步必须能区分「机器写的」和「人填的」——
+   * - 机器写的：每次同步都应刷新（models.dev 会更新模型能力，旧值可能已过时/错误）；
+   * - 人填的：默认不动（管理员更懂自己的网关）。
+   *
+   * 没有这个字段时只能靠「值是否为空」判断，导致**一次错误写入就永久沉淀**：
+   * 线上曾用 provider 级模板把 20 个不支持图片的模型标成支持，之后默认同步全部
+   * 跳过（因为它们"有值"），只能靠人工跑 overwrite 才能纠正。
+   */
+  capabilitiesSource String? @map("capabilities_source")
   enabled      Boolean  @default(true)
   baseUrl      String?  @map("base_url") @db.Text
   providerType String   @default("cloud") @map("provider_type")

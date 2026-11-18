@@ -361,6 +361,10 @@ export class ModelsService implements OnModuleInit {
         modelID: dto.modelID.trim(),
         name: dto.name.trim(),
         capabilities: dto.capabilities as Prisma.InputJsonValue | undefined,
+        // 管理员显式声明能力 → 标记 manual，自动同步默认不覆盖
+        ...(dto.capabilities !== undefined
+          ? { capabilitiesSource: 'manual' }
+          : {}),
         enabled: dto.enabled ?? true,
         ...(providerType ? { providerType } : {}),
         ...(baseUrl ? { baseUrl } : {}),
@@ -455,7 +459,11 @@ export class ModelsService implements OnModuleInit {
         ...(dto.modelID !== undefined ? { modelID: dto.modelID.trim() } : {}),
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
         ...(dto.capabilities !== undefined
-          ? { capabilities: dto.capabilities as Prisma.InputJsonValue }
+          ? {
+              capabilities: dto.capabilities as Prisma.InputJsonValue,
+              // 显式设置 → manual，此后自动同步不再覆盖（除非 overwrite）
+              capabilitiesSource: 'manual',
+            }
           : {}),
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
         ...(dto.providerType !== undefined
@@ -1192,6 +1200,7 @@ export class ModelsService implements OnModuleInit {
         modelID: true,
         baseUrl: true,
         capabilities: true,
+        capabilitiesSource: true,
       },
     } as never)) as unknown as {
       id: string;
@@ -1199,6 +1208,7 @@ export class ModelsService implements OnModuleInit {
       modelID: string;
       baseUrl: string | null;
       capabilities: unknown;
+      capabilitiesSource: string | null;
     }[];
 
     // provider → baseUrl（同行一致，取首个非空值即可）
@@ -1225,17 +1235,28 @@ export class ModelsService implements OnModuleInit {
         continue;
       }
       summary.matched += 1;
-      const hasOwn =
-        row.capabilities !== null &&
-        typeof row.capabilities === 'object' &&
-        Object.keys(row.capabilities as object).length > 0;
-      if (hasOwn && options?.overwrite !== true) {
+      /**
+       * 覆盖判定（2026-11-18 修订）：按**来源**而不是「有没有值」。
+       *
+       * - `manual`（管理员显式设置）→ 默认不动，`overwrite` 才覆盖；
+       * - `modelsdev`（上次自动同步写的）→ **每次刷新**（models.dev 会更新能力，
+       *   旧值可能已过时；更关键的是能自动纠正一次错误写入）；
+       * - `null`（历史数据/自动入库未填）→ 视为可刷新。
+       *
+       * 教训：早先按「有没有值」判断，导致 provider 级模板一次错误写入后永久沉淀
+       * （20 个不支持图片的模型被标成支持，默认同步全跳过，只能人工 overwrite 纠正）。
+       */
+      const fromManual = row.capabilitiesSource === 'manual';
+      if (fromManual && options?.overwrite !== true) {
         summary.skippedCustom += 1;
         continue;
       }
       await this.prisma.model.update({
         where: { id: row.id },
-        data: { capabilities: caps as unknown as Prisma.InputJsonValue },
+        data: {
+          capabilities: caps as unknown as Prisma.InputJsonValue,
+          capabilitiesSource: 'modelsdev',
+        },
       });
       summary.updated += 1;
     }

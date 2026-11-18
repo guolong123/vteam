@@ -776,6 +776,132 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
   });
 
+  /**
+   * models.dev 能力同步的来源判定（2026-11-18）。
+   *
+   * 教训：早先按「capabilities 有没有值」决定是否覆盖，导致一次错误写入永久沉淀——
+   * provider 级模板把 20 个不支持图片的模型标成支持后，默认同步全部跳过，
+   * 只能靠人工 overwrite 纠正。改为按 `capabilitiesSource` 判定：
+   *   modelsdev → 每次刷新（可在无人干预下自动纠正历史错误）
+   *   manual    → 默认不动（管理员更懂自己的网关）
+   *   null      → 视为可刷新（历史数据）
+   */
+  describe('syncCapabilitiesFromModelsDev 来源判定', () => {
+    const stubCatalog = () => {
+      jest
+        .spyOn(
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          require('./models-dev-sync'),
+          'fetchModelsDevCatalog',
+        )
+        .mockResolvedValue({
+          commandcode: {
+            id: 'commandcode',
+            api: 'https://api.commandcode.ai/provider/v1',
+            models: {
+              // 线上真实数据：v4.1-flash 支持图，v4-pro 不支持
+              'deepseek/deepseek-v4.1-flash': {
+                attachments: true,
+                modalities: { input: ['text', 'image'], output: ['text'] },
+              },
+              'deepseek/deepseek-v4-pro': {
+                modalities: { input: ['text'], output: ['text'] },
+              },
+            },
+          },
+        } as never);
+    };
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('capabilitiesSource=modelsdev（曾自动同步）→ 每次刷新，可自动纠正历史错误', async () => {
+      stubCatalog();
+      prisma.model.findMany.mockResolvedValue([
+        {
+          id: 'md_1',
+          providerID: 'commandcode',
+          modelID: 'deepseek/deepseek-v4-pro',
+          baseUrl: 'https://api.commandcode.ai/provider/v1',
+          // 被错误标成支持图片（模板污染的样子）
+          capabilities: { modalities: { input: ['text', 'image'] } },
+          capabilitiesSource: 'modelsdev',
+        },
+      ]);
+      prisma.model.update.mockResolvedValue({});
+
+      const out = await service.syncCapabilitiesFromModelsDev({
+        providerIDs: ['commandcode'],
+      });
+
+      expect(out.updated).toBe(1);
+      expect(prisma.model.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            capabilitiesSource: 'modelsdev',
+            capabilities: expect.objectContaining({
+              modalities: expect.objectContaining({ input: ['text'] }),
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('capabilitiesSource=manual（管理员显式设置）→ 默认跳过', async () => {
+      stubCatalog();
+      prisma.model.findMany.mockResolvedValue([
+        {
+          id: 'md_2',
+          providerID: 'commandcode',
+          modelID: 'deepseek/deepseek-v4-pro',
+          baseUrl: 'https://api.commandcode.ai/provider/v1',
+          capabilities: { toolCall: false },
+          capabilitiesSource: 'manual',
+        },
+      ]);
+
+      const out = await service.syncCapabilitiesFromModelsDev({
+        providerIDs: ['commandcode'],
+      });
+
+      expect(out.skippedCustom).toBe(1);
+      expect(out.updated).toBe(0);
+      expect(prisma.model.update).not.toHaveBeenCalled();
+    });
+
+    it('overwrite=true → manual 也覆盖', async () => {
+      stubCatalog();
+      prisma.model.findMany.mockResolvedValue([
+        {
+          id: 'md_3',
+          providerID: 'commandcode',
+          modelID: 'deepseek/deepseek-v4-pro',
+          baseUrl: 'https://api.commandcode.ai/provider/v1',
+          capabilities: { toolCall: false },
+          capabilitiesSource: 'manual',
+        },
+      ]);
+      prisma.model.update.mockResolvedValue({});
+
+      const out = await service.syncCapabilitiesFromModelsDev({
+        providerIDs: ['commandcode'],
+        overwrite: true,
+      });
+
+      expect(out.updated).toBe(1);
+    });
+
+    it('目录拉取失败 → catalogFetched=false 且一行不写', async () => {
+      jest
+        .spyOn(require('./models-dev-sync'), 'fetchModelsDevCatalog')
+        .mockResolvedValue(null);
+
+      const out = await service.syncCapabilitiesFromModelsDev();
+
+      expect(out.catalogFetched).toBe(false);
+      expect(prisma.model.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateProvider（Provider 级配置：全模型行原子重写 + C6 门控下发）', () => {
     /* updateProvider 链路里 model.findMany 有三处用途，按 select 形态路由：
      * provider 行（{providerType, baseUrl}）、getLocalProviderConfigs
