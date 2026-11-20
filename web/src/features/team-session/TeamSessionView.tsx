@@ -558,6 +558,16 @@ export function TeamSessionView({
     [queryClient, effectivePanelTaskId],
   );
 
+  /**
+   * 普通附件（无产出物归属）的兜底入口（2026-11-20）：指向**该团队的文档站**，
+   * 而不是独立的 `/docs/file?url=` 简陋页。
+   *
+   * 用户反馈：从消息点文件和从右侧附件清单点文件，打开的界面不一致，且简陋页
+   * 返回链路也不对。统一到文档站后，两个入口是同一套界面、同一条返回路径。
+   * 文档站无对应文档时至少能看到该团队全部产出物，比孤立预览页有用。
+   */
+  const fallbackDocsHref = teamId ? `/docs?teamId=${encodeURIComponent(teamId)}` : null;
+
   /* ---------- 当前任务派生查询（三 Tab 数据源） ---------- */
   const artifactsQuery = useQuery({
     queryKey: ["task", effectivePanelTaskId, "artifacts"],
@@ -2247,6 +2257,7 @@ export function TeamSessionView({
                     senderType="external"
                     attachments={attachments}
                     resolveArtifactDoc={resolveArtifactDoc}
+                    fallbackDocsHref={fallbackDocsHref}
                     initials={initials}
                   />,
                 );
@@ -2277,7 +2288,7 @@ export function TeamSessionView({
                     return withSeparator(
                       <React.Fragment key={msg.id}>
                         {flushProc(msg.id)}
-                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} grouped={grouped} initials={initials} />
+                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
                       </React.Fragment>,
                     );
                   }
@@ -2285,7 +2296,7 @@ export function TeamSessionView({
                   return withSeparator(
                     <React.Fragment key={msg.id}>
                       {flushProc(`tail-${msg.id}`)}
-                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} grouped={grouped} initials={initials} />
+                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
                     </React.Fragment>,
                   );
                 }
@@ -2336,7 +2347,7 @@ export function TeamSessionView({
                  */
                 if (!cleaned && rawText) return null;
                 return withSeparator(
-                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} initials={initials} status={msg.status} />,
+                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} initials={initials} status={msg.status} />,
                 );
               }
               });
