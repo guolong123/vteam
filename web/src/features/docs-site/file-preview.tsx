@@ -863,6 +863,26 @@ function CodeFilePreview({
   const renderable = PROTOTYPE_RENDERABLE_EXTS.has(ext);
   const [mode, setMode] = useState<"preview" | "source">(renderable ? "preview" : "source");
   const [device, setDevice] = useState<DeviceType>("desktop");
+  /**
+   * 原型全屏（2026-11-20）：原型页面按设备固定尺寸渲染，文档站里可用宽度有限
+   * （左侧文档树 + 内边距），大屏原型容易被挤成需要横向滚动。全屏后铺满视口，
+   * 按 Esc 或右上角按钮退出。
+   */
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    // 全屏期间禁用背景滚动，避免滚轮把底下的文档树一起滚动
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [fullscreen]);
 
   const language = useMemo(
     () => CODE_LANG_OVERRIDE[ext] ?? languageForPath(displayName || fileUrl) ?? "text",
@@ -1049,7 +1069,45 @@ function CodeFilePreview({
           {(ext || language).toUpperCase()}
         </span>
         {mode === "preview" ? (
-          <DeviceSwitcher device={device} onChange={setDevice} />
+          <>
+            <DeviceSwitcher device={device} onChange={setDevice} />
+            <button
+              type="button"
+              data-testid="docs-code-fullscreen"
+              onClick={() => setFullscreen(true)}
+              title="全屏预览原型（Esc 退出）"
+              aria-label="全屏预览原型"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `2px ${space.md}px`,
+                borderRadius: radius.sm,
+                border: `1px solid ${neutral[200]}`,
+                backgroundColor: surface,
+                color: "#0D9488",
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                style={{ width: 13, height: 13 }}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+              </svg>
+              全屏
+            </button>
+          </>
         ) : (
           <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono }}>
             {shownLines.length} 行
@@ -1142,6 +1200,109 @@ function CodeFilePreview({
       {truncated && (
         <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
           仅预览前 {CODE_PREVIEW_MAX_LINES} 行，完整内容请下载查看。
+        </div>
+      )}
+
+      {/**
+       * 原型全屏覆盖层（2026-11-20）。
+       *
+       * 用 position:fixed 铺满视口，而不是浏览器 Fullscreen API：
+       * 后者需要用户手势授权、且 iframe 内部（原型沙箱）常有跨域限制，
+       * 兼容性差；覆盖层方式在所有浏览器一致，Esc 也能正常退出。
+       * 设备尺寸保持不变（DeviceFrame 内部按 spec 固定宽高），只是给足可用空间。
+       */}
+      {fullscreen && mode === "preview" && (
+        <div
+          data-testid="docs-code-fullscreen-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`全屏预览 ${displayName || title}`}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: "var(--color-bg, #0B1220)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `10px ${space.xl}px`,
+              borderBottom: `1px solid ${neutral[200]}`,
+              backgroundColor: surface,
+              flexShrink: 0,
+            }}
+          >
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontSize: fontSize.sm,
+                fontWeight: 600,
+                color: neutral[800],
+                fontFamily: fontFamily.body,
+              }}
+            >
+              {displayName || title}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexShrink: 0 }}>
+              <DeviceSwitcher device={device} onChange={setDevice} />
+              <button
+                type="button"
+                data-testid="docs-code-fullscreen-exit"
+                onClick={() => setFullscreen(false)}
+                title="退出全屏（Esc）"
+                aria-label="退出全屏"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: space.xs,
+                  padding: `4px ${space.md}px`,
+                  borderRadius: radius.sm,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: surface,
+                  color: neutral[700],
+                  fontSize: fontSize.sm,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span aria-hidden style={{ lineHeight: 1 }}>✕</span>
+                退出全屏
+              </button>
+            </div>
+          </div>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: "auto",
+              padding: `${space.lg}px`,
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "flex-start",
+            }}
+          >
+            {text === null ? (
+              <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>正在编译原型…</span>
+            ) : (
+              <DeviceFrame device={device} label={displayName || fileUrl}>
+                <PrototypeSandbox
+                  source={text}
+                  name={displayName || title}
+                  device={device}
+                />
+              </DeviceFrame>
+            )}
+          </div>
         </div>
       )}
     </div>
