@@ -22,6 +22,8 @@ export const WORKER_EVENT_TYPES = {
   /** 模型 question / 工具权限确认待用户处理：worker 轮询检测到 pending 后上送（不 abort，serve 继续等）。 */
   SESSION_QUESTION: 'session.question',
   SESSION_PERMISSION: 'session.permission',
+  /** 会话上下文压缩开始/完成（用户可见系统消息 + 可审计日志）。 */
+  SESSION_COMPACT: 'session.compact',
 } as const;
 
 export type WorkerEventType = (typeof WORKER_EVENT_TYPES)[keyof typeof WORKER_EVENT_TYPES];

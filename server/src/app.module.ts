@@ -34,6 +34,7 @@ import { TeamsModule } from './teams/teams.module';
 import { TimersModule } from './timers/timers.module';
 import { UsageModule } from './usage/usage.module';
 import { StatsModule } from './stats/stats.module';
+import { PlatformConfigModule } from './platform-config/platform-config.module';
 
 @Module({
   imports: [
@@ -83,6 +84,7 @@ import { StatsModule } from './stats/stats.module';
     TimersModule,
     UsageModule,
     StatsModule,
+    PlatformConfigModule,
   ],
   controllers: [],
   providers: [],

@@ -153,6 +153,19 @@ export interface ExecuteRequestPayload {
   executionConfig?: ExecutionConfig;
   /** 在飞注入标志（双写镜像 server 语义：同 ses 已有运行，仅追加 prompt，不建跟踪/不出终态事件）。 */
   inFlight?: boolean;
+  /**
+   * 会话上下文压缩策略（服务端平台配置下发）。
+   *
+   * 命中条件（worker 判定）：不活跃 ≥ idleDays 且当前上下文 ≥ minContextTokens。
+   * 命中时**先压缩、等落完、才投递本条消息**；`awaitMs` 是等待上限，超时
+   * 放弃压缩、照常投递（fail-open）。字段缺失 = 不压缩（旧 server 行为不变）。
+   */
+  compactIfStale?: {
+    idleDays: number;
+    minContextTokens: number;
+    awaitMs: number;
+    timeoutMs: number;
+  };
 }
 
 /**
@@ -2416,6 +2429,13 @@ export class ExecServer {
           }),
         );
       }
+
+      // 会话上下文压缩（长期不活跃 → 发消息前先压完再投递）。
+      // 必须在 runSendAndAwait（真正 sendMessage）之前：compact 默认 steer 会唤醒
+      // 会话，若与消息同时进队列，消息不会等压缩，本轮仍跑旧上下文。
+      // fail-open：判定/压缩/等待的任何失败都只记日志，绝不阻断本轮。
+      await this.maybeCompactBeforeSend(payload, opencodeSessionId);
+
       const ctx: Record<string, string | undefined> = {
         taskId: payload.taskId,
         agentId: payload.agentId,
@@ -2814,6 +2834,135 @@ export class ExecServer {
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length > MAX_ATTACHMENT_BYTES) return null;
     return buf;
+  }
+
+  /**
+   * 发消息前的「长期不活跃 → 主动压缩」编排（fail-open：任何失败都不阻断本轮）。
+   *
+   * 触发条件（三个同时满足才压）：
+   *   ① 会话不活跃 ≥ idleDays（用 contextInfo.lastActivityAt，毫秒 → 天）；
+   *   ② 当前上下文 ≥ minContextTokens（用 contextInfo.tokenEstimate）；
+   *   ③ 驱动实现 compactSession 能力（dsh 无该能力 → 跳过）。
+   *
+   * 时序（关键）：`compactSession` 默认 steer **会唤醒会话**——必须等到压缩
+   * 真正落完（轮询 `getMessages` 出现 compaction 结果，或 wait 加速），
+   * 才返回让调用方投递用户消息。等待上限 `awaitMs`，超时放弃压缩、照常投递。
+   *
+   * 为什么用「轮询 getMessages 里出现 compaction 消息」判定：driver 的
+   * `getMessages` 会映射 user/assistant 两类消息；v2 的 compaction 完成消息
+   * 在 `Session.Message.Compaction.Completed` 里（type='compaction'），但 vteam
+   * 驱动层不映射它 ⇒ 这里用「最近一次 assistant 消息的 time.created 前进」
+   * 作为近似（压缩执行完必然会有一条新消息）。⚠️ 该近似是保守的：宁可
+   * 多等一会（超时照常投递），绝不提前投递导致压到一半就跑用户消息。
+   */
+  private async maybeCompactBeforeSend(
+    payload: ExecuteRequestPayload,
+    sessionID: string,
+  ): Promise<void> {
+    const cfg = payload.compactIfStale;
+    if (!cfg || cfg.idleDays <= 0) {
+      return;
+    }
+    const compactable = this.driver as unknown as {
+      compactSession?: (sid: string, delivery?: 'steer' | 'queue') => Promise<void>;
+      getContextInfo?: (sid: string) => Promise<{
+        tokenEstimate: number | null;
+        lastActivityAt: number | null;
+      }>;
+    };
+    if (typeof compactable.compactSession !== 'function') {
+      return; // dsh / 旧驱动：能力位缺省 false
+    }
+
+    // 判定：上下文大小 + 不活跃天数
+    let shouldCompact = false;
+    try {
+      const info = await compactable.getContextInfo?.(sessionID);
+      if (!info) {
+        return;
+      }
+      const idleMs = cfg.idleDays * 24 * 60 * 60 * 1000;
+      const stale =
+        info.lastActivityAt !== null &&
+        Date.now() - info.lastActivityAt >= idleMs;
+      const big =
+        info.tokenEstimate !== null &&
+        info.tokenEstimate >= cfg.minContextTokens;
+      shouldCompact = stale && big;
+      if (!shouldCompact) {
+        this.logger.info(
+          `[compact] 跳过 session=${sessionID}（idle=${stale} big=${big} tokens=${info.tokenEstimate ?? '-'}）`,
+        );
+        return;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[compact] 上下文判定失败，跳过压缩 session=${sessionID}: ${(err as Error).message}`,
+      );
+      return;
+    }
+
+    // 执行压缩 + 等待落完（fail-open：任何失败都照常投递）
+    // 事件上送也是 best-effort：sender.send 自身不抛，这里再包一层确保
+    // 任何意外都不影响「压缩/发消息」主链路。
+    const notify = (phase: 'start' | 'done' | 'timeout' | 'failed', extra: Record<string, unknown> = {}) => {
+      void this.sender
+        .send(WORKER_EVENT_TYPES.SESSION_COMPACT, {
+          sessionId: sessionID,
+          taskId: payload.taskId,
+          channelId: payload.channelId,
+          agentId: payload.agentId,
+          phase,
+          ...extra,
+        })
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `[compact] 事件上送失败 phase=${phase} session=${sessionID}: ${(err as Error).message}`,
+          ),
+        );
+    };
+    let tokensBefore: number | null = null;
+    try {
+      tokensBefore =
+        (await compactable.getContextInfo?.(sessionID))?.tokenEstimate ?? null;
+      this.logger.info(
+        `[compact] 开始 session=${sessionID} tokensBefore=${tokensBefore ?? '-'} idleDays=${cfg.idleDays} minTokens=${cfg.minContextTokens}`,
+      );
+      notify('start', { tokensBefore });
+      await compactable.compactSession(sessionID, 'steer');
+      const awaitMs = Math.max(0, cfg.awaitMs);
+      const deadline = Date.now() + awaitMs;
+      // 以「消息数变化 + 最后活动时间刷新」为落完信号：压缩完成后会出现
+      // 一条 compaction 消息（getMessages 映射丢弃它，但其后必有 assistant
+      // 消息或 lastActivityAt 前进）。用 1s 轮询直到 lastActivityAt 变化
+      // 或超时——保守但简单，且超时必放行。
+      const baseline = await compactable.getContextInfo?.(sessionID);
+      const before = baseline?.lastActivityAt ?? 0;
+      let settled = false;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1_000));
+        const info = await compactable.getContextInfo?.(sessionID);
+        if (info && info.lastActivityAt !== null && info.lastActivityAt > before) {
+          settled = true;
+          break;
+        }
+      }
+      const tokensAfter =
+        (await compactable.getContextInfo?.(sessionID))?.tokenEstimate ?? null;
+      this.logger.info(
+        `[compact] session=${sessionID} 压缩${settled ? '完成' : '超时（照常投递）'} tokensBefore=${tokensBefore ?? '-'} tokensAfter=${tokensAfter ?? '-'}`,
+      );
+      notify(settled ? 'done' : 'timeout', {
+        tokensBefore,
+        tokensAfter,
+        elapsedMs: cfg.awaitMs - Math.max(0, deadline - Date.now()),
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[compact] 压缩失败，照常投递 session=${sessionID}: ${(err as Error).message}`,
+      );
+      notify('failed', { tokensBefore, error: (err as Error).message });
+    }
   }
 
   /** sendAndAwait 封装：sendMessage → awaitCompletion（onPoll 增量上送 delta + pending 检测）。 */

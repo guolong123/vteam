@@ -472,4 +472,32 @@ export interface OpenCodeDriver {
 
   /** 健康检查（在线 = true；**不抛异常**，网络错/非 2xx 一律 false）。 */
   isHealthy(): Promise<boolean>;
+
+  /**
+   * 主动请求一次会话上下文压缩（v2: `POST /api/session/{id}/compact`）。
+   *
+   * **可选**能力：仅 V2Driver 实现；dsh 引擎无该 RPC，不实现（能力位门控）。
+   * 失败抛 `DriverRequestError`；调用方按「不阻断本轮」处理。
+   */
+  compactSession?(
+    sessionID: string,
+    delivery?: 'steer' | 'queue',
+  ): Promise<void>;
+
+  /**
+   * 读取会话上下文信息（供压缩判定使用）。
+   *
+   * - `tokenEstimate`：当前活跃上下文 token 估算（最后一次 compaction 之后的消息）；
+   *   `null` = 无法估算（新会话/无 assistant 消息/驱动不支持）。
+   * - `lastCompactionAt`：最近一次压缩完成的时间戳（ms epoch）；`null` = 从未压缩。
+   * - `lastActivityAt`：会话最近活动时间（ms epoch）；`null` = 未知。
+   *
+   * **可选**能力，实现方：V2Driver。dsh 引擎不实现。
+   */
+  getContextInfo?(sessionID: string): Promise<{
+    tokenEstimate: number | null;
+    lastCompactionAt: number | null;
+    lastActivityAt: number | null;
+    messageCount: number;
+  }>;
 }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { ExecutionPoliciesModule } from '../execution-policies/execution-policies.module';
+import { PlatformConfigModule } from '../platform-config/platform-config.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { TimersModule } from '../timers/timers.module';
 import { WorkersModule } from '../workers/workers.module';
@@ -41,6 +42,7 @@ import { WorkerDispatcher } from './worker-dispatcher';
     ArtifactsModule,
     TimersModule,
     ExecutionPoliciesModule,
+    PlatformConfigModule,
   ],
   controllers: [ChatController],
   providers: [

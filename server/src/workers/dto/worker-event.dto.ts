@@ -23,6 +23,8 @@ export const WORKER_EVENT_TYPES = {
   GIT_OP: 'git.op',
   SESSION_QUESTION: 'session.question',
   SESSION_PERMISSION: 'session.permission',
+  /** 会话上下文压缩开始/完成（worker 上送 → server 落 system 消息 + 广播）。 */
+  SESSION_COMPACT: 'session.compact',
 } as const;
 
 export type WorkerEventType =

@@ -546,6 +546,16 @@ export class WorkerEventIngress {
             );
           })
           .then(() => true);
+      case 'session.compact':
+        // 会话上下文压缩（开始/完成）：落 system 消息到来源频道 + SSE 广播。
+        // best-effort：异常吞错不阻断（本事件纯属用户可见性/审计，不影响回复主链路）。
+        return this.handleSessionCompact(dto)
+          .catch((err: unknown) => {
+            this.logger.error(
+              `[ingress] session.compact 处理失败: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          })
+          .then(() => true);
     }
     return Promise.resolve(true);
   }
@@ -609,6 +619,150 @@ export class WorkerEventIngress {
         status: mapped,
       });
     }
+  }
+
+  /**
+   * session.compact：会话上下文压缩开始/完成的可视化与审计。
+   *
+   * worker 在压缩开始/完成/超时/失败时各上送一次（phase=start|done|timeout|failed）。
+   * 本处理器：
+   *   1) `done` 阶段把压缩时刻与前后 token 写回 Session（观测字段）；
+   *   2) 每个阶段落一条 `senderType=system` 消息到来源频道并 SSE 广播——
+   *      用户可见「正在整理长期会话上下文 / 已整理完成」，`start` 与终态各一条，
+   *      让"隔了几天回来这次为什么慢"有据可循。
+   *
+   * 全部 best-effort：频道不存在/校验失败只记 warn，不抛错（压缩事件纯属
+   * 可观测性，绝不阻断回复主链路）。
+   */
+  private async handleSessionCompact(dto: WorkerEventDto): Promise<void> {
+    const raw = dto.payload as {
+      sessionId?: unknown;
+      taskId?: unknown;
+      channelId?: unknown;
+      agentId?: unknown;
+      phase?: unknown;
+      tokensBefore?: unknown;
+      tokensAfter?: unknown;
+      elapsedMs?: unknown;
+      error?: unknown;
+    };
+    const phase =
+      raw.phase === 'start' ||
+      raw.phase === 'done' ||
+      raw.phase === 'timeout' ||
+      raw.phase === 'failed'
+        ? raw.phase
+        : null;
+    if (!phase) {
+      this.logger.warn(`[ingress] session.compact 非法 phase=${String(raw.phase)}，忽略`);
+      return;
+    }
+    const channelId = this.str(raw.channelId);
+    if (!channelId) {
+      this.logger.warn('[ingress] session.compact 缺 channelId，跳过可见提示');
+      return;
+    }
+    // 频道存在性校验（防伪造频道 id 写脏数据）
+    const channel = await this.prisma.chatChannel.findUnique({
+      where: { id: channelId },
+      select: { id: true },
+    });
+    if (!channel) {
+      this.logger.warn(
+        `[ingress] session.compact channel=${channelId} 不存在，跳过可见提示`,
+      );
+      return;
+    }
+
+    // ① 落库观测字段（仅 done 阶段，且能反查到平台 Session 主键时）
+    const platformSessionId = await this.resolvePlatformSessionId(
+      this.str(raw.sessionId),
+      dto.workerId,
+      this.str(raw.taskId),
+      this.str(raw.agentId),
+    );
+    if (platformSessionId && phase === 'done') {
+      const before = this.intOrNull(raw.tokensBefore);
+      const after = this.intOrNull(raw.tokensAfter);
+      try {
+        await this.prisma.session.update({
+          where: { id: platformSessionId },
+          data: {
+            compactedAt: new Date(),
+            compactTokenBefore: before,
+            compactTokenAfter: after,
+          },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[ingress] session.compact 观测落库失败 session=${platformSessionId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    // ② 用户可见：落一条 system 消息并广播
+    const text = this.compactNoticeText(phase, raw);
+    const id = await this.idGen.nextId('m');
+    await this.prisma.message.create({
+      data: {
+        id,
+        channelId,
+        taskId:
+          this.str(raw.taskId) && !this.str(raw.taskId)!.startsWith('team:')
+            ? this.str(raw.taskId)
+            : null,
+        senderType: SENDER_TYPE.system,
+        senderId: null,
+        content: { text, parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.sent,
+      } as any,
+    });
+    await this.realtime.broadcast(
+      EVENT_TYPES.CHAT_MESSAGE_NEW,
+      {
+        message: {
+          id,
+          channelId,
+          senderType: SENDER_TYPE.system,
+          senderId: null,
+          content: { text, parts: [] },
+          mentions: [],
+          status: MESSAGE_STATUS.sent,
+          createdAt: new Date().toISOString(),
+        },
+      },
+      { type: 'channel', id: channelId },
+    );
+    this.logger.log(
+      `[ingress] session.compact phase=${phase} session=${platformSessionId ?? this.str(raw.sessionId) ?? '-'} 已落系统消息 ${id}`,
+    );
+  }
+
+  /** 压缩各阶段的用户可见文案（简短，避免刷屏；system-marker 对长文自动折叠）。 */
+  private compactNoticeText(
+    phase: 'start' | 'done' | 'timeout' | 'failed',
+    raw: { tokensBefore?: unknown; tokensAfter?: unknown; error?: unknown },
+  ): string {
+    const before = this.intOrNull(raw.tokensBefore);
+    const after = this.intOrNull(raw.tokensAfter);
+    switch (phase) {
+      case 'start':
+        return `正在整理长期会话的上下文${before !== null ? `（约 ${before.toLocaleString()} token）` : ''}，本次回复可能稍慢。`;
+      case 'done':
+        return `上下文已整理${before !== null && after !== null ? `：约 ${before.toLocaleString()} → ${after.toLocaleString()} token` : ''}。`;
+      case 'timeout':
+        return `上下文整理超时，已按原上下文继续回复（不影响本次结果）。`;
+      case 'failed':
+        return `上下文整理未成功，已按原上下文继续回复${this.str(raw.error) ? `（${this.str(raw.error)}）` : ''}。`;
+    }
+  }
+
+  /** 安全转非负整数（脏值 → null）。 */
+  private intOrNull(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.trunc(value)
+      : null;
   }
 
   /** agent.status：status=error/带 error → emit agent.error；否则 emit agent.loading（phase 透传）。 */
