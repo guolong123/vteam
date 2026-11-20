@@ -1294,7 +1294,8 @@ function CodeFilePreview({
             {text === null ? (
               <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>正在编译原型…</span>
             ) : (
-              <DeviceFrame device={device} label={displayName || fileUrl}>
+              /* bare：全屏只显示原型本身，不要窗口装饰（圆点/地址栏/灵动岛/状态栏） */
+              <DeviceFrame device={device} label={displayName || fileUrl} bare>
                 <PrototypeSandbox
                   source={text}
                   name={displayName || title}
