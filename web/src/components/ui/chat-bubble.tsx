@@ -51,6 +51,14 @@ export interface ChatBubbleAttachment {
   name: string;
   size?: number;
   ext: string;
+  /**
+   * 产出物归属（2026-11-20）：**产出物挂附件时**才有值。
+   *
+   * 有这个字段 ⇒ 点击走完整文档站 `/docs/:taskId?doc=<slug>`，与右侧附件清单
+   * **完全同一个界面**；没有（用户上传的普通文件）⇒ 回退旧预览页 `/docs/file?url=`。
+   */
+  artifactId?: string;
+  taskId?: string;
 }
 
 export interface ChatBubbleProps {
@@ -61,6 +69,14 @@ export interface ChatBubbleProps {
   time?: string;
   /** 多附件（≤10）：按顺序在气泡内纵向渲染多张 AttachmentCard；缺省/空数组不渲染。 */
   attachments?: ChatBubbleAttachment[];
+  /**
+   * 产出物 slug 解析器（可选）：把「任务 + 产出物」映射成文档站 `?doc=` 的 slug。
+   *
+   * 为什么由调用方注入：slug 规则（`docIdFor`）需要**该任务全部产出物**做同名去重，
+   * 气泡组件不该为一个链接去拉全量列表。调用方（会话页）已有该查询，直接传下来。
+   * 返回 null/缺省 ⇒ 回退旧预览页（保持既有行为，不因缺数据而打不开）。
+   */
+  resolveArtifactDoc?: (artifactId: string, taskId: string) => string | null;
   isMentionMe?: boolean;
   /** 外部渠道消息：senderType==='external' 时展示“外部渠道”徽章 */
   senderType?: string;
@@ -107,6 +123,7 @@ export function ChatBubble({
   role,
   time,
   attachments,
+  resolveArtifactDoc,
   isMentionMe,
   senderType,
   showIdentity = true,
@@ -423,7 +440,13 @@ export function ChatBubble({
               >
                 {/* 多附件：纵向逐条渲染，单条仍走 AttachmentCard 原渲染链路（testid/折叠语义不变） */}
                 {attachmentList.map((item, i) => (
-                  <AttachmentCard key={`${item.url}-${i}`} attachment={item} isUser={isUser} embedded />
+                  <AttachmentCard
+                    key={`${item.url}-${i}`}
+                    attachment={item}
+                    isUser={isUser}
+                    embedded
+                    resolveArtifactDoc={resolveArtifactDoc}
+                  />
                 ))}
               </div>
             )}
@@ -462,10 +485,13 @@ export function AttachmentCard({
   attachment,
   isUser,
   embedded = false,
+  resolveArtifactDoc,
 }: {
   attachment: ChatBubbleAttachment;
   isUser: boolean;
   embedded?: boolean;
+  /** 产出物 → 文档站 slug（见 ChatBubbleProps.resolveArtifactDoc 注释）。 */
+  resolveArtifactDoc?: ChatBubbleProps["resolveArtifactDoc"];
 }) {
   const isImage = (IMAGE_EXTS as readonly string[]).includes(
     attachment.ext.toLowerCase(),
@@ -554,12 +580,28 @@ export function AttachmentCard({
     </button>
   );
 
-  // 非图片附件 → 文档站预览（docx/pdf/xlsx/文本等由 FilePreview 渲染），不再点击即下载。
-  const docsPreviewHref =
-    `/docs/file?url=${encodeURIComponent(attachment.url)}` +
-    `&name=${encodeURIComponent(attachment.name)}` +
-    `&ext=${encodeURIComponent(attachment.ext)}` +
-    (typeof attachment.size === "number" ? `&size=${attachment.size}` : "");
+  /**
+   * 附件点击目标（2026-11-20 统一）：
+   *
+   * - **产出物附件**（带 artifactId + taskId，且能算出 slug）→
+   *   `/docs/:taskId?doc=<slug>`：与右侧附件清单**完全同一个界面**（完整文档站，
+   *   带版本切换/导出/文档树，返回回会话页）；
+   * - 其它（用户上传的普通文件）→ 旧通用预览页 `/docs/file?url=`（无产出物归属，
+   *   只能按 URL 预览）。
+   *
+   * 此前所有附件都走后者：同一份文件，点消息进的是简陋预览页、点右侧清单进的是
+   * 完整文档站，两套界面且简陋页没有返回链路（用户实测反馈）。
+   */
+  const artifactDocSlug =
+    attachment.artifactId && attachment.taskId && resolveArtifactDoc
+      ? resolveArtifactDoc(attachment.artifactId, attachment.taskId)
+      : null;
+  const docsPreviewHref = artifactDocSlug && attachment.taskId
+    ? `/docs/${attachment.taskId}?doc=${encodeURIComponent(artifactDocSlug)}`
+    : `/docs/file?url=${encodeURIComponent(attachment.url)}` +
+      `&name=${encodeURIComponent(attachment.name)}` +
+      `&ext=${encodeURIComponent(attachment.ext)}` +
+      (typeof attachment.size === "number" ? `&size=${attachment.size}` : "");
   const fileLink = (
     <a
       data-testid="attachment-file"

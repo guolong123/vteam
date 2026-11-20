@@ -143,6 +143,8 @@ export interface MsgPartsProps {
   streaming?: boolean;
   /** 多附件（≤10）：透传给 ChatBubble / DshMessage，渲染为正文下方纵向多张附件卡。 */
   attachments?: ChatBubbleAttachment[];
+  /** 产出物 → 文档站 slug（透传给 ChatBubble，让消息附件与附件清单打开同一界面）。 */
+  resolveArtifactDoc?: (artifactId: string, taskId: string) => string | null;
   isMentionMe?: boolean;
   style?: CSSProperties;
   className?: string;
@@ -173,7 +175,7 @@ export interface MsgPartsProps {
   variant?: "bubble" | "line" | "dsh";
 }
 
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachments, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachments, resolveArtifactDoc, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
   /** 多附件存在性（缺省 undefined / 空数组一律视为无附件，不渲染附件区、不参与有内容判定）。 */
   const hasAttachments = (attachments?.length ?? 0) > 0;
   // DSH 变体整条委托：本组件不认识它，避免把两套 part 语义混在一处。
@@ -483,6 +485,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
         role={role}
         time={time}
         attachments={attachments}
+        resolveArtifactDoc={resolveArtifactDoc}
         isMentionMe={isMentionMe}
       />
     );
@@ -530,7 +533,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
               <MsgLineBox key="line-body-fallback" tone="body" text={lineBodyFallback} />
             ) : null}
             {hasAttachments ? (
-              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachments={attachments} isMentionMe={isMentionMe} />
+              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} isMentionMe={isMentionMe} />
             ) : null}
           </>
         ) : (

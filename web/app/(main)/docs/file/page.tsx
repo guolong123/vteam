@@ -9,12 +9,25 @@
  */
 import { Suspense } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FilePreview } from "@/src/features/docs-site/file-preview";
 import { fontSize, fontFamily, neutral, space, radius } from "@/src/theme/tokens";
 
 function FilePreviewContent() {
   const params = useSearchParams();
+  const router = useRouter();
+  /**
+   * 返回（2026-11-20 修订）：不再指向 `/docs`（无 teamId 时是"选择一个团队"的简陋
+   * 列表页——用户明确反馈"返回时返回到了一个简陋的文档站"）。
+   * 有应用内历史就 back（回到发起点，通常是会话页）；直接打开/刷新则回看板。
+   */
+  const handleBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push("/board");
+  };
   const url = params.get("url") ?? "";
   const name = params.get("name") ?? "文件预览";
   const ext = params.get("ext") ?? "";
@@ -43,12 +56,23 @@ function FilePreviewContent() {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-        <Link
-          href="/docs"
-          style={{ color: "#0D9488", fontSize: fontSize.sm, textDecoration: "none" }}
+        <button
+          type="button"
+          data-testid="docs-file-back"
+          onClick={handleBack}
+          style={{
+            border: "none",
+            background: "none",
+            padding: 0,
+            color: "#0D9488",
+            fontSize: fontSize.sm,
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+            textDecoration: "none",
+          }}
         >
-          ← 返回文档站
-        </Link>
+          ← 返回
+        </button>
         <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {name}
         </span>

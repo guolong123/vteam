@@ -505,6 +505,7 @@ function OfficeShell({
   fileUrl,
   displayName,
   children,
+  hideDownloadToolbar = false,
 }: {
   title: string;
   status: "loading" | "ready" | "error";
@@ -513,6 +514,8 @@ function OfficeShell({
   /** 下载文件名（原始名；老数据由 humanFileName 兜底成标题+扩展名）。 */
   displayName: string;
   children: React.ReactNode;
+  /** 隐藏「下载原文件」工具条（由文档站查看器头部统一渲染，省一整行高度）。 */
+  hideDownloadToolbar?: boolean;
 }) {
   return (
     <div
@@ -530,7 +533,9 @@ function OfficeShell({
         ...baseFont,
       }}
     >
-      {/* 工具条：预览取代了下载卡，必须保留「下载原文件」入口 */}
+      {/* 工具条：预览取代了下载卡，必须保留「下载原文件」入口。
+          hideDownloadToolbar=true ⇒ 由查看器头部统一渲染（省一整行高度）。 */}
+      {!hideDownloadToolbar && (
       <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
         <a
           data-testid="docs-office-download"
@@ -561,6 +566,7 @@ function OfficeShell({
           </span>
         )}
       </div>
+      )}
       {children}
     </div>
   );
@@ -578,12 +584,15 @@ function DocxFilePreview({
   ext,
   displayName,
   title,
+  hideDownloadToolbar = false,
 }: {
   version: FilePreviewVersion;
   fileUrl: string;
   ext: string;
   displayName: string;
   title: string;
+  /** 隐藏内部「下载原文件」工具条（文档站查看器头部统一渲染时用）。 */
+  hideDownloadToolbar?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -628,6 +637,7 @@ function DocxFilePreview({
       status={status}
       fileUrl={fileUrl}
       displayName={displayName}
+      hideDownloadToolbar={hideDownloadToolbar}
     >
       <div
         ref={hostRef}
@@ -666,12 +676,15 @@ function SheetFilePreview({
   ext,
   displayName,
   title,
+  hideDownloadToolbar = false,
 }: {
   version: FilePreviewVersion;
   fileUrl: string;
   ext: string;
   displayName: string;
   title: string;
+  /** 隐藏内部「下载原文件」工具条（文档站查看器头部统一渲染时用）。 */
+  hideDownloadToolbar?: boolean;
 }) {
   const [sheets, setSheets] = useState<SheetTable[] | null>(null);
   const [active, setActive] = useState(0);
@@ -728,6 +741,7 @@ function SheetFilePreview({
         status="loading"
         fileUrl={fileUrl}
         displayName={displayName}
+        hideDownloadToolbar={hideDownloadToolbar}
       >
         <span />
       </OfficeShell>
@@ -1166,10 +1180,21 @@ export function FilePreview({
   version,
   type,
   title,
+  hideDownloadToolbar = false,
 }: {
   version: FilePreviewVersion;
   type: FilePreviewType;
   title: string;
+  /**
+   * 隐藏内部「下载原文件」工具条（2026-11-20）。
+   *
+   * 该工具条在 office/docx 预览里**独占一整行**；文档站查看器头部已经有动作排
+   * （导出 PDF / 下载 MD / 下载原文件）。置 true 后由头部统一渲染，省掉一整行
+   * 高度给正文（用户实测：上方占位太多，正文被挤）。
+   *
+   * 默认 false：本组件被独立使用时仍自带下载入口。
+   */
+  hideDownloadToolbar?: boolean;
 }) {
   // text：contentRef 即正文 → DocsMarkdown（显式白名单 urlTransform）。
   if (type === "text") {
@@ -1221,6 +1246,7 @@ export function FilePreview({
         ext={ext}
         displayName={displayName}
         title={title}
+        hideDownloadToolbar={hideDownloadToolbar}
       />
     );
   }
@@ -1233,6 +1259,7 @@ export function FilePreview({
         ext={ext}
         displayName={displayName}
         title={title}
+        hideDownloadToolbar={hideDownloadToolbar}
       />
     );
   }

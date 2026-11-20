@@ -336,6 +336,47 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
               title={title}
             />
           )}
+          {/**
+           * 「下载原文件」并入头部这排动作（2026-11-20）。
+           *
+           * 它原本渲染在 FilePreview 内部那条工具栏里，**独占一整行**；而本头部
+           * 已经有「导出 PDF / 下载 MD」一排名额。并过来可省掉一整行高度给正文
+           * （用户实测反馈：上方占位太多，正文被挤）。
+           *
+           * 仅对文件类（doc/file）且 URL 可访问时显示——text 类没有"原文件"概念。
+           */}
+          {versionQuery.data && type !== "text" && (() => {
+            const originalUrl =
+              versionQuery.data.fileUrl ?? versionQuery.data.contentRef ?? "";
+            if (!originalUrl.startsWith("/uploads/")) return null;
+            return (
+              <a
+                data-testid="docs-header-download"
+                href={originalUrl}
+                download={versionQuery.data.fileName || true}
+                title="下载原文件"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: space.xs,
+                  padding: `2px ${space.md}px`,
+                  borderRadius: radius.sm,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: surface,
+                  color: "#0D9488",
+                  fontSize: fontSize.sm,
+                  fontWeight: 500,
+                  textDecoration: "none",
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>↓</span>
+                下载原文件
+              </a>
+            );
+          })()}
           {/* 版本切换：‹ vN … ›，当前/选中版高亮 */}
           <div
             aria-label="版本切换"
@@ -442,7 +483,13 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
               minHeight: 0,
             }}
           >
-            <FilePreview version={versionQuery.data} type={type} title={title} />
+            {/* hideDownloadToolbar：下载入口已并入查看器头部，省掉预览内部那整行 */}
+            <FilePreview
+              version={versionQuery.data}
+              type={type}
+              title={title}
+              hideDownloadToolbar
+            />
           </div>
         ) : null}
       </div>
@@ -896,12 +943,22 @@ export default function DocsUnifiedPage() {
    * 直接打开或刷新（无应用内历史）时回落到会话页（有 teamId）或看板——避免 history back
    * 把用户弹出应用。
    */
+  /**
+   * 返回（2026-11-20 修订）：**优先回会话页**，不再 history.back 回到简陋的团队选择列表。
+   *
+   * 旧实现用 `router.back()`：从会话页点开文件 → 返回没问题；但如果用户是从
+   * 附件清单/深链直接进来，back 会落到 `/docs`（没有 teamId 的那个"选择一个团队"
+   * 简陋列表页）——用户明确反馈"返回时返回到了一个简陋的文档站"。
+   *
+   * 现在：有 teamId 就回该团队的会话页（文件都是团队/任务的产物，会话页是自然归属）；
+   * 没有 teamId（团队选择器页）才回看板。
+   */
   const handleDocsBack = () => {
-    if (typeof window !== "undefined" && window.history.length > 1) {
-      router.back();
+    if (teamId) {
+      router.push(`/teams/${teamId}/session`);
       return;
     }
-    router.push(teamId ? `/teams/${teamId}/session` : "/board");
+    router.push("/board");
   };
 
   return (

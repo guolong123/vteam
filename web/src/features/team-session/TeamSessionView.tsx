@@ -126,7 +126,15 @@ function formatTime(iso: string): string {
 }
 
 /** 消息 DTO attachments 数组元素的宽松读取形状（服务端已校验，前端仍防御脏数据/历史广播）。 */
-type RawMessageAttachment = { url: string; name?: unknown; size?: unknown; ext?: unknown };
+type RawMessageAttachment = {
+  url: string;
+  name?: unknown;
+  size?: unknown;
+  ext?: unknown;
+  /** 产出物归属（2026-11-20）：产出物挂附件时才有，字符串 id。 */
+  artifactId?: unknown;
+  taskId?: unknown;
+};
 
 /**
  * 消息附件归一化（多附件契约）：
@@ -152,6 +160,13 @@ function resolveMessageAttachments(msg: RealtimeChatMessage): ChatBubbleAttachme
           ext: typeof item.ext === "string" ? item.ext : "",
         };
         if (typeof item.size === "number") attachment.size = item.size;
+        // 产出物归属（2026-11-20）：有值时点击进完整文档站（与右侧附件清单一致）
+        if (typeof item.artifactId === "string" && item.artifactId) {
+          attachment.artifactId = item.artifactId;
+          if (typeof item.taskId === "string" && item.taskId) {
+            attachment.taskId = item.taskId;
+          }
+        }
         return attachment;
       });
   }
@@ -494,6 +509,54 @@ export function TeamSessionView({
     // 但活跃聊天仍会每 30s 打一次 worker 会话窗口；SSE 是主路径，兜底不必这么密。
     refetchInterval: 60_000,
   });
+
+  /**
+   * 产出物 → 文档站 slug 解析器（2026-11-20）。
+   *
+   * 让**消息里的产出物附件**点击后进完整文档站（`/docs/:taskId?doc=<slug>`），
+   * 与右侧附件清单完全同一个界面 —— 此前消息附件走的是独立简陋预览页
+   * `/docs/file?url=`，同一份文件两套体验，且简陋页没有返回链路。
+   *
+   * slug 必须前端算：`docIdFor(title, id, all)` 带**同名去重**（依赖该任务全部产出物），
+   * 服务端两参数版本算不出同样的值。这里按 taskId 走 react-query 缓存
+   * （同一任务只拉一次；附件少的场景开销可忽略）。
+   */
+  const resolveArtifactDoc = useCallback(
+    (artifactId: string, taskId: string): string | null => {
+      const readItems = (id: string) =>
+        (queryClient.getQueryData<ArtifactsResponse>(["task", id, "artifacts"])
+          ?.items ?? []) as { id: string; title: string }[];
+
+      // 先读该附件所属任务的缓存；未命中再读当前面板任务（消息常属于当前任务）
+      let items = readItems(taskId);
+      if (items.length === 0 && effectivePanelTaskId) {
+        items = readItems(effectivePanelTaskId);
+      }
+      const target = items.find((a) => a.id === artifactId);
+      console.log('[DBG resolveArtifactDoc]', { artifactId, taskId, panelTask: effectivePanelTaskId, itemCount: items.length, found: !!target });
+      if (!target) {
+        /**
+         * 两个缓存都没有 → 预取（不阻塞渲染）。
+         *
+         * 回退旧预览页会带来一个很差的体验：首次点开看到简陋页，刷新后才"变好"。
+         * 所以这里**先预取**，同时返回 null 让链接暂用旧路径；由于列表查询
+         * refetchInterval=30s 且预取会立刻完成，实际几乎观察不到。
+         */
+        void queryClient
+          .fetchQuery({
+            queryKey: ["task", taskId, "artifacts"],
+            queryFn: () =>
+              api.get<ArtifactsResponse>(`/tasks/${taskId}/artifacts`, {
+                query: { pageSize: 50 },
+              }),
+          })
+          .catch(() => undefined);
+        return null;
+      }
+      return docIdFor(target.title, target.id, items);
+    },
+    [queryClient, effectivePanelTaskId],
+  );
 
   /* ---------- 当前任务派生查询（三 Tab 数据源） ---------- */
   const artifactsQuery = useQuery({
@@ -2183,6 +2246,7 @@ export function TeamSessionView({
                     time={formatTime(msg.createdAt)}
                     senderType="external"
                     attachments={attachments}
+                    resolveArtifactDoc={resolveArtifactDoc}
                     initials={initials}
                   />,
                 );
@@ -2213,7 +2277,7 @@ export function TeamSessionView({
                     return withSeparator(
                       <React.Fragment key={msg.id}>
                         {flushProc(msg.id)}
-                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} grouped={grouped} initials={initials} />
+                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} grouped={grouped} initials={initials} />
                       </React.Fragment>,
                     );
                   }
@@ -2221,7 +2285,7 @@ export function TeamSessionView({
                   return withSeparator(
                     <React.Fragment key={msg.id}>
                       {flushProc(`tail-${msg.id}`)}
-                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} grouped={grouped} initials={initials} />
+                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} grouped={grouped} initials={initials} />
                     </React.Fragment>,
                   );
                 }
@@ -2272,7 +2336,7 @@ export function TeamSessionView({
                  */
                 if (!cleaned && rawText) return null;
                 return withSeparator(
-                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} initials={initials} status={msg.status} />,
+                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} initials={initials} status={msg.status} />,
                 );
               }
               });
