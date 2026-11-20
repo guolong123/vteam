@@ -45,7 +45,6 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { SessionTurnsService } from '../workers/session-turns.service';
-import { PlatformConfigService } from '../platform-config/platform-config.service';
 import { isMemberSessionScope } from '../workers/session-scope';
 import { SESSION_TURN_STATUS } from '../workers/global-session.constants';
 import {
@@ -1950,11 +1949,6 @@ export class WorkerDispatcher
     // 缺省可空——旧装配/单测不提供时跳过轮次台账（席位会话行为不变）。
     @Optional()
     private readonly sessionTurns?: SessionTurnsService,
-    // 平台配置（会话压缩阈值等运行期可调参数）。缺省可空——单测/旧装配
-    // 未提供时不下发 compactIfStale（worker 行为与引入前逐字节一致）；
-    // 生产装配经 ChatModule（已 import PlatformConfigModule）提供。
-    @Optional()
-    private readonly platformConfig?: PlatformConfigService,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -3570,34 +3564,6 @@ export class WorkerDispatcher
       systemOpts.boundarySection = boundarySection;
     }
     try {
-      // 平台配置：会话长期不活跃 → 下一次发消息前主动压缩（决策见
-      // docs/agent-platform/context-compaction-idle.md）。读配置失败一律
-      // fail-open（不下发压缩策略），绝不阻断本轮派发。
-      let compactIfStale:
-        | {
-            idleDays: number;
-            minContextTokens: number;
-            awaitMs: number;
-            timeoutMs: number;
-          }
-        | undefined;
-      if (this.platformConfig && !injectFlight) {
-        try {
-          const cfg = await this.platformConfig.getSessionCompactConfig();
-          if (cfg.enabled) {
-            compactIfStale = {
-              idleDays: cfg.idleDays,
-              minContextTokens: cfg.minContextTokens,
-              awaitMs: cfg.awaitMs,
-              timeoutMs: cfg.timeoutMs,
-            };
-          }
-        } catch (err) {
-          this.logger.warn(
-            `[compact] 平台配置读取失败，本轮不压缩: ${this.describeError(err)}`,
-          );
-        }
-      }
       await this.workerClient.execute(worker, {
         prompt: [{ type: 'text', text: finalPrompt }],
         model,
@@ -3610,7 +3576,6 @@ export class WorkerDispatcher
         ...(injectFlight ? { inFlight: true } : {}),
         ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),
         ...(attachmentRef ? { attachments: attachmentRef.attachments } : {}),
-        ...(compactIfStale ? { compactIfStale } : {}),
         system: buildSystemInstructions(agentIdentity, systemOpts),
       });
     } catch (err) {
