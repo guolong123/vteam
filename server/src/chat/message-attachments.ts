@@ -28,6 +28,17 @@ export interface MessageAttachmentMeta {
   size?: number;
   /** 小写扩展名（无扩展名 → 空串，供前端判定图片内嵌/文件下载）。 */
   ext: string;
+  /**
+   * 产出物归属（2026-11-20）：**仅产出物挂附件时**有值，普通上传附件没有。
+   *
+   * 为什么需要：会话消息里的文件点开曾跳到独立的 `/docs/file?url=` 简陋预览页，
+   * 而右侧附件清单走的是完整文档站 `/docs/:taskId?doc=<slug>` —— 同一份文件两个
+   * 界面、两套体验，且简陋页没有返回链路。带上 artifactId + taskId 后，消息附件
+   * 也能直接进完整文档站（与附件清单完全一致）。
+   */
+  artifactId?: string;
+  /** 产出物所属任务（拼 `/docs/:taskId?doc=` 用；与 artifactId 同时存在才有意义）。 */
+  taskId?: string;
 }
 
 /** 参与归一化的消息行子集（Prisma Message row / 任何 DTO 都可传入）。 */
@@ -85,6 +96,14 @@ export function normalizeAttachmentList(
     ) {
       meta.size = Math.trunc(item.size);
     }
+    // 产出物归属：只在两个 id 都在时才带上（半截数据不给前端猜）
+    const artifactId =
+      typeof item.artifactId === 'string' ? item.artifactId.trim() : '';
+    const taskId = typeof item.taskId === 'string' ? item.taskId.trim() : '';
+    if (artifactId && taskId) {
+      meta.artifactId = artifactId;
+      meta.taskId = taskId;
+    }
     out.push(meta);
     seen.add(url);
     if (out.length >= MAX_MESSAGE_ATTACHMENTS) break;
@@ -128,6 +147,9 @@ export function toStoredAttachments(
       ext: item.ext,
     };
     if (item.size !== undefined) stored.size = item.size;
+    // 产出物归属一并落库（刷新/重新拉历史时仍能直接进文档站）
+    if (item.artifactId) stored.artifactId = item.artifactId;
+    if (item.taskId) stored.taskId = item.taskId;
     return stored;
   }) as Prisma.InputJsonValue;
 }

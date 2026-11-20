@@ -1829,7 +1829,8 @@ describe('PlatformMcpService', () => {
       idGen.nextId.mockResolvedValue('m_0000000100');
       prisma.message.create.mockResolvedValue(createdMessage);
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { contentRef: '/uploads/report.pdf' },
+        // 2026-11-20：带上 artifactId，让消息附件能直接跳完整文档站
+        { contentRef: '/uploads/report.pdf', artifactId: 'art_1' },
       ]);
 
       const result = await service.groupPost(ctx, {
@@ -1852,6 +1853,8 @@ describe('PlatformMcpService', () => {
         }),
       });
       expect(result.attachment).toEqual({
+        artifactId: 'art_1',
+        taskId: 't_0000000001',
         attachmentUrl: '/uploads/report.pdf',
         attachmentName: 'report.pdf',
         attachmentType: 'pdf',

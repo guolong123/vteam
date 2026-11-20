@@ -511,6 +511,15 @@ export interface GroupPostAttachment {
   attachmentUrl: string;
   attachmentName: string;
   attachmentType: string;
+  /**
+   * 产出物归属（2026-11-20）：让会话消息里的文件**直接进完整文档站**
+   * （`/docs/:taskId?doc=<slug>`，与右侧附件清单同一界面），而不是旧的
+   * 独立简陋预览页 `/docs/file?url=`。
+   *
+   * 归档命中版本 / 拉取归档成功时都有值；纯外部链接（无产出物）则没有 → 前端回退。
+   */
+  artifactId?: string;
+  taskId?: string;
 }
 
 /** read_file 返回结构：source 标识内容来源（归档命中 / worker 拉取）。 */
@@ -1664,7 +1673,36 @@ export class PlatformMcpService implements OnModuleInit {
         content: { text: args.content, parts: [] } as Prisma.InputJsonValue,
         mentions: (mentions ?? null) as Prisma.InputJsonValue | null,
         status: MESSAGE_STATUS.sent,
-        ...(attachment ?? {}),
+        // 旧三字段投影（首个附件；旧 MCP 消费者兼容）
+        ...(attachment
+          ? {
+              attachmentUrl: attachment.attachmentUrl,
+              attachmentName: attachment.attachmentName,
+              attachmentType: attachment.attachmentType,
+            }
+          : {}),
+        /**
+         * 新数组列是**唯一真相**（2026-11-20）：同时携带产出物归属
+         * `artifactId` + `taskId`，让会话消息里的文件能直接跳完整文档站
+         * （与右侧附件清单同一界面），而不是旧的独立预览页。
+         */
+        ...(attachment
+          ? {
+              attachments: [
+                {
+                  url: attachment.attachmentUrl,
+                  name: attachment.attachmentName,
+                  ext: attachment.attachmentType,
+                  ...(attachment.artifactId
+                    ? {
+                        artifactId: attachment.artifactId,
+                        taskId: attachment.taskId,
+                      }
+                    : {}),
+                },
+              ],
+            }
+          : {}),
       } as any,
     });
 
@@ -9917,7 +9955,7 @@ export class PlatformMcpService implements OnModuleInit {
     const versions = await this.prisma.artifactVersion.findMany({
       where: { artifact: { taskId }, filePath: { not: null } },
       orderBy: { createdAt: 'desc' },
-      select: { contentRef: true },
+      select: { contentRef: true, artifactId: true },
     });
     const hit = versions.find(
       (v) => FileStorageService.normalizeFileRef(v.contentRef) === target,
@@ -9929,6 +9967,9 @@ export class PlatformMcpService implements OnModuleInit {
         attachmentUrl: url,
         attachmentName: meta.name,
         attachmentType: meta.ext,
+        // 让前端能跳到完整文档站（与右侧附件清单一致）
+        artifactId: hit.artifactId,
+        taskId,
       };
     }
     return this.fetchAndArchiveAttachment(ctx, taskId, fileRef);
@@ -9965,12 +10006,17 @@ export class PlatformMcpService implements OnModuleInit {
       const name = fileRef.split(/[\\/]/).pop() || 'attachment';
       const stored = await FileStorageService.saveBufferFile(buffer, name);
       const sha256 = createHash('sha256').update(buffer).digest('hex');
+      // 归档成功才有 artifactId；失败仍挂附件（退化成旧行为，前端回退预览页）
+      let archivedArtifactId: string | undefined;
       await this.artifactsService
         .archiveFile(taskId, {
           fileRef,
           storedUrl: stored.url,
           storedName: stored.name,
           sha256,
+        })
+        .then((res) => {
+          archivedArtifactId = res.artifactId;
         })
         .catch((err) => {
           this.logger.warn(
@@ -9984,6 +10030,9 @@ export class PlatformMcpService implements OnModuleInit {
         attachmentUrl: stored.url,
         attachmentName: stored.name,
         attachmentType: stored.ext,
+        ...(archivedArtifactId
+          ? { artifactId: archivedArtifactId, taskId }
+          : {}),
       };
     } catch (err) {
       this.logger.warn(
