@@ -45,6 +45,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { SessionTurnsService } from '../workers/session-turns.service';
+import { PlatformConfigService } from '../platform-config/platform-config.service';
 import { isMemberSessionScope } from '../workers/session-scope';
 import { SESSION_TURN_STATUS } from '../workers/global-session.constants';
 import {
@@ -1156,12 +1157,25 @@ export const DEFAULT_SILENT_SESSION_WAKE_MS = 600_000;
  * 并重武装全新窗口；第 MAX 次唤醒后仍静默 → 走失败路径（pending 删除 + failedSessions
  * 标记 + 注销 + emitError + agent.error）。
  */
+import {
+  StaleSessionConverger,
+  type StaleSessionConvergerOptions,
+} from './stale-session-converger';
+
 export const MAX_SILENT_WAKE_ATTEMPTS = 3;
 
 /** 空闲判死：session 进入 running 后无任何输出活动（delta/agent.status/task.completed）超时 →
  *  判死（session 标 failed + agent.error）。缺省 0=关闭空闲判死扫描（线上误杀长脚本/等权限，
  *  无真实 hang 证据）；env AGENT_IDLE_TIMEOUT_MS 可 opt-in 打开。 */
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 0;
+
+/**
+ * 僵尸 running 收敛扫描周期（2026-11-20）：每 10 分钟扫一轮。
+ *
+ * 阈值是 30 分钟无活动才收敛 ⇒ 最坏情况一条僵尸会话在 40 分钟内被收回。
+ * 更短会频繁扫库；更长则用户盯着「会话运行中」干等。
+ */
+export const STALE_CONVERGE_INTERVAL_MS = 10 * 60 * 1000;
 
 /** 空闲判死扫描周期（定期执行 DB 侧扫描，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
@@ -1732,6 +1746,8 @@ export class WorkerDispatcher
 
   /** 空闲判死扫描定时器（惰性启动：首个 dispatch 注册 watchdog 时）。 */
   private idleScanTimer: ReturnType<typeof setInterval> | null = null;
+  /** 僵尸 running 收敛定时器（2026-11-20）：与上面的**判死**扫描相互独立。 */
+  private staleConvergeTimer: ReturnType<typeof setInterval> | null = null;
 
   /** F2 C1 幂等：已落库回流的会话（自持轮询与 ingress task.completed 双通道防重）。
    *  F3 MAJOR-1：新一轮 dispatch 会清除目标会话标记（跨轮回流允许），仍防同轮双写。 */
@@ -1934,6 +1950,11 @@ export class WorkerDispatcher
     // 缺省可空——旧装配/单测不提供时跳过轮次台账（席位会话行为不变）。
     @Optional()
     private readonly sessionTurns?: SessionTurnsService,
+    // 平台配置（会话压缩阈值等运行期可调参数）。缺省可空——单测/旧装配
+    // 未提供时不下发 compactIfStale（worker 行为与引入前逐字节一致）；
+    // 生产装配经 ChatModule（已 import PlatformConfigModule）提供。
+    @Optional()
+    private readonly platformConfig?: PlatformConfigService,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -1997,6 +2018,11 @@ export class WorkerDispatcher
     // todo-7 重启安全：空闲扫描常驻启动（AGENT_IDLE_TIMEOUT_MS>0 时），重启后即便
     // 没有进程内 dispatch 状态，DB 侧检出仍能判死 stuck running 会话。
     this.startIdleScan();
+    // 僵尸态温和收敛（2026-11-20）：**无条件启动**。
+    // 与上面的判死扫描刻意分开：判死会发「异常终止」公告并可能自动拉起，
+    // 对「其实已答完、只是 idle 回传丢了」的会话是错误结论（平白刷群 + 误导复核）。
+    // 本扫描只把长期无活动的 running 改回 idle，等价于补上那条丢失的回传。
+    this.startStaleConverge();
     // todo-9 重启安全：静默 deadline 经 TriggerService 注册同 kind handler，
     // 重启后到期行仍能收割静默会话（内存 pending 全空时走 DB 侧判定）。
     try {
@@ -2024,6 +2050,10 @@ export class WorkerDispatcher
     if (this.idleScanTimer) {
       clearInterval(this.idleScanTimer);
       this.idleScanTimer = null;
+    }
+    if (this.staleConvergeTimer) {
+      clearInterval(this.staleConvergeTimer);
+      this.staleConvergeTimer = null;
     }
   }
 
@@ -3540,6 +3570,34 @@ export class WorkerDispatcher
       systemOpts.boundarySection = boundarySection;
     }
     try {
+      // 平台配置：会话长期不活跃 → 下一次发消息前主动压缩（决策见
+      // docs/agent-platform/context-compaction-idle.md）。读配置失败一律
+      // fail-open（不下发压缩策略），绝不阻断本轮派发。
+      let compactIfStale:
+        | {
+            idleDays: number;
+            minContextTokens: number;
+            awaitMs: number;
+            timeoutMs: number;
+          }
+        | undefined;
+      if (this.platformConfig && !injectFlight) {
+        try {
+          const cfg = await this.platformConfig.getSessionCompactConfig();
+          if (cfg.enabled) {
+            compactIfStale = {
+              idleDays: cfg.idleDays,
+              minContextTokens: cfg.minContextTokens,
+              awaitMs: cfg.awaitMs,
+              timeoutMs: cfg.timeoutMs,
+            };
+          }
+        } catch (err) {
+          this.logger.warn(
+            `[compact] 平台配置读取失败，本轮不压缩: ${this.describeError(err)}`,
+          );
+        }
+      }
       await this.workerClient.execute(worker, {
         prompt: [{ type: 'text', text: finalPrompt }],
         model,
@@ -3552,6 +3610,7 @@ export class WorkerDispatcher
         ...(injectFlight ? { inFlight: true } : {}),
         ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),
         ...(attachmentRef ? { attachments: attachmentRef.attachments } : {}),
+        ...(compactIfStale ? { compactIfStale } : {}),
         system: buildSystemInstructions(agentIdentity, systemOpts),
       });
     } catch (err) {
@@ -5976,6 +6035,38 @@ export class WorkerDispatcher
       );
     }, IDLE_SCAN_INTERVAL_MS);
     this.idleScanTimer.unref?.();
+  }
+
+  /**
+   * 启动僵尸 running 收敛扫描（**无条件启用**，不看 `agentIdleTimeoutMs`）。
+   *
+   * 为什么必须独立且默认开：`scanIdleSessions` 被 `AGENT_IDLE_TIMEOUT_MS` 门控
+   * （缺省 0 = 整个扫描 return），而那条路径的语义是**判死**（failed + 公告 + 拉起）。
+   * 「已正常结束但 idle 回传丢失」的会话不该被判死，却也不能永久卡在 running——
+   * 线上 vteam.ketaops.cc 的 `s_0000000058` 就是这样卡了 29 小时的
+   * （最后一条 agent 消息 11-19 03:01，status 至今 running）。
+   *
+   * 收敛只需一次 UPDATE，开销远低于判死路径，可以放心常驻。
+   */
+  private startStaleConverge(): void {
+    if (this.staleConvergeTimer) {
+      return;
+    }
+    const converger = new StaleSessionConverger({
+      prisma: this.prisma as unknown as StaleSessionConvergerOptions['prisma'],
+      logger: {
+        log: (message: string) => this.logger.log(message),
+        warn: (message: string) => this.logger.warn(message),
+      },
+    });
+    this.staleConvergeTimer = setInterval(() => {
+      void converger
+        .converge()
+        .catch((err: unknown) =>
+          this.logger.error(`僵尸会话收敛失败: ${this.describeError(err)}`),
+        );
+    }, STALE_CONVERGE_INTERVAL_MS);
+    this.staleConvergeTimer.unref?.();
   }
 
   /**
