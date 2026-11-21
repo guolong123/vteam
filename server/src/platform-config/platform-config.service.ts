@@ -77,7 +77,10 @@ export class PlatformConfigService implements OnModuleInit {
   private readonly logger = new Logger(PlatformConfigService.name);
 
   /** DB 值缓存：key → { 行, 写入时刻 }（读路径走缓存，TTL 60s；写路径主动失效）。 */
-  private readonly cache = new Map<string, { row: PlatformConfigRow; at: number }>();
+  private readonly cache = new Map<
+    string,
+    { row: PlatformConfigRow; at: number }
+  >();
   private readonly cacheTtlMs = 60_000;
 
   constructor(
@@ -87,7 +90,11 @@ export class PlatformConfigService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     // 主键前缀续号：`pc_` 序列与库内对齐，重启不撞主键。
-    await resyncIdPrefix(this.prisma.platformConfig, CONFIG_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.platformConfig,
+      CONFIG_ID_PREFIX,
+      this.idGen,
+    );
     try {
       const created = await this.ensureDefaults();
       if (created > 0) {

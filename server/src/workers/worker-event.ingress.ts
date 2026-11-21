@@ -654,7 +654,9 @@ export class WorkerEventIngress {
         ? raw.phase
         : null;
     if (!phase) {
-      this.logger.warn(`[ingress] session.compact 非法 phase=${String(raw.phase)}，忽略`);
+      this.logger.warn(
+        `[ingress] session.compact 非法 phase=${String(raw.phase)}，忽略`,
+      );
       return;
     }
     const channelId = this.str(raw.channelId);

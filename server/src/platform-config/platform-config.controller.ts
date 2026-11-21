@@ -1,18 +1,14 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from '../users/admin.guard';
 import {
   AuthenticatedUser,
   CurrentUser,
 } from '../common/decorators/current-user.decorator';
-import { UpdatePlatformConfigDto, UpdatePlatformConfigsDto } from './dto/update-platform-config.dto';
+import {
+  UpdatePlatformConfigDto,
+  UpdatePlatformConfigsDto,
+} from './dto/update-platform-config.dto';
 import { PlatformConfigService } from './platform-config.service';
 
 /**

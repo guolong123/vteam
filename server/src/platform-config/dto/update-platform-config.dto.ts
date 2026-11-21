@@ -21,7 +21,10 @@ export class UpdatePlatformConfigDto {
 export class UpdatePlatformConfigsDto {
   @ApiProperty({
     description: '键值对（键须在白名单内，值按该键类型校验）',
-    example: { SESSION_COMPACT_IDLE_DAYS: '5', SESSION_COMPACT_AWAIT_MS: '60000' },
+    example: {
+      SESSION_COMPACT_IDLE_DAYS: '5',
+      SESSION_COMPACT_AWAIT_MS: '60000',
+    },
   })
   @IsOptional()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

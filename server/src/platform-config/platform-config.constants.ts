@@ -38,7 +38,8 @@ export const SESSION_COMPACT_CONFIG_SPECS: readonly PlatformConfigSpec[] = [
     key: 'SESSION_COMPACT_IDLE_DAYS',
     valueType: 'number',
     defaultValue: '3',
-    description: '会话超过该天数不活跃，下一次发消息前触发上下文压缩；填 0 关闭该特性',
+    description:
+      '会话超过该天数不活跃，下一次发消息前触发上下文压缩；填 0 关闭该特性',
   },
   {
     key: 'SESSION_COMPACT_MIN_CONTEXT_TOKENS',

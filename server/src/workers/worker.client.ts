@@ -548,9 +548,7 @@ export class WorkerClient {
           : {}),
         ...(opts.attachments ? { attachments: opts.attachments } : {}),
         ...(opts.inFlight ? { inFlight: true } : {}),
-        ...(opts.compactIfStale
-          ? { compactIfStale: opts.compactIfStale }
-          : {}),
+        ...(opts.compactIfStale ? { compactIfStale: opts.compactIfStale } : {}),
         prompt: opts.prompt,
       }),
     });
