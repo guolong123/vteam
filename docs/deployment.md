@@ -713,7 +713,7 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
 
 ### 8.1.2 Windows worker 安装（原生，预览）
 
-> **状态**：M0（运行时 Windows 兼容：CLI 解析 / 进程树清理 / 平台缺省路径 / 隔离域 / 自更新禁用）已落地并在
+> **状态**：M0（运行时 Windows 兼容：CLI 解析 / 进程树清理 / 平台缺省路径 / 隔离域 / 自更新闸门）已落地并在
 > macOS 上完成 `tsc` + 全量 jest；**一键安装器（`install-worker.ps1`）与服务化脚本为预览版，尚未在 Windows 真机验证**。
 > 首版范围：**Windows 10 1809+ / 11 x64、仅 opencode 引擎、自更新默认关闭**。dsh 引擎在 Windows 上**启动即报错**
 > （dsh 的 Linux 沙箱链不可用，不做静默回退）。真机验收清单见 `docs/windows-worker-feasibility.md` §8.3。
@@ -817,8 +817,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <安装目录>\app\scripts\w
 
 ```powershell
 # 升级 = 重跑安装命令（幂等：保留 .env 里的 token/密码，停服务 → 替换 app → 重启 → 自检）
-# 注意：Windows 首版**自更新默认关闭**（无服务重启桥，update-worker 指令只落 ready-manual），
-#       `WORKER_WINDOWS_SELF_UPDATE=1` 仅在自备重启桥时使用。
+#
+# 关于「控制面点更新按钮」这条路（2026-11-21 起）：
+#   Windows 侧已有**真正的重启桥**：worker 探测托管方（sc.exe query → schtasks /Query）→
+#   派一个脱离的 cmd 助手（app\update-restart.cmd，经 cmd /c start 另起一摊）→ 本进程退出 →
+#   助手等 PID 消失后 sc start / schtasks /Run 把新码拉起。
+#   之所以要"跳出去"：WinSW 配了 stopparentprocessfirst=true、计划任务 Stop 也会杀整棵
+#   进程树 ⇒ 进程内自重启不可行。
+#
+#   ⚠️ 但**缺省仍是关闭的**（需 `WORKER_WINDOWS_SELF_UPDATE=1` 才执行替换）。原因：Windows
+#   没有 Linux 那套**自动回滚**（Linux 靠"新进程启动后自检失败再回滚"，Windows 助手只负责
+#   start；新码一启动就崩时 SCM 只会按 WinSW 的 onfailure 反复重试，不会回滚到 dist.prev）。
+#   没有回滚预案时，**升级仍推荐重跑安装器**（它会自检）。
+#
+#   要启用自更新：设 WORKER_WINDOWS_SELF_UPDATE=1；若服务名不是缺省的 vteam-worker，
+#   另设 WORKER_WINDOWS_SERVICE_NAME=<你的服务/任务名>。
 
 # 卸载（缺省保留 work\、data\ 与 .env；加 -PurgeData 全删）
 powershell -NoProfile -ExecutionPolicy Bypass -File <安装目录>\app\scripts\windows\uninstall-worker.ps1 -InstallDir <安装目录>
@@ -842,7 +855,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <安装目录>\app\scripts\w
 | 配置加载 | `EnvironmentFile` / `source .env` | 服务模式 `node --env-file`；手工/前台 `start-worker.ps1` 自解析 |
 | 权限收紧 | `chmod 600` | `icacls /inheritance:r` |
 | 进程清理 | `kill(-pid)` 进程组 | `taskkill /PID <pid> /T /F` |
-| 自更新 | 可用（systemd 重启） | **默认关闭**（升级=重跑安装器） |
+| 自更新 | 可用（systemd 重启 + 自动回滚） | **有重启桥、默认关闭**（见 §8.1.2「升级」：`WORKER_WINDOWS_SELF_UPDATE=1` 启用；无自动回滚 ⇒ 升级仍推荐重跑安装器） |
 | dsh 引擎 | 支持（Linux 沙箱链） | **不支持**（启动即报错） |
 
 ### 8.2 灰度步骤与闸门

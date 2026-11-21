@@ -27,7 +27,7 @@ description: WORKER_ENGINE=dsh 试用栈专项用例——引擎选择/注册投
 | 私聊频道 | 群聊 `c_0000000009`；PM `c_0000000010`；开发者 `c_0000000011`；测试 `c_0000000012` |
 | Worker 节点 | `w_trial_dsh`（engine=dsh，status=online，maxInstances=10） |
 | 模型路由 | `opencode-go/deepseek-v4.1-flash`（唯一 enabled 模型；DSH_BASE_URL=https://opencode.ai/inference/go/v1） |
-| DSH 版本 | `0.2.2-alpha.2`（镜像内 `dsh --version` 实测；node v24.22.2） |
+| DSH 版本 | `0.2.2-rc.5`（镜像内 `dsh --version` 实测；node v24.22.2）<br>升级自 alpha.2：vendor 锚点全部未漂移，MCP 握手/ persona / provider 路由均实测兼容 |
 | 部署形态 | `docker compose -f /tmp/trial-compose.yml`（db/init/server/web/worker 五容器）+ `docker-compose.dsh-inspect.yml`（观察面板旁挂） |
 | 认证方式 | 用户端点 JWT Bearer；worker 注册/心跳/事件用 `X-Worker-Token: compose-worker-token` |
 
@@ -73,7 +73,7 @@ curl -s http://localhost:13000/api/v1/workers -H "Authorization: Bearer $T"
 docker exec vteam-trial-worker-dsh dsh --version
 docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer\|session/create\|assistant-stream" \
   $(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-server/lib/index.js'
-# 期望输出：0.2.2-alpha.2；vendored 计数 ≥ 5（cancel/steer/create/stream-frame 均存在）
+# 期望输出：0.2.2-rc.5；vendored 计数 ≥ 5（cancel/steer/create/stream-frame 均存在）
 ```
 
 **执行安全提示**
@@ -97,7 +97,7 @@ docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer
 | TC-DSH-002 | worker 注册上报 engine=dsh 与能力位 | 正向 | P0 | 试用栈在跑；admin token | 1. `GET /api/v1/workers`<br>2. 定位 `w_trial_dsh` | 1. `capabilities.engine="dsh"`、`status="online"`、`maxInstances=10`<br>2. `capabilities.engineCapabilities` 全为 false：`steer/todos/omoConfig/planFiles/integrations/externalAgents/mcpStatusProbe/perMessageModelSwitch`（实测已确认）<br>3. `capabilities.skills` 非空（≥1，实测 8 个）<br>4. `capabilities.tools` 含 git 工具族（git_clone/pull/fetch/status/diff/log/push） |
 | TC-DSH-003 | dsh 模式上报不带端口的 baseUrl | 正向 | P1 | admin token；TC-DSH-002 通过 | 1. `GET /api/v1/workers`，取 `w_trial_dsh` 的 `capabilities.baseUrl` | 1. baseUrl 形如 `http://<host>`（**无** `:端口` 后缀，dsh 无 serve 端口；server 以此拼执行端点 `<base>:4198`）<br>2. 用该 baseUrl 派发消息能到达 worker（反向佐证：若带错误端口，派发 fetch failed） |
 | TC-DSH-004 | 心跳携带引擎健康（dsh 无 serve 进程） | 正向 | P1 | worker 在线 | 1. 观察连续 2 个心跳周期（≤20s）<br>2. `GET /api/v1/workers` | 1. `status` 持续 `online`，不出现 `degraded`（dsh 模式健康=运行时子进程存活，**不看** serveServer.isRunning，见 worker/src/index.ts:1797）<br>2. `lastHeartbeatAt` 每次刷新 |
-| TC-DSH-005 | vendored SDK 补丁在镜像内生效 | 正向 | P0 | 容器运行中 | 1. `docker exec vteam-trial-worker-dsh dsh --version`<br>2. 在容器内 grep SDK server `lib/index.js` 的 `session/cancel`、`session/steer`、`session/create`、`assistant-stream` | 1. `0.2.2-alpha.2`<br>2. 四个标记**全部存在**（构建期 vendor-sdk-server.mjs 幂等施加；缺失=镜像构建未跑 vendor，运行期将丢失中断/流式/preset 绑定） |
+| TC-DSH-005 | vendored SDK 补丁在镜像内生效 | 正向 | P0 | 容器运行中 | 1. `docker exec vteam-trial-worker-dsh dsh --version`<br>2. 在容器内 grep SDK server `lib/index.js` 的 `session/cancel`、`session/steer`、`session/create`、`assistant-stream` | 1. `0.2.2-rc.5`<br>2. 四个标记**全部存在**（构建期 vendor-sdk-server.mjs 幂等施加；缺失=镜像构建未跑 vendor，运行期将丢失中断/流式/preset 绑定） |
 | TC-DSH-006 | 容器内运行时基线（node 版本/沙箱降级） | 正向 | P2 | 容器运行中 | 1. `docker exec vteam-trial-worker-dsh node --version`<br>2. `docker exec vteam-trial-worker-dsh bwrap --version`；执行一轮对话后观察日志 `sandbox/mode` | 1. node ≥ 24.9（实测 v24.22.2；DSH 硬性要求）<br>2. bwrap 在容器内受限时自动降级为 `workspace-write`，**命令仍可执行**（P0 约束 C4），worker 不因沙箱降级而失败 |
 
 ### 2.2 反向用例
@@ -203,6 +203,7 @@ docker exec vteam-trial-worker-dsh sh -c 'grep -c "session/cancel\|session/steer
 | TC-DSH-033 | 记忆 autoInject 注入系统提示 | 正向 | P2 | 团队存在启用记忆（当前 tm_0000000002 为空，需先建一条） | 1. `POST /api/v1/memories` 建一条 autoInject=true 记忆<br>2. 发消息，观察 worker 收到的 system 长度 | 1. 记忆创建成功<br>2. 该轮 system（persona）包含记忆内容（buildSystemInstructions 拼接）；无记忆时行为与现状一致 |
 | TC-DSH-034 | 凭据不落盘（patch 只写变量名） | 正向 | P0 | worker 容器内 | 1. `docker exec vteam-trial-worker-dsh cat /data/vteam-worker/.vteam/dsh-profile.patch.yml`（或对应任务目录）<br>2. grep API key 值 | 1. patch 中 provider 行为 `apiKeyEnv: VTEAM_PROVIDER_*_KEY`（变量名引用）<br>2. **文件中不出现明文 key**（key 只在 spawn env；P0 约束 C3 安全要求） |
 | TC-DSH-035 | 平台 MCP 鉴权头注入 | 正向 | P1 | worker 运行中 | 1. 检查 patch 的 `mcp-vteam` 条目<br>2. 发一轮触发平台工具的消息 | 1. patch 含 streamable-http url 与鉴权 headers（commit 40dec6b 修复项）<br>2. 工具调用成功（server 收到带鉴权的 MCP 请求） |
+| TC-DSH-067 | session-controller 已挂载，换模型走**运行期**而非重启 | 正向 | P0 | worker 运行中；成员已配模型 A，改配模型 B | 1. `docker exec vteam-trial-worker-dsh cat <workDir>/.vteam/dsh-profile.patch.yml`，确认含 `- id: session-controller` + `@deepseek-ai/dsh-api-session-controller`<br>2. 把成员模型改成 B，对同一会话再发一条消息<br>3. 看 worker 日志 | 1. patch 含 session-controller 条目（缺失时 `session/selectModel` 恒返回 `sessionController service unavailable`）<br>2. 日志出现 `模型路由已切换（N/N 个会话生效，**运行时未重启**）`<br>3. **不该**出现 `selectModel 全部失败 … 回退重启运行时`；也不该出现 `重启运行时`（那条是降级路径，约 1s + 必须等无在途回合）<br>说明：alpha.2 与 rc.5 的 sdk profile **都没挂**这个包（实测），是本仓库 patch 必须自带的一行 |
 | TC-DSH-036 | dsh 能力位降级在控制面可见 | 正向 | P2 | admin token | 1. Web 打开 worker 详情/成员会话页 | 1. 前端对 `engineCapabilities` 全 false 的 worker 隐藏/降级对应功能入口（todos 面板空、无 per-message 模型切换、无 planFiles），**不报错**（server 据能力位跳过不支持端点而非猜引擎） |
 
 ### 6.2 反向用例
