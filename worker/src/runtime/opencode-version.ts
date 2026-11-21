@@ -33,10 +33,15 @@ export interface OpencodeVersionInfo {
 export const MIN_OPENCODE_MAJOR = 2;
 
 /**
- * 锁版规格（与 `worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC` 默认值保持一致）。
+ * 锁版规格（**必须**与 `worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC` 默认值一致）。
  * v1 的 npm 包 `opencode-ai` 冻结在 1.19.3，永远到不了 v2；v2 换包名为 `@opencode/cli`。
+ *
+ * ⚠️ 这个常量出现在**启动期版本闸门**的错误文案里（告诉运维该装哪一版），
+ * 而真正装进镜像的是 Dockerfile 的 ARG。两者不一致 ⇒ 报错指向的版本装不到、
+ * 或者装到的版本与报错文案不符（运维按提示操作仍然失败）。
+ * 防漂移：`opencode-version.spec.ts` 有一条测试**直接读 Dockerfile** 比对本常量。
  */
-export const REQUIRED_OPENCODE_CLI_SPEC = '@opencode/cli@2.0.32';
+export const REQUIRED_OPENCODE_CLI_SPEC = '@opencode/cli@2.3.2';
 
 /**
  * 版本不达标时的**可操作指引**（两种部署形态都给）。

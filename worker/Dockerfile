@@ -1,6 +1,6 @@
 # worker 镜像（Phase 5 T3，D4 Oracle 实测方案；2026-08 agent-browser 集成版）。
 # 双阶段：build（TS 编译）→ runner（全局安装 opencode CLI + agent-browser + 运行 dist）。
-# opencode CLI = npm 包 @opencode/cli（**锁版本** @opencode/cli@2.0.32，见下方 OPENCODE_CLI_SPEC）。
+# opencode CLI = npm 包 @opencode/cli（**锁版本** @opencode/cli@2.3.2，见下方 OPENCODE_CLI_SPEC）。
 # agent-browser = Vercel / vercel-labs/agent-browser（Rust + Chrome CDP，给 opencode Agent 补浏览器能力）。
 #
 # 基座说明：原 node:22-alpine (musl) 跑不了 Chrome(glibc)，切到 debian bookworm-slim；
@@ -31,9 +31,24 @@ RUN npm config set registry https://registry.npmmirror.com
 # 永远到不了 v2；v2 换了包名 → `@opencode/cli`。不锁版本会让"镜像里跑的是哪一版"不可知，
 # 而控制面调度器按 opencode 版本串精确过滤 worker（版本闸门必须先于 v2 worker 上线）。
 # 复现/升级某次构建时覆盖：
-#   --build-arg OPENCODE_CLI_SPEC=@opencode/cli@2.0.32
+#   --build-arg OPENCODE_CLI_SPEC=@opencode/cli@2.3.2
 # 构建日志会打印实际装到的版本（下方 echo），便于事后追溯"这个镜像用的是哪版"。
-ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32
+#
+# 2.0.32 → 2.3.2（2026-11-18 发布）实测结论（升级依据，勿凭版本号升级）：
+# - **无端点移除**：对比仓库基线 docs/agent-platform/opencode-v2-contract-baseline/openapi.json
+#   （2.0.28 快照，142 ops）与线上最新 spec（173 ops）⇒ 移除 0 个、新增 31 个（多为
+#   `experimental/*`），worker 用到的 9 个端点（/api/{agent,info,integration,location/reload,
+#   mcp,model,provider,session,skill}）全部保留；
+# - **无响应形态变化**：上述端点的 200 JSON schema 与基线逐字相同（含 `{location,data}`
+#   包装形态）——这是最隐蔽的破坏点，已逐端点比对；
+# - **系统库依赖未变**：2.3.2 与 2.0.32 的 linux-arm64 二进制动态依赖同为
+#   libc/libm/libpthread/libdl/librt/libgcc_s/libstdc++ ⇒ 镜像现有 apt 包已够，无需新增；
+# - 二进制体积 207MB → 248MB（镜像会变大，属预期）。
+#
+# 锁版语义不变：worker 上报**规范化 semver**（`2.3.2`），控制面按精确串过滤 worker，
+# 故 worker/src/runtime/opencode-version.ts 的 REQUIRED_OPENCODE_CLI_SPEC 必须与这里同步
+# （有单测钉死两者一致性，见 opencode-version.spec.ts）。
+ARG OPENCODE_CLI_SPEC=@opencode/cli@2.3.2
 # **必须钉版本**：`agent-browser` / `bun` 若不带版本，上游每次发版都会让这一层及**其后所有层**
 # 失效（v1.1.1→v1.2.0 实测：基础镜像 tag 浮动 + 未钉版本 ⇒ 6 个构建 job 的缓存命中数为 0，
 # 镜像层全变 ⇒ 集群每次发布都要整包重拉）。`agent-browser` 的版本同时决定它下载的

@@ -27,6 +27,13 @@
  *                 restart vteam-worker`。**无 systemd → 不重启、不 process.exit**，
  *                 落 `ready-manual` + 明确日志「已下载待手动重启」（决策⑤）。
  *
+ *   f') Windows  **服务/计划任务重启桥**（2026-11-21 新增，见 attemptWindowsRestart）：
+ *                 `sc.exe query` / `schtasks.exe /Query` 探到托管方后，派一个**脱离的**
+ *                 cmd 助手（`update-restart.cmd`，经 `cmd /c start` 另起一摊），由它在
+ *                 本进程退出后 `sc start` / `schtasks /Run`。之所以要"跳出去"：WinSW 配了
+ *                 `stopparentprocessfirst=true`、计划任务 Stop 也会杀整棵进程树 ⇒
+ *                 进程内自重启不可行。仍受 `WORKER_WINDOWS_SELF_UPDATE=1` 闸门控制（缺省关）。
+ *
  * 自动回滚（计划决策②）：进程内 `registeredSinceUpdate`——执行完 e) 置 false，下一次
  * register 成功置 true。达到阈值且 `dist.prev` 存在 → `dist → dist.failed`（留证）、
  * `dist.prev → dist` → 重启 → 落 `rolledback` + `rolledBack=true`。**只做一次**，之后
@@ -66,13 +73,27 @@ export const WORKER_SOURCE_TARBALL = 'worker-src.tar.gz';
 export const WORKER_SOURCE_VERSION_FILE = 'worker-src.version.json';
 
 /**
- * Windows 自更新逃生开关（默认关闭）。
+ * Windows 自更新开关（**缺省关闭**，显式开启才执行替换+重启）。
  *
- * Windows 原生支持首版没有服务重启桥：替换 dist 后进程仍在跑旧码，无法自动重启。
- * 默认走 `ready-manual`（提示人工重启），只有明确配置了服务管理器/重启脚本的部署
- * 才应设置 `WORKER_WINDOWS_SELF_UPDATE=1` 放开文件替换流程。
+ * 2026-11-21 起 Windows 已有真正的重启桥（`attemptWindowsRestart`：探托管方 →
+ * 派脱离助手 → 本进程退出 → 助手拉起新码），所以设 `=1` 后自更新是**能闭环**的，
+ * 不再是"只换文件不重启"的半成品。
+ *
+ * 之所以仍然缺省关闭：Windows 缺一条 Linux 有的保险——**自动回滚**依赖"新进程启动后
+ * 自检失败再回滚"，而助手只负责 `sc start`；若新码一启动就崩，SCM 会按 WinSW 的
+ * `<onfailure action="restart">` 反复重试，不会回滚到 `dist.prev`。
+ * 故缺省仍把升级交给安装器（`install-worker.ps1 -Force`，它会自检并保留 .env），
+ * 由运维确认托管方式与回滚预案后再显式开启。
  */
 export const WINDOWS_SELF_UPDATE_ENV = 'WORKER_WINDOWS_SELF_UPDATE';
+
+/**
+ * Windows 托管目标名（服务名 / 计划任务名，安装器缺省都是 `vteam-worker`）。
+ * 允许覆盖：安装器支持 `-ServiceName` 自定义，硬编码单名会误判"没有托管方"。
+ */
+export const WINDOWS_SERVICE_NAME_ENV = 'WORKER_WINDOWS_SERVICE_NAME';
+/** 缺省 Windows 服务/任务名（与 install-worker.ps1 的 `$Script:ServiceName` 一致）。 */
+export const DEFAULT_WINDOWS_SERVICE_NAME = 'vteam-worker';
 
 /** tarball 内要求存在的成员（缺任一即视为坏包，**在备份 dist 之前**就中止）。 */
 const REQUIRED_PACKAGE_ENTRIES = [
@@ -400,6 +421,26 @@ export class WorkerUpdater {
   }
 
   /** 心跳/register 上报用的当前状态（undefined = 从未进入更新流程，不携带该键）。 */
+  /**
+   * 本进程**能否自己完成一次升级**（不依赖人工）。
+   *
+   * 三种情况返回 false：
+   * - **Windows 且未开 `WORKER_WINDOWS_SELF_UPDATE`**：缺省关闭（见该常量注释）；
+   * - **Linux 且没有 systemd**：替换后没人拉起新码（`detectSystemd` 运行期才知道，
+   *   故这里只判"平台层面看起来可以"，真正的兜底在 `attemptRestart` 里落 ready-manual）；
+   * - 平台不支持（其它）。
+   *
+   * 用途：随注册上报 `engineCapabilities.selfUpdate`，控制面据此决定
+   * **显示"更新"按钮（一键下发）还是"升级命令"（复制粘贴人工执行）**。
+   */
+  get canSelfUpdate(): boolean {
+    if (process.platform === 'win32') {
+      return this.isWindowsSelfUpdateAllowed();
+    }
+    // POSIX：systemd 在运行期探测；这里给"可以尝试"的乐观值（失败会落 ready-manual）
+    return true;
+  }
+
   get state(): WorkerUpdateState | undefined {
     return this.currentState;
   }
@@ -518,17 +559,21 @@ export class WorkerUpdater {
   }
 
   private async runUpdate(version: string | undefined): Promise<UpdateRunOutcome> {
-    // Windows 原生支持首版：默认**不执行**自更新。
-    // 原因：Windows 没有 systemd，`detectSystemd()` 恒为 null；替换 dist 后当前进程仍跑旧码，
-    // 既不会自动重启、也没有服务重启桥；若在替换途中失败，进程还活着 → 注册正常 →
-    // 自动回滚永远不触发（下次重启才炸）。因此首版把「升级」交给安装器（重跑/换 dist 后
-    // 重启服务），自更新指令只回一个诚实的 ready-manual + 告警。
+    // ── Windows 闸门（**默认关闭**，显式开启才执行自更新）───────────────
+    //
+    // 现状：Windows 侧已有「脱离助手」重启桥（见 attemptWindowsRestart），故
+    // `WORKER_WINDOWS_SELF_UPDATE=1` 时自更新**能真正闭环**（替换 dist → 进程退出 →
+    // 助手拉起新码）。但仍缺一条 Linux 有的保险：**自动回滚看护**依赖"重启后由新进程
+    // 自检并回滚"，而 Windows 上助手只负责 `sc start`，若新码启动即崩，SCM 会按
+    // WinSW 的 `<onfailure action="restart">` 反复重试而不回滚。
+    // 因此缺省仍保持关闭（升级交给安装器），由运维显式判断后开启。
     if (process.platform === 'win32' && !this.isWindowsSelfUpdateAllowed()) {
       this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
       this.logger.warn(
-        '[worker-update] Windows 首版不支持自更新（没有服务重启桥）：本次 update-worker 指令不会执行。' +
-          '升级请重跑 Windows 安装器 / 替换 dist 后重启 worker；' +
-          `若已自行配置服务管理器与重启脚本，可设置 ${WINDOWS_SELF_UPDATE_ENV}=1 显式放开（风险自负）。`,
+        '[worker-update] Windows 自更新未启用（缺省关闭）：本次 update-worker 指令不会执行。' +
+          '升级请重跑 Windows 安装器 -Force（停旧 → 换 app → 重启 → 自检），' +
+          `或设置 ${WINDOWS_SELF_UPDATE_ENV}=1 启用自更新（需先确认：worker 以服务/计划任务托管，` +
+          `且服务名可用 ${WINDOWS_SERVICE_NAME_ENV} 指定）。`,
       );
       return 'applied-ready-manual';
     }
@@ -675,16 +720,19 @@ export class WorkerUpdater {
    * 新码躺磁盘、进程跑旧码，实时修复数周不生效）。
    */
   private async attemptRestart(): Promise<UpdateRunOutcome> {
+    // ══ Windows：走「脱离助手」重启桥（服务 / 计划任务两种托管）══════════════
+    //
+    // 顺序很重要：先判活跃会话（绝不打断在跑的会话），再派助手。
+    if (process.platform === 'win32') {
+      return await this.attemptWindowsRestart();
+    }
+
     const systemd = await this.detectSystemd();
     if (systemd === null) {
       this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
-      const restartHint =
-        process.platform === 'win32'
-          ? `重启 worker 服务（或重跑 Windows 安装器）：installDir=${this.installDir}`
-          : `cd ${this.installDir} && ./scripts/start.sh`;
       this.logger.warn(
         `[worker-update] 未检测到可用的 systemd（候选 unit ${this.systemdUnitCandidates().join(' / ')} 均不存在）——已下载待手动重启：` +
-          restartHint,
+          `cd ${this.installDir} && ./scripts/start.sh`,
       );
       return 'applied-ready-manual';
     }
@@ -1067,6 +1115,176 @@ export class WorkerUpdater {
       `cd ${this.installDir} && rm -rf dist.failed && mv dist dist.failed && ` +
       `mv dist.prev dist && systemctl --user restart ${this.systemdUnitCandidates()[0]}`
     );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // Windows 重启桥（本次新增）
+  //
+  // ── 为什么必须"跳出去再回来" ────────────────────────────────────────
+  // Windows 侧由 WinSW 服务或计划任务托管，两者都**连整棵进程树一起停**：
+  // - WinSW 配置里 `stopparentprocessfirst=true`（见 install-worker.ps1），
+  //   `sc stop` 会先杀父进程再杀子进程；
+  // - 计划任务 `Stop-ScheduledTask` 同样终止整个任务实例。
+  // 而自更新的进程**杀不掉自己再复活自己**（进程内执行 `sc stop` 等于自杀在执行途中，
+  // 后半截清理/日志全丢）。所以必须：**先派一个脱离的助手进程**（它在托管方进程树之外），
+  // 由助手等本进程退出后再 `sc start` / `Start-ScheduledTask` 把服务拉起来。
+  //
+  // ── 安全性 ──────────────────────────────────────────────────────────
+  // 助手是**纯文本脚本**（写在 installDir 下），只做「等 PID 消失 → 启动服务」。
+  // 它不联网、不读凭据、不改代码；失败只写一行日志。且只在
+  // `WORKER_WINDOWS_SELF_UPDATE=1` 时才会被派出去（缺省关闭）。
+  // ══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Windows 重启段：探测托管方 → 会话门禁 → 派发脱离助手 → 主动退出。
+   *
+   * 关键顺序（每条都有事故背景）：
+   * 1. **先探托管方**：没有服务/任务可重启 ⇒ 派了助手也只是空转，直接 ready-manual；
+   * 2. **再判活跃会话**：有会话就落 ready-manual + `pendingRestart`，等会话归零后重试
+   *    （与 Linux 分支同一语义：绝不打断在跑的对话）；
+   * 3. **派助手**：助手在托管方进程树之外，等本进程退出后把服务拉起来；
+   * 4. **主动退出**：这一步是必须的 —— 若不退出，助手会一直等 PID 消失（最长 5 分钟），
+   *    期间 worker 仍以旧码在跑、还继续注册/接单，状态是"已更新但没生效"的假象。
+   *    主动 `process.exit` 让 SCM/计划任务看到进程结束，助手随即拉起新码。
+   *
+   * @returns 派发成功返回 `applied-ready-manual`（语义：文件已就位，重启由助手接力）；
+   *   任何一步不满足都返回该状态**并**打明确日志（不含糊其辞）。
+   */
+  private async attemptWindowsRestart(): Promise<UpdateRunOutcome> {
+    const host = await this.detectWindowsHost();
+    if (host === null) {
+      this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      this.logger.warn(
+        `[worker-update] 未检测到 Windows 托管方（服务/计划任务名 ${this.windowsServiceName()} 均不存在）` +
+          '——已下载待手动重启：重启 worker 服务，或重跑 Windows 安装器 -Force',
+      );
+      return 'applied-ready-manual';
+    }
+
+    const sessionsBeforeRestart = this.activeSessionCount();
+    if (sessionsBeforeRestart > 0) {
+      this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      this.pendingRestart = true;
+      this.logger.warn(
+        `[worker-update] 覆盖完成但此刻有 ${sessionsBeforeRestart} 个活跃会话，跳过重启——` +
+          `已下载，会话归零后自动重试（托管方 ${host.kind}:${host.name}）`,
+      );
+      return 'applied-ready-manual';
+    }
+
+    // 非交互/无权限场景（服务以 SYSTEM 运行则通常有权限；受限账户可能没有）
+    const helper = await this.launchWindowsRestartHelper(host);
+    if (helper === undefined) {
+      this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      this.pendingRestart = true;
+      return 'applied-ready-manual';
+    }
+
+    this.logger.info(
+      `[worker-update] Windows 重启桥已就位（托管方 ${host.kind}:${host.name}，助手 ${helper}）——` +
+        '本进程即将退出，由助手在退出后拉起新码',
+    );
+    // 给日志刷新与事件循环一个 tick，然后主动退出（见方法注释第 4 条）。
+    setTimeout(() => {
+      process.exit(0);
+    }, 500).unref?.();
+    return 'applied-ready-manual';
+  }
+
+  /** Windows 托管目标名（服务名/任务名，env 可覆盖）。 */
+  private windowsServiceName(): string {
+    const override = (this.env[WINDOWS_SERVICE_NAME_ENV] ?? '').trim();
+    return override !== '' ? override : DEFAULT_WINDOWS_SERVICE_NAME;
+  }
+
+  /**
+   * 探测 Windows 托管方式（服务优先、其次计划任务）。
+   *
+   * 为什么两个都要探：`install-worker.ps1` 的 `-ServiceManager auto` 在**下载不到 WinSW**
+   * 时会回退计划任务（内网常见）。只认服务会让那批部署永远停在 ready-manual。
+   *
+   * 探测用 `sc.exe query` / `schtasks.exe /Query`：两者是系统自带，不依赖 PowerShell
+   * 执行策略（`-ExecutionPolicy Bypass` 只在安装器里生效，服务进程未必有）。
+   *
+   * @returns `{kind:'service'|'task', name}` 或 `null`（没有托管方 ⇒ 走 ready-manual）
+   */
+  private async detectWindowsHost(): Promise<{ kind: 'service' | 'task'; name: string } | null> {
+    const name = this.windowsServiceName();
+
+    const svc = await this.run('sc.exe', ['query', name], { timeoutMs: 15_000 });
+    // sc.exe 对不存在的服务返回 1060（"指定的服务未安装"），退出码非 0
+    if (svc.code === 0) {
+      return { kind: 'service', name };
+    }
+
+    const task = await this.run('schtasks.exe', ['/Query', '/TN', name], { timeoutMs: 15_000 });
+    if (task.code === 0) {
+      return { kind: 'task', name };
+    }
+
+    return null;
+  }
+
+  /**
+   * 派发**脱离的**重启助手：等本进程退出 → 重启托管目标。
+   *
+   * 为什么用 `cmd.exe /c start` 而不是直接用 spawn 的 detached：
+   * Node 在 win32 上 `detached: true` 只保证新进程不随父进程的 Job 结束而结束，
+   * 但若本进程正在被 SCM 停止（`stopparentprocessfirst`），子进程仍会被同一棵树的
+   * 清理杀掉。经 `start`（新控制台 + 立即返回）才是真正的"另起一摊"。
+   *
+   * @returns 助手脚本路径（供日志）；派发失败返回 undefined
+   */
+  private async launchWindowsRestartHelper(
+    host: { kind: 'service' | 'task'; name: string },
+  ): Promise<string | undefined> {
+    const helperPath = path.join(this.installDir, 'update-restart.cmd');
+    const logPath = path.join(this.installDir, 'logs', 'update-restart.log');
+    const pid = process.pid;
+
+    // 助手内容：等 PID 退出（最长 5 分钟）→ 启动服务/任务 → 记一行日志。
+    // ⚠️ 全部用字面量、不做变量拼接注入（服务名来自 env，已由上面的探测验证存在）。
+    const lines = [
+      '@echo off',
+      'setlocal',
+      `set "TARGET_LOG=${logPath}"`,
+      'if not exist "%TARGET_LOG%" if not exist "%TARGET_LOG%\\.." mkdir "%TARGET_LOG%\\.." 2>nul',
+      ':: 等旧进程退出（它正在被 SCM/计划任务停止）',
+      `for /L %%i in (1,1,60) do (`,
+      `  tasklist /FI "PID eq ${pid}" 2>nul | find "${pid}" >nul`,
+      '  if errorlevel 1 goto restart',
+      '  ping -n 3 127.0.0.1 >nul',
+      ')',
+      ':restart',
+      'ping -n 3 127.0.0.1 >nul',
+      host.kind === 'service'
+        ? `sc.exe start "${host.name}" >> "%TARGET_LOG%" 2>&1`
+        : `schtasks.exe /Run /TN "${host.name}" >> "%TARGET_LOG%" 2>&1`,
+      'endlocal',
+      'exit /b 0',
+    ];
+    const content = lines.join('\r\n') + '\r\n';
+
+    try {
+      await this.fsImpl.writeFile(helperPath, Buffer.from(content, 'utf8'));
+    } catch (err) {
+      this.logger.warn(
+        `[worker-update] 写 Windows 重启助手失败（${helperPath}）：${(err as Error).message}——回退 ready-manual`,
+      );
+      return undefined;
+    }
+
+    const launched = await this.run('cmd.exe', ['/c', 'start', '""', '/min', helperPath], {
+      timeoutMs: 15_000,
+    });
+    if (launched.code !== 0) {
+      this.logger.warn(
+        `[worker-update] 派发 Windows 重启助手失败（退出码 ${launched.code}）：` +
+          `${(launched.stderr || launched.stdout).trim()}——回退 ready-manual`,
+      );
+      return undefined;
+    }
+    return helperPath;
   }
 
   /** Windows 自更新逃生开关（默认关闭，见 WINDOWS_SELF_UPDATE_ENV）。 */
