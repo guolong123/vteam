@@ -42,6 +42,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { apiUrl, WORKER_TOKEN_HEADER } from '../client/registry-client';
+import { resolveMcpHeaders } from './mcp-headers';
+import {
+  McpServerRecord,
+  resolveVteamMcpTimeoutMs,
+  VTEAM_MCP_SERVER_NAME,
+} from './mcp-servers-record';
 import { readOmoAgents, writeOmoAgents } from './omo-config';
 import { OMO_BUNDLED_MARKER, readOmoEnabled } from './omo-enabled';
 import {
@@ -183,18 +189,13 @@ export interface ToolRecord {
    */
   source?: string;
 }
-export interface McpServerRecord {
-  id: string;
-  name: string;
-  type: string;
-  command: { command?: string[]; cwd?: string; environment?: unknown; timeout?: number } | null;
-  url: string | null;
-  headers: Record<string, string> | null;
-  oauth: unknown;
-  enabled?: boolean;
-  /** remote 顶层可选超时（11 §5.1 remote 字段含 timeout?；服务端当前模型未提供，兼容预留）。 */
-  timeout?: number;
-}
+/**
+ * 平台 MCP 服务器记录（控制面 `GET /mcp-servers` 的行形状）。
+ *
+ * 定义在 `./mcp-servers-record`（共享模块），这里重导出以保持既有 import 路径可用：
+ * dsh 注入器也要用它，但不能为了一个类型去 import 整个 opencode 注入器链。
+ */
+export type { McpServerRecord };
 
 /** manifest 键：记录上次注入的文件/目录名，用于停用资源清理。 */
 interface InjectManifest {
@@ -355,34 +356,17 @@ const OMO_BUNDLED_V2_CAPABILITY_FIELD = 'v2';
  */
 const LEGACY_GUARD_ENTRY_RE = /vteam-role-guard/;
 
-/** 平台 MCP 远端条目名（与 server `PLATFORM_MCP_SERVER_NAME` 对齐）。 */
-const VTEAM_MCP_SERVER_NAME = 'vteam';
-
 /**
- * vteam 远端条目 MCP 客户端超时下限 ms：`secret_command` 阻塞调用最坏总预算
- * 855s（540s 敏感值输入 + 300s 命令 + 15s 裕量），不设下限会被 OpenCode 默认
- * 超时在预算内掐断 → 注入点硬编码本下限，不依赖客户端默认值、不要求 DB 迁移。
+ * vteam 远端条目超时口径（**与 dsh 注入器共用**，见 `./mcp-servers-record`）。
+ *
+ * 为什么搬走：dsh 的 `dsh-mcp-client` 也有 `toolCallTimeoutMs`（缺省 60s），
+ * 平台 `secret_command` 的 855s 预算在 dsh 上同样会被掐断 ⇒ 两引擎必须同口径。
  */
-export const VTEAM_MCP_TIMEOUT_FLOOR_MS = 900_000;
-
-/**
- * vteam 远端条目最终 timeout：`VTEAM_MCP_TIMEOUT_MS` 可覆盖，但一律 clamp 到
- * `VTEAM_MCP_TIMEOUT_FLOOR_MS`（缺省/空串/非十进制整数/非正数 → 直接取下限）。
- */
-export function resolveVteamMcpTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
-  const raw = env.VTEAM_MCP_TIMEOUT_MS;
-  if (typeof raw !== 'string' || !/^\d+$/.test(raw.trim())) {
-    return VTEAM_MCP_TIMEOUT_FLOOR_MS;
-  }
-  const parsed = Number.parseInt(raw.trim(), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return VTEAM_MCP_TIMEOUT_FLOOR_MS;
-  }
-  return Math.max(parsed, VTEAM_MCP_TIMEOUT_FLOOR_MS);
-}
-
+export {
+  resolveVteamMcpTimeoutMs,
+  VTEAM_MCP_SERVER_NAME,
+  VTEAM_MCP_TIMEOUT_FLOOR_MS,
+} from './mcp-servers-record';
 
 /** 技能落盘根（与引擎的发现路径一致；双写避免切引擎丢技能）。 */
 export const SKILL_ROOTS = ['.opencode/skills', '.dsh/skills'] as const;
@@ -1414,25 +1398,17 @@ export class ResourceInjector {
    * 直接替换，不依赖 serve 子进程环境是否导出、以及 opencode 版本对 {env:} 模板的
    * 支持差异——外部 worker 场景 serve 环境缺变量时模板替换为空导致 401 needs_auth）。
    * 未知变量保留原样（由 opencode 侧兜底替换）。
+   *
+   * 实现已抽到 `./mcp-headers`：dsh 引擎经 patch 挂 MCP 时用**同一份**解析，
+   * 否则两引擎对同一条平台 MCP 会给出不同 header（dsh 会把字面量 `{env:...}` 发出去）。
    */
   private resolveHeaders(
     headers: Record<string, unknown> | undefined,
   ): Record<string, unknown> | undefined {
-    if (!headers) {
-      return headers;
-    }
-    const knownEnv: Record<string, string> = {
-      WORKER_ID: this.workerId,
-      X_WORKER_TOKEN: this.workerToken,
-    };
-    const resolved: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(headers)) {
-      resolved[key] =
-        typeof value === 'string'
-          ? value.replace(/\{env:([A-Z0-9_]+)\}/g, (match, name: string) => knownEnv[name] ?? match)
-          : value;
-    }
-    return resolved;
+    return resolveMcpHeaders(headers, {
+      workerId: this.workerId,
+      workerToken: this.workerToken,
+    });
   }
 
   // ------------------------------------------------------------------

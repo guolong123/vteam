@@ -13,11 +13,20 @@
  * @module engine/dsh/injector
  */
 
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { WORKER_TOKEN_HEADER } from '../../client/registry-client';
+import { resolveMcpHeaders, stringifyMcpHeaders } from '../../resources/mcp-headers';
+import {
+  McpServerRecord,
+  resolveVteamMcpTimeoutMs,
+  VTEAM_MCP_SERVER_NAME,
+} from '../../resources/mcp-servers-record';
 import type {
   EngineConfigSnapshot,
+  EngineMcpServerSpec,
   EngineModelCredential,
   CredentialApplier,
   ResourceInjector,
@@ -27,6 +36,9 @@ import { buildDshPatch, type DshMcpMount, type DshProviderRoute } from './patch-
 
 /** patch 文件名（落在 workDir 的 `.vteam/` 下，避免污染引擎私有目录）。 */
 export const DSH_PATCH_FILENAME = 'dsh-profile.patch.yml';
+
+/** `/mcp-servers` 分页大小（与 opencode 注入器同口径）。 */
+const DSH_MCP_REGISTRY_PAGE_SIZE = 100;
 
 /** 凭据环境变量名前缀（providerID 大写化后拼接，避免与宿主 env 撞名）。 */
 export const DSH_CREDENTIAL_ENV_PREFIX = 'VTEAM_PROVIDER_';
@@ -75,6 +87,24 @@ export interface DshInjectorOptions {
    * 已用 `DSH_SYSTEM_PROMPT` 环境变量做范例（cordis.patch.yml:113-118）。
    */
   persona?: { prefix: string; suffix?: string };
+  /**
+   * 平台 MCP 列表拉取参数（`GET /mcp-servers?enabled=true`）。
+   *
+   * ⚠️ **缺它就是「注册的 MCP 不会下发」**：此前 dsh 只挂内置 `platformMcpUrl` 一条，
+   * 平台「MCP 服务器」页里注册的其余条目在 dsh worker 上**永远不会出现在 patch 里**
+   * ⇒ worker 内的 agent 看不到这些工具，且没有任何报错（patch 只是少了几行）。
+   * 传了本参数才会拉取并把每一条落成 `dsh-mcp-client` 挂载。
+   */
+  mcpRegistry?: {
+    /** server 基址（config.serverUrl）。 */
+    serverUrl: string;
+    /** X-Worker-Token（拉取鉴权）。 */
+    workerToken: string;
+    /** worker 全局 id（`x-worker-id`：server 按它覆盖内置 vteam 地址）。 */
+    workerId: string;
+    /** fetch 注入点（测试用）。 */
+    fetchImpl?: typeof fetch;
+  };
   logger?: { info(m: string): void; warn(m: string): void; error(m: string): void };
 }
 
@@ -99,6 +129,21 @@ export class DshResourceInjector implements ResourceInjector {
    * roster 是**静态出厂角色**（7 个），渲染一次比每轮重新构造简单且稳定。
    */
   private presetRosterPatch: string | null = null;
+
+  /**
+   * 最近一次成功写盘的 patch **内容签名**（sha256 前 16 位）。
+   *
+   * 为什么需要：DSH 的运行时在 spawn 时读 `--patch`，**不会**跟着文件变化重载。
+   * 所以「配置变了」必须能被**判定**，才能在空闲运行时上重建（见调用方的
+   * `refreshPatch` 语义）。仅比较 mtime 不可靠（并发写、时钟回拨），
+   * 且调用方常常重算出**完全相同**的内容（幂等轮次）——那种情况不该重启运行时。
+   */
+  private lastSignature: string | null = null;
+
+  /** 最近一次成功写盘的签名（null = 还没写过）。 */
+  get currentSignature(): string | null {
+    return this.lastSignature;
+  }
 
   /** 设置 preset roster patch（null = 不注入 roster，退回单 persona）。 */
   setPresetRosterPatch(patch: string | null): void {
@@ -137,7 +182,7 @@ export class DshResourceInjector implements ResourceInjector {
   private async applyNow(snapshot: EngineConfigSnapshot, workDir: string): Promise<string> {
     const patchPath = path.join(workDir, '.vteam', DSH_PATCH_FILENAME);
     const providers = snapshot.modelCredentials.map((cred) => this.toProviderRoute(cred));
-    const mcpMounts = this.buildMounts(snapshot);
+    const mcpMounts = await this.buildMounts(snapshot);
 
     let content = buildDshPatch({
       providers,
@@ -155,9 +200,11 @@ export class DshResourceInjector implements ResourceInjector {
     const tmp = `${patchPath}.tmp-${process.pid}`;
     await fs.promises.writeFile(tmp, content, 'utf8');
     await fs.promises.rename(tmp, patchPath);
+    this.lastSignature = createHash('sha256').update(content).digest('hex').slice(0, 16);
 
     this.logger.info(
-      `[engine/dsh] patch 已写入 ${patchPath}（providers=${providers.length}, mcp=${mcpMounts.length}）`,
+      `[engine/dsh] patch 已写入 ${patchPath}（providers=${providers.length}, mcp=${mcpMounts.length}` +
+        `${mcpMounts.length > 0 ? `: ${mcpMounts.map((m) => m.serverName).join(', ')}` : ''}）`,
     );
     return patchPath;
   }
@@ -231,25 +278,54 @@ export class DshResourceInjector implements ResourceInjector {
   }
 
   /** 构造 MCP 挂载清单（平台 MCP + 工具 MCP）。 */
-  private buildMounts(_snapshot: EngineConfigSnapshot): DshMcpMount[] {
-    const mounts: DshMcpMount[] = [];
+  /**
+   * 构造 MCP 挂载清单。
+   *
+   * 三个来源（按优先级合并，同名后者覆盖前者 ⇒ 平台注册表**优先**）：
+   * 1. 内置平台 MCP（`platformMcpUrl`，vteam 核心工具面）；
+   * 2. 平台「MCP 服务器」注册表（`GET /mcp-servers?enabled=true`）；
+   * 3. worker 内置工具 MCP（`toolMcpCommand`，P4b，可降级）。
+   *
+   * ⚠️ **第 2 条此前完全缺失**：dsh 只挂内置 `vteam`，平台页面上注册的其余 MCP
+   * 在 dsh worker 上永远不出现——worker 内的 agent 看不到工具，且没有任何报错。
+   * 这就是「dsh worker 类型下注册的 MCP 不会自动下发」的根因。
+   *
+   * 拉取失败**不清空**已挂载条目：宁可让 agent 跑在**上次已知**的工具面上
+   * （patch 是整体重写，故「上次」= 调用方仍在传的 options/内置条目），
+   * 也不要在一次控制面抖动里把 agent 的工具全拔掉。
+   */
+  private async buildMounts(snapshot: EngineConfigSnapshot): Promise<DshMcpMount[]> {
+    /** serverName → mount（后者覆盖前者；保留首次出现的顺序）。 */
+    const byName = new Map<string, DshMcpMount>();
+    const put = (mount: DshMcpMount): void => {
+      byName.set(mount.serverName, mount);
+    };
 
+    // ① 内置平台 MCP
     if (this.options.platformMcpUrl !== undefined && this.options.platformMcpUrl !== '') {
-      mounts.push({
+      put({
         serverName: 'vteam',
         transport: 'streamable-http',
         url: this.options.platformMcpUrl,
         ...(this.options.platformMcpHeaders === undefined
           ? {}
           : { headers: this.options.platformMcpHeaders }),
+        toolCallTimeoutMs: resolveVteamMcpTimeoutMs(),
         // 平台 MCP 是 vteam 核心工具面（submit_artifact/group_post/…）：启动失败必须暴露，
         // 否则 agent 会"看起来能跑但所有协作工具都消失"，排查成本极高。
         failOnStartupError: true,
       });
     }
 
+    // ② 平台注册表（本次修复的核心）
+    const registryMounts = await this.fetchRegistryMounts();
+    for (const mount of registryMounts) {
+      put(mount);
+    }
+
+    // ③ worker 内置工具 MCP
     if (this.options.toolMcpCommand !== undefined) {
-      mounts.push({
+      put({
         serverName: 'vteam-tools',
         transport: 'stdio',
         command: this.options.toolMcpCommand.command,
@@ -262,7 +338,183 @@ export class DshResourceInjector implements ResourceInjector {
       });
     }
 
+    // 快照里已经排好序的 MCP 声明（若调用方直接给了，也要落进去）：
+    // 引擎无关快照是本模块的**契约输入**，只认 options 会让 `apply(snapshot)` 的
+    // 语义变成"snapshot 只用来取凭据"——那正是 dsh 注入器此前的实际行为。
+    for (const spec of snapshot.mcpServers ?? []) {
+      put(this.fromSnapshotSpec(spec));
+    }
+
+    return [...byName.values()];
+  }
+
+  /** 引擎无关快照里的 MCP 声明 → patch 挂载。 */
+  private fromSnapshotSpec(spec: EngineMcpServerSpec): DshMcpMount {
+    const isHttp = spec.transport === 'streamable-http';
+    return {
+      serverName: spec.name,
+      transport: isHttp ? 'streamable-http' : 'stdio',
+      ...(spec.command === undefined ? {} : { command: spec.command }),
+      ...(spec.args === undefined ? {} : { args: spec.args }),
+      ...(spec.env === undefined ? {} : { env: spec.env }),
+      ...(spec.url === undefined ? {} : { url: spec.url }),
+      ...(spec.headers === undefined ? {} : { headers: spec.headers }),
+      // 与注册表路径同规则：**只有内置 vteam 硬失败**。其余条目若设 true，
+      // dsh 的 loader 会因一条不可达的 MCP 拒绝启动整个运行时（见 recordToMount）。
+      failOnStartupError: spec.name === VTEAM_MCP_SERVER_NAME,
+    };
+  }
+
+  /**
+   * 拉取平台「MCP 服务器」注册表并映射成挂载。
+   *
+   * 与 opencode 注入器**同口径**：`GET /api/v1/mcp-servers?enabled=true&page&pageSize`
+   * （分页循环到 total），带 `X-Worker-Token` + `x-worker-id`（server 据此把内置
+   * `vteam` 的 url 覆盖成该 worker 可达的地址）。
+   *
+   * 失败策略：**抛错给调用方**（`applyNow` 失败 → 调用方保留旧 patch），
+   * 不静默产出"少几个 MCP"的 patch —— 静默少几条正是本次问题的形态。
+   */
+  private async fetchRegistryMounts(): Promise<DshMcpMount[]> {
+    const registry = this.options.mcpRegistry;
+    if (registry === undefined) {
+      return [];
+    }
+    const base = registry.serverUrl.replace(/\/+$/, '');
+    if (base === '') {
+      return [];
+    }
+    const fetchImpl = registry.fetchImpl ?? globalThis.fetch;
+    const records: McpServerRecord[] = [];
+    for (let page = 1; ; page += 1) {
+      const url =
+        `${base}/api/v1/mcp-servers?enabled=true&page=${page}` +
+        `&pageSize=${DSH_MCP_REGISTRY_PAGE_SIZE}`;
+      const response = await fetchImpl(url, {
+        headers: {
+          [WORKER_TOKEN_HEADER]: registry.workerToken,
+          'x-worker-id': registry.workerId,
+        },
+      });
+      if (!response.ok) {
+        throw new Error(
+          `[engine/dsh] /mcp-servers 拉取失败: HTTP ${response.status} ${response.statusText}`,
+        );
+      }
+      const payload = (await response.json()) as { items?: unknown[]; total?: unknown };
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      for (const item of items) {
+        if (item === null || typeof item !== 'object') continue;
+        records.push(item as McpServerRecord);
+      }
+      const total = typeof payload.total === 'number' ? payload.total : records.length;
+      if (items.length === 0 || page * DSH_MCP_REGISTRY_PAGE_SIZE >= total) {
+        break;
+      }
+    }
+
+    const mounts: DshMcpMount[] = [];
+    for (const record of records) {
+      const mount = this.recordToMount(record);
+      if (mount === undefined) {
+        this.logger.warn(
+          `[engine/dsh] MCP 服务器 ${record.name} 配置不完整（type=${record.type}），跳过`,
+        );
+        continue;
+      }
+      mounts.push(mount);
+    }
     return mounts;
+  }
+
+  /**
+   * 平台 MCP 记录 → patch 挂载（字段映射与 opencode 注入器一致，见 `buildMcpEntry`）。
+   *
+   * 关键差异（dsh-mcp-client 的 Config 形态）：
+   * - local：platform 的 `command.command` 是**数组**（首元为可执行文件），
+   *   而 dsh 是 `command` + `args[]` 两个字段 ⇒ 必须拆开；
+   * - remote：`headers` 要解析 `{env:...}` 模板（否则把字面量模板发出去 ⇒ 401）；
+   * - 两型都带 `toolCallTimeoutMs`：平台长任务工具（secret_command 855s）会被
+   *   dsh 缺省的 60s 掐断。
+   */
+  private recordToMount(record: McpServerRecord): DshMcpMount | undefined {
+    const isVteam = record.name === VTEAM_MCP_SERVER_NAME;
+    // 平台超时口径：vteam 用固定下限（clamp），其余用记录自带的值
+    const timeoutMs = isVteam
+      ? resolveVteamMcpTimeoutMs()
+      : typeof record.timeout === 'number' && record.timeout > 0
+        ? record.timeout
+        : typeof record.command?.timeout === 'number' && record.command.timeout > 0
+          ? record.command.timeout
+          : undefined;
+
+    if (record.type === 'local') {
+      const parts = Array.isArray(record.command?.command) ? record.command?.command : [];
+      const bin = parts[0];
+      if (typeof bin !== 'string' || bin.trim() === '') {
+        return undefined;
+      }
+      const env = this.stringRecord(record.command?.environment);
+      return {
+        serverName: record.name,
+        transport: 'stdio',
+        command: bin,
+        args: parts.slice(1).map((a) => String(a)),
+        ...(env === undefined ? {} : { env }),
+        ...(typeof record.command?.cwd === 'string' && record.command.cwd !== ''
+          ? { cwd: record.command.cwd }
+          : {}),
+        ...(timeoutMs === undefined ? {} : { toolCallTimeoutMs: timeoutMs }),
+        // 只有**内置 vteam**（平台核心工具面）才让启动失败硬失败；第三方 MCP 一律软失败。
+        // 见下方 remote 分支的说明（failOnStartupError 是"整棵树"级别的开关）。
+        failOnStartupError: isVteam,
+      };
+    }
+
+    if (record.type === 'remote') {
+      const url = (record.url ?? '').trim();
+      if (url === '') {
+        return undefined;
+      }
+      const headers = stringifyMcpHeaders(
+        resolveMcpHeaders(record.headers ?? undefined, {
+          workerId: this.options.mcpRegistry?.workerId ?? '',
+          workerToken: this.options.mcpRegistry?.workerToken ?? '',
+        }),
+      );
+      return {
+        serverName: record.name,
+        transport: 'streamable-http',
+        url,
+        ...(Object.keys(headers).length === 0 ? {} : { headers }),
+        ...(timeoutMs === undefined ? {} : { toolCallTimeoutMs: timeoutMs }),
+        // ⚠️ **只有内置 vteam 才硬失败**（实测 2026-11-20）：
+        // `failOnStartupError: true` 会让 dsh 的 loader **整个运行时拒绝启动**
+        // （`plugin tree failed to load: ... initial connection or tool synchronization failed`）。
+        // 平台上任意一条第三方 MCP 不可达（DNS 失败/服务下线/内网地址）就会把
+        // **整台 worker 拖死** ⇒ agent 连对话都跑不起来，比"少几个工具"严重得多。
+        // vteam 是平台核心工具面（submit_artifact/group_post/…），它不通则 agent 只会
+        // "假装在工作"，故保留硬失败；其余条目一律软失败（工具缺了但运行时活着，
+        // 日志里有连接错误可查）。
+        failOnStartupError: isVteam,
+      };
+    }
+
+    return undefined;
+  }
+
+  /** 任意 JSON → string 字典（非字符串值丢弃：dsh 的 env 是 `z.dict(String)`）。 */
+  private stringRecord(value: unknown): Record<string, string> | undefined {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+    const out: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof raw === 'string') {
+        out[key] = raw;
+      }
+    }
+    return Object.keys(out).length === 0 ? undefined : out;
   }
 }
 
