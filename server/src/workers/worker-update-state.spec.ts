@@ -2,6 +2,7 @@ import {
   computeUpdateAvailable,
   isCodeVersionAligned,
   isComparableCodeVersion,
+  isNonReleasedCodeVersion,
   isWorkerUpdateState,
   normalizeReportedUpdateState,
   WORKER_UPDATE_STATE_MAX_LENGTH,
@@ -66,10 +67,18 @@ describe('normalizeReportedUpdateState（上报值归一化）', () => {
   });
 });
 
-describe('版本比对（dev 是未知占位，不是事实）', () => {
-  it('isComparableCodeVersion：非空且非 dev', () => {
+describe('版本比对（占位串不是事实）', () => {
+  it('isComparableCodeVersion：非空且非占位串', () => {
     expect(isComparableCodeVersion('deadbee')).toBe(true);
-    expect(isComparableCodeVersion('manual-20261010')).toBe(true);
+    expect(isComparableCodeVersion('v1.6.26')).toBe(true);
+    /**
+     * ⚠️ 这条**曾经断言 true**，正是 2026-11-21 事故的根源：
+     * Windows 安装器写 `manual-<日期>`，server 写 `local-compose`，
+     * 两个都"可比对"却永不相等 ⇒ 升级成功后永久显示「待更新」。
+     * 现已归入占位串（见 NON_RELEASED_CODE_VERSION_PATTERNS）。
+     */
+    expect(isComparableCodeVersion('manual-20261010')).toBe(false);
+    expect(isComparableCodeVersion('local-compose')).toBe(false);
     expect(isComparableCodeVersion('dev')).toBe(false);
     expect(isComparableCodeVersion('')).toBe(false);
     expect(isComparableCodeVersion('  ')).toBe(false);
@@ -111,5 +120,57 @@ describe('版本比对（dev 是未知占位，不是事实）', () => {
       expect(computeUpdateAvailable(code, expected)).toBe(available);
       expect(isCodeVersionAligned(code, expected)).toBe(aligned);
     }
+  });
+});
+
+/**
+ * 占位/非发布版本不参与比对（2026-11-21 线上实测：Windows 升级后永久显示「待更新」）。
+ *
+ * 事故形态：Windows 安装器在 `.env` 里写 `WORKER_CODE_VERSION=manual-<日期>`，
+ * 而 compose 的 server `CODE_VERSION=local-compose` ⇒ 两者**永不相等**
+ * ⇒ `updateAvailable` 恒 true ⇒ 用户升完 2.3.2 后卡片仍挂「待更新」。
+ *
+ * 语义要求（两条都必须是 false，不能"猜"）：
+ * - 占位串对占位串：既不报可更新（不撒谎），也不报已对齐（同样不撒谎）；
+ * - 占位串对真实版本：仍然不报（没有可比基准）。
+ */
+describe('占位版本串不参与版本比对', () => {
+  it('manual-* / local-compose / dev 两两组合 → 都不可比对', () => {
+    const placeholders = [
+      'manual-20261121',
+      'manual-20261114',
+      'local-compose',
+      'dev',
+      'container-unstamped',
+    ];
+    for (const code of placeholders) {
+      for (const expected of placeholders) {
+        expect(isComparableCodeVersion(code)).toBe(false);
+        expect(isComparableCodeVersion(expected)).toBe(false);
+        // 关键：**没有** updateAvailable（否则就是本次事故）
+        expect(computeUpdateAvailable(code, expected)).toBe(false);
+        expect(isCodeVersionAligned(code, expected)).toBe(false);
+      }
+    }
+  });
+
+  it('占位串 vs 真实发布时间戳 → 不报可更新（没有可比基准）', () => {
+    expect(computeUpdateAvailable('manual-20261121', 'v1.6.26')).toBe(false);
+    expect(computeUpdateAvailable('local-compose', 'v1.6.26')).toBe(false);
+  });
+
+  it('真实发布版本之间仍然正常比对（修复不能把功能一起关掉）', () => {
+    expect(computeUpdateAvailable('v1.6.25', 'v1.6.26')).toBe(true);
+    expect(computeUpdateAvailable('v1.6.26', 'v1.6.26')).toBe(false);
+    expect(isCodeVersionAligned('v1.6.26', 'v1.6.26')).toBe(true);
+    expect(isCodeVersionAligned('v1.6.25', 'v1.6.26')).toBe(false);
+  });
+
+  it('isNonReleasedCodeVersion 判定与匹配不区分大小写', () => {
+    expect(isNonReleasedCodeVersion('DEV')).toBe(true);
+    expect(isNonReleasedCodeVersion('Local-Compose')).toBe(true);
+    expect(isNonReleasedCodeVersion('Manual-20261121')).toBe(true);
+    expect(isNonReleasedCodeVersion('v1.6.26')).toBe(false);
+    expect(isNonReleasedCodeVersion('2f3a91c')).toBe(false);
   });
 });

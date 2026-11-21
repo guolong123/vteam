@@ -7,11 +7,46 @@
  * 这里直接接收 url/name/ext/size 四元组并复用文档站的 FilePreview 矩阵
  * （docx/pdf/xlsx/图片/文本等），聊天附件卡点击即跳到这里预览，而不是强制下载。
  */
-import { Suspense } from "react";
-import Link from "next/link";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { FilePreview } from "@/src/features/docs-site/file-preview";
+import { docIdFor } from "@/src/lib/artifact-slug";
+import type { ArtifactsResponse } from "@/src/components/tasks/task-detail-types";
 import { fontSize, fontFamily, neutral, space, radius } from "@/src/theme/tokens";
+
+/**
+ * 有产出物归属时，把 `/docs/file?…` **重定向**到文档站对应文档（2026-11-20）。
+ *
+ * 兜底路径：正常情况下消息附件已经直接指向 `/docs/:taskId?doc=`，不会再走本页。
+ * 但历史链接/旧消息（附件里没有 artifactId）或外部直接打开时仍会到这里——
+ * 此时若能从 artifactId 算出文档站 slug，就跳过去，让两个入口最终落到**同一界面**，
+ * 避免用户看到"简陋的独立预览页"（用户多次反馈）。
+ *
+ * 算不出来（缺 taskId / 该任务没有产出物列表）→ 留本页正常预览（不阻断）。
+ */
+async function resolveDocsHref(
+  queryClient: QueryClient,
+  artifactId: string,
+  taskId: string,
+): Promise<string | null> {
+  try {
+    const data = await queryClient.fetchQuery({
+      queryKey: ["task", taskId, "artifacts"],
+      queryFn: () =>
+        api.get<ArtifactsResponse>(`/tasks/${taskId}/artifacts`, {
+          query: { pageSize: 100 },
+        }),
+    });
+    const items = (data?.items ?? []) as { id: string; title: string }[];
+    const target = items.find((a) => a.id === artifactId);
+    if (!target) return null;
+    return `/docs/${taskId}?doc=${encodeURIComponent(docIdFor(target.title, target.id, items))}`;
+  } catch {
+    return null;
+  }
+}
 
 function FilePreviewContent() {
   const params = useSearchParams();
@@ -28,11 +63,47 @@ function FilePreviewContent() {
     }
     router.push("/board");
   };
+  const artifactId = params.get("artifactId") ?? "";
+  const artifactTaskId = params.get("taskId") ?? "";
+  /** 重定向判定中：先不渲染预览，避免"闪一下简陋页再跳走"。 */
+  const [redirecting, setRedirecting] = useState(
+    () => Boolean(artifactId && artifactTaskId),
+  );
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!artifactId || !artifactTaskId) return;
+    let cancelled = false;
+    void (async () => {
+      const href = await resolveDocsHref(queryClient, artifactId, artifactTaskId);
+      if (cancelled) return;
+      if (href) {
+        router.replace(href);
+        return;
+      }
+      // 算不出文档站地址 → 放弃重定向，留在本页正常预览
+      setRedirecting(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId, artifactTaskId, queryClient, router]);
+
   const url = params.get("url") ?? "";
   const name = params.get("name") ?? "文件预览";
   const ext = params.get("ext") ?? "";
   const sizeRaw = params.get("size");
   const size = sizeRaw !== null && sizeRaw !== "" ? Number(sizeRaw) : 0;
+
+  if (redirecting) {
+    return (
+      <div
+        data-testid="docs-file-redirecting"
+        style={{ padding: space.xl, color: neutral[500], fontFamily: fontFamily.body }}
+      >
+        正在打开文档…
+      </div>
+    );
+  }
 
   if (!url) {
     return (

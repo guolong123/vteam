@@ -35,7 +35,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog, EmptyState, PageWindow } from "@/src/components/ui";
+import { ConfirmDialog, EmptyState, PageWindow, UpgradeCommandDialog } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -52,6 +52,10 @@ import {
   pulseCss,
   formatRelativeTime,
   WorkerStatusBadge,
+  deriveServerBase,
+  deriveWebBase,
+  isNonReleasedVersion,
+  isLoopbackHost,
   type WorkerItem,
 } from "./shared";
 
@@ -74,6 +78,7 @@ function WorkerCard({
   onShutdown,
   onDelete,
   onUpdate,
+  onUpgradeManual,
 }: {
   worker: WorkerItem;
   now: number;
@@ -89,6 +94,8 @@ function WorkerCard({
   onShutdown: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdate: (id: string) => void;
+  /** 不能自更新的节点：打开「手动升级」对话框（复制命令）。 */
+  onUpgradeManual: (worker: WorkerItem) => void;
 }) {
   const router = useRouter();
   const label = WORKER_STATUS_LABEL[worker.status];
@@ -118,6 +125,21 @@ function WorkerCard({
   const engine = worker.capabilities?.engine === "dsh" ? "dsh" : "opencode";
   const isDsh = engine === "dsh";
 
+  /*
+   * 展示用版本串。
+   *
+   * ⚠️ 不能直接用 `worker.opencodeVersion`：server 落库前会对该字段做 semver 归一化
+   * （`normalizeOpencodeVersion`，调度器按精确串过滤 worker 需要它），**会把
+   * `0.2.2-rc.5` 抹成 `0.2.2`** —— 而 rc 与正式版的行为差异恰是排障最需要的信息。
+   * 精确版本在 `capabilities.engineCapabilities.engineVersion`（不参与归一化）。
+   * 旧 worker 没上报该字段时回落顶层值（兼容）。
+   */
+  const engineVersionRaw =
+    (worker.capabilities as { engineCapabilities?: { engineVersion?: string } } | undefined)
+      ?.engineCapabilities?.engineVersion ?? worker.opencodeVersion;
+  const displayVersion = engineVersionRaw === "unknown" ? undefined : engineVersionRaw;
+
+
   /* UX-01 操作可用性：workers.edit 权限 + 非 offline（命令需心跳下发）+ 非 busy */
   const isBusy = busy?.workerId === worker.id;
   const restartBusy = isBusy && busy?.action === "restart";
@@ -125,6 +147,21 @@ function WorkerCard({
   const deleteBusy = isBusy && busy?.action === "delete";
   const updateBusy = isBusy && busy?.action === "update";
   const opsDisabled = !canEdit || isOffline || isBusy;
+
+  /* ── 升级入口的可见性与形态 ────────────────────────────────────────
+     **只在确实需要升级时显示**（`updateAvailable`）。
+     - canSelfUpdate === true ⇒ 一键「更新」按钮；
+     - 否则（false / undefined=旧 worker）⇒「升级命令」按钮 + 复制弹窗。
+
+     ⚠️ 不要把 `upgradeHint !== undefined` 也算作可见条件（曾这样做，是 bug）：
+     `upgradeHint` 的语义是"**这个节点不能自更新**，若需要升级就这么升"，
+     它在「版本已对齐」时**同样存在**（用来解释能力缺失）。把它当可见条件
+     ⇒ 升级完成后按钮**永远挂着**（用户实测："这个升级的状态怎么才能掉"）。
+     server 侧 `updateAvailable` 已排除占位版本（local-compose / manual-*），
+     所以它才是"是否真的需要升级"的唯一准绳。 */
+  const canSelfUpdate = worker.canSelfUpdate === true;
+  const updateEntryVisible = worker.updateAvailable;
+  const updateEntryDisabled = canSelfUpdate ? opsDisabled || dispatched : !canEdit;
   const opsTitle = !canEdit
     ? "无 workers.edit 权限"
     : isOffline
@@ -216,6 +253,11 @@ function WorkerCard({
             <>
               <span aria-hidden style={{ fontSize: fontSize.xs }}>⬢</span>
               dsh
+              {/* 版本：dsh 上报的是**引擎真实版本**（含 `-rc.N`，如 0.2.2-rc.5）。
+                  探测失败时 opencodeVersion 为 'unknown' ⇒ 不显示（不谎报版本）。 */}
+              {displayVersion !== undefined && (
+                <span style={{ fontWeight: 400, opacity: 0.85 }}>{displayVersion}</span>
+              )}
               <span aria-hidden style={{ fontWeight: 400, opacity: 0.7 }}>· DeepSeek Harness</span>
             </>
           ) : (
@@ -245,9 +287,11 @@ function WorkerCard({
               alignItems: "center",
               fontSize: fontSize.xs,
               fontWeight: 600,
-              color: worker.updateAvailable ? "#D97706" : neutral[500],
-              backgroundColor: worker.updateAvailable ? "rgba(245,158,11,0.10)" : neutral[100],
-              border: `1px solid ${worker.updateAvailable ? "rgba(245,158,11,0.28)" : neutral[200]}`,
+              color: worker.updateAvailable ? "var(--color-warning-text)" : neutral[500],
+              backgroundColor: worker.updateAvailable ? "var(--color-warning-bg)" : neutral[100],
+              border: `1px solid ${
+                worker.updateAvailable ? "var(--color-warning-border)" : neutral[200]
+              }`,
               padding: "1px 6px",
               borderRadius: radius.pill,
               fontFamily: fontFamily.mono,
@@ -264,9 +308,9 @@ function WorkerCard({
               alignItems: "center",
               fontSize: fontSize.xs,
               fontWeight: 600,
-              color: "#D97706",
-              backgroundColor: "rgba(245,158,11,0.10)",
-              border: "1px solid rgba(245,158,11,0.28)",
+              color: "var(--color-warning-text)",
+              backgroundColor: "var(--color-warning-bg)",
+              border: "1px solid var(--color-warning-border)",
               padding: "1px 6px",
               borderRadius: radius.pill,
               fontFamily: fontFamily.body,
@@ -284,7 +328,7 @@ function WorkerCard({
           style={{ fontSize: fontSize.xs, color: neutral[400], display: "flex", gap: space.xs, alignItems: "center" }}
         >
           {worker.rolledBack || worker.updateState === "rolledback" ? (
-            <span style={{ color: "#D97706", fontWeight: 600 }}>⚠ 已回滚（新版本异常）</span>
+            <span style={{ color: "var(--color-warning-text)", fontWeight: 600 }}>⚠ 已回滚（新版本异常）</span>
           ) : (
             <span>{WORKER_UPDATE_STATE_LABEL[worker.updateState ?? ""] ?? worker.updateState}</span>
           )}
@@ -458,35 +502,52 @@ function WorkerCard({
         >
           查看详情
         </button>
-        {worker.updateAvailable && (
+        {/* 有更新时的两个入口：
+            - 能自更新 ⇒ 「更新」按钮（一键下发，后台下载+重启）；
+            - 不能自更新（Windows 缺省关闭 / 旧 worker）⇒ 「升级命令」按钮，
+              点开弹窗复制命令让用户自己执行。**不能不给入口** —— 否则用户面对的是
+              "按钮点了没反应"或"根本没有按钮"（本仓库此前的形态）。 */}
+        {updateEntryVisible && (
           <button
             type="button"
-            data-testid="worker-update-button"
+            data-testid={canSelfUpdate ? "worker-update-button" : "worker-upgrade-manual-button"}
             data-worker-id={worker.id}
-            disabled={opsDisabled || dispatched}
+            disabled={canSelfUpdate ? opsDisabled || dispatched : !canEdit}
             title={
               !canEdit
                 ? "无 workers.edit 权限"
                 : isOffline
                   ? "离线节点无法接收更新指令"
-                  : dispatched
-                    ? "指令已下发，等待 worker 空闲执行"
-                    : "下载新版本并在空闲时重启生效"
+                  : !canSelfUpdate
+                    ? "该节点不能自动升级，点开复制升级命令"
+                    : dispatched
+                      ? "指令已下发，等待 worker 空闲执行"
+                      : "下载新版本并在空闲时重启生效"
             }
-            onClick={() => onUpdate(worker.id)}
+            onClick={() =>
+              canSelfUpdate ? onUpdate(worker.id) : onUpgradeManual(worker)
+            }
             style={{
               flex: 1,
               padding: `${space.sm - 1}px ${space.md}px`,
               borderRadius: radius.md,
-              border: `1px solid ${opsDisabled || dispatched ? neutral[100] : "rgba(245,158,11,0.28)"}`,
-              backgroundColor: opsDisabled || dispatched ? neutral[100] : "rgba(245,158,11,0.10)",
-              color: opsDisabled || dispatched ? neutral[400] : "#D97706",
+              border: `1px solid ${
+                updateEntryDisabled ? neutral[100] : "var(--color-warning-border)"
+              }`,
+              backgroundColor: updateEntryDisabled ? neutral[100] : "var(--color-warning-bg)",
+              color: updateEntryDisabled ? neutral[400] : "var(--color-warning-text)",
               fontSize: fontSize.md,
-              cursor: opsDisabled || dispatched ? "not-allowed" : "pointer",
+              cursor: updateEntryDisabled ? "not-allowed" : "pointer",
               fontFamily: fontFamily.body,
             }}
           >
-            {updateBusy ? "下发中…" : dispatched ? "已下发" : "更新"}
+            {!canSelfUpdate
+              ? "升级命令"
+              : updateBusy
+                ? "下发中…"
+                : dispatched
+                  ? "已下发"
+                  : "更新"}
           </button>
         )}
         <button
@@ -645,6 +706,23 @@ export default function WorkersPage() {
      → ConfirmDialog 确认后执行 → 刷新列表；失败走页级错误条 */
   /* 已下发更新的 worker（本地提示态；updateAvailable 翻 false 后渲染条件自然清除） */
   const [dispatchedIds, setDispatchedIds] = useState<string[]>([]);
+
+  /* 手动升级指引对话框：不能自更新的节点（Windows 缺省关闭 / 旧 worker）点「升级」打开，
+     里面给一条可复制命令。用 worker 而不是 boolean：对话框要展示该节点的具体信息。 */
+  const [upgradeTarget, setUpgradeTarget] = useState<WorkerItem | null>(null);
+
+  /* 控制面 server 基址（给升级命令填地址）。
+     server 只下发带 `{{SERVER_URL}}` 占位符的**模板**——它不知道用户从哪个地址打开控制面。
+     这里用**浏览器当前 origin** 推导（`deriveServerBase`：web 13001 → server 13000），
+     SSR 首帧为空、挂载后填充。回环地址另有警示（远程 worker 上会指向它自己）。 */
+  const [serverBase, setServerBase] = useState("");
+  const [webBase, setWebBase] = useState("");
+  const [loopbackOrigin, setLoopbackOrigin] = useState(false);
+  useEffect(() => {
+    setServerBase(deriveServerBase(window.location.origin));
+    setWebBase(deriveWebBase(window.location.origin));
+    setLoopbackOrigin(isLoopbackHost(window.location.hostname));
+  }, []);
 
   /* 自更新：POST /workers/:id/update → 命令经心跳下发（workers.edit；目标版本由 server env 决定） */
   const updateMutation = useMutation({
@@ -908,6 +986,7 @@ export default function WorkersPage() {
               onRestart={(id) => restartMutation.mutate(id)}
               onShutdown={(id) => shutdownMutation.mutate(id)}
               onUpdate={(id) => updateMutation.mutate(id)}
+              onUpgradeManual={(w) => setUpgradeTarget(w)}
               onDelete={(id) => {
                 const target = items.find((x) => x.id === id);
                 if (target) setDeleteTarget(target);
@@ -936,6 +1015,20 @@ export default function WorkersPage() {
         心跳超时（连续 30 秒 = 3 个心跳周期未上报）自动标记离线，其上的任务组按亲和与负载策略
         迁移到存活节点；新增节点无需重启控制面，注册即入池（水平扩容）。
       </div>
+
+      {/* 手动升级指引：不能自更新的节点（Windows 缺省关闭 / 旧 worker）在这里拿升级命令。
+          与上面的「更新」按钮互斥：能自更新的节点不会走到这里（upgradeHint 为 undefined）。 */}
+      <UpgradeCommandDialog
+        open={upgradeTarget !== null}
+        workerLabel={upgradeTarget?.name ?? upgradeTarget?.id ?? ""}
+        summary={upgradeTarget?.upgradeHint?.summary ?? ""}
+        command={upgradeTarget?.upgradeHint?.command ?? ""}
+        serverBase={serverBase}
+        webBase={webBase}
+        loopback={loopbackOrigin}
+        reason={upgradeTarget?.upgradeHint?.reason}
+        onClose={() => setUpgradeTarget(null)}
+      />
 
       {/* 删除离线 worker 二次确认（复用 ConfirmDialog，对齐 agents 页删除确认模式） */}
       <ConfirmDialog

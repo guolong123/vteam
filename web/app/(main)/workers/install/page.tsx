@@ -56,10 +56,23 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** 安装方式：curl（Linux/macOS 一键脚本）/ docker（容器）/ powershell（Windows 原生，M1 新增） */
 type InstallMethod = "curl" | "docker" | "powershell";
 
-/** 生成随机 workerId（worker-XX，10-99；安装向导初始值 + 「重新生成」按钮共用） */
-function randomWorkerId(): string {
-  const rand = Math.floor(10 + Math.random() * 90);
-  return `worker-${String(rand).padStart(2, "0")}`;
+/**
+ * Worker 标识的**缺省语义 = 留空，由 worker 自己用主机名**。
+ *
+ * ── 为什么不再随机生成 `worker-XX`（2026-11-21 实测事故）────────────────
+ * 随机 id 会被写进安装命令（`--worker-id worker-42`），从而**覆盖** worker 侧
+ * `w_${hostname}` 的缺省值。后果：同一台机器重装/升级后若随机到不同 id，
+ * 控制面就多出一个新 worker，**旧记录留在列表里变 offline**（用户实测：
+ * 升级后新老两个节点并存，同主机名）。
+ *
+ * 而主机名天然满足"一台机器一个标识"，且重装/升级**天然稳定**（id 不变 ⇒
+ * 是更新而非新增）。所以缺省留空最稳；需要特殊命名时再手填。
+ *
+ * 返回值：用户填了就用 fill；空串 ⇒ 命令里**不带** worker-id 参数。
+ */
+function workerIdArgs(fill: string, flag: "--worker-id" | "-WorkerId"): string {
+  const v = fill.trim();
+  return v === "" ? "" : ` ${flag} ${v}`;
 }
 
 /**
@@ -345,11 +358,8 @@ export default function WorkerInstallPage() {
     }
   }, [serverUrl]);
 
-  /* workerId 初始随机生成：SSR 首帧空串 → 挂载后填充（对齐 pageOrigin 模式避免 hydration mismatch，
-     替代原型示例值 worker-05，避免固定 id 多 worker 冲突） */
-  useEffect(() => {
-    setWorkerId(randomWorkerId());
-  }, []);
+  /* workerId **缺省留空**（空 = 由 worker 用主机名，见 workerIdArgs 注释）。
+     不再随机生成：随机 id 会覆盖主机名缺省值，导致重装/升级后同机器变成"新节点"。 */
 
   /* 注册 token 自动拉取（GET /workers/register-token，workers.view）：
      保证复制命令即带 --token，无需手工填写；拉取失败（权限不足/网络）保留空值走手动引导 */
@@ -396,14 +406,14 @@ export default function WorkerInstallPage() {
   const dshDockerEnv = "-e WORKER_ENGINE=dsh";
 
   const curlCommand = isDsh
-    ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh --worker-id ${workerId} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`
-    : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
+    ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh ${workerIdArgs(workerId, "--worker-id")} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`
+    : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} ${workerIdArgs(workerId, "--worker-id")} --concurrency ${concurrency}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
   // `--init`：容器 PID1 必须当 reaper。node 直接当 PID1 时不回收 reparent 到 PID1 的
   // 孤儿孙进程 ⇒ agent-browser/Chrome 每次浏览器操作留下 ~20 个 Z 僵尸（PPID=1）。
   // 镜像内已有 tini ENTRYPOINT 双保险；这里显式加 --init，旧镜像/自定义 entrypoint 也不复发。
   const dockerCommand = isDsh
-    ? `docker run -d --init --name dsh-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
-    : `docker run -d --init --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
+    ? `docker run -d --init --name ${workerId !== "" ? `dsh-worker-${workerId}` : "vteam-worker-dsh-1"} -e SERVER_URL=${serverUrl} ${workerId !== "" ? `-e WORKER_ID=${workerId} ` : ""}-e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
+    : `docker run -d --init --name ${workerId !== "" ? `opencode-worker-${workerId}` : "vteam-worker-1"} -e SERVER_URL=${serverUrl} ${workerId !== "" ? `-e WORKER_ID=${workerId} ` : ""}-e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
 
   /**
    * Windows 原生安装命令（M1）。
@@ -421,7 +431,7 @@ export default function WorkerInstallPage() {
   const windowsSrcUrl = `${pageOrigin}/worker-src.tar.gz`;
   const windowsCommand = [
     `Invoke-WebRequest -UseBasicParsing ${psQuote(`${pageOrigin}/install-worker.ps1`)} -OutFile "$env:TEMP\\install-worker.ps1"`,
-    `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\\install-worker.ps1" -Server ${psQuote(serverUrl)} -SrcUrl ${psQuote(windowsSrcUrl)} -WorkerId ${psQuote(workerId)} -Concurrency ${concurrency}${workerToken ? ` -Token ${psQuote(workerToken)}` : ""}${advertiseHost ? ` -AdvertiseHost ${psQuote(sanitizeIp(advertiseHost))}` : ""}${mcpUrl ? ` -McpUrl ${psQuote(mcpUrl)}` : ""}`,
+    `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\\install-worker.ps1" -Server ${psQuote(serverUrl)} -SrcUrl ${psQuote(windowsSrcUrl)} ${workerId.trim() === "" ? "" : `-WorkerId ${psQuote(workerId)}`} -Concurrency ${concurrency}${workerToken ? ` -Token ${psQuote(workerToken)}` : ""}${advertiseHost ? ` -AdvertiseHost ${psQuote(sanitizeIp(advertiseHost))}` : ""}${mcpUrl ? ` -McpUrl ${psQuote(mcpUrl)}` : ""}`,
   ].join("; ");
 
   const command =
@@ -474,11 +484,6 @@ export default function WorkerInstallPage() {
     { key: "docker", label: "docker 容器安装", icon: "▣", desc: "容器化 · 隔离与版本可回滚" },
     { key: "powershell", label: "Windows PowerShell", icon: "❖", desc: "Windows 原生 · 服务化/开机自启（预览）" },
   ];
-
-  /** 重新生成 workerId（原型占位按钮 → 真实随机，仍满足"自动生成可修改"语义） */
-  const regenerateWorkerId = () => {
-    setWorkerId(randomWorkerId());
-  };
 
   return (
     <div
@@ -595,34 +600,19 @@ export default function WorkerInstallPage() {
                 />
               </FieldRow>
 
-              <FieldRow label="Worker 标识" hint="全局唯一，可改">
+              <FieldRow
+                label="Worker 标识"
+                hint="留空 = 用主机名（推荐：同机器重装/升级后仍是同一节点）"
+              >
                 <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
                   <input
                     data-testid="worker-id-input"
                     value={workerId}
                     onChange={(e) => setWorkerId(e.target.value)}
+                    placeholder={`留空 = 使用主机名（如 w_${"<hostname>"}）`}
                     spellCheck={false}
                     style={{ ...inputStyle, flex: 1 }}
                   />
-                  <button
-                    type="button"
-                    data-testid="regenerate-worker-id-button"
-                    title="重新生成 workerId"
-                    onClick={regenerateWorkerId}
-                    style={{
-                      flexShrink: 0,
-                      padding: `${space.sm}px ${space.md}px`,
-                      borderRadius: radius.md,
-                      border: `1px solid ${neutral[200]}`,
-                      backgroundColor: neutral[50],
-                      color: neutral[600],
-                      fontSize: fontSize.md,
-                      cursor: "pointer",
-                      fontFamily: fontFamily.body,
-                    }}
-                  >
-                    ↻ 重新生成
-                  </button>
                 </div>
               </FieldRow>
 

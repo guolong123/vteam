@@ -49,6 +49,36 @@ export const WORKER_UPDATE_STATE_MAX_LENGTH = 191;
  */
 export const WORKER_UNKNOWN_CODE_VERSION = 'dev';
 
+/**
+ * **占位/非发布版本串**集合：这些值不是真实发布标识，一律**不参与版本比对**。
+ *
+ * ── 为什么必须扩充（2026-11-21 线上实测）──────────────────────────────
+ * 原先只排除 `dev`。而 compose 缺省注入的是 `local-compose`（部署占位串），
+ * Windows 安装器会在 `.env` 里写 `manual-<日期>`（人工安装戳）——两者都**不是**
+ * "发布到哪个版本"的答案：
+ *
+ * - 容器 worker：两侧同为 `local-compose` ⇒ 恰好相等 ⇒ 不显示（侥幸正确）；
+ * - Windows worker：`manual-20261121` vs `local-compose` ⇒ **永不相等**
+ *   ⇒ 升级成功后仍永久显示「待更新」（用户实测：升完还是待升级）。
+ *
+ * 判定口径：这些值 → `computeUpdateAvailable` 返回 false（不谎报可更新）、
+ * `isCodeVersionAligned` 返回 false（也不谎报已对齐）。UI 据 `expectedVersion`
+ * 是否可比对来展示"无更新语义"，而不是显示误导性的「待更新」。
+ */
+export const NON_RELEASED_CODE_VERSION_PATTERNS: readonly RegExp[] = [
+  /^dev$/i,
+  /^local-compose$/i,
+  /^manual-/i,
+  /^unknown$/i,
+  /^container-unstamped$/i,
+];
+
+/** 该串是否是占位/非发布版本（不参与比对）。 */
+export function isNonReleasedCodeVersion(raw: string): boolean {
+  const v = raw.trim();
+  return NON_RELEASED_CODE_VERSION_PATTERNS.some((re) => re.test(v));
+}
+
 /** 值是否属于自更新状态机枚举（未知取值不猜、不落库）。 */
 export function isWorkerUpdateState(
   value: unknown,
@@ -80,7 +110,9 @@ export function isComparableCodeVersion(
 ): boolean {
   if (raw === null || raw === undefined) return false;
   const trimmed = raw.trim();
-  return trimmed.length > 0 && trimmed !== WORKER_UNKNOWN_CODE_VERSION;
+  if (trimmed.length === 0) return false;
+  // dev / local-compose / manual-* 等占位串不是"发布到哪个版本"的答案（见常量注释）
+  return !isNonReleasedCodeVersion(trimmed);
 }
 
 /**

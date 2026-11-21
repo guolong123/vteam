@@ -5,6 +5,9 @@
  * 闸门行为（major<2 → 抛可操作错误；major>=2 → 放行；认不出 → 只告警不判死）。
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
 import {
   assertOpencodeVersionSupported,
   formatOpencodeVersion,
@@ -164,5 +167,93 @@ describe('assertOpencodeVersionSupported（T18：单模闸门，不再有 v1 模
     expect(() =>
       assertOpencodeVersionSupported(parseOpencodeVersion('opencode v2.0.28')),
     ).not.toThrow();
+  });
+});
+
+/**
+ * 防漂移：`REQUIRED_OPENCODE_CLI_SPEC`（代码常量）与 `worker/Dockerfile` 的
+ * `ARG OPENCODE_CLI_SPEC` 默认值**必须一致**。
+ *
+ * 为什么这条必须有：该常量只出现在**启动期版本闸门的错误文案**里（告诉运维"该装哪一版"），
+ * 而真正决定镜像里装哪一版的是 Dockerfile 的 ARG。两者不一致时：
+ * - 运维照报错提示 `npm i -g <常量>` 装到的版本，与镜像实际不一致；
+ * - 或镜像已升级、报错文案还指着老版本 ⇒ 排障方向被带偏。
+ * 这类漂移**没有任何运行期症状**，只能靠直接读文件比对。
+ */
+describe('锁版规格防漂移（代码常量 ↔ Dockerfile ARG）', () => {
+  it('REQUIRED_OPENCODE_CLI_SPEC 与 worker/Dockerfile 的 ARG 默认值一致', () => {
+    // spec 跑在 worker/src/runtime 下 ⇒ 上溯三级到 worker/，再取 Dockerfile
+    const dockerfile = path.resolve(__dirname, '..', '..', 'Dockerfile');
+    expect(fs.existsSync(dockerfile)).toBe(true);
+    const content = fs.readFileSync(dockerfile, 'utf8');
+
+    const match = /^ARG\s+OPENCODE_CLI_SPEC=(\S+)\s*$/m.exec(content);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe(REQUIRED_OPENCODE_CLI_SPEC);
+  });
+
+  /**
+   * 裸机安装脚本（`web/public/install-worker.sh`）是**镜像路径之外的第二条落地路径**。
+   * 它与镜像必须是同一版：控制面按 opencode 版本串**精确过滤** worker，
+   * 两边分叉会让调度与排障都出错（"明明装了却派单不到"最典型的成因）。
+   */
+  it('install-worker.sh 的缺省钉版与 Dockerfile 同版', () => {
+    const script = path.resolve(__dirname, '..', '..', '..', 'web', 'public', 'install-worker.sh');
+    if (!fs.existsSync(script)) {
+      // 只跑 worker 单测的独立检出可能没有 web/ ⇒ 明确跳过而不是假绿
+      expect(true).toBe(true);
+      return;
+    }
+    const content = fs.readFileSync(script, 'utf8');
+    const match = /^OPENCODE_CLI_DEFAULT_SPEC="(@opencode\/cli@[^"]+)"/m.exec(content);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe(REQUIRED_OPENCODE_CLI_SPEC);
+  });
+
+  /**
+   * ⚠️ **Windows 安装器是一份独立实现**（PowerShell），它有**自己的一份**钉版：
+   * `$Script:DefaultOpencodeSpec` 与 `-Opencode` 参数的缺省值。
+   *
+   * 现实教训：Linux 的 `install-worker.sh` 改了、`.ps1` 忘了改 —— 两平台就落在不同
+   * opencode 版本上，而控制面按版本串**精确过滤** worker ⇒ Windows 节点会静默
+   * "装了但派不到任务"。本仓库此前**只**校验了 .sh，.ps1 完全没有守卫。
+   */
+  it('install-worker.ps1（Windows）的缺省钉版与 Dockerfile 同版', () => {
+    const script = path.resolve(__dirname, '..', '..', '..', 'web', 'public', 'install-worker.ps1');
+    if (!fs.existsSync(script)) {
+      expect(true).toBe(true);
+      return;
+    }
+    const content = fs.readFileSync(script, 'utf8');
+
+    // ① 常量（脚本内部解析用）
+    const constMatch = /^\$Script:DefaultOpencodeSpec\s*=\s*'(@opencode\/cli@[^']+)'/m.exec(content);
+    expect(constMatch).not.toBeNull();
+    expect(constMatch![1]).toBe(REQUIRED_OPENCODE_CLI_SPEC);
+
+    // ② 参数缺省值（用户不传 -Opencode 时生效）
+    const paramMatch = /\[string\]\$Opencode\s*=\s*'(@opencode\/cli@[^']+)'/m.exec(content);
+    expect(paramMatch).not.toBeNull();
+    expect(paramMatch![1]).toBe(REQUIRED_OPENCODE_CLI_SPEC);
+
+    // ③ 脚本里不得残留其它版本的 @opencode/cli@x.y.z 引用（注释/报错文案也算）
+    const version = REQUIRED_OPENCODE_CLI_SPEC.split('@').pop()!;
+    const refs = [...content.matchAll(/@opencode\/cli@(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+    expect(refs.length).toBeGreaterThan(0);
+    for (const ref of refs) {
+      expect(ref).toBe(version);
+    }
+  });
+
+  it('Dockerfile 里不再残留旧的锁版引用（注释与 --build-arg 示例同步）', () => {
+    const dockerfile = path.resolve(__dirname, '..', '..', 'Dockerfile');
+    const content = fs.readFileSync(dockerfile, 'utf8');
+    const version = REQUIRED_OPENCODE_CLI_SPEC.split('@').pop()!;
+    // 只要文件里出现 `@opencode/cli@<semver>`，就必须全是当前锁的版本
+    const refs = [...content.matchAll(/@opencode\/cli@(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+    expect(refs.length).toBeGreaterThan(0);
+    for (const ref of refs) {
+      expect(ref).toBe(version);
+    }
   });
 });

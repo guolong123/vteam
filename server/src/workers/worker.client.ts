@@ -304,6 +304,19 @@ export interface ExecuteOptions {
   attachments?: ExecuteAttachment[];
   /** 在飞注入标志（同 ses 已有运行：worker 侧仅追加 prompt，不建跟踪/不出终态事件）。 */
   inFlight?: boolean;
+  /**
+   * 会话上下文压缩策略（平台配置下发；仅 worker 侧实现该能力时生效）。
+   *
+   * worker 在 `runExecution` 开头判定「不活跃 ≥ idleDays 且上下文 ≥ minContextTokens」，
+   * 命中则**先压缩、等落完、才投递本条消息**——让这条消息直接跑在压缩后的上下文上。
+   * `awaitMs` 是等压缩落完的上限，超时放弃压缩、照常投递（fail-open）。
+   */
+  compactIfStale?: {
+    idleDays: number;
+    minContextTokens: number;
+    awaitMs: number;
+    timeoutMs: number;
+  };
 }
 
 /**
@@ -535,6 +548,7 @@ export class WorkerClient {
           : {}),
         ...(opts.attachments ? { attachments: opts.attachments } : {}),
         ...(opts.inFlight ? { inFlight: true } : {}),
+        ...(opts.compactIfStale ? { compactIfStale: opts.compactIfStale } : {}),
         prompt: opts.prompt,
       }),
     });

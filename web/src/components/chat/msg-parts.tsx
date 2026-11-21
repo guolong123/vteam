@@ -145,6 +145,8 @@ export interface MsgPartsProps {
   attachments?: ChatBubbleAttachment[];
   /** 产出物 → 文档站 slug（透传给 ChatBubble，让消息附件与附件清单打开同一界面）。 */
   resolveArtifactDoc?: (artifactId: string, taskId: string) => string | null;
+  /** 无产出物归属的普通附件兜底文档站入口（透传）。 */
+  fallbackDocsHref?: string | null;
   isMentionMe?: boolean;
   style?: CSSProperties;
   className?: string;
@@ -175,7 +177,7 @@ export interface MsgPartsProps {
   variant?: "bubble" | "line" | "dsh";
 }
 
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachments, resolveArtifactDoc, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachments, resolveArtifactDoc, fallbackDocsHref, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
   /** 多附件存在性（缺省 undefined / 空数组一律视为无附件，不渲染附件区、不参与有内容判定）。 */
   const hasAttachments = (attachments?.length ?? 0) > 0;
   // DSH 变体整条委托：本组件不认识它，避免把两套 part 语义混在一处。
@@ -486,6 +488,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
         time={time}
         attachments={attachments}
         resolveArtifactDoc={resolveArtifactDoc}
+        fallbackDocsHref={fallbackDocsHref}
         isMentionMe={isMentionMe}
       />
     );

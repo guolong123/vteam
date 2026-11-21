@@ -77,6 +77,12 @@ export interface ChatBubbleProps {
    * 返回 null/缺省 ⇒ 回退旧预览页（保持既有行为，不因缺数据而打不开）。
    */
   resolveArtifactDoc?: (artifactId: string, taskId: string) => string | null;
+  /**
+   * 兜底文档站入口（可选）：无产出物归属的普通附件，点开时跳到该团队的文档站，
+   * 而不是独立的 `/docs/file?url=` 简陋页（用户反馈：那个页面和文档站不一致、
+   * 返回也不对）。为 null/缺省时才回退旧预览页。
+   */
+  fallbackDocsHref?: string | null;
   isMentionMe?: boolean;
   /** 外部渠道消息：senderType==='external' 时展示“外部渠道”徽章 */
   senderType?: string;
@@ -124,6 +130,7 @@ export function ChatBubble({
   time,
   attachments,
   resolveArtifactDoc,
+  fallbackDocsHref,
   isMentionMe,
   senderType,
   showIdentity = true,
@@ -446,6 +453,7 @@ export function ChatBubble({
                     isUser={isUser}
                     embedded
                     resolveArtifactDoc={resolveArtifactDoc}
+                    fallbackDocsHref={fallbackDocsHref}
                   />
                 ))}
               </div>
@@ -486,12 +494,15 @@ export function AttachmentCard({
   isUser,
   embedded = false,
   resolveArtifactDoc,
+  fallbackDocsHref,
 }: {
   attachment: ChatBubbleAttachment;
   isUser: boolean;
   embedded?: boolean;
   /** 产出物 → 文档站 slug（见 ChatBubbleProps.resolveArtifactDoc 注释）。 */
   resolveArtifactDoc?: ChatBubbleProps["resolveArtifactDoc"];
+  /** 无产出物归属时的兜底文档站入口（见 ChatBubbleProps.fallbackDocsHref）。 */
+  fallbackDocsHref?: string | null;
 }) {
   const isImage = (IMAGE_EXTS as readonly string[]).includes(
     attachment.ext.toLowerCase(),
@@ -596,12 +607,30 @@ export function AttachmentCard({
     attachment.artifactId && attachment.taskId && resolveArtifactDoc
       ? resolveArtifactDoc(attachment.artifactId, attachment.taskId)
       : null;
-  const docsPreviewHref = artifactDocSlug && attachment.taskId
-    ? `/docs/${attachment.taskId}?doc=${encodeURIComponent(artifactDocSlug)}`
-    : `/docs/file?url=${encodeURIComponent(attachment.url)}` +
-      `&name=${encodeURIComponent(attachment.name)}` +
-      `&ext=${encodeURIComponent(attachment.ext)}` +
-      (typeof attachment.size === "number" ? `&size=${attachment.size}` : "");
+  const legacyPreviewHref =
+    `/docs/file?url=${encodeURIComponent(attachment.url)}` +
+    `&name=${encodeURIComponent(attachment.name)}` +
+    `&ext=${encodeURIComponent(attachment.ext)}` +
+    (typeof attachment.size === "number" ? `&size=${attachment.size}` : "") +
+    /**
+     * 带上产出物归属：即使本页只能给出通用预览链接，`/docs/file` 拿到这两个参数
+     * 会**自动重定向**到文档站对应文档（见该页 resolveDocsHref），
+     * 保证「消息点附件」与「附件清单点附件」最终落到同一界面。
+     */
+    (attachment.artifactId && attachment.taskId
+      ? `&artifactId=${encodeURIComponent(attachment.artifactId)}` +
+        `&taskId=${encodeURIComponent(attachment.taskId)}`
+      : "");
+  /**
+   * 点开目标优先级（2026-11-20）：
+   * ① 产出物附件 → 文档站对应文档（与右侧附件清单**完全同一界面**）；
+   * ② 普通附件但有团队 → 该团队文档站（同一套界面/返回链路）；
+   * ③ 都没有 → 旧通用预览页（保持可打开，不再黑屏或 404）。
+   */
+  const docsPreviewHref =
+    artifactDocSlug && attachment.taskId
+      ? `/docs/${attachment.taskId}?doc=${encodeURIComponent(artifactDocSlug)}`
+      : (fallbackDocsHref ?? legacyPreviewHref);
   const fileLink = (
     <a
       data-testid="attachment-file"

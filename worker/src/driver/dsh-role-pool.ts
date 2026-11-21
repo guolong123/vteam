@@ -149,6 +149,32 @@ export class DshRolePool {
     return role === undefined ? undefined : this.runtimes.get(role)?.driver;
   }
 
+  /**
+   * 让**所有**角色运行时在下次 spawn 时读取新 patch。
+   *
+   * DSH 的 patch 只在 spawn 时读 ⇒ 平台改了 MCP/provider 之后必须换掉进程。
+   * 空闲的立即重建，忙的登记排队（由各自驱动的 `turn/end` 触发）——
+   * 绝不打断在跑的那一轮。
+   *
+   * @returns { reloaded, deferred }：立即重载 / 排队的运行时数
+   */
+  async reloadAllForPatch(): Promise<{ reloaded: number; deferred: number }> {
+    let reloaded = 0;
+    let deferred = 0;
+    for (const [role, runtime] of [...this.runtimes.entries()]) {
+      const applied = await runtime.driver.reloadForPatch();
+      if (applied) {
+        reloaded += 1;
+      } else {
+        deferred += 1;
+      }
+      this.logger.info(
+        `[dsh-role-pool] patch 重载：角色 ${role} ${applied ? '已立即生效' : '排队到本轮结束'}`,
+      );
+    }
+    return { reloaded, deferred };
+  }
+
   /** 关闭全部运行时（worker 停机时）。 */
   async closeAll(): Promise<void> {
     if (this.sweeper !== null) {

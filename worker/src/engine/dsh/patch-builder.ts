@@ -65,16 +65,22 @@ export interface DshProviderRoute {
 
 /** MCP 服务器声明（引擎无关 → patch 条目）。 */
 export interface DshMcpMount {
-  /** 命名空间（工具名前缀）。 */
+  /** 命名空间（工具名前缀）。`[A-Za-z0-9_-]{1,32}`（dsh-mcp-client 的 serverName 约束）。 */
   serverName: string;
   transport: 'stdio' | 'streamable-http';
-  /** stdio */
+  /** stdio：可执行文件（platform 的 `command.command[0]`）。 */
   command?: string;
+  /** stdio：参数（platform 的 `command.command[1..]`）。 */
   args?: string[];
+  /** stdio：额外环境变量（**合并**在引擎清理过的环境之上）。 */
   env?: Record<string, string>;
+  /** stdio：工作目录（dsh-mcp-client 的 `cwd`，缺省 = 引擎进程 cwd）。 */
+  cwd?: string;
   /** streamable-http */
   url?: string;
   headers?: Record<string, string>;
+  /** 单次工具调用/资源请求超时 ms（dsh-mcp-client 的 `toolCallTimeoutMs`）。 */
+  toolCallTimeoutMs?: number;
   /** 启动失败是否让整棵树启动失败（平台 MCP 建议 true，工具 MCP 建议 false）。 */
   failOnStartupError?: boolean;
 }
@@ -201,6 +207,23 @@ export function buildDshPatch(input: DshPatchInput): string {
     );
   }
 
+  // ③' **session-controller 服务**（运行期换模型的唯一依赖）
+  //
+  // 为什么必须显式挂：`session/selectModel`（由 vendor-sdk-server.mjs 注入）转发的
+  // 是 `ctx.get("sessionController")`，而这个服务由 `@deepseek-ai/dsh-api-session-controller`
+  // 提供——**`sdk` profile 的 cordis.patch.yml 并没有挂它**（alpha.2 与 rc.5 均如此，实测）。
+  // 不挂 ⇒ `session/selectModel` 恒返回 `sessionController service unavailable`
+  // ⇒ 驱动 `switchRoute` 只能回退「重启运行时换模型」（约 1s + 必须等无在途回合）。
+  //
+  // ⚠️ 这个失败是**静默降级**：换模型"仍然生效"，只是从「一次 RPC」退化成「重启进程」。
+  // 所以它会长期不被发现——单测里必须钉死（见 dsh-patch-conformance.spec.ts）。
+  lines.push(
+    '',
+    '- insert:',
+    '    - id: session-controller',
+    "      name: '@deepseek-ai/dsh-api-session-controller'",
+  );
+
   // ③ MCP 挂载：insert: 形态（新增条目）
   if (input.mcpMounts.length > 0) {
     lines.push('', '- insert:');
@@ -222,6 +245,9 @@ export function buildDshPatch(input: DshPatchInput): string {
             lines.push(`          ${quoteKey(key)}: ${quote(value)}`);
           }
         }
+        if (mount.cwd !== undefined && mount.cwd !== '') {
+          lines.push(`        cwd: ${quote(mount.cwd)}`);
+        }
       } else {
         if (mount.url !== undefined) lines.push(`        url: ${quote(mount.url)}`);
         if (mount.headers !== undefined && Object.keys(mount.headers).length > 0) {
@@ -230,6 +256,10 @@ export function buildDshPatch(input: DshPatchInput): string {
             lines.push(`          ${quoteKey(key)}: ${quote(value)}`);
           }
         }
+      }
+      // toolCallTimeoutMs：dsh-mcp-client 缺省只有 60s，平台的长任务工具会被掐断
+      if (mount.toolCallTimeoutMs !== undefined && mount.toolCallTimeoutMs > 0) {
+        lines.push(`        toolCallTimeoutMs: ${Math.floor(mount.toolCallTimeoutMs)}`);
       }
       lines.push(`        failOnStartupError: ${mount.failOnStartupError === true ? 'true' : 'false'}`);
     }

@@ -1,16 +1,20 @@
 "use client";
 
 /**
- * /system/settings —— 全局设置（聊天流式输出样式 + 页面特效）。
+ * /system/settings —— 全局设置（聊天流式输出样式 + 页面特效 + 会话压缩平台配置）。
  *
  * 私聊消息渲染保留两套实现：
  * - 原生：现有气泡 + 过程折叠（MsgParts variant="bubble"）
  * - DSH：DSH 风格的流式过程展示（MsgParts variant="dsh"）
- * 偏好存 localStorage（zustand persist），只影响本浏览器。
+ * 这两项偏好存 localStorage（zustand persist），只影响本浏览器。
+ *
+ * 「会话上下文压缩」是**平台配置**（存服务端 DB，管理员可改，对所有会话生效），
+ * 见 SessionCompactConfigPanel。
  */
 import { useChatPrefsStore, type ChatStreamStyle } from "@/lib/stores/chat-prefs-store";
 import { fontSize, fontFamily, neutral, space, radius } from "@/src/theme/tokens";
 import { CanvasUIEffectPicker } from "@/src/components/canvasui/effect-picker";
+import { SessionCompactConfigPanel } from "@/src/components/settings/session-compact-config-panel";
 
 const OPTIONS: Array<{
   value: ChatStreamStyle;
@@ -38,9 +42,12 @@ export default function GlobalSettingsPage() {
       <div>
         <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>全局设置</div>
         <div style={{ marginTop: 4, fontSize: fontSize.xs, color: neutral[400] }}>
-          仅影响当前浏览器；不改变服务端数据。
+          流式样式与页面特效仅影响当前浏览器；会话压缩为平台配置，对所有会话生效。
         </div>
       </div>
+
+      {/* 平台配置（服务端 DB）：会话长期不活跃 → 发消息前主动压缩 */}
+      <SessionCompactConfigPanel />
 
       <section
         style={{

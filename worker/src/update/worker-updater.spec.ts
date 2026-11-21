@@ -929,3 +929,174 @@ describe('robustRename（EXDEV 跨设备回退，compose e2e 实测缺陷）', (
     expect(calls).toEqual(['rename']);
   });
 });
+
+/**
+ * Windows 重启桥（2026-11-21 新增）。
+ *
+ * ── 为什么这些测试值得写 ──────────────────────────────────────────────
+ * 这段代码**永远在本机（macOS/Linux）跑不到**（`process.platform === 'win32'` 才进），
+ * 而它负责的是一次真实升级的最后一环：把新码拉起来。写错的后果是
+ * 「文件换了、进程还是旧码」——最典型的静默失败（用户以为升了，实际没生效）。
+ *
+ * 因此这里直接测**私有实现的两个可判定的部分**：
+ * 1. `detectWindowsHost`：服务 / 计划任务两种托管都要认（安装器在下载不到 WinSW 时
+ *    会回退计划任务，只认服务会让那批部署永远卡在 ready-manual）；
+ * 2. `launchWindowsRestartHelper`：助手脚本必须真的写到盘上、内容里必须是
+ *    **等 PID 退出再启动**（顺序写反 = 启动的是旧码），且服务名/任务名正确落到命令上。
+ *
+ * ⚠️ 平台分支本身不 mock（`process.platform` 不可写）；这里**直接调私有方法**，
+ * 它们本身不含平台判断 —— 平台判断只在 `attemptRestart` 的分流处。
+ */
+describe('Windows 重启桥（detectWindowsHost / launchWindowsRestartHelper）', () => {
+  /** 取 updater 的私有实现（测试专用）。 */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const priv = (u: WorkerUpdater): any => u as any;
+
+  /** 造一个只关心 Windows 探测与派发的 updater（run 结果按命令名路由）。 */
+  function makeWinUpdater(
+    route: (command: string, args: string[]) => CommandOutcome,
+    env: NodeJS.ProcessEnv = {},
+  ) {
+    const fsImpl = new FakeFs();
+    fsImpl.dirs.add(INSTALL_DIR);
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const updater = new WorkerUpdater({
+      serverUrl: 'http://server.example.com',
+      installDir: INSTALL_DIR,
+      activeSessionCount: () => 0,
+      fetchImpl: jest.fn() as unknown as typeof fetch,
+      fsImpl,
+      run: async (command, args) => {
+        calls.push({ command, args });
+        return route(command, args);
+      },
+      now: () => 1,
+      env: { ...BASE_ENV, ...env },
+      logger: { info: () => {}, warn: () => {}, debug: () => {} },
+    });
+    return { updater, fsImpl, calls };
+  }
+
+  const ok = (): CommandOutcome => ({ code: 0, stdout: '', stderr: '' });
+  const fail = (code = 1): CommandOutcome => ({ code, stdout: '', stderr: '' });
+
+  it('服务存在 → 认作 service（计划任务无需再探）', async () => {
+    const { updater } = makeWinUpdater((cmd) => (cmd === 'sc.exe' ? ok() : fail()));
+    const host = await priv(updater).detectWindowsHost();
+    expect(host).toEqual({ kind: 'service', name: 'vteam-worker' });
+  });
+
+  it('服务不存在但计划任务存在 → 认作 task（内网无 WinSW 时的回退形态）', async () => {
+    const { updater, calls } = makeWinUpdater((cmd) =>
+      cmd === 'sc.exe' ? fail(1060) : ok(),
+    );
+    const host = await priv(updater).detectWindowsHost();
+    expect(host).toEqual({ kind: 'task', name: 'vteam-worker' });
+    // 两个探测都要跑过：先服务后任务
+    expect(calls.map((c) => c.command)).toEqual(['sc.exe', 'schtasks.exe']);
+  });
+
+  it('两者都不存在 → null（调用方据此走 ready-manual，不瞎派助手）', async () => {
+    const { updater } = makeWinUpdater(() => fail(1060));
+    expect(await priv(updater).detectWindowsHost()).toBeNull();
+  });
+
+  it('服务名可由 WORKER_WINDOWS_SERVICE_NAME 覆盖（安装器 -ServiceName 自定义场景）', async () => {
+    const { updater, calls } = makeWinUpdater((cmd) => (cmd === 'sc.exe' ? ok() : fail()), {
+      WORKER_WINDOWS_SERVICE_NAME: 'my-vteam-worker',
+    });
+    const host = await priv(updater).detectWindowsHost();
+    expect(host).toEqual({ kind: 'service', name: 'my-vteam-worker' });
+    expect(calls[0]!.args).toContain('my-vteam-worker');
+  });
+
+  it('派发 service 助手：脚本先等 PID 消失，再 sc start <服务名>', async () => {
+    const { updater, fsImpl, calls } = makeWinUpdater(() => ok());
+    const helper = await priv(updater).launchWindowsRestartHelper({
+      kind: 'service',
+      name: 'vteam-worker',
+    });
+
+    expect(helper).toBe(path.join(INSTALL_DIR, 'update-restart.cmd'));
+    const content = fsImpl.files.get(helper!)?.toString('utf8') ?? '';
+
+    // ① 必须包含「等本进程 PID 退出」的循环（否则会在旧进程还活着时就 start，等于没重启）
+    expect(content).toContain(`tasklist /FI "PID eq ${process.pid}"`);
+    // ② 必须 sc start 到正确名字
+    expect(content).toContain('sc.exe start "vteam-worker"');
+    // ③ 关键顺序：等待循环出现在 sc start 之前
+    expect(content.indexOf('tasklist /FI')).toBeLessThan(content.indexOf('sc.exe start'));
+    // ④ 派发用 cmd /c start（脱离进程树），不是裸 spawn
+    const launch = calls.find((c) => c.command === 'cmd.exe');
+    expect(launch).toBeDefined();
+    expect(launch!.args).toContain('start');
+    expect(launch!.args).toContain(helper);
+  });
+
+  it('派发 task 助手：走 schtasks /Run 而不是 sc', async () => {
+    const { updater, fsImpl } = makeWinUpdater(() => ok());
+    const helper = await priv(updater).launchWindowsRestartHelper({
+      kind: 'task',
+      name: 'vteam-worker',
+    });
+    const content = fsImpl.files.get(helper!)?.toString('utf8') ?? '';
+    expect(content).toContain('schtasks.exe /Run /TN "vteam-worker"');
+    expect(content).not.toContain('sc.exe start');
+  });
+
+  it('写助手失败 → undefined（调用方回退 ready-manual，不假装已重启）', async () => {
+    const { updater, fsImpl } = makeWinUpdater(() => ok());
+    jest.spyOn(fsImpl, 'writeFile').mockRejectedValueOnce(new Error('EACCES'));
+    const helper = await priv(updater).launchWindowsRestartHelper({
+      kind: 'service',
+      name: 'vteam-worker',
+    });
+    expect(helper).toBeUndefined();
+  });
+
+  it('派发失败（cmd 非 0）→ undefined（同上：宁可人工，不谎报）', async () => {
+    const { updater } = makeWinUpdater((cmd) => (cmd === 'cmd.exe' ? fail(1) : ok()));
+    const helper = await priv(updater).launchWindowsRestartHelper({
+      kind: 'service',
+      name: 'vteam-worker',
+    });
+    expect(helper).toBeUndefined();
+  });
+});
+
+/**
+ * `canSelfUpdate`：随注册上报给控制面，决定 UI 显示「更新」按钮还是「复制升级命令」。
+ *
+ * ⚠️ 这条能力位是**本轮 UI 改造的前提**：控制面若拿不到它（旧 worker 为 undefined），
+ * 就只能保守地按"不能自更新"处理 —— 那正是 Windows/旧节点的现状。
+ * 平台分支在 mac/Linux 上无法直接触发 win32，故这里只钉住"当前平台应给出什么"，
+ * Windows 的真实取值靠 `isWindowsSelfUpdateAllowed` 的环境变量语义保证（见下）。
+ */
+describe('canSelfUpdate（上报给控制面的自更新能力）', () => {
+  it('非 Windows 平台 → true（POSIX 走 systemd；无 systemd 时运行期落 ready-manual）', () => {
+    if (process.platform === 'win32') {
+      return; // 在 Windows 上跑时由下一条覆盖
+    }
+    const { updater } = createHarness();
+    expect(updater.canSelfUpdate).toBe(true);
+  });
+
+  it('Windows + 未开逃生开关 → false（缺省关闭，见 WORKER_WINDOWS_SELF_UPDATE）', () => {
+    // 无法改 process.platform；直接验证开关解析语义（Windows 分支的唯一变量）
+    const { updater } = createHarness({ env: {} });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allowed = (updater as any).isWindowsSelfUpdateAllowed();
+    expect(allowed).toBe(false);
+  });
+
+  it('Windows 逃生开关接受 1/true/yes/on/y（大小写不敏感）', () => {
+    for (const raw of ['1', 'true', 'YES', 'on', 'y']) {
+      const { updater } = createHarness({ env: { WORKER_WINDOWS_SELF_UPDATE: raw } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((updater as any).isWindowsSelfUpdateAllowed()).toBe(true);
+    }
+    const { updater } = createHarness({ env: { WORKER_WINDOWS_SELF_UPDATE: '0' } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((updater as any).isWindowsSelfUpdateAllowed()).toBe(false);
+  });
+});

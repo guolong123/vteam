@@ -93,12 +93,58 @@ export class DshPoolDriver implements OpenCodeDriver, EngineEventChannel {
     return this.pool.listRoles();
   }
 
+  /**
+   * patch 变更后让池内运行时读取新 patch（空闲的立即重建，忙的排队）。
+   *
+   * 由 `createDshWorkerDriver` 在 patch 重写后调用——**这是「注册的 MCP 改了要生效」**
+   * 的关键一环：不调它，patch 虽已落盘，但 agent 仍跑在旧进程上（DSH 不监听 patch）。
+   */
+  async refreshPatch(): Promise<{ reloaded: number; deferred: number }> {
+    const result = await this.pool.reloadAllForPatch();
+    if (result.reloaded + result.deferred > 0) {
+      this.logger.info(
+        `[dsh-pool] patch 刷新：立即生效 ${result.reloaded} 个运行时，排队 ${result.deferred} 个`,
+      );
+    }
+    return result;
+  }
+
   /** 凭据登记实现（由 createDshWorkerDriver 注入实际 applier）。 */
   private credentialSink?: (creds: EngineModelCredential[]) => Promise<void>;
 
   /** 注入凭据登记实现（createDshWorkerDriver 构造时调用一次）。 */
   setCredentialSink(sink: (creds: EngineModelCredential[]) => Promise<void>): void {
     this.credentialSink = sink;
+  }
+
+  /**
+   * 注入「重建 patch」（由 `createDshWorkerDriver` 接线）。
+   *
+   * 为什么走这个入口而不是让命令处理者自己调注入器：rebuildPatch 需要闭包里的
+   * 真相源（currentCredentials / 模型目录 / preset roster）与注入器实例，那些都在
+   * `createDshWorkerDriver` 内部。命令处理处只有 `driver` 这个句柄 ⇒ 与
+   * `setCredentialSink` 同一套依赖倒置。
+   */
+  private patchSink?: () => Promise<void>;
+
+  /** 注入 patch 重建实现。 */
+  setPatchSink(sink: () => Promise<void>): void {
+    this.patchSink = sink;
+  }
+
+  /**
+   * 按平台最新配置重建 patch 并刷新运行时（reload-config 的 dsh 实现）。
+   *
+   * 与 opencode 的 `applyConfigChange` 语义对齐：**配置变更后必须能在引擎里生效**。
+   * 区别是 dsh 没有热重载通道（patch 只在 spawn 时读）⇒ 空闲运行时重建、
+   * 忙运行时排队（见 `refreshPatch`）。
+   */
+  async rebuildFromPlatform(): Promise<{ reloaded: number; deferred: number }> {
+    if (this.patchSink === undefined) {
+      throw new Error('[dsh-pool] patch 重建未接线（无 patchSink）');
+    }
+    await this.patchSink();
+    return this.refreshPatch();
   }
 
   /**

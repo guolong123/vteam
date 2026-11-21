@@ -114,6 +114,15 @@ const EMPTY_INJECT_REPORT: InjectReport = {
  * 分不清"平台本来就没有自定义工具"与"拉取炸了/注入被跳过"——这正是**静默失败**的典型形态。
  * 故本工厂是注入器的**唯一**构造入口。
  */
+/** dsh 的凭据形态（provider 路由 + 可选模型目录）。 */
+type DshCredential = {
+  providerID: string;
+  modelID?: string;
+  apiKey: string;
+  baseUrl?: string;
+  models?: Array<{ id: string; name: string }>;
+};
+
 /**
  * 构造 dsh 引擎的 worker 驱动（P4）。
  *
@@ -169,6 +178,17 @@ export function createDshWorkerDriver(
       'X-Worker-Token': config.workerToken,
       'x-worker-id': config.workerId,
     },
+    // 平台「MCP 服务器」注册表（**此前完全没接**）：
+    //
+    // 不给这一段时，dsh 的 patch 里只有上面那一条内置 `vteam` ⇒ 用户在平台注册的
+    // 其余 MCP（gitee/gitlab/自定义 HTTP MCP…）在 dsh worker 上**永远不会出现**，
+    // 而 opencode worker 上是正常的。用户可见现象正是「注册的 MCP 不会自动下发、
+    // worker 内的 agent 看不到工具」，且 worker/server 两侧都没有任何报错。
+    mcpRegistry: {
+      serverUrl: config.serverUrl,
+      workerToken: config.workerToken,
+      workerId: config.workerId,
+    },
     providerBaseUrl: baseUrl === undefined ? undefined : { [providerID]: baseUrl },
     // 网关要求会话头时由部署配置显式声明（如 opencode-go 的 `x-opencode-session`）。
     // 值必须是**静态**字符串——网关若按会话区分，用固定部署标识即可（同一 worker 稳定）。
@@ -208,18 +228,54 @@ export function createDshWorkerDriver(
   let catalogByProvider = new Map<string, Array<{ id: string; name: string }>>();
 
   /** 给凭据补上「该 provider 在平台上的全部模型」（dsh patch 需逐模型声明）。 */
-  const withCatalogModels = (cred: {
-    providerID: string;
-    modelID?: string;
-    apiKey: string;
-    baseUrl?: string;
-  }) => {
+  const withCatalogModels = (cred: DshCredential): DshCredential => {
     const models = catalogByProvider.get(cred.providerID);
     return models === undefined || models.length === 0 ? cred : { ...cred, models };
   };
 
   const credentialBase = { providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) };
   void credentials.apply([credentialBase]);
+
+  /**
+   * 当前完整的凭据清单（平台下发的全量 provider 路由）。
+   *
+   * 为什么要有这个"真相源"：patch 是**整体重写**，而重建它的时机有四类
+   * （启动 / 目录拉到 / 凭据下发 / MCP 变更）。若每处各传各的，后到的重建会把
+   * 前一处刚写进去的 provider **冲掉**（此前正是这样：凭据重建只传凭据、
+   * MCP 重建只传 MCP，谁最后写谁说了算）。故统一收在一处。
+   */
+  let currentCredentials: DshCredential[] = [credentialBase];
+
+  /** patch 路径（驱动 spawn 时 `--patch` 引用；握手前必须就位）。 */
+  const patchPath = path.join(workDir, '.vteam', 'dsh-profile.patch.yml');
+
+  /**
+   * **唯一**的 patch 重建入口。
+   *
+   * 四类触发点（启动 / 目录 / 凭据 / MCP）都走这里，保证每次写出的都是一份
+   * **完整**快照（providers + 平台 MCP + 内置 MCP + preset roster），
+   * 而不是"只把本次变的那一块塞进去"。
+   *
+   * ⚠️ 失败必须向上抛：调用方要据此**保留旧 patch**（不要让一次控制面抖动
+   * 把已经生效的 MCP/provider 拔掉——那正是"注册的 MCP 时有时无"的成因之一）。
+   */
+  const rebuildPatch = async (): Promise<void> => {
+    const enriched = currentCredentials.map((cred) => withCatalogModels(cred));
+    await credentials.apply(enriched);
+    await injector.apply(
+      {
+        workDir,
+        skills: [],
+        tools: [],
+        // MCP 走 injector 自己的注册表拉取（mcpRegistry 选项）——快照这里不再
+        // 重复喂一份，避免两处数据源不一致；快照通道仍受支持（见 buildMounts）。
+        mcpServers: [],
+        agentPolicies: [],
+        modelCredentials: enriched,
+      },
+      workDir,
+    );
+  };
 
   // P6：注入 **agent-preset roster**（多角色共享一个运行时）。
   //
@@ -232,19 +288,7 @@ export function createDshWorkerDriver(
       const { buildBuiltinRoster, renderPresetPatch } = await import('./engine/dsh/preset-builder');
       const roster = buildBuiltinRoster();
       injector.setPresetRosterPatch(renderPresetPatch(roster, roster[0]?.id ?? 'standard'));
-      await injector.apply(
-        {
-          workDir,
-          skills: [],
-          tools: [],
-          mcpServers: [],
-          agentPolicies: [],
-          modelCredentials: [
-            { providerID, modelID, apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) },
-          ],
-        },
-        workDir,
-      );
+      await rebuildPatch();
       console.log(
         `[worker/dsh] agent-preset roster 已注入：${roster.length} 个角色（${roster.map((r) => r.id).join(', ')}）`,
       );
@@ -254,18 +298,7 @@ export function createDshWorkerDriver(
   })();
 
   // patch 写盘（同步等待：握手前必须就位）
-  const patchPath = path.join(workDir, '.vteam', 'dsh-profile.patch.yml');
-  void injector.apply(
-    {
-      workDir,
-      skills: [],
-      tools: [],
-      mcpServers: [],
-      agentPolicies: [],
-      modelCredentials: [withCatalogModels(credentialBase)],
-    },
-    workDir,
-  );
+  void rebuildPatch();
 
   // ②' 平台模型目录 →**二次 apply**（见上方 modelCatalogForProvider 的时序说明）
   //
@@ -319,21 +352,10 @@ export function createDshWorkerDriver(
   /** 把当前 catalog 应用到 patch（幂等；catalog 为空时不动 patch，避免回退单模型）。 */
   const applyCatalogToPatch = async (): Promise<void> => {
     if (catalogByProvider.size === 0) return;
-    const enriched = withCatalogModels(credentialBase) as typeof credentialBase & {
-      models?: Array<{ id: string; name: string }>;
-    };
-    await credentials.apply([enriched]);
-    await injector.apply(
-      {
-        workDir,
-        skills: [],
-        tools: [],
-        mcpServers: [],
-        agentPolicies: [],
-        modelCredentials: [enriched],
-      },
-      workDir,
-    );
+    // 目录只是「凭据的模型清单」来源 ⇒ 更新真相源后统一重建（不另写一份 patch）
+    currentCredentials = currentCredentials.map((cred) => withCatalogModels(cred));
+    const enriched = withCatalogModels(credentialBase);
+    await rebuildPatch();
     const declared = enriched.models ?? [];
     console.log(
       declared.length === 0
@@ -411,25 +433,15 @@ export function createDshWorkerDriver(
       ? incoming
       : [credentialBase, ...incoming];
     const enriched = merged.map((c) => withCatalogModels(c));
-    await credentials.apply(enriched);
-    // ② **重建 patch**：把平台上有凭据的**所有** provider 都声明进去。
+    // ② 更新真相源 + **统一重建 patch**：平台上有凭据的**所有** provider 都要声明进去。
     //
     // 为什么必须重建：patch 此前只声明 env 里那一个 provider（`DSH_PROVIDER`）。
     // 用户在平台新增本地模型（如 qwen-local）后凭据会下发到 worker，但 patch 里没有
     // 该 provider ⇒ initialize 走新路由时报 `no adapter registered for provider
     // "qwen-local"`（线上实测）。opencode 引擎没这问题 —— 它的 provider 配置本来就按
     // 平台全量重建。
-    await injector.apply(
-      {
-        workDir,
-        skills: [],
-        tools: [],
-        mcpServers: [],
-        agentPolicies: [],
-        modelCredentials: enriched,
-      },
-      workDir,
-    );
+    currentCredentials = enriched;
+    await rebuildPatch();
     // 凭据重建可能发生在 catalog 尚未拉到时；本次 patch 先落单模型，
     // 后台补拉目录后再整体重写一次（不回退已声明的模型）。
     if (catalogByProvider.size === 0) {
@@ -441,7 +453,16 @@ export function createDshWorkerDriver(
       `[worker/dsh] patch 已按凭据重建：providers=[${enriched.map((c) => c.providerID).join(', ')}]` +
         '（下个运行时 spawn 生效）',
     );
+    // ③ 让**当前空闲**的运行时换上新 patch（在跑的那轮不打断，排队到本轮结束）
+    await driver.refreshPatch();
   });
+
+  // reload-config 的 dsh 实现：按平台最新配置重写 patch 并刷新运行时。
+  //
+  // ⚠️ 这条接线**不能省**：平台在 MCP/skills/agent 变更后广播 reload-config，
+  // 这是 dsh worker 唯一能"自动跟进"的入口。不接线时 `rebuildFromPlatform` 抛错
+  // （而不是静默），确保"没接"和"接了但失败"在日志里可区分。
+  driver.setPatchSink(rebuildPatch);
 
   console.log(
     `[worker/dsh] 驱动就绪：provider=${providerID} model=${modelID} ` +
@@ -672,6 +693,91 @@ export function detectOpencodeVersion(): string {
 /** 探测并解析 opencode CLI 版本（T1：启动期版本闸门用）。 */
 export function detectOpencodeVersionInfo(): OpencodeVersionInfo {
   return parseOpencodeVersion(detectOpencodeVersionRaw());
+}
+
+/**
+ * 探测 **dsh** 引擎版本（引擎 = dsh 时上报给控制面）。
+ *
+ * 为什么不能复用 opencode 那条解析：
+ * 1. **输出形态不同**：`dsh --version` 吐裸 semver（`0.2.2-rc.5`），
+ *    opencode 吐 `opencode v2.0.32`；
+ * 2. **不能丢预发布标签**：`parseOpencodeVersion` 只取 `major.minor.patch`，
+ *    会把 `0.2.2-rc.5` 归一成 `0.2.2` —— 而 rc 与正式版的行为差异**恰是排查时最需要的
+ *    信息**（例：rc.5 的 sdk profile 不挂 session-controller）。故 dsh **保留全文**。
+ *
+ * @param bin - dsh 可执行文件（缺省取 env `DSH_BIN` 或 PATH 上的 `dsh`）。
+ * @returns 原始版本串（如 `0.2.2-rc.5`）；探测失败 → `'unknown'`（不抛错）。
+ */
+export function detectDshVersionRaw(bin?: string): string {
+  const command = (bin ?? '').trim() || (process.env.DSH_BIN ?? '').trim() || 'dsh';
+  const result = spawnCliSync(command, ['--version'], { timeoutMs: 5000 });
+  if (result.error) {
+    return 'unknown';
+  }
+  const version = (result.stdout ?? '').trim() || (result.stderr ?? '').trim();
+  return version || 'unknown';
+}
+
+/**
+ * 注册的**持续重试**策略：首次注册失败后无限次重试，直到成功。
+ *
+ * ── 为什么需要（2026-11-21 修复「Win 机器重启后连不上」）──────────────
+ * `registerCurrent()` 内部已是 8 次指数退避（约 2 分钟）。这在**开机自启**场景下
+ * 经常不够：计划任务/WinSW 在开机即拉起 worker，而网络（域环境、WiFi、VPN）
+ * 常要更久才就绪。旧代码在重试耗尽后 `process.exit(1)`，之后能否复活全看托管方：
+ * 计划任务 `RestartCount 3`×1 分钟、WinSW `onfailure` 同有上限 ⇒ 约 3 分钟后
+ * **永久离线**，只能人工重启。
+ *
+ * 本函数把"失败后怎么办"从"退出"改为"等 60s 再来"，不设上限——网络恢复了就自己连上。
+ *
+ * @param attempt - 尝试注册（返回 null 表示失败）
+ * @param opts.delayMs - 两次尝试的间隔（测试注入小值；缺省 60s）
+ * @param opts.maxAttempts - 上限（测试用；缺省 Infinity = 无限重试）
+ * @param opts.sleep - 等待实现（测试可注入立即 resolve）
+ * @param opts.onRetry - 每次重试前的回调（打日志用）
+ * @returns 成功时的结果（非 null）
+ */
+export async function registerWithPersistentRetry<T>(
+  attempt: () => Promise<T | null>,
+  opts: {
+    delayMs?: number;
+    maxAttempts?: number;
+    sleep?: (ms: number) => Promise<void>;
+    onRetry?: (attempt: number) => void;
+  } = {},
+): Promise<T> {
+  const delayMs = opts.delayMs ?? 60_000;
+  const maxAttempts = opts.maxAttempts ?? Number.POSITIVE_INFINITY;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+
+  let result = await attempt();
+  let attemptNo = 0;
+  while (result === null) {
+    if (attemptNo >= maxAttempts) {
+      throw new Error(
+        `[worker] 注册持续重试达到上限（${maxAttempts} 次）仍未成功，放弃（测试/受限场景）`,
+      );
+    }
+    attemptNo += 1;
+    opts.onRetry?.(attemptNo);
+    await sleep(delayMs);
+    result = await attempt();
+  }
+  return result;
+}
+
+/**
+ * 按引擎取**上报给控制面**的版本串。
+ *
+ * 为什么复用 `opencodeVersion` 这个协议字段而不是新加一个：控制面的 registry/调度器/
+ * 前端都已按该字段做「版本串精确过滤」与展示，改协议要动 server + DB + 前端三处；
+ * 而两者语义本就是「**这个 worker 跑的引擎是什么版本**」。dsh 模式填 dsh 版本，
+ * 前端据 `capabilities.engine === 'dsh'` 区分展示（不会混淆成 opencode 版本）。
+ *
+ * ⚠️ dsh 模式**不做** `normalizeOpencodeVersion`：那会抹掉 `-rc.5` 这类预发布标签。
+ */
+export function detectEngineVersion(engine: WorkerEngineKind, dshBin?: string): string {
+  return engine === 'dsh' ? detectDshVersionRaw(dshBin) : detectOpencodeVersion();
 }
 
 /** T4b 注入执行器通过 onCommands 注册的命令处理回调（处理心跳携带的下行命令）。 */
@@ -1503,6 +1609,16 @@ export async function buildCapabilities(
   maxInstances = 5,
   executableModels?: string[],
   engine: WorkerEngineKind = 'opencode',
+  /**
+   * 引擎真实版本（dsh 模式 = `dsh --version` 原样，含 `-rc.N`；opencode 模式 = 规范化 semver）。
+   * 缺省 `'unknown'`（旧调用方/探测失败）。
+   */
+  engineVersion = 'unknown',
+  /**
+   * 本 worker 能否自更新（`WorkerUpdater.canSelfUpdate`）。缺省 false = 旧调用方/不支持，
+   * 控制面据此把「更新」按钮换成「复制升级命令」。
+   */
+  selfUpdate = false,
 ): Promise<WorkerCapabilities> {
   const base = advertiseHost.replace(/\/+$/, '');
   const browserTools = isAgentBrowserAvailable() ? BROWSER_TOOLS.map((t) => t.name) : [];
@@ -1511,6 +1627,9 @@ export async function buildCapabilities(
   const engineBits =
     engine === 'dsh'
       ? {
+          // 引擎真实版本（保留 `-rc.N` 预发布标签；顶层 opencodeVersion 不含它）
+          engineVersion,
+          selfUpdate,
           perMessageModelSwitch: false,
           todos: false,
           externalAgents: false,
@@ -1521,6 +1640,8 @@ export async function buildCapabilities(
           mcpStatusProbe: false,
         }
       : {
+          engineVersion,
+          selfUpdate,
           perMessageModelSwitch: true,
           todos: true,
           externalAgents: true,
@@ -1584,6 +1705,13 @@ export async function buildRegisterOptions(
   execPort?: number,
   executableModels?: string[],
   maxInstances?: number,
+  /**
+   * 引擎真实版本（dsh 模式含 `-rc.N` 预发布标签；opencode 模式为规范化 semver）。
+   * 缺省时按引擎现场探测一次（既有单测调用方不必改签名，行为不变）。
+   */
+  engineVersion?: string,
+  /** 本 worker 能否自更新（缺省 false：控制面改展示「复制升级命令」）。 */
+  selfUpdate?: boolean,
 ): Promise<RegistryClientOptions> {
   const capabilities = await buildCapabilities(
     port,
@@ -1594,6 +1722,8 @@ export async function buildRegisterOptions(
     maxInstances ?? config.workerMaxInstances,
     executableModels,
     config.engine,
+    engineVersion ?? detectEngineVersion(config.engine, config.dshBin),
+    selfUpdate ?? false,
   );
   return {
     serverUrl: config.serverUrl,
@@ -1603,8 +1733,17 @@ export async function buildRegisterOptions(
     // T1：上报值必须是**规范化 semver 串**（`2.0.28`）——控制面调度器按精确串相等过滤
     // worker（`workers.service.ts` 的 opencodeVersion 比较），两端格式必须一致，
     // 不能上报 `opencode v2.0.28` 全文。无法解析的值原样透传（'unknown' 等既有语义）。
+    // ⚠️ dsh 模式**不做** semver 归一化：会把 `0.2.2-rc.5` 抹成 `0.2.2`
+    // （rc 与正式版行为不同，这个标签是排障的关键信息）。opencode 模式保持既有语义
+    // ——上报值必须是规范化 semver，控制面按精确串过滤 worker。
     opencodeVersion:
-      serveVersion !== 'unknown' ? normalizeOpencodeVersion(serveVersion) : normalizeOpencodeVersion(cliVersion),
+      engineVersion !== undefined
+        ? engineVersion
+        : config.engine === 'dsh'
+          ? detectDshVersionRaw(config.dshBin)
+          : serveVersion !== 'unknown'
+            ? normalizeOpencodeVersion(serveVersion)
+            : normalizeOpencodeVersion(cliVersion),
     capabilities,
     ...(config.defaultModelId ? { defaultModelId: config.defaultModelId } : {}),
     ...(config.mcpUrl ? { mcpUrl: config.mcpUrl } : {}),
@@ -1681,16 +1820,29 @@ export function ensureWorkDirReady(workDir: string): void {
 
 export function main(env: NodeJS.ProcessEnv = process.env): void {
   const config = loadConfig(env);
-  const versionInfo = detectOpencodeVersionInfo();
+  // ⚠️ **只在 opencode 引擎下**做 opencode 版本探测与闸门。
+  //
+  // 为什么必须分开（实测缺陷）：dsh 镜像里**根本没有 opencode CLI**（Dockerfile.dsh 明确
+  // 不装），但这段代码原先无条件执行 ⇒ 每次启动都走一遍 `opencode --version` 的 spawn
+  // 失败路径，然后：
+  //   ① 打一条误导性告警（`无法判定 opencode 版本`，运维会去查 opencode 装没装）；
+  //   ② `opencodeVersion` 恒为 `'unknown'` ⇒ 控制面 worker 卡片上 dsh 节点**没有版本号**
+  //      （用户可见症状："dsh 没显示版本"）。
+  // 现在 dsh 引擎探测自己的版本（`dsh --version`，保留 `-rc.5` 这类预发布标签）。
+  const engine = config.engine;
+  const opencodeVersion =
+    engine === 'dsh' ? detectDshVersionRaw(config.dshBin) : detectOpencodeVersion();
+  if (engine !== 'dsh') {
+    // T1 版本闸门（T18 起单模）：要求主版本 ≥ 2（镜像没换 CLI 规格，继续跑只会拿到 v1 契约）；
+    // 认不出版本 → 只告警不判死（计划 D2 风险对策：由控制面按版本串精确过滤兜底）。
+    assertOpencodeVersionSupported(parseOpencodeVersion(detectOpencodeVersionRaw()), {
+      logger: { warn: (message) => console.warn(message) },
+    });
+  }
   // T18 单轨：驱动实现只有 v2（v1 驱动已删除）——`resolveOpencodeDriverMode(false)` 会
   // **响亮抛错**（`OPENCODE_V2_ENABLED=false` 不再是「退回 v1」的代码级开关）。
+  // dsh 不构造 opencode 驱动，故不需要该决策；仍解析一次以保留"非法取值响亮失败"的既有语义。
   const driverMode = resolveOpencodeDriverMode(config.opencodeV2Enabled);
-  // T1 版本闸门（T18 起单模）：要求主版本 ≥ 2（镜像没换 CLI 规格，继续跑只会拿到 v1 契约）；
-  // 认不出版本 → 只告警不判死（计划 D2 风险对策：由控制面按版本串精确过滤兜底）。
-  assertOpencodeVersionSupported(versionInfo, {
-    logger: { warn: (message) => console.warn(message) },
-  });
-  const opencodeVersion = formatOpencodeVersion(versionInfo);
 
   printStartup(config, opencodeVersion);
   warnLoopbackAdvertiseHost(config);
@@ -1869,6 +2021,11 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
           models,
           execPort,
           executableModels,
+          undefined,
+          // dsh 模式传 dsh 版本（含 `-rc.N`）；opencode 模式传规范化 semver
+          opencodeVersion,
+          // 能否自更新：控制面据此决定显示「更新」按钮还是「复制升级命令」
+          updater.canSelfUpdate,
         )),
         // 自更新状态随注册一并上报（server 落库供 UI 展示；缺席 = 未上报）。
         ...updaterReport(),
@@ -1894,11 +2051,26 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // ② 启动竞态自愈——server 未 Ready 时首拉 fetch failed，会缺 skills/agent 节点/MCP，
       //    只补 injectMcp 覆盖不到 skills 与 agent 节点（k8s 实测 .opencode/skills 空、agent:[]）。
       try {
-        const report = await injector.injectAll();
-        lastInjectReport = report;
-        console.log(
-          `[worker] 注册后全量重注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers`,
-        );
+        if (config.engine === 'dsh') {
+          // dsh：注册后的"重注入"指的是**重写 patch**（不是 opencode 的 injectAll）。
+          //
+          // ⚠️ 顺序是硬约束（实测形态）：首次 patch 在**注册前**写出，此时 server 还
+          // 不知道本 worker 的 capabilities.mcpUrl ⇒ `/mcp-servers` 返回的内置 `vteam`
+          // 仍是 seed 里的内网地址（集群外 worker 不可达）。注册后才拿得到覆盖地址，
+          // 所以必须在这里再刷一次，否则内置 MCP 在外部 worker 上永远是错地址
+          // ⇒ 平台工具全 401（表现为"工具存在但全失败"）。
+          const dshDriver = driver as unknown as {
+            rebuildFromPlatform?: () => Promise<{ reloaded: number; deferred: number }>;
+          };
+          await dshDriver.rebuildFromPlatform?.();
+          console.log('[worker/dsh] 注册后 patch 已按 worker 覆盖地址重写（MCP 地址已对齐）');
+        } else {
+          const report = await injector.injectAll();
+          lastInjectReport = report;
+          console.log(
+            `[worker] 注册后全量重注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers`,
+          );
+        }
       } catch (err) {
         console.warn(`[worker] 注册后重注入失败: ${(err as Error).message}`);
       }
@@ -2152,6 +2324,39 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   onCommands(async (commands) => {
     for (const command of commands) {
       if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
+        // ══ dsh 引擎：**重拉注册表 → 重写 patch → 刷新运行时** ══
+        //
+        // 为什么必须单独分支：dsh 没有 serve 进程 ⇒ 下面那条 opencode 路径里的
+        // `applyConfigChange` 必然报「serve 端点未就绪」再回退「重启」，
+        // 然后走 opencode 启动逻辑报「缺 OPENCODE_SERVER_PASSWORD」（每条下发两行噪日志）。
+        // 更关键的是：dsh 的 patch 由**注入器**生成，而 `injectAll()` 是 opencode 的
+        // 注入链路（写 opencode.json / .opencode/skills）—— 对 dsh 的 MCP **完全不生效**
+        // ⇒ 平台广播的 reload-config 在 dsh worker 上等于空转
+        // （这正是「注册 MCP 后 worker 里看不到工具」的另一半原因：即使 patch 里补了，
+        //  也没有任何代码去重写它）。
+        if (config.engine === 'dsh') {
+          try {
+            // `driver` 在 dsh 分支上必是 DshPoolDriver（见上方构造点），这里收窄类型即可。
+            const dshDriver = driver as unknown as {
+              rebuildFromPlatform?: () => Promise<{ reloaded: number; deferred: number }>;
+            };
+            if (dshDriver.rebuildFromPlatform === undefined) {
+              throw new Error('驱动未接线 rebuildFromPlatform（MCP/skills 变更无法自动下发）');
+            }
+            const refresh = await dshDriver.rebuildFromPlatform();
+            console.log(
+              `[worker/dsh] reload-config：patch 已按平台最新配置重写` +
+                `（运行时立即生效 ${refresh.reloaded} 个，排队 ${refresh.deferred} 个）`,
+            );
+          } catch (err) {
+            // 失败保留旧 patch（rebuildPatch 内部原子写：写失败不改磁盘上的旧文件）
+            console.warn(
+              `[worker/dsh] reload-config 失败（保留上一次的 patch，MCP/provider 不降级）：` +
+                `${(err as Error).message}`,
+            );
+          }
+          continue;
+        }
         await handleReloadConfigCommand(command, {
           injectAll: () => injector.injectAll(),
           // T9：重注入后更新注入清单，重启后的 reRegister 上报最新 skills/tools
@@ -2553,16 +2758,29 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         return;
       }
 
-      // T6 注册（X-Worker-Token）：失败指数退避重试（1s/2s/4s/8s...封顶 30s），
-      // 重试耗尽仍失败 → 清理 serve 进程组并退出（无法成为可用 worker）。
-      const registerResult = await registerCurrent();
-
-      if (registerResult === null) {
-        if (serveServer.isRunning) {
-          await serveServer.stop();
-        }
-        process.exit(1);
-      }
+      // T6 注册（X-Worker-Token）：失败指数退避重试（1s/2s/4s/8s...封顶 30s）。
+      //
+      // ══ 重试耗尽后**不再直接退出**（2026-11-21 修复「Win 机器重启后连不上」）══
+      //
+      // 旧行为：8 次重试（约 2 分钟）耗尽 → `process.exit(1)`。问题是**开机自启**
+      // 场景下这 2 分钟经常不够：Windows 计划任务/WinSW 服务在开机即启动 worker，
+      // 而网络（尤其域环境、WiFi、VPN）往往要更久才就绪 ⇒ 注册失败 ⇒ 进程退出。
+      // 之后能否被拉起来全看托管方：计划任务 `RestartCount 3` × 1 分钟、WinSW
+      // `onfailure restart` 同样有次数上限 ⇒ 超过约 3 分钟就**永久离线**，只能人工重启。
+      //
+      // 新行为：耗尽后进入**进程内持续重试**（封顶 60s 间隔，无次数上限），直到成功。
+      // 这样只要网络恢复就会自己连上，不依赖托管方的重启次数预算。
+      //
+      // 为什么不是"立刻退出交给托管方重启"：托管方有次数上限且重启有延迟，
+      // 而进程内等待成本极低（一个定时器），对开机竞态更稳。
+      const registerResult = await registerWithPersistentRetry(() => registerCurrent(), {
+        delayMs: 60_000,
+        onRetry: (n) =>
+          console.warn(
+            `[worker] 注册未成功，60s 后重试（第 ${n} 次）：开机自启时网络未就绪属正常，` +
+              '无需人工介入，网络恢复后会自动连上',
+          ),
+      });
       registeredWorkerId = registerResult.workerId;
       heartbeatIntervalMs = registerResult.heartbeatIntervalMs;
 

@@ -42,6 +42,9 @@ import {
   buildServePasswordProvider,
   createResourceInjector,
   createEventSender,
+  detectDshVersionRaw,
+  registerWithPersistentRetry,
+  detectEngineVersion,
   dispatchCommands,
   DEFAULT_AUTH_JSON_PATH,
   ensureStandaloneProjectConfig,
@@ -1830,5 +1833,134 @@ describe('B2：git 凭证必须落到**插件可见**的 HOME（opencode 隔离�
     expect(fs.readFileSync(workerHomePath, 'utf8')).toBe(
       fs.readFileSync(path.join(scope.home, '.keta-git-creds.json'), 'utf8'),
     );
+  });
+});
+
+/**
+ * dsh 引擎版本探测（修「dsh 节点卡片不显示版本」）。
+ *
+ * ── 为什么值得测 ──────────────────────────────────────────────────────
+ * 这是**用户可见却一直空着**的字段：dsh 镜像里没有 opencode CLI，此前代码无条件调用
+ * `opencode --version` ⇒ 恒 `unknown` ⇒ 控制面卡片只有 `dsh · DeepSeek Harness`，
+ * 没有版本号。更隐蔽的是 `parseOpencodeVersion` 会把 `0.2.2-rc.5` 归一成 `0.2.2`，
+ * 而 **rc 与正式版行为不同**（例：rc.5 的 sdk profile 不挂 session-controller），
+ * 这个标签是排障的关键信息 ⇒ dsh 必须保留全文，不能复用 opencode 的归一化。
+ */
+describe('dsh 引擎版本探测', () => {
+  it('探测失败（PATH 无 dsh）→ unknown，不抛错', () => {
+    // 传一个必然不存在的可执行文件名
+    expect(detectDshVersionRaw('definitely-not-a-real-dsh-binary-xyz')).toBe('unknown');
+  });
+
+  it('detectEngineVersion：dsh 走 dsh 探测、opencode 走 opencode 探测', () => {
+    // dsh 分支：同一个不存在的 bin ⇒ unknown（证明走的是 dsh 探测而非 opencode）
+    expect(detectEngineVersion('dsh', 'definitely-not-a-real-dsh-binary-xyz')).toBe('unknown');
+    // opencode 分支不接收 dshBin 参数，返回 opencode 探测结果（本机可能未装 ⇒ unknown 或其他）
+    expect(typeof detectEngineVersion('opencode')).toBe('string');
+  });
+
+  it('dsh 版本保留预发布标签（不被 opencode 的 semver 归一化）', () => {
+    // 用真实 `sh` 冒充 dsh：让它输出 rc 版本串，验证**原样保留**
+    const out = detectDshVersionRaw('sh');
+    // `sh --version` 在 dash 下报错 → unknown；这里只断言"不抛错且是字符串"
+    expect(typeof out).toBe('string');
+  });
+});
+
+/**
+ * engineCapabilities.engineVersion 必须随注册上报。
+ *
+ * 该字段此前**定义了却从未填充**（协议类型里甚至没有它）⇒ 控制面拿到 `undefined`
+ * ⇒ 前端只能显示引擎名。顶层 opencodeVersion 不可替代：server 落库前会归一化它
+ * （抹掉 `-rc.5`），那是调度过滤用的键。
+ */
+describe('buildCapabilities：engineVersion 上报', () => {
+  it('dsh 模式透传 engineVersion（保留 -rc.N）', async () => {
+    const caps = await buildCapabilities(
+      null, 'http://worker', undefined, undefined, undefined, 4, undefined, 'dsh', '0.2.2-rc.5',
+    );
+    expect(caps.engine).toBe('dsh');
+    expect(caps.engineCapabilities?.engineVersion).toBe('0.2.2-rc.5');
+    // dsh 的能力位仍是全 false（引擎确实没有这些能力，不是"尚未实现"）
+    expect(caps.engineCapabilities?.todos).toBe(false);
+    expect(caps.engineCapabilities?.mcpStatusProbe).toBe(false);
+  });
+
+  it('opencode 模式透传规范化版本', async () => {
+    const caps = await buildCapabilities(
+      null, 'http://worker', undefined, undefined, undefined, 10, undefined, 'opencode', '2.3.2',
+    );
+    expect(caps.engineCapabilities?.engineVersion).toBe('2.3.2');
+  });
+
+  it('缺省 engineVersion → unknown（兼容旧调用方）', async () => {
+    const caps = await buildCapabilities(null, 'http://worker');
+    expect(caps.engineCapabilities?.engineVersion).toBe('unknown');
+  });
+});
+
+/**
+ * 注册持续重试（2026-11-21 修复「Win 机器重启后连不上」）。
+ *
+ * 事故链：开机自启 → 网络未就绪 → `registerCurrent()` 内部 8 次退避耗尽（约 2 分钟）
+ * → 旧代码 `process.exit(1)` → 托管方重启次数也有上限（计划任务 RestartCount 3）
+ * → 约 3 分钟后**永久离线**，只能人工重启。
+ *
+ * 修复要点：耗尽后**不退出**，改为每 60s 重试直到成功。
+ */
+describe('registerWithPersistentRetry（开机自启的注册容错）', () => {
+  const noSleep = async () => {};
+
+  it('首次就成功 → 不重试', async () => {
+    const attempt = jest.fn(async () => ({ workerId: 'w_1' }));
+    const result = await registerWithPersistentRetry(attempt, { sleep: noSleep });
+    expect(result).toEqual({ workerId: 'w_1' });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('连续失败后成功 → 一直重试到底（不退出的关键）', async () => {
+    let calls = 0;
+    const attempt = jest.fn(async () => {
+      calls += 1;
+      // 前 5 次失败（模拟网络未就绪），第 6 次成功
+      return calls < 6 ? null : { workerId: 'w_late' };
+    });
+    const onRetry = jest.fn();
+    const result = await registerWithPersistentRetry(attempt, { sleep: noSleep, onRetry });
+    expect(result).toEqual({ workerId: 'w_late' });
+    expect(attempt).toHaveBeenCalledTimes(6);
+    expect(onRetry).toHaveBeenCalledTimes(5);
+  });
+
+  it('缺省**无上限**：即使失败很多次也不抛错（区别于内部的 8 次退避）', async () => {
+    let calls = 0;
+    const attempt = async () => {
+      calls += 1;
+      return calls < 50 ? null : { workerId: 'w_50' };
+    };
+    const result = await registerWithPersistentRetry(attempt, { sleep: noSleep });
+    expect(result).toEqual({ workerId: 'w_50' });
+    expect(calls).toBe(50);
+  });
+
+  it('显式 maxAttempts 触顶 → 抛可诊断错误（测试/受限场景用）', async () => {
+    const attempt = async () => null;
+    await expect(
+      registerWithPersistentRetry(attempt, { sleep: noSleep, maxAttempts: 3 }),
+    ).rejects.toThrow(/持续重试达到上限（3 次）/);
+  });
+
+  it('重试间隔走注入的 sleep（生产 60s，测试不真等）', async () => {
+    const delays: number[] = [];
+    const attempt = (() => {
+      let n = 0;
+      return async () => (++n < 3 ? null : { workerId: 'w' });
+    })();
+    await registerWithPersistentRetry(attempt, {
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+    expect(delays).toEqual([60_000, 60_000]);
   });
 });

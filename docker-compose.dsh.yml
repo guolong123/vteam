@@ -1,79 +1,37 @@
 # ============================================================
-# vteam 试用栈（dsh 引擎 worker）
+# vteam 试用栈（dsh 引擎）——**兼容层 / 观察面板**
 #
-# 用法：
-#   docker compose -f docker-compose.yml -f docker-compose.dsh.yml up -d --build
+#   ⚠️ 2026-11-20 起：**dsh worker 已默认纳入主 `docker-compose.yml`**（服务名
+#   `worker-dsh`，与 opencode 的 `worker` 并存）。因此**日常不再需要本文件**：
 #
-# 与主 compose 的差异**仅限 worker 服务**：server/web/db/init 一字不动
-# （这正是"配置与使用方式不变，只换后端运行时"的验证点）。
+#       docker compose -p vteam up -d          # 一步起 db/init/server/web/worker/worker-dsh
 #
-# 需要的最小环境变量（写进 .env 或命令行）：
-#   DSH_API_KEY    模型 API key（必需）
-#   DSH_PROVIDER   路由名（缺省 deepseek-official）
-#   DSH_MODEL      模型 id（缺省 deepseek-v4-flash）
-#   DSH_BASE_URL   自定义网关时填（OpenAI 兼容端点）
+#   本文件现在只做两件事：
+#     1. 保留旧命令 `-f docker-compose.yml -f docker-compose.dsh.yml` 的**兼容性**——
+#        旧命令过去会"替换" worker 引擎；现在 worker-dsh 本来就在了，故此处**不再重复
+#        定义 worker**（重复定义会把同一份 Dockerfile.dsh 起成两个同 name 容器，
+#        第二个必然因容器名冲突失败）。
+#     2. 提供 `dsh-inspect` 观察面板（DSH 原生 Web UI，只读旁挂，不参与 vteam 执行）。
 #
-# 访问地址：http://localhost:13001
+#   历史用法（仍可用，等价于只多起观察面板）：
+#     docker compose -p vteam -f docker-compose.yml -f docker-compose.dsh.yml up -d
+#
+# 访问地址：http://localhost:13001 · DSH 面板 http://localhost:13080
 # ============================================================
 
 services:
-  worker:
-    build:
-      context: ./worker
-      dockerfile: Dockerfile.dsh
-    image: vteam-worker:dsh
-    container_name: vteam-compose-worker-dsh
-    environment:
-      # ── 引擎选择（本次试用的核心开关）──────────────────────────────
-      WORKER_ENGINE: dsh
-      DSH_PROVIDER: ${DSH_PROVIDER:-deepseek-official}
-      DSH_MODEL: ${DSH_MODEL:-deepseek-v4-flash}
-      DSH_API_KEY: ${DSH_API_KEY:-}
-      DSH_BASE_URL: ${DSH_BASE_URL:-}
-      # DSH 运行时 home（隔离；只存会话与 profile，不含凭据）
-      DSH_HOME_DIR: /data/dsh-home
-      # ── 与 opencode 无关的通用配置（保持与主 compose 一致）──────────
-      X_WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
-      SERVER_URL: http://server:3000
-      WORKER_ID: w_compose_dsh
-      WORKER_ADVERTISE_HOST: http://worker
-      WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
-      WORKER_CODE_VERSION: ${WORKER_CODE_VERSION:-local-compose}
-      WORKER_MAX_INSTANCES: "10"
-      WORKER_FIRST_TOKEN_TIMEOUT_MS: "300000"
-      WORK_DIR: /data/vteam-worker
-      # DSH 会话的首字兜底（DSH 是 committed 粒度，首字延迟比 opencode 高）
-      # 平台 MCP 地址（缺省按 SERVER_URL 推导）
-      # WORKER_MCP_URL: http://server:3000/api/v1/platform-mcp
-    ports:
-      # dsh 无 serve 端口；worker 执行端点 4198 → 宿主 14000（便于直接调试）
-      - "14000:4198"
-    volumes:
-      - vteam_worker_data:/data/vteam-worker
-      - dsh_home:/data/dsh-home
-
-  # ==========================================================================
-  # dsh-inspect：DSH 原生 Web UI 观察面板（**只读旁挂**，不参与 vteam 执行）
-  #
-  # 用途：对照 vteam 界面看 DSH 引擎侧的原始视角（会话、事件流、模型调用细节）。
-  # 关键设计：
-  #  - **共享 worker 的 DSH_HOME volume**（复用同一份会话数据；worker 仍在跑
-  #    `sdk` profile 的 stdio 运行时，本服务只是另一个读同一 home 的 web profile 实例）
-  #  - 绑定**容器具体 IP**：DSH 拒绝 `0.0.0.0`（会拒绝并明确报错"绑定所有接口会把
-  #    RCE 暴露到网络"），故用 `$(hostname -i)` 取容器 IP
-  #  - `--trusted-host` 必须显式列出宿主机访问用的 authority，否则 /api 一律 403
-  #  - launch token **每次启动都变**，从容器日志取（下方日志行会打印完整带 token URL）
-  #
-  # 访问：docker logs vteam-trial-dsh-inspect | grep token
-  # ==========================================================================
+  # dsh worker 已由主 compose 定义（服务名 worker-dsh），这里只对齐卷名。
+  # ⚠️ 不要在此重复定义 build/image/container_name —— 那会与主 compose 的服务
+  # 变成两个实例（compose 合并同名服务，但旧版脚本传了不同的 dockerfile 时会覆盖，
+  # 导致主 compose 的 worker-dsh 也被改成同一引擎，两个服务抢同一个容器名）。
   dsh-inspect:
     image: vteam-worker:dsh
-    container_name: vteam-trial-dsh-inspect
+    container_name: vteam-compose-dsh-inspect
     restart: unless-stopped
-    # 复用 worker 的两个卷：会话数据（dsh_home）+ 工作目录（便于查看注入产物）
+    # 复用 worker-dsh 的两个卷：会话数据（dsh_home）+ 工作目录（便于查看注入产物）
     volumes:
       - dsh_home:/data/dsh-home
-      - vteam_worker_data:/data/vteam-worker
+      - dsh_worker_data:/data/vteam-worker
     environment:
       DSH_HOME: /data/dsh-home
       # provider 凭据：与 worker 同源（web profile 也需要它才能发起模型请求）
@@ -91,11 +49,10 @@ services:
       # 宿主 13080 → 容器 3080
       - "13080:3080"
     depends_on:
-      worker:
+      worker-dsh:
         condition: service_started
     networks:
       - vteam-net
 
-volumes:
-  dsh_home:
-  vteam_worker_data:
+# 卷在**主 compose** 里已定义（dsh_home / dsh_worker_data），此处不重复声明：
+# 重复声明不同属性会触发 compose 的合并告警，且容易与主文件漂移。

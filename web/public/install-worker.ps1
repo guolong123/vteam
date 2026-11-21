@@ -78,8 +78,8 @@
     非管理员 → $env:LOCALAPPDATA\vteam-worker。
 
 .PARAMETER Opencode
-    opencode CLI 的 npm spec，缺省 @opencode/cli@2.0.32（与 worker/Dockerfile 同版）。
-    可传 2.0.32 / v2.0.32 / latest / 完整 spec；装完强制自检主版本 == 2。
+    opencode CLI 的 npm spec，缺省 @opencode/cli@2.3.2（与 worker/Dockerfile 同版）。
+    可传 2.3.2 / v2.3.2 / latest / 完整 spec；装完强制自检主版本 == 2。
 
 .PARAMETER NodeVersion
     便携 Node 版本，缺省 v22.12.0（与 Linux 安装脚本同版，避免两条路径版本分叉）。
@@ -173,7 +173,7 @@ param(
     [Alias('InstallDir')]
     [string]$Dir = '',
 
-    [string]$Opencode = '@opencode/cli@2.0.32',
+    [string]$Opencode = '@opencode/cli@2.3.2',
 
     [string]$NodeVersion = 'v22.12.0',
 
@@ -211,7 +211,7 @@ $Script:TaskName = 'vteam-worker'
 $Script:FirewallRuleName = 'vteam-worker-exec'
 $Script:ExecPort = 4198
 $Script:Tag = '[install-worker]'
-$Script:DefaultOpencodeSpec = '@opencode/cli@2.0.32'
+$Script:DefaultOpencodeSpec = '@opencode/cli@2.3.2'
 $Script:WinswFileName = 'vteam-worker-service.exe'
 
 # ==========================================================================
@@ -756,16 +756,16 @@ function Resolve-OpencodeSpec {
     $value = $Spec.Trim()
     if ($value -eq '') { return $Script:DefaultOpencodeSpec }
     if ($value -ieq 'latest') {
-        Write-Warn 'opencode spec 传了 latest（浮动标签）：控制面按 opencode 版本串精确过滤 worker，建议钉版本（缺省 2.0.32）。'
+        Write-Warn 'opencode spec 传了 latest（浮动标签）：控制面按 opencode 版本串精确过滤 worker，建议钉版本（缺省 2.3.2）。'
         return '@opencode/cli@latest'
     }
     if ($value -match '^[vV]?\d') {
         return ('@opencode/cli@{0}' -f ($value -replace '^[vV]', ''))
     }
-    if ($value -match '^@[^/]+/[^@]+@.+$') { return $value }   # 完整 scoped spec：@opencode/cli@2.0.32
+    if ($value -match '^@[^/]+/[^@]+@.+$') { return $value }   # 完整 scoped spec：@opencode/cli@2.3.2
     if ($value -match '^@[^/]+/[^@]+$') {
         Write-Warn ("opencode spec 未带版本（{0}）：按缺省版本钉住，避免装到 v3（worker 驱动只验证过 v2）。" -f $value)
-        return ('{0}@2.0.32' -f $value)
+        return ('{0}@2.3.2' -f $value)
     }
     return $value
 }
@@ -863,9 +863,9 @@ function Invoke-OpencodeEnsure {
     }
     Write-Detail ("opencode 版本输出：{0}" -f $info.Text)
     if ($info.Major -ne 2) {
-        throw ("opencode 主版本为 $($info.Major)（$($info.Text)）：worker 只支持 v2（本仓库对着 @opencode/cli@2.0.32 验证）。`n" +
+        throw ("opencode 主版本为 $($info.Major)（$($info.Text)）：worker 只支持 v2（本仓库对着 @opencode/cli@2.3.2 验证）。`n" +
             "  v1 已冻结在 1.19.3（永远到不了 v2），v3 未经 worker 驱动验证。`n" +
-            "  请用 -Opencode 2.0.32 显式钉版本后重跑安装器。")
+            "  请用 -Opencode 2.3.2 显式钉版本后重跑安装器。")
     }
     Write-Ok ("opencode 就绪：{0}（{1}）" -f $bin, $info.Text)
     return $bin
@@ -1706,10 +1706,23 @@ function Install-WorkerWindowsService {
 }
 
 function New-WorkerTaskSettings {
+    <#
+      自动重启预算（2026-11-21 调整：3 次 → 999 次）。
+
+      背景（实测事故）：机器重启后 worker 离线，且**再也不会自己回来**。
+      旧配置 `-RestartCount 3 -RestartInterval 1分钟` ⇒ 最迟 3 分钟后就彻底放弃；
+      而开机自启时网络（域环境/WiFi/VPN）常要更久才就绪。两组条件叠加 = 永久离线。
+
+      现在的分工：
+      - **worker 进程内**已改为持续重试注册（不退出），所以正常情况用不到这里的重启；
+      - 本项是**第二层保险**：覆盖进程真的崩溃/被杀的情况（如 OOM、安全软件拦截）。
+      `RestartCount` 上限是 999（Windows 允许的最大值附近），配合 1 分钟间隔 ≈ 16 小时，
+      足以跨过任何合理的网络恢复窗口；真正需要长跑的场景由进程内重试兜住。
+    #>
     $interval = New-TimeSpan -Minutes 1
     try {
         return (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
-            -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval $interval)
+            -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval $interval)
     } catch {
         Write-Warn ("计划任务设置不支持 RestartCount/RestartInterval（$($_.Exception.Message)），退化为无自动重启。")
         return (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `

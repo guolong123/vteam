@@ -68,6 +68,14 @@ services:
       JWT_ACCESS_EXPIRES_IN: "2h"
       JWT_REFRESH_EXPIRES_IN: "7d"
       WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
+      # ── worker 自更新的「期望版本」─────────────────────────────────────
+      # 控制面用它和 worker 上报的 codeVersion 比对，算出 updateAvailable（要不要显示
+      # 「待更新」）。**不配 = 永远没有更新提示**（computeUpdateAvailable 在缺期望版本时
+      # 一律 false —— 它不会凭空说"可更新"）。
+      # 本地开发缺省与 worker 侧 WORKER_CODE_VERSION 同值（local-compose）⇒ 版本对齐、
+      # 不产生噪音提示；要让本地看到「待更新」，把它改成别的值再重启 server 即可
+      #（例如 CODE_VERSION=local-next），或用真实发布 tag。
+      CODE_VERSION: ${CODE_VERSION:-local-compose}
       # ⚠️ 这里**不再**导出 SERVER_PASSWORD：控制面自 v2 适配起**不再直连 opencode serve**
       # （决策 D3），它只调 worker 的执行端点（`POST /sessions`、`POST /sessions/:id/prompt`、
       # `GET /sessions/:id/messages`、`POST /sessions/:id/abort`、`GET /models`），
@@ -218,6 +226,67 @@ services:
     networks:
       - vteam-net
 
+  # ==========================================================================
+  # dsh 引擎 worker（**默认随栈启动**，与上面的 opencode worker 并存）
+  #
+  # 为什么默认纳入：README/AGENTS.md 里 `docker compose -p vteam up -d` 是唯一本地入口，
+  # dsh 引擎此前要靠 `-f docker-compose.dsh.yml` 叠加才起得来 ⇒ 很容易"启动了什么引擎
+  # 取决于敲了哪条命令"。同一个 worker token 下注册两个 worker，控制面按
+  # `capabilities.engine` 与 opencode 版本串分别调度，互不影响。
+  #
+  # 与 opencode worker 的隔离（**不能共用**，共用会互相踩）：
+  # - 容器名 `vteam-compose-worker-dsh`（不覆盖 `vteam-compose-worker`）
+  # - 数据卷 `dsh_worker_data` + `dsh_home`（opencode 用 vteam_worker_data/worker_home）
+  # - 宿主端口 14198/14080（opencode 占 14000/14848；dsh 无 serve 端口，14198 是执行端点）
+  #
+  # 模型凭据：**不需要在这里配 `DSH_API_KEY`**。注册模式下凭据由控制面 `model-credentials`
+  # 命令下发（写 spawn env `VTEAM_PROVIDER_*_KEY`）；只有 `WORKER_STANDALONE=true`（无控制面）
+  # 时才必须在 env 里给 key。故缺省留空不会让 worker 空转。
+  # ==========================================================================
+  worker-dsh:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.dsh
+    image: vteam-worker:dsh
+    container_name: vteam-compose-worker-dsh
+    restart: unless-stopped
+    init: true
+    environment:
+      # ── 引擎选择 ────────────────────────────────────────────────
+      WORKER_ENGINE: dsh
+      # DSH 运行时 home（隔离；只存会话与 profile，不含凭据明文）
+      DSH_HOME_DIR: /data/dsh-home
+      # 路由缺省值（平台下发凭据后以平台配置为准；这里只保证首次握手有个可用路由）
+      DSH_PROVIDER: ${DSH_PROVIDER:-deepseek-official}
+      DSH_MODEL: ${DSH_MODEL:-deepseek-v4-flash}
+      DSH_API_KEY: ${DSH_API_KEY:-}
+      DSH_BASE_URL: ${DSH_BASE_URL:-}
+      # ── 通用配置（与 opencode worker 同口径）─────────────────────
+      X_WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
+      SERVER_URL: http://server:3000
+      # worker id 必须与 opencode worker 不同（控制面按 id 主键注册）
+      WORKER_ID: w_compose_dsh
+      WORKER_ADVERTISE_HOST: http://worker-dsh
+      WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
+      WORKER_CODE_VERSION: ${WORKER_CODE_VERSION:-local-compose}
+      # dsh 每角色一个运行时进程（RSS ~350MB/进程），并发上限按本机内存给，别照抄 opencode 的 10
+      WORKER_MAX_INSTANCES: ${DSH_WORKER_MAX_INSTANCES:-4}
+      # DSH 是 committed 粒度，首字延迟比 opencode 高 ⇒ 多给一倍预算
+      WORKER_FIRST_TOKEN_TIMEOUT_MS: "600000"
+      WORK_DIR: /data/vteam-worker
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      # dsh 无 serve 端口；执行端点 4198 → 宿主 14198（便于直接调试）
+      - "14198:4198"
+    volumes:
+      # dsh 自己的两个卷：**不与 opencode worker 共用**
+      - dsh_worker_data:/data/vteam-worker
+      - dsh_home:/data/dsh-home
+    networks:
+      - vteam-net
+
 volumes:
   mysql_data:
   # P2：server 产出物落盘持久化（Agent 文档/文件，见 server 服务 volumes 挂载）
@@ -226,6 +295,9 @@ volumes:
   vteam_worker_data:
   # worker 用户目录（HOME）持久化（opencode.db 会话库、auth.json 模型凭据、.keta-git-creds.json）
   worker_home:
+  # dsh worker 的工作目录与运行时 home（与 opencode 侧完全隔离）
+  dsh_worker_data:
+  dsh_home:
 
 networks:
   vteam-net:

@@ -22,6 +22,8 @@ export const WORKER_EVENT_TYPES = {
   /** 模型 question / 工具权限确认待用户处理：worker 轮询检测到 pending 后上送（不 abort，serve 继续等）。 */
   SESSION_QUESTION: 'session.question',
   SESSION_PERMISSION: 'session.permission',
+  /** 会话上下文压缩开始/完成（用户可见系统消息 + 可审计日志）。 */
+  SESSION_COMPACT: 'session.compact',
 } as const;
 
 export type WorkerEventType = (typeof WORKER_EVENT_TYPES)[keyof typeof WORKER_EVENT_TYPES];
@@ -41,6 +43,25 @@ export interface WorkerCapabilities {
   engine?: 'opencode' | 'dsh';
   /** P6：引擎能力位（缺省 = 全支持，兼容旧 worker）。 */
   engineCapabilities?: {
+    /**
+     * 引擎自身版本串（opencode 模式 = opencode 版本；dsh 模式 = **保留预发布标签**的
+     * dsh 版本，如 `0.2.2-rc.5`）。
+     *
+     * 为什么与顶层 `opencodeVersion` 并存：顶层字段是**调度过滤**的键（规范化 semver），
+     * 本字段是**引擎真实版本**（dsh 下含 `-rc.N`，不可归一化）。缺省 = 旧 worker 未上报。
+     */
+    engineVersion?: string;
+    /**
+     * 本 worker **能否自己完成升级**（不依赖人工）。
+     *
+     * - `true`：控制面「更新」按钮可直接下发 `update-worker`，worker 会下载→替换→重启；
+     * - `false` / 缺省（旧 worker）：控制面应改为展示**升级命令**让用户复制执行。
+     *
+     * 为什么需要它：Windows 侧自更新缺省关闭（没有自动回滚，见 worker-updater 常量注释），
+     * 老 worker 甚至会说"不支持"。此前控制面对这两类节点**无脑下发指令**，结果是
+     * `ready-manual` 之后什么也没发生 —— 用户以为点了就升级了（静默失败）。
+     */
+    selfUpdate?: boolean;
     perMessageModelSwitch?: boolean;
     todos?: boolean;
     externalAgents?: boolean;

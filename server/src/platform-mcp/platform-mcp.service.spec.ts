@@ -11200,17 +11200,41 @@ describe('PlatformMcpService', () => {
       // 注意：这不是 CI 修复——ci.yml:27/54/69 是裸 actions/checkout@v4、无 paths/
       // sparse-checkout，server job 拿的是全仓，worker/src/resources/injector.ts
       // 存在，本条在 CI 里照常执行。降级后的漂移兜底见 T17。
-      const WORKER_INJECTOR_REL = '../../../worker/src/resources/injector.ts';
-      const workerInjectorPath = path.resolve(__dirname, WORKER_INJECTOR_REL);
-      const hasWorkerInjector = fs.existsSync(workerInjectorPath);
+      /**
+       * ⚠️ 扫描 worker/src/resources 下**全部** .ts，而不是钉死 injector.ts。
+       *
+       * 原因（2026-11-21 CI 实测）：该常量原本就定义在 injector.ts 里，后来被抽到
+       * `mcp-servers-record.ts`（dsh 也要用，避免为一个类型 import 整个 opencode
+       * 注入器链），injector.ts 只留 re-export。于是原先按单文件匹配的正则虽然仍能
+       * 命中标识符（re-export 行里出现），但捕获组拿不到数字 ⇒ `Number(undefined)`
+       * = NaN ⇒ 断言失败。本测试的**意图**是"两侧数值不漂移"，与常量放在哪个文件无关，
+       * 故改为按目录扫描（取**第一处有字面量定义**的文件）。
+       */
+      const WORKER_RESOURCES_REL = '../../../worker/src/resources';
+      const workerResourcesDir = path.resolve(__dirname, WORKER_RESOURCES_REL);
+      const hasWorkerInjector = fs.existsSync(workerResourcesDir);
       const crossPackageIt = hasWorkerInjector ? it : it.skip;
       crossPackageIt(
         '跨包契约：worker 注入的客户端超时下限与 server 侧同值（防漂移）',
         () => {
-          const injectorSource = fs.readFileSync(workerInjectorPath, 'utf8');
-          const floor = /VTEAM_MCP_TIMEOUT_FLOOR_MS\s*=\s*([\d_]+)/.exec(
-            injectorSource,
-          );
+          // 找**带字面量定义**的那一处（`= 900_000`），跳过纯 re-export
+          // （`export { VTEAM_MCP_TIMEOUT_FLOOR_MS } from './x'` 里没有 `=` 和数字）。
+          const sources = fs
+            .readdirSync(workerResourcesDir)
+            .filter((f) => f.endsWith('.ts') && !f.endsWith('.spec.ts'))
+            .map((f) => ({
+              file: f,
+              text: fs.readFileSync(path.join(workerResourcesDir, f), 'utf8'),
+            }));
+          const hit = sources
+            .map(({ file, text }) => ({
+              file,
+              text,
+              m: /VTEAM_MCP_TIMEOUT_FLOOR_MS\s*=\s*([\d_]+)/.exec(text),
+            }))
+            .find((x) => x.m !== null);
+          const floor = hit?.m ?? null;
+          const injectorSource = hit?.text ?? '';
           // 两侧值都打进断言消息：漂移时能直接看出是哪一侧变了、原文怎么写的
           // （源码字面量带下划线分隔，如 900_000，故按数值比、原样留档）。
           expect({
@@ -11228,7 +11252,7 @@ describe('PlatformMcpService', () => {
         // 让「本条被跳过」这件事在输出里可见，而不是静默少跑一条。
         // eslint-disable-next-line no-console
         console.warn(
-          `[skip] 跨包契约测试未执行：缺少 ${WORKER_INJECTOR_REL}` +
+          `[skip] 跨包契约测试未执行：缺少 ${WORKER_RESOURCES_REL}` +
             `（server 侧下限 ${SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS}ms 未经跨包对账）`,
         );
       }

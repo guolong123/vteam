@@ -32,6 +32,8 @@ export type { SearchableOption, SearchableSelectProps } from "./searchable-selec
 export type { EmptyStateProps } from "./empty-state";
 export { ConfirmDialog } from "./confirm-dialog";
 export type { ConfirmDialogProps } from "./confirm-dialog";
+export { UpgradeCommandDialog } from "./upgrade-command-dialog";
+export type { UpgradeCommandDialogProps } from "./upgrade-command-dialog";
 export { Pagination } from "./pagination";
 export type { PaginationProps } from "./pagination";
 export { PageWindow } from "./page-window";

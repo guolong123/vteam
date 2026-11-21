@@ -20,13 +20,20 @@
 
 ```bash
 # 起/停（项目名 vteam；在主工作区根目录执行）
+# 2026-11-20 起：**默认同时起 opencode worker 与 dsh worker**（服务名 worker / worker-dsh），
+# 不再需要叠加 -f docker-compose.dsh.yml 才能跑 dsh 引擎。
 docker compose -p vteam up -d
 docker compose -p vteam ps
 docker compose -p vteam logs -f server
 
-# 改了 server/worker 代码后重建
+# 改了 server/worker 代码后重建（dsh 引擎的 worker 代码改动要重建 worker-dsh）
 docker compose -p vteam build server worker
 docker compose -p vteam up -d server worker
+docker compose -p vteam build worker-dsh
+docker compose -p vteam up -d worker-dsh
+
+# 只跑 dsh worker（本地不需要 opencode 引擎时）
+docker compose -p vteam up -d db init server web worker-dsh
 
 # 改了 prisma schema 后跑迁移（init 镜像与 server 是**独立镜像**，要分别 build）
 docker compose -p vteam build init

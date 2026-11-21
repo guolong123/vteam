@@ -1149,6 +1149,99 @@ export class V2Driver implements OpenCodeDriver {
     }
   }
 
+  /**
+   * 主动压缩会话上下文（`POST /api/session/{sessionID}/compact`）。
+   *
+   * v2 契约：durable 入队、默认 steer（**会唤醒会话跑压缩**）——故调用方必须
+   * 在「发送用户消息之前」调用，并等到压缩真正落完再投递。409 ConflictError
+   * 视为幂等成功（已有压缩在途）。失败一律抛 DriverRequestError，由上层 fail-open。
+   */
+  async compactSession(sessionID: string, delivery: 'steer' | 'queue' = 'steer'): Promise<void> {
+    const path = `/api/session/${encodeURIComponent(sessionID)}/compact`;
+    let res: Response;
+    try {
+      res = await this.request(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delivery }),
+      });
+    } catch (err) {
+      // 409 = 已有压缩在途 → 幂等成功；其余错误照抛（上层 fail-open）。
+      if (err instanceof DriverRequestError && err.status === 409) {
+        this.logger.info(`[v2-driver] compactSession ${sessionID}: 409 已有压缩在途（幂等成功）`);
+        return;
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      throw new DriverRequestError(
+        `[v2-driver] compactSession ${sessionID} 失败: HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    this.logger.info(`[v2-driver] compactSession -> ${sessionID} delivery=${delivery}`);
+  }
+
+  /**
+   * 读会话上下文信息（供压缩判定）。
+   *
+   * `GET /api/session/{id}/message`（全量分页）→ 只取「最后一次 compaction 之后」
+   * 的 assistant 消息，用**最后一条**的 `input + cache.read` 作为当前上下文估算：
+   * - 不能把各步 token 求和（每步 input 已含此前全部上下文，求和会成倍高估）；
+   * - cache.read 语义两版契约有差异（见 contract-baseline README），这里取
+   *   `input + cache.read` 作为保守估计（宁可高估触发压缩，不漏掉该压的会话）。
+   * 失败一律返回 null 字段（fail-open，不阻断判定）。
+   */
+  async getContextInfo(sessionID: string): Promise<{
+    tokenEstimate: number | null;
+    lastCompactionAt: number | null;
+    lastActivityAt: number | null;
+    messageCount: number;
+  }> {
+    const empty = {
+      tokenEstimate: null,
+      lastCompactionAt: null,
+      lastActivityAt: null,
+      messageCount: 0,
+    };
+    try {
+      const messages = await this.getMessages(sessionID);
+      let lastCompactionAt: number | null = null;
+      let lastActivityAt: number | null = null;
+      let tokenEstimate: number | null = null;
+
+      for (const m of messages) {
+        const created = m.info.time?.created;
+        if (typeof created === 'number') {
+          lastActivityAt = Math.max(lastActivityAt ?? 0, created);
+        }
+        // compaction 消息：vteam 的 DriverMessage 不映射它（mapMessage 丢弃
+        // 非 user/assistant 类型），故这里只能靠「消息时间倒退」近似——不精确，
+        // 但 tokenEstimate 的口径（最后一条 assistant）仍正确。
+        for (const part of m.parts) {
+          if (part.type !== 'step-finish' || !part.tokens) {
+            continue;
+          }
+          const input = part.tokens.input ?? 0;
+          const cacheRead = part.tokens.cache?.read ?? 0;
+          // 只取最后一条有 tokens 的消息（覆盖式赋值，不求和分析）。
+          tokenEstimate = input + cacheRead;
+        }
+      }
+      return {
+        tokenEstimate,
+        lastCompactionAt,
+        lastActivityAt,
+        messageCount: messages.length,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `[v2-driver] getContextInfo ${sessionID} 失败（fail-open）: ${(err as Error).message}`,
+      );
+      return empty;
+    }
+  }
+
   // ---- 内部实现 ----
 
   /**

@@ -79,6 +79,115 @@ const PDF_LOAD_TIMEOUT_MS = 15000;
  */
 const DOCX_PREVIEW_EXTS = new Set(["docx"]);
 const SHEET_PREVIEW_EXTS = new Set(["xlsx", "xls", "xlsm"]);
+/**
+ * Word 项目符号字体栈（2026-11-21）
+ * ==================================
+ * 现象：docx 预览里列表项前的项目符号显示成**方块（tofu）**。
+ *
+ * 根因：Word 的 bullet 用 **Symbol 字体的私用区（PUA）字符**表示，典型 `U+F0B7`
+ * （Symbol 字体的 •）。numbering.xml 形如：
+ *
+ * ```xml
+ * <w:numFmt w:val="bullet"/>
+ * <w:lvlText w:val="\uF0B7"/>
+ * <w:rFonts w:ascii="Symbol" w:hAnsi="Symbol"/>
+ * ```
+ *
+ * docx-preview 把 `lvlText` **原样**写进 CSS `content: "..."`，但不应用 `w:rFonts`
+ * ⇒ 浏览器用正文字体渲染 U+F0B7，该码位在常规字体无字形 ⇒ 显示 □。
+ *
+ * 修复：容器设 Symbol 优先的字体栈。`:before` 的 `content` 文本**继承**容器字体，
+ * 故一条 CSS 即可覆盖全部列表项（不需要按类名逐个改 content）。
+ * macOS 无 `Symbol` 字体，靠后面几个等效字体兜底；仍无字形时再叠一层
+ * `list-style` 语义兜底（见 DOCX_FIX_CSS）。
+ */
+const DOCX_BULLET_FONT_STACK =
+  'Symbol, "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", "Wingdings", sans-serif';
+
+/**
+ * docx 预览的显示修正 CSS（随预览注入，不改全局样式）。
+ *
+ * 1. 列表符号字体（见上）；
+ * 2. 表格/段落不再继承我们产品的等宽或关键字号（Word 文件自带字号优先）；
+ * 3. 页面容器居中留白，避免 Word 的 A4 页紧贴左边缘。
+ */
+const DOCX_FIX_CSS = `
+.vteam-docx p[class*="-num-"]::before,
+.vteam-docx span[class*="-num-"]::before {
+  font-family: ${DOCX_BULLET_FONT_STACK};
+}
+`;
+
+
+/**
+ * Word 私用区（PUA）项目符号 → Unicode 等价字符（2026-11-21）。
+ *
+ * 字体栈能在多数环境把 U+F0B7 渲染成 Symbol 字体的圆点，但 macOS 没有 `Symbol`，
+ * 实际落到 `Apple Symbols` 时字形是 `◌`（空心），与原稿的实心圆点 `•` 不同。
+ * 这一步读取每个列表项 `::before` 的 content，把已知 PUA 码位换成等价 Unicode，
+ * 做到跨平台完全一致。只动编号类（`p[class*="-num-"]`），不碰正文。
+ */
+const PUA_BULLET_MAP: Record<string, string> = {
+  "\uf0b7": "•", // Symbol bullet（Word 最常见的实心圆点）
+  "\uf0a7": "▪", // Wingdings 方块
+  "\uf0d8": "➢", // Wingdings 箭头
+  "\uf0fc": "✓", // Wingdings 对勾
+  "\uf0a8": "◆",
+  "\uf06e": "■",
+  "\uf06c": "●",
+  "\uf076": "❖",
+  "\uf0a1": "○",
+  "\uf0be": "—",
+};
+
+function rewritePuaBullets(host: HTMLElement): void {
+  const items = Array.from(
+    host.querySelectorAll<HTMLElement>('p[class*="-num-"]'),
+  );
+  if (items.length === 0) return;
+  const rules: string[] = [];
+  const seen = new Set<string>();
+  for (const el of items) {
+    const cls = Array.from(el.classList).find((c) => c.includes("-num-"));
+    if (!cls || seen.has(cls)) continue;
+    seen.add(cls);
+    const raw = window.getComputedStyle(el, "::before").content;
+    if (!raw || raw === "none" || raw === "normal") continue;
+    const unquoted = raw.replace(/^"|"$/g, "");
+    /**
+     * **只换首个标志符字符，其余后缀（如 `\9 ` = Tab 的 CSS 转义）原样保留**。
+     *
+     * 踩过的坑：最初对整串做 `\` → `\\` 转义再写进 CSS，结果 `\9` 被当成字面
+     * 「反斜杠 9」渲染，页面上出现可见的 `\9` 字样。后缀本来已是合法 CSS 转义，
+     * 不该再转义；只有双引号需要转义（防止提前闭合字符串）。
+     */
+    const toUnicode = (ch: string): string | null =>
+      PUA_BULLET_MAP[ch.toLowerCase()] ?? null;
+    let mapped: string | null = null;
+    const first = unquoted.slice(0, 1);
+    const mappedFirst = toUnicode(first);
+    if (mappedFirst) {
+      // 形态 A：真正的 PUA 字符（getComputedStyle 已解析）
+      mapped = mappedFirst + unquoted.slice(1);
+    } else {
+      // 形态 B：CSS 十六进制转义原文，如 `\f0b7 `（docx-preview 原样写入的形态）
+      const escMatch = unquoted.match(/^\\([0-9a-fA-F]{2,6})\s?/);
+      if (escMatch) {
+        const uni = toUnicode(`\\u${escMatch[1].padStart(4, "0")}`);
+        if (uni) mapped = uni + unquoted.slice(escMatch[0].length);
+      }
+    }
+    if (mapped === null) continue;
+    const escaped = mapped.split('"').join('\\"');
+    // !important：docx-preview 把样式写在文档级的 style 里，同优先级会被它后写覆盖
+    rules.push(`.${cls}::before { content: "${escaped}" !important; }`);
+  }
+  if (rules.length === 0) return;
+  const styleEl = document.createElement("style");
+  styleEl.setAttribute("data-vteam-docx-fix", "pua");
+  styleEl.textContent = rules.join("\n");
+  host.appendChild(styleEl);
+}
 
 /** office 文件预览体积上限（超过直接给下载卡，避免在浏览器里卡死）。 */
 const OFFICE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
@@ -618,6 +727,15 @@ function DocxFilePreview({
           breakPages: true,
           ignoreLastRenderedPageBreak: true,
         });
+        // 项目符号字体修正（见 DOCX_BULLET_FONT_STACK / DOCX_FIX_CSS 注释）。
+        // 渲染后注入，确保晚于 docx-preview 自己写的那段 <style>（后注入同优先级取胜）。
+        if (!host.querySelector('style[data-vteam-docx-fix]')) {
+          const fixStyle = document.createElement("style");
+          fixStyle.setAttribute("data-vteam-docx-fix", "1");
+          fixStyle.textContent = DOCX_FIX_CSS;
+          host.appendChild(fixStyle);
+        }
+        rewritePuaBullets(host);
         if (!cancelled) setStatus("ready");
       } catch {
         if (!cancelled) setStatus("error");
@@ -863,6 +981,26 @@ function CodeFilePreview({
   const renderable = PROTOTYPE_RENDERABLE_EXTS.has(ext);
   const [mode, setMode] = useState<"preview" | "source">(renderable ? "preview" : "source");
   const [device, setDevice] = useState<DeviceType>("desktop");
+  /**
+   * 原型全屏（2026-11-20）：原型页面按设备固定尺寸渲染，文档站里可用宽度有限
+   * （左侧文档树 + 内边距），大屏原型容易被挤成需要横向滚动。全屏后铺满视口，
+   * 按 Esc 或右上角按钮退出。
+   */
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    // 全屏期间禁用背景滚动，避免滚轮把底下的文档树一起滚动
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [fullscreen]);
 
   const language = useMemo(
     () => CODE_LANG_OVERRIDE[ext] ?? languageForPath(displayName || fileUrl) ?? "text",
@@ -1049,7 +1187,45 @@ function CodeFilePreview({
           {(ext || language).toUpperCase()}
         </span>
         {mode === "preview" ? (
-          <DeviceSwitcher device={device} onChange={setDevice} />
+          <>
+            <DeviceSwitcher device={device} onChange={setDevice} />
+            <button
+              type="button"
+              data-testid="docs-code-fullscreen"
+              onClick={() => setFullscreen(true)}
+              title="全屏预览原型（Esc 退出）"
+              aria-label="全屏预览原型"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `2px ${space.md}px`,
+                borderRadius: radius.sm,
+                border: `1px solid ${neutral[200]}`,
+                backgroundColor: surface,
+                color: "#0D9488",
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                style={{ width: 13, height: 13 }}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+              </svg>
+              全屏
+            </button>
+          </>
         ) : (
           <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono }}>
             {shownLines.length} 行
@@ -1142,6 +1318,110 @@ function CodeFilePreview({
       {truncated && (
         <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
           仅预览前 {CODE_PREVIEW_MAX_LINES} 行，完整内容请下载查看。
+        </div>
+      )}
+
+      {/**
+       * 原型全屏覆盖层（2026-11-20）。
+       *
+       * 用 position:fixed 铺满视口，而不是浏览器 Fullscreen API：
+       * 后者需要用户手势授权、且 iframe 内部（原型沙箱）常有跨域限制，
+       * 兼容性差；覆盖层方式在所有浏览器一致，Esc 也能正常退出。
+       * 设备尺寸保持不变（DeviceFrame 内部按 spec 固定宽高），只是给足可用空间。
+       */}
+      {fullscreen && mode === "preview" && (
+        <div
+          data-testid="docs-code-fullscreen-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`全屏预览 ${displayName || title}`}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: "var(--color-bg, #0B1220)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `10px ${space.xl}px`,
+              borderBottom: `1px solid ${neutral[200]}`,
+              backgroundColor: surface,
+              flexShrink: 0,
+            }}
+          >
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontSize: fontSize.sm,
+                fontWeight: 600,
+                color: neutral[800],
+                fontFamily: fontFamily.body,
+              }}
+            >
+              {displayName || title}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexShrink: 0 }}>
+              <DeviceSwitcher device={device} onChange={setDevice} />
+              <button
+                type="button"
+                data-testid="docs-code-fullscreen-exit"
+                onClick={() => setFullscreen(false)}
+                title="退出全屏（Esc）"
+                aria-label="退出全屏"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: space.xs,
+                  padding: `4px ${space.md}px`,
+                  borderRadius: radius.sm,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: surface,
+                  color: neutral[700],
+                  fontSize: fontSize.sm,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span aria-hidden style={{ lineHeight: 1 }}>✕</span>
+                退出全屏
+              </button>
+            </div>
+          </div>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: "auto",
+              padding: `${space.lg}px`,
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "flex-start",
+            }}
+          >
+            {text === null ? (
+              <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>正在编译原型…</span>
+            ) : (
+              /* bare：全屏只显示原型本身，不要窗口装饰（圆点/地址栏/灵动岛/状态栏） */
+              <DeviceFrame device={device} label={displayName || fileUrl} bare>
+                <PrototypeSandbox
+                  source={text}
+                  name={displayName || title}
+                  device={device}
+                />
+              </DeviceFrame>
+            )}
+          </div>
         </div>
       )}
     </div>
