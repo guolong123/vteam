@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { resyncIdPrefix } from '../common/id-resync';
 import { ACTOR_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
@@ -24,6 +25,7 @@ import {
   ISSUE_TRANSITIONS,
   IssueTransitionAction,
 } from './issues.constants';
+import { assertTeamMember } from '../common/team-access';
 
 /** Issue 域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ISSUE_ID_PREFIX = 'is';
@@ -115,16 +117,7 @@ export class IssuesService implements OnModuleInit {
     teamId: string,
     userId: string,
   ): Promise<void> {
-    const member = await (this.prisma as any).teamUserMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
-      select: { id: true },
-    });
-    if (!member) {
-      throw new ForbiddenException({
-        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该团队成员',
-      });
-    }
+    await assertTeamMember(this.prisma, teamId, userId);
   }
 
   /**
@@ -358,8 +351,8 @@ export class IssuesService implements OnModuleInit {
 
   /** GET /issues：taskId 或 teamId 二选一过滤（均缺 → 400）+ status/assigneeAgentId 筛选 + 分页（不含软删）。 */
   async findAll(query: QueryIssuesDto, userId: string) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     let where: Prisma.IssueWhereInput = { deletedAt: null };
     if (query.taskId) {
       await this.assertTaskMember(query.taskId, userId);
@@ -873,14 +866,7 @@ export class IssuesService implements OnModuleInit {
     return tags.filter((t): t is string => typeof t === 'string');
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

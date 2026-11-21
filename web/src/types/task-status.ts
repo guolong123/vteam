@@ -2,7 +2,7 @@
  * 任务状态单一来源（tech-debt-remediation Todo 14）。
  * =============================================================
  * `TaskApiStatus` 七态联合此前在 web 侧有五处重复声明（task-detail-types /
- * task-status-actions / TaskDetailDrawer / board 页 / 团队任务页），此处为唯一定义，
+ * task-status-actions / TaskDetailDrawer / 团队右栏任务卡），此处为唯一定义，
  * 其余位置均为导入或透传重导出。
  * 对齐 server `TASK_STATUS`（server/src/common/constants/task.constants.ts:9-17）：
  * queued/pending/in_progress/blocked/pending_review/completed/archived。

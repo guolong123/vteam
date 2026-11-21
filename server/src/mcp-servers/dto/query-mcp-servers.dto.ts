@@ -1,13 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import { MCP_SERVER_TYPES } from './create-mcp-server.dto';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /**
  * GET /mcp-servers 查询参数（type/enabled 过滤 + name 搜索 + 分页，
  * 对齐 QueryToolsDto 模式，返回 {items, total, page, pageSize}）。
  */
-export class QueryMcpServersDto {
+export class QueryMcpServersDto extends PaginatedQueryDto {
   @ApiPropertyOptional({
     description: '服务器类型过滤（local/remote），缺省返回全部',
     enum: MCP_SERVER_TYPES,
@@ -33,22 +34,4 @@ export class QueryMcpServersDto {
   @IsOptional()
   @IsString()
   name?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({ description: '每页条数', default: 20, minimum: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  pageSize?: number;
 }

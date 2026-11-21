@@ -80,12 +80,20 @@ export class WorkerCapabilitiesDto {
   engineCapabilities?: {
     perMessageModelSwitch?: boolean;
     todos?: boolean;
-    externalAgents?: boolean;
     integrations?: boolean;
-    omoConfig?: boolean;
     planFiles?: boolean;
     steer?: boolean;
     mcpStatusProbe?: boolean;
+    /**
+     * @deprecated 已下线能力位（2026-11-21「外部 agent」功能移除）。
+     *
+     * **保留声明仅为向后兼容**：升级前发布的 worker 仍会带上这两个键，而本 DTO 是
+     * `@ValidateNested` + 白名单校验——删掉字段会让整条心跳 400 ⇒ worker 30s 内被判离线
+     * （与 v2 五态那次故障同型）。服务端不再读取它们的值。
+     */
+    externalAgents?: boolean;
+    /** @deprecated 同 `externalAgents`：OmO 已下线，仅为兼容旧 worker 上报而保留。 */
+    omoConfig?: boolean;
   };
 
   @ApiProperty({ description: 'worker 启用的 skill 名列表', type: [String] })

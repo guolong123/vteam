@@ -64,9 +64,7 @@ export interface WorkerCapabilities {
     selfUpdate?: boolean;
     perMessageModelSwitch?: boolean;
     todos?: boolean;
-    externalAgents?: boolean;
     integrations?: boolean;
-    omoConfig?: boolean;
     planFiles?: boolean;
     steer?: boolean;
     mcpStatusProbe?: boolean;

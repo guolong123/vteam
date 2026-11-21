@@ -63,6 +63,7 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
+import { formatDateTime } from "@/lib/datetime-format";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -183,15 +184,6 @@ interface ArtifactDetail {
   createdAt: string;
   updatedAt: string;
   versions: ArtifactVersionDto[];
-}
-
-/* ------------------------------ 工具函数（与 artifacts 页同语义） ------------------------------ */
-/** ISO8601 → "YYYY-MM-DD HH:mm"（本地时区）。 */
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /* ------------------------------ 徽章组件 ------------------------------ */
@@ -516,7 +508,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         <span style={{ textAlign: "right" }}>
           {[...versions]
             .reverse()
-            .map((v) => `v${v.version} · ${formatTime(v.createdAt)}`)
+            .map((v) => `v${v.version} · ${formatDateTime(v.createdAt)}`)
             .join("　→　") || "暂无版本历史"}
         </span>
       </div>
@@ -951,14 +943,14 @@ export default function DocsUnifiedPage() {
    * 简陋列表页）——用户明确反馈"返回时返回到了一个简陋的文档站"。
    *
    * 现在：有 teamId 就回该团队的会话页（文件都是团队/任务的产物，会话页是自然归属）；
-   * 没有 teamId（团队选择器页）才回看板。
+   * 没有 teamId（团队选择器页）才回团队列表。
    */
   const handleDocsBack = () => {
     if (teamId) {
       router.push(`/teams/${teamId}/session`);
       return;
     }
-    router.push("/board");
+    router.push("/teams");
   };
 
   return (

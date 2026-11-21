@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  ForbiddenException,
   Get,
   NotFoundException,
   Param,
@@ -18,6 +17,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { PrismaService } from '../prisma/prisma.service';
 import { ReplyQuestionDto } from './dto/reply-question.dto';
 import { QuestionsService } from './questions.service';
+import { assertTeamMember } from '../common/team-access';
 
 /**
  * 模型提问 / 工具权限确认端点（会话页弹窗 + 补拉数据源）。
@@ -121,15 +121,6 @@ export class QuestionsController {
     teamId: string,
     userId: string,
   ): Promise<void> {
-    const member = await (this.prisma as any).teamUserMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
-      select: { id: true },
-    });
-    if (!member) {
-      throw new ForbiddenException({
-        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该团队成员',
-      });
-    }
+    await assertTeamMember(this.prisma, teamId, userId);
   }
 }

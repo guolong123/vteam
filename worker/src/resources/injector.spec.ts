@@ -7,7 +7,6 @@ import {
   ResourceInjector,
   schemaToArgs,
 } from './injector';
-import { OMO_AGENT_NAMES, omoConfigUserPath } from './omo-config';
 
 /** 构造按 URL pathname 路由的 mock fetch（Response 最小形态）。 */
 function makeFetch(
@@ -1083,7 +1082,7 @@ describe('ResourceInjector 清理与组合', () => {
   });
 });
 
-describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
+describe('ResourceInjector：plugins 节（opencode.json，v2 原生段名）', () => {
   function injectorFor(workDir: string): ResourceInjector {
     return new ResourceInjector({
       serverUrl: 'http://localhost:3000',
@@ -1100,293 +1099,38 @@ describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
     return JSON.parse(fs.readFileSync(path.join(workDir, rel), 'utf8'));
   }
 
-  describe('plugins 节（opencode.json，v2 原生段名）', () => {
-    it('写入 oh-my-openagent 条目', async () => {
-      const workDir = workDirFor();
-      await injectorFor(workDir).injectMcp();
-      expect(readJson(workDir, 'opencode.json').plugins).toEqual([
-        'oh-my-openagent@latest',
-        '-opencode.browser',
-      ]);
-    });
-
-    it('禁用 v2 内置浏览器插件（否则平台的 browser 工具被同名内置工具**静默遮蔽**）', async () => {
-      const workDir = workDirFor();
-      await injectorFor(workDir).injectMcp();
-      // 内置 opencode.browser 插件注册了一个名为 `browser` 的工具 → 与平台自己的
-      // browser 工具（agent-browser）同名冲突：平台工具进注册表但**不进模型的 tools[]**
-      // → 模型永远调不到，且全程无报错。精确 id 禁用是 T6 验证过的安全手段。
-      expect(readJson(workDir, 'opencode.json').plugins).toContain('-opencode.browser');
-    });
-
-    it('重复注入不追加重复条目（幂等）', async () => {
-      const workDir = workDirFor();
-      const injector = injectorFor(workDir);
-      await injector.injectMcp();
-      await injector.injectMcp();
-      expect(readJson(workDir, 'opencode.json').plugins).toEqual([
-        'oh-my-openagent@latest',
-        '-opencode.browser',
-      ]);
-    });
-
-    it('各种等价写法都识别为已存在（不重复追加）', async () => {
-      for (const entry of [
-        'oh-my-openagent',
-        'oh-my-openagent@latest',
-        'oh-my-opencode@latest',
-        '/opt/omo/node_modules/oh-my-openagent',
-      ]) {
-        const workDir = workDirFor();
-        fs.writeFileSync(
-          path.join(workDir, 'opencode.json'),
-          JSON.stringify({ plugin: [entry] }),
-        );
-        await injectorFor(workDir).injectMcp();
-        expect(readJson(workDir, 'opencode.json').plugins).toEqual([
-          entry,
-          '-opencode.browser',
-        ]);
-      }
-    });
-
-    it('用户手写的其他 plugin 条目保留，OmO 追加在后', async () => {
-      const workDir = workDirFor();
-      fs.writeFileSync(
-        path.join(workDir, 'opencode.json'),
-        JSON.stringify({ plugin: ['./my-local-plugin.js'] }),
-      );
-      await injectorFor(workDir).injectMcp();
-      expect(readJson(workDir, 'opencode.json').plugins).toEqual([
-        './my-local-plugin.js',
-        'oh-my-openagent@latest',
-        '-opencode.browser',
-      ]);
-    });
+  it('禁用 v2 内置浏览器插件（否则平台的 browser 工具被同名内置工具**静默遮蔽**）', async () => {
+    const workDir = workDirFor();
+    await injectorFor(workDir).injectMcp();
+    // 内置 opencode.browser 插件注册了一个名为 `browser` 的工具 → 与平台自己的
+    // browser 工具（agent-browser）同名冲突：平台工具进注册表但**不进模型的 tools[]**
+    // → 模型永远调不到，且全程无报错。精确 id 禁用是 T6 验证过的安全手段。
+    expect(readJson(workDir, 'opencode.json').plugins).toEqual([
+      '-opencode.browser',
+    ]);
   });
 
-  describe('agent→模型配置（落点：用户级 ~/.omo/omo.jsonc）', () => {
-    let omoDir: string;
-    let prevOmoDir: string | undefined;
-
-    beforeEach(() => {
-      omoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omo-dir-'));
-      prevOmoDir = process.env.OMO_CONFIG_DIR;
-      process.env.OMO_CONFIG_DIR = omoDir;
-    });
-
-    afterEach(() => {
-      if (prevOmoDir === undefined) delete process.env.OMO_CONFIG_DIR;
-      else process.env.OMO_CONFIG_DIR = prevOmoDir;
-    });
-
-    /** 用户级配置绝对路径（惰性读 $HOME，必须在 beforeEach 之后调用）。 */
-    const userCfgPath = (): string => omoConfigUserPath();
-    const readUserCfg = (): any => JSON.parse(fs.readFileSync(userCfgPath(), 'utf8'));
-
-    it('无任何文件时：新建到用户级 ~/.omo/omo.jsonc，工作目录不留配置', async () => {
-      const workDir = workDirFor();
-      const written = await injectorFor(workDir).writeOmoConfig({
-        sisyphus: 'opencode/big-pickle',
-      });
-      expect(written).toBe(userCfgPath());
-      expect(readUserCfg()).toEqual({
-        agents: { sisyphus: { model: 'opencode/big-pickle' } },
-      });
-      expect(fs.existsSync(path.join(workDir, '.omo', 'omo.jsonc'))).toBe(false);
-    });
-
-    it('用户级已存在 → 写用户级，保留 [opencode] 段其他键与 _migrations', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
-      fs.writeFileSync(
-        userCfgPath(),
-        JSON.stringify({ '[opencode]': { agents: {} }, _migrations: ['x'] }),
-      );
-      const written = await injectorFor(workDir).writeOmoConfig({
-        atlas: 'opencode/big-pickle',
-      });
-      expect(written).toBe(userCfgPath());
-      const cfg = readUserCfg();
-      expect(cfg['[opencode]'].agents.atlas).toEqual({
-        model: 'opencode/big-pickle',
-      });
-      expect(cfg._migrations).toEqual(['x']);
-    });
-
-    it('历史落点（工作目录 .omo/omo.jsonc）→ 迁移到用户级并删除旧文件', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
-      fs.writeFileSync(
-        path.join(workDir, '.omo', 'omo.jsonc'),
-        JSON.stringify({
-          '[opencode]': { agents: { sisyphus: { model: 'old/win' } } },
-        }),
-      );
-      const injector = injectorFor(workDir);
-      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'old/win' });
-
-      const written = await injector.writeOmoConfig({ atlas: 'a/b' });
-
-      expect(written).toBe(userCfgPath());
-      expect(fs.existsSync(path.join(workDir, '.omo', 'omo.jsonc'))).toBe(false);
-      expect(readUserCfg()['[opencode]'].agents.sisyphus).toEqual({
-        model: 'old/win',
-      });
-    });
-
-    it('更早的历史落点（工作目录 .opencode/oh-my-openagent.jsonc）同样迁移', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.join(workDir, '.opencode'), { recursive: true });
-      fs.writeFileSync(
-        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
-        JSON.stringify({ agents: { oracle: { model: 'a/b' } } }),
-      );
-      const injector = injectorFor(workDir);
-      expect(injector.readOmoConfig()).toEqual({ oracle: 'a/b' });
-
-      const written = await injector.writeOmoConfig({ atlas: 'a/b' });
-
-      expect(written).toBe(userCfgPath());
-      expect(
-        fs.existsSync(path.join(workDir, '.opencode', 'oh-my-openagent.jsonc')),
-      ).toBe(false);
-    });
-
-    it('用户级已存在时工作目录历史文件不干扰（不迁移、不覆盖）', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
-      fs.writeFileSync(
-        userCfgPath(),
-        JSON.stringify({
-          '[opencode]': { agents: { sisyphus: { model: 'user/win' } } },
-        }),
-      );
-      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
-      fs.writeFileSync(
-        path.join(workDir, '.omo', 'omo.jsonc'),
-        JSON.stringify({ agents: { sisyphus: { model: 'stale/lose' } } }),
-      );
-      const injector = injectorFor(workDir);
-      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'user/win' });
-
-      await injector.writeOmoConfig({ atlas: 'a/b' });
-
-      expect(readUserCfg()['[opencode]'].agents.sisyphus).toEqual({
-        model: 'user/win',
-      });
-    });
-
-    it('读旧格式（顶层 agents）与新格式（[opencode].agents）都认', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
-      fs.writeFileSync(
-        userCfgPath(),
-        JSON.stringify({ agents: { oracle: { model: 'a/b' } } }),
-      );
-      expect(injectorFor(workDir).readOmoConfig()).toEqual({ oracle: 'a/b' });
-
-      fs.writeFileSync(
-        userCfgPath(),
-        JSON.stringify({ '[opencode]': { agents: { oracle: { model: 'c/d' } } } }),
-      );
-      expect(injectorFor(workDir).readOmoConfig()).toEqual({ oracle: 'c/d' });
-    });
-
-    it('JSONC 注释与尾逗号可解析', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
-      fs.writeFileSync(
-        userCfgPath(),
-        `// OMO configuration\n{\n  "[opencode]": {\n    "agents": {\n      "sisyphus": { "model": "a/b" },\n    },\n  },\n}\n`,
-      );
-      expect(injectorFor(workDir).readOmoConfig()).toEqual({ sisyphus: 'a/b' });
-    });
-
-    it('增量合并：只改传入项，其余保留；空串清除覆盖', async () => {
-      const workDir = workDirFor();
-      const injector = injectorFor(workDir);
-      await injector.writeOmoConfig({ sisyphus: 'a/one', atlas: 'a/two' });
-      await injector.writeOmoConfig({ sisyphus: 'b/three' });
-      expect(injector.readOmoConfig()).toEqual({
-        sisyphus: 'b/three',
-        atlas: 'a/two',
-      });
-      await injector.writeOmoConfig({ sisyphus: '' });
-      expect(injector.readOmoConfig()).toEqual({ atlas: 'a/two' });
-    });
-
-    it('保留 agent 的其他键（variant），只覆盖 model', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
-      fs.writeFileSync(
-        userCfgPath(),
-        JSON.stringify({
-          '[opencode]': {
-            agents: { sisyphus: { model: 'old/m', variant: 'high' } },
-          },
-        }),
-      );
-      await injectorFor(workDir).writeOmoConfig({ sisyphus: 'new/m' });
-      expect(readUserCfg()['[opencode]'].agents.sisyphus).toEqual({
-        model: 'new/m',
-        variant: 'high',
-      });
-    });
-
-    it('文件不存在/损坏 → readOmoConfig 返回空对象不抛错', () => {
-      const workDir = workDirFor();
-      expect(injectorFor(workDir).readOmoConfig()).toEqual({});
-      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
-      fs.writeFileSync(userCfgPath(), '{ broken');
-      expect(injectorFor(workDir).readOmoConfig()).toEqual({});
-    });
-
-    it('OMO_AGENT_NAMES 覆盖 OmO schema 的全部 agent（含 prometheus/atlas）', () => {
-      expect(OMO_AGENT_NAMES).toEqual(
-        expect.arrayContaining(['sisyphus', 'prometheus', 'atlas', 'hephaestus']),
-      );
-      expect(OMO_AGENT_NAMES.length).toBe(14);
-    });
+  it('重复注入不追加重复条目（幂等）', async () => {
+    const workDir = workDirFor();
+    const injector = injectorFor(workDir);
+    await injector.injectMcp();
+    await injector.injectMcp();
+    expect(readJson(workDir, 'opencode.json').plugins).toEqual([
+      '-opencode.browser',
+    ]);
   });
-});
 
-describe('ResourceInjector：从 slim fork 迁移到 OmO', () => {
-  function injectorFor(workDir: string): ResourceInjector {
-    return new ResourceInjector({
-      serverUrl: 'http://localhost:3000',
-      workerToken: 'tok',
-      workerId: 'w_test',
-      workDir,
-      fetchImpl: makeFetch({
-        '/api/v1/mcp-servers': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
-      }),
-    });
-  }
-
-  it('残留的 oh-my-opencode-slim 条目被替换为 OmO（回归：宽松匹配会导致 OmO 永不加载）', async () => {
+  it('用户手写的其他 plugin 条目保留', async () => {
     const workDir = workDirFor();
     fs.writeFileSync(
       path.join(workDir, 'opencode.json'),
-      JSON.stringify({ plugin: ['/opt/omo/node_modules/oh-my-opencode-slim'] }),
+      JSON.stringify({ plugin: ['./my-local-plugin.js'] }),
     );
     await injectorFor(workDir).injectMcp();
-    const cfg = JSON.parse(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'));
-    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
-    expect(JSON.stringify(cfg.plugins)).not.toContain('slim');
-  });
-
-  it('slim 与 OmO 并存时只保留 OmO，且顺序稳定', async () => {
-    const workDir = workDirFor();
-    fs.writeFileSync(
-      path.join(workDir, 'opencode.json'),
-      JSON.stringify({
-        plugin: ['oh-my-opencode-slim', 'oh-my-openagent@latest', './mine.js'],
-      }),
-    );
-    await injectorFor(workDir).injectMcp();
-    const cfg = JSON.parse(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'));
-    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', './mine.js', '-opencode.browser']);
+    expect(readJson(workDir, 'opencode.json').plugins).toEqual([
+      './my-local-plugin.js',
+      '-opencode.browser',
+    ]);
   });
 });
 
@@ -1484,7 +1228,7 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     });
     const cfg = readConfig(workDir);
     expect(cfg.mcp?.servers?.vteam).toBeDefined();
-    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(cfg.plugins).toEqual(['-opencode.browser']);
     expect(cfg.agents['vteam-developer']).toEqual(V2_ENTRY);
     expect(cfg.agents['vteam-tester']).toBeDefined();
     // 用户手写的 v1 `agent:` 节被**迁移**进 `agents:`（用户条目保留）
@@ -1518,7 +1262,7 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     const first = fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8');
     await injector.injectAll();
     expect(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8')).toBe(first);
-    expect(readConfig(workDir).plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(readConfig(workDir).plugins).toEqual(['-opencode.browser']);
     expect(readManifest(workDir).agentNames).toEqual(['vteam-developer', 'vteam-tester']);
   });
 
@@ -1541,7 +1285,7 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     // 批次 D-1：受管块**保留**（删掉 = 退回引擎默认权限 = 权限放大，fail-open）。
     expect(cfg.agents?.['vteam-developer']).toEqual(V2_ENTRY);
     expect(cfg.agents?.['vteam-tester']).toBeDefined();
-    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(cfg.plugins).toEqual(['-opencode.browser']);
     expect(fs.existsSync(path.join(workDir, '.opencode', 'plugins', 'manual-tool.ts'))).toBe(true);
     // 记账与「块仍在配置里」一致：名字不清零 + 标记未刷新。
     const manifest = readManifest(workDir);
@@ -1718,7 +1462,7 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     fs.writeFileSync(
       path.join(workDir, 'opencode.json'),
       JSON.stringify({
-        plugin: [`./${pluginRel}`, 'oh-my-openagent@latest', './mine.js'],
+        plugin: [`./${pluginRel}`, './mine.js'],
         agent: {},
       }),
       'utf8',
@@ -1739,7 +1483,7 @@ describe('ResourceInjector：agent 策略注入（v2 原生 **agents** 节，无
     expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
     expect(fs.existsSync(path.join(workDir, pluginRel))).toBe(false);
     const cfg = readConfig(workDir);
-    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', './mine.js', '-opencode.browser']);
+    expect(cfg.plugins).toEqual(['./mine.js', '-opencode.browser']);
     const manifest = readManifest(workDir);
     expect(manifest.guardRolesFile).toBeUndefined();
     expect(manifest.guardSessionsDir).toBeUndefined();
@@ -1818,7 +1562,7 @@ describe('ResourceInjector：T15 —— 写出的 opencode.json 必须是 **v2 �
     expect(cfg.agent).toBeUndefined();
     expect(cfg.plugin).toBeUndefined();
     expect(Object.keys(cfg.mcp)).toEqual(['servers']);
-    expect(cfg.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(cfg.plugins).toEqual(['-opencode.browser']);
   });
 
   it('mcp 条目是 v2 原生形：disabled 极性 + 三段 timeout + snake_case OAuth', async () => {

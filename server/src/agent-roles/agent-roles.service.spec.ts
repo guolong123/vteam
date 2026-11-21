@@ -16,7 +16,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AgentRolesService } from './agent-roles.service';
 import { CreateAgentRoleDto } from './dto/create-agent-role.dto';
 import { UpdateAgentRoleDto } from './dto/update-agent-role.dto';
-import { OpencodeAgentNameValidator } from './opencode-agent-name.validator';
 
 describe('AgentRolesService', () => {
   let service: AgentRolesService;
@@ -44,7 +43,6 @@ describe('AgentRolesService', () => {
     description: '内置角色：产品经理（需求分析与原型设计）。',
     type: 'builtin',
     defaultAgentId: 'a_product',
-    defaultOpencodeAgentName: null,
     capabilities: { 'task.create': true, 'chat.post': true },
     rolePrompt: '你是产品经理。',
     sortOrder: 1,
@@ -58,7 +56,6 @@ describe('AgentRolesService', () => {
     description: null,
     type: 'custom',
     defaultAgentId: null,
-    defaultOpencodeAgentName: null,
     capabilities: null,
     rolePrompt: '你是数据分析师。',
     sortOrder: 0,
@@ -73,7 +70,6 @@ describe('AgentRolesService', () => {
     description: null,
     type: 'builtin',
     defaultAgentId: r.defaultAgentId,
-    defaultOpencodeAgentName: null,
     capabilities: {},
     rolePrompt: `role-prompt-${r.key}`,
     sortOrder: r.sortOrder,
@@ -106,7 +102,6 @@ describe('AgentRolesService', () => {
         AgentRolesService,
         { provide: PrismaService, useValue: prisma },
         { provide: IdGeneratorService, useValue: idGen },
-        { provide: OpencodeAgentNameValidator, useValue: validator },
       ],
     }).compile();
 
@@ -160,9 +155,6 @@ describe('AgentRolesService', () => {
       expect(builtin.map((r) => [r.id, r.defaultAgentId])).toEqual(
         BUILTIN_AGENT_ROLES.map((r) => [r.id, r.defaultAgentId]),
       );
-      expect(builtin.every((r) => r.defaultOpencodeAgentName === null)).toBe(
-        true,
-      );
     });
 
     it('type=builtin 过滤 + 自定义分页（page=2, pageSize=5）', async () => {
@@ -204,7 +196,6 @@ describe('AgentRolesService', () => {
           'description',
           'type',
           'defaultAgentId',
-          'defaultOpencodeAgentName',
           'capabilities',
           'rolePrompt',
           'sortOrder',
@@ -338,174 +329,6 @@ describe('AgentRolesService', () => {
           code: AGENT_ROLE_ERRORS.AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND,
         },
       });
-      expect(prisma.agentRole.create).not.toHaveBeenCalled();
-    });
-
-    it('capabilities 合法 → 键校验通过并落库（岗位能力点矩阵）', async () => {
-      const capabilities = { 'task.create': false, 'chat.post': true };
-      prisma.agentRole.create.mockResolvedValue({ ...customRow, capabilities });
-
-      const result = await service.create({
-        name: '数据分析师',
-        key: 'data-analyst',
-        type: 'custom',
-        capabilities,
-      });
-
-      expect(prisma.agentRole.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ capabilities }),
-        }),
-      );
-      expect(result).toMatchObject({ capabilities });
-    });
-
-    it('capabilities 含目录外键 → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID（不落库）', async () => {
-      await expect(
-        service.create({
-          name: '数据分析师',
-          key: 'data-analyst',
-          type: 'custom',
-          capabilities: { 'task.create': true, nope: false },
-        }),
-      ).rejects.toMatchObject({
-        response: { code: AGENT_ROLE_ERRORS.AGENT_ROLE_CAPABILITY_KEY_INVALID },
-      });
-      expect(prisma.agentRole.create).not.toHaveBeenCalled();
-    });
-
-    it('capabilities 值非 boolean → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID', async () => {
-      await expect(
-        service.create({
-          name: '数据分析师',
-          key: 'data-analyst',
-          type: 'custom',
-          capabilities: { 'task.create': 'deny' as unknown as boolean },
-        }),
-      ).rejects.toMatchObject({
-        response: { code: AGENT_ROLE_ERRORS.AGENT_ROLE_CAPABILITY_KEY_INVALID },
-      });
-      expect(prisma.agentRole.create).not.toHaveBeenCalled();
-    });
-
-    it('capabilities 缺省 → 出厂矩阵落库（敏感能力点预置拒绝）', async () => {
-      prisma.agentRole.create.mockResolvedValue({
-        ...customRow,
-        capabilities: buildFactoryCapabilityMatrix(),
-      });
-
-      await service.create({
-        name: '数据分析师',
-        key: 'data-analyst',
-        type: 'custom',
-      });
-
-      expect(prisma.agentRole.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            capabilities: buildFactoryCapabilityMatrix(),
-          }),
-        }),
-      );
-    });
-
-    it('外部引擎名创建：落库 defaultOpencodeAgentName、defaultAgentId=null、原样保存（含空格/大写）', async () => {
-      prisma.agentRole.create.mockResolvedValue({
-        ...customRow,
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-
-      const dto: CreateAgentRoleDto = {
-        name: '计划构建者',
-        key: 'plan-builder',
-        type: 'custom',
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      };
-      const result = await service.create(dto);
-
-      expect(prisma.agentRole.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          defaultAgentId: null,
-          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-        }),
-      });
-      // 外部名不做存在性强校验（弱校验仅告警），不查 Agent 表
-      expect(prisma.agent.findUnique).not.toHaveBeenCalled();
-      expect(result).toMatchObject({
-        defaultAgentId: null,
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-      expect(validator.warnIfUnknown).toHaveBeenCalledWith(
-        'Prometheus - Plan Builder',
-        'ar_0000000001',
-      );
-    });
-
-    it('外部引擎名首尾空白被 trim（内部空白/大小写逐字保留）', async () => {
-      prisma.agentRole.create.mockResolvedValue({
-        ...customRow,
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-
-      await service.create({
-        name: '计划构建者',
-        key: 'plan-builder',
-        type: 'custom',
-        defaultOpencodeAgentName: '  Prometheus - Plan Builder  ',
-      });
-
-      expect(prisma.agentRole.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-        }),
-      });
-    });
-
-    it('外部引擎名空串 → null（等同未设置，不触发弱校验）', async () => {
-      prisma.agentRole.create.mockResolvedValue(customRow);
-
-      await service.create({
-        name: '数据分析师',
-        key: 'data-analyst',
-        type: 'custom',
-        defaultOpencodeAgentName: '',
-      });
-
-      expect(prisma.agentRole.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          defaultAgentId: null,
-          defaultOpencodeAgentName: null,
-        }),
-      });
-      expect(validator.warnIfUnknown).not.toHaveBeenCalled();
-    });
-
-    it('两个槽位同时给 → 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT（不落库、不查 Agent）', async () => {
-      prisma.agent.findUnique.mockResolvedValue({ id: 'a_developer' });
-
-      await expect(
-        service.create({
-          name: '冲突角色',
-          key: 'conflict-role',
-          type: 'custom',
-          defaultAgentId: 'a_developer',
-          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-        }),
-      ).rejects.toThrow(BadRequestException);
-      await expect(
-        service.create({
-          name: '冲突角色',
-          key: 'conflict-role',
-          type: 'custom',
-          defaultAgentId: 'a_developer',
-          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-        }),
-      ).rejects.toMatchObject({
-        response: {
-          code: AGENT_ROLE_ERRORS.AGENT_ROLE_DEFAULT_SLOT_CONFLICT,
-        },
-      });
-      expect(prisma.agent.findUnique).not.toHaveBeenCalled();
       expect(prisma.agentRole.create).not.toHaveBeenCalled();
     });
 
@@ -652,153 +475,6 @@ describe('AgentRolesService', () => {
       ).rejects.toMatchObject({
         response: {
           code: AGENT_ROLE_ERRORS.AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND,
-        },
-      });
-      expect(prisma.agentRole.update).not.toHaveBeenCalled();
-    });
-
-    it('capabilities 更新 → 键校验通过并整体替换落库', async () => {
-      const capabilities = { 'task.create': false, 'chat.post': true };
-      prisma.agentRole.findUnique.mockResolvedValue(customRow);
-      prisma.agentRole.update.mockResolvedValue({ ...customRow, capabilities });
-
-      const result = await service.update('ar_0000000001', { capabilities });
-
-      expect(prisma.agentRole.update).toHaveBeenCalledWith({
-        where: { id: 'ar_0000000001' },
-        data: { capabilities },
-      });
-      expect(result).toMatchObject({ capabilities });
-    });
-
-    it('capabilities 不传 → 不触碰现有矩阵（undefined 不落 data）', async () => {
-      prisma.agentRole.findUnique.mockResolvedValue(customRow);
-      prisma.agentRole.update.mockResolvedValue(customRow);
-
-      await service.update('ar_0000000001', { name: '新名字' });
-
-      expect(prisma.agentRole.update).toHaveBeenCalledWith({
-        where: { id: 'ar_0000000001' },
-        data: { name: '新名字' },
-      });
-    });
-
-    it('内置角色可编辑 capabilities（仅 key 只读，能力矩阵放开）', async () => {
-      const capabilities = { 'task.create': true };
-      prisma.agentRole.findUnique.mockResolvedValue(builtinRow);
-      prisma.agentRole.update.mockResolvedValue({
-        ...builtinRow,
-        capabilities,
-      });
-
-      const result = await service.update('ar_product', { capabilities });
-
-      expect(prisma.agentRole.update).toHaveBeenCalledWith({
-        where: { id: 'ar_product' },
-        data: { capabilities },
-      });
-      expect(result).toMatchObject({ capabilities });
-    });
-
-    it('capabilities 含目录外键 → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID（不落库）', async () => {
-      prisma.agentRole.findUnique.mockResolvedValue(customRow);
-
-      await expect(
-        service.update('ar_0000000001', { capabilities: { nope: true } }),
-      ).rejects.toMatchObject({
-        response: { code: AGENT_ROLE_ERRORS.AGENT_ROLE_CAPABILITY_KEY_INVALID },
-      });
-      expect(prisma.agentRole.update).not.toHaveBeenCalled();
-    });
-
-    it('更新为外部引擎名：落库外部名并清空内部 id（单一槽位切换）', async () => {
-      prisma.agentRole.findUnique.mockResolvedValue({
-        ...customRow,
-        defaultAgentId: 'a_developer',
-      });
-      prisma.agentRole.update.mockResolvedValue({
-        ...customRow,
-        defaultAgentId: null,
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-
-      const result = await service.update('ar_0000000001', {
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-
-      expect(prisma.agentRole.update).toHaveBeenCalledWith({
-        where: { id: 'ar_0000000001' },
-        data: {
-          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-          defaultAgentId: null,
-        },
-      });
-      expect(result).toMatchObject({
-        defaultAgentId: null,
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-      expect(validator.warnIfUnknown).toHaveBeenCalledWith(
-        'Prometheus - Plan Builder',
-        'ar_0000000001',
-      );
-    });
-
-    it('更新为内部 id：落库内部 id 并清空外部名（外部 → 内部反向切换）', async () => {
-      prisma.agentRole.findUnique.mockResolvedValue({
-        ...customRow,
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-      prisma.agent.findUnique.mockResolvedValue({ id: 'a_developer' });
-      prisma.agentRole.update.mockResolvedValue({
-        ...customRow,
-        defaultAgentId: 'a_developer',
-        defaultOpencodeAgentName: null,
-      });
-
-      await service.update('ar_0000000001', { defaultAgentId: 'a_developer' });
-
-      expect(prisma.agentRole.update).toHaveBeenCalledWith({
-        where: { id: 'ar_0000000001' },
-        data: {
-          defaultAgentId: 'a_developer',
-          defaultOpencodeAgentName: null,
-        },
-      });
-    });
-
-    it('外部名为空串 → 清除外部槽位（不动内部槽位，不触发弱校验）', async () => {
-      prisma.agentRole.findUnique.mockResolvedValue({
-        ...customRow,
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-      prisma.agentRole.update.mockResolvedValue(customRow);
-
-      await service.update('ar_0000000001', { defaultOpencodeAgentName: '' });
-
-      expect(prisma.agentRole.update).toHaveBeenCalledWith({
-        where: { id: 'ar_0000000001' },
-        data: { defaultOpencodeAgentName: null },
-      });
-      expect(validator.warnIfUnknown).not.toHaveBeenCalled();
-    });
-
-    it('两个槽位同时给非空 → 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT（不落库）', async () => {
-      prisma.agentRole.findUnique.mockResolvedValue(customRow);
-
-      await expect(
-        service.update('ar_0000000001', {
-          defaultAgentId: 'a_developer',
-          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-        }),
-      ).rejects.toThrow(BadRequestException);
-      await expect(
-        service.update('ar_0000000001', {
-          defaultAgentId: 'a_developer',
-          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-        }),
-      ).rejects.toMatchObject({
-        response: {
-          code: AGENT_ROLE_ERRORS.AGENT_ROLE_DEFAULT_SLOT_CONFLICT,
         },
       });
       expect(prisma.agentRole.update).not.toHaveBeenCalled();

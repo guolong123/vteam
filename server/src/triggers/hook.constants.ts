@@ -21,8 +21,6 @@ export const HOOK_STATUS = {
   CANCELLED: 'cancelled',
 } as const;
 
-export type HookStatus = (typeof HOOK_STATUS)[keyof typeof HOOK_STATUS];
-
 /** Hook 主键域前缀（冻结 hks_，经共享 IdGeneratorService 生成；`tmr_` 不动）。 */
 export const HOOK_ID_PREFIX = 'hks';
 

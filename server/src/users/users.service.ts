@@ -10,6 +10,11 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
+import {
+  normalizePage,
+  normalizePageSize,
+  paginated,
+} from '../common/pagination';
 
 /** bcrypt 轮数：与 auth.service.register 保持一致 */
 const BCRYPT_ROUNDS = 10;
@@ -28,16 +33,6 @@ const SAFE_USER_SELECT = {
   updatedAt: true,
 } as const;
 
-export interface UserListResult {
-  items: unknown[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-const DEFAULT_PAGE_SIZE = 20;
-const MAX_PAGE_SIZE = 100;
-
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -47,10 +42,10 @@ export class UsersService {
    * search 对 username / displayName 做模糊匹配。响应不含 password_hash。
    * 附带所属团队数 _count.teamUserMembers（MOCK-05：真实计数，非前端硬编码 0）。
    */
-  async findAll(page = 1, pageSize = DEFAULT_PAGE_SIZE, search?: string) {
-    const safePage = page >= 1 ? page : 1;
-    const safePageSize =
-      pageSize >= 1 ? Math.min(pageSize, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+  async findAll(page = 1, pageSize?: number, search?: string) {
+    // 与全平台列表端点同一分页口径（common/pagination）；此前是第 4 种手写实现。
+    const safePage = normalizePage(page);
+    const safePageSize = normalizePageSize(pageSize);
 
     const where = search
       ? {
@@ -75,7 +70,7 @@ export class UsersService {
       this.prisma.user.count({ where }),
     ]);
 
-    return { items, total, page: safePage, pageSize: safePageSize };
+    return paginated(items, total, safePage, safePageSize);
   }
 
   /**

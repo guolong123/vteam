@@ -1,6 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { createPaginatedQueryDto } from '../../common/dto/paginated-query.dto';
+import { EXTERNAL_USERS_DEFAULT_PAGE_SIZE } from '../constants';
 
 /**
  * GET /external-users 查询参数（契约 §2.1）。
@@ -9,7 +11,16 @@ import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
  * externalId 做 contains 匹配（MySQL 默认排序规则大小写不敏感）。
  * 外部用户量级小，分页在服务层内存里做（先按邀请时间统计排序再切片）。
  */
-export class QueryExternalUsersDto {
+/**
+ * 本端点契约的 `pageSize` 默认值是 **50**（其余列表端点均为 20），上限 100。
+ * 特化基类由 `createPaginatedQueryDto` 生成，字段装饰器与手写完全等价。
+ */
+class ExternalUsersPaginatedQueryDto extends createPaginatedQueryDto({
+  defaultPageSize: EXTERNAL_USERS_DEFAULT_PAGE_SIZE,
+  maxPageSize: 100,
+}) {}
+
+export class QueryExternalUsersDto extends ExternalUsersPaginatedQueryDto {
   @ApiPropertyOptional({
     description:
       '关键字：姓名/渠道展示名/公司/岗位/联系方式/外部标识 模糊匹配（trim 后 contains）',
@@ -17,30 +28,6 @@ export class QueryExternalUsersDto {
   @IsOptional()
   @IsString()
   keyword?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({
-    description: '每页条数（1-100）',
-    default: 50,
-    minimum: 1,
-    maximum: 100,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  pageSize?: number;
 }
 
 /**

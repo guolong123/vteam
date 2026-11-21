@@ -767,10 +767,10 @@ const BUILTIN_AGENT_ROLES: readonly {
  * EXTERNAL_AGENT_ROLES 逐字节一致，自包含镜像，理由见文件头）。2026-09-22 起 seed
  * 预置到全新库（此前 fresh 不存在外部岗）：type=custom、sortOrder 紧随内置 1..7。
  *
- * 2026-10-21（opencode v2 适配）：三个岗位的默认 Agent 槽位由「**外部引擎名**」
- * （`defaultOpencodeAgentName` = OmO 的 `Sisyphus - ultraworker` /
- * `Prometheus - Plan Builder` / `Atlas - Plan Executor`）改为「**平台 Agent**」
+ * 2026-10-21（opencode v2 适配）：三个岗位的默认 Agent 改为「**平台 Agent**」
  * （`defaultAgentId` = `agents` 表的 `a_developer` / `a_plan`，与内置岗位同形）。
+ * 旧值绑定的是 OmO 的「外部引擎名」（`Sisyphus - ultraworker` / `Prometheus - Plan Builder` /
+ * `Atlas - Plan Executor`）；该槽位已于 2026-11-21 随「外部 agent」功能整体下线移除。
  *
  * 原因：opencode v2 移除了 v1 插件 API ⇒ 镜像内置的 OmO（v1 形态）在 v2 上**不加载**
  * ⇒ 那三个 agent 名在 v2 上**不存在**（实测 v2.0.32：把会话的 agent 设成不存在的名字
@@ -779,8 +779,7 @@ const BUILTIN_AGENT_ROLES: readonly {
  * 而平台自己的 `vteam-*` agent 由控制面注入进项目 `opencode.json` 的 agents 节
  * ⇒ 在 v2 上**存在** ⇒ 三个岗位改绑平台 Agent（内部槽位）后重新可派发。
  *
- * 槽位互斥（`defaultAgentId` 与 `defaultOpencodeAgentName` 至多一个非空，同时空 ⇒
- * 400 `ROLE_DEFAULT_AGENT_MISSING`）⇒ 本表只填**内部**槽位，外部槽位一律不写（保持 NULL）。
+ * 槽位缺省为空 ⇒ 400 `ROLE_DEFAULT_AGENT_MISSING`（岗位不可派发），故本表必须填。
  * 语义映射（职责不变）：执行岗 → `a_developer`；计划岗 → `a_plan`。
  */
 const EXTERNAL_AGENT_ROLES: readonly {
@@ -1347,8 +1346,8 @@ async function main() {
         // 2026-10-21（opencode v2）：默认 Agent 槽位 = **平台 Agent**（内部槽位）。
         // 旧值是 OmO 的外部引擎名（`Sisyphus - ultraworker` 等），而 v2 不加载 OmO
         // ⇒ 那三个名字在 v2 上不存在 ⇒ 派发必失败（`Agent not found`，无回复、无回退）。
-        // 两个槽位互斥 ⇒ 这里**只**填 `defaultAgentId`，`defaultOpencodeAgentName` 不写
-        // （保持 NULL；两槽位同为空 ⇒ 400 ROLE_DEFAULT_AGENT_MISSING ⇒ 岗位不可派发）。
+        // 只填 `defaultAgentId`：外部引擎名槽位已随「外部 agent」功能下线移除，
+        // 缺省为空 ⇒ 400 ROLE_DEFAULT_AGENT_MISSING ⇒ 岗位不可派发。
         defaultAgentId: role.defaultAgentId,
         capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES,
         capabilitiesConfiguredAt: new Date(),

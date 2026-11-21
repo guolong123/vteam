@@ -133,7 +133,7 @@ test.describe("no-agent-picker 选择器移除回归", () => {
     // 断言本体：残留 testid 与全页 <select> 均为零（M6 保证被缩窄到会话页）
     await expect(page.getByTestId("message-agent-select")).toHaveCount(0);
     await expect(page.locator("select")).toHaveCount(0);
-    // 反向探针：外部 Agent 选择器不得出现在会话页任何位置（成员面板已移除，仅剩角色编辑器）
+    // 反向探针：外部 Agent 选择器不得出现在会话页任何位置（该功能已整体下线）
     await expect(page.getByTestId("member-external-agent-select")).toHaveCount(0);
   });
 

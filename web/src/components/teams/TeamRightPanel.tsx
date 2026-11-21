@@ -40,6 +40,7 @@ import {
   ARTIFACT_TYPE_LABEL,
   ISSUE_STATUS_BADGE,
 } from "@/src/components/tasks/task-detail-types";
+import { formatDateOnly } from "@/lib/datetime-format";
 
 /* ------------------------------------------------------------------ */
 /* 团队任务列表卡片（任务 Tab · 状态子页；并行化替代原团队队列卡）          */
@@ -91,12 +92,6 @@ const TEAM_TASK_STATUS_THEME: Record<TaskApiStatus, { color: string; bg: string;
 const TEAM_TASK_BREATHE_STYLE = (
   <style>{`@keyframes team-task-breathe { 0%,100%{opacity:.25} 50%{opacity:1} }`}</style>
 );
-
-function formatDateOnly(iso: string | null | undefined): string {
-  const t = iso ? new Date(iso).getTime() : NaN;
-  if (!Number.isFinite(t)) return "—";
-  return new Date(t).toLocaleDateString("zh-CN");
-}
 
 export function TeamTaskListCard({
   team,

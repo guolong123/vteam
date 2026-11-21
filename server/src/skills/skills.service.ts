@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -137,8 +138,8 @@ export class SkillsService implements OnModuleInit {
    * 成员只读：强制 enabled=true（09 §3.8「成员只读可见已启用」，仅启用技能可供 Agent 勾选）。
    */
   async findAll(query: QuerySkillsDto = {}, viewer?: SkillViewer) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const where: Prisma.SkillWhereInput = query.name
       ? { name: { contains: query.name } }
       : {};
@@ -446,14 +447,7 @@ export class SkillsService implements OnModuleInit {
     );
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

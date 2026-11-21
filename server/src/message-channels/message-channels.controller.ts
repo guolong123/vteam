@@ -37,25 +37,7 @@ import {
 } from './message-channel.constants';
 import { CreateMessageChannelDto } from './dto/create-message-channel.dto';
 import { UpdateMessageChannelDto } from './dto/update-message-channel.dto';
-
-function maskSecrets(
-  secrets: Record<string, any> | null | undefined,
-): Record<string, string> {
-  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) {
-    return {};
-  }
-  return Object.keys(secrets as Record<string, unknown>).reduce(
-    (acc, k) => ({ ...acc, [k]: '***' }),
-    {} as Record<string, string>,
-  );
-}
-
-function maskChannel(row: any): any {
-  return {
-    ...row,
-    secrets: maskSecrets(row.secrets as Record<string, any> | null),
-  };
-}
+import { maskChannel, maskSecrets } from '../common/mask-secrets';
 
 function extractWecomBotId(
   secrets: Record<string, any> | null | undefined,

@@ -11,10 +11,6 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
-import {
-  WECOM_OPERATOR_TTL_MS,
-  WecomAibotAdapter,
-} from '../message-channels/adapters/wecom-aibot.adapter';
 import { Prisma } from '@prisma/client';
 import { validateArtifactDeclaration } from '../artifacts/artifacts.service';
 import { ArtifactsService } from '../artifacts/artifacts.service';
@@ -310,19 +306,6 @@ function isUniqueConstraintViolation(err: unknown): boolean {
   return code === 'P2002' || code === 'ER_DUP_ENTRY';
 }
 
-type WecomBridgeExternalMessage = {
-  readonly id: string;
-  readonly content?: unknown;
-  readonly createdAt?: Date | null;
-};
-
-function getWecomBridgeStream(adapter: unknown, id: string): unknown {
-  if (typeof adapter !== 'object' || adapter === null) return undefined;
-  const getStream: unknown = Reflect.get(adapter, 'getStream');
-  if (typeof getStream !== 'function') return undefined;
-  return Reflect.apply(getStream, adapter, [id]);
-}
-
 /** 首次 bind 的 instanceRef 占位（opencode 会话尚未创建；第二次 bind 写入真实 sessionId）。 */
 export const PENDING_INSTANCE_REF = 'pending';
 
@@ -365,7 +348,7 @@ export function isVteamAgentName(x: unknown): x is VteamAgentName {
 /**
  * 由 Agent 的绑定 key（`agents.agent_key`）解析 opencode agent 名
  * （`agentKey` → `vteam-<agentKey>`，vteam-custom-agent-opencode Todo 4）。
- * 目标成员未显式绑定 `opencodeAgentName` 时按 key 回退；未知/空 key 返回 null
+ * 目标成员的 Agent 行按 key 解析；未知/空 key 返回 null
  * （调用方据此省略 boundarySection，与引入前逐字节一致）。
  */
 export function agentKeyToVteamAgentName(
@@ -386,7 +369,7 @@ export function agentKeyToVteamAgentName(
  * `agentKey` 缺席/非法（`AGENT_KEY_PATTERN` 未命中 → 视为缺席，绝不拼出非法 agent 名）
  * 时返回 **null**——不做任何按名回退（`Agent.role` 列已随 todo 7 删除）。
  * 该收窄即 todo 1 声明的规则 4（无 `agentKey` 者无策略候选），调用方据此回退现状：
- * `opencodeAgentName` 或省略 `agent` 键。
+ * 省略 `agent` 键（由引擎默认 agent 执行）。
  * 纯函数；worker 能力位门控由调用方执行（此处不判定）。
  */
 export function resolvePolicyAgentCandidate(
@@ -2548,39 +2531,6 @@ export class WorkerDispatcher
     });
   }
 
-  private async findActiveWecomBridgeMessage(
-    channelId: string,
-    fallback: WecomBridgeExternalMessage | null,
-    adapter: unknown,
-  ): Promise<WecomBridgeExternalMessage | null> {
-    const candidates: WecomBridgeExternalMessage[] = [];
-    if (fallback) candidates.push(fallback);
-    try {
-      const rows = await (this.prisma as any).message.findMany({
-        where: {
-          channelId,
-          senderType: SENDER_TYPE.external,
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        select: { id: true, content: true, createdAt: true },
-      });
-      if (Array.isArray(rows)) candidates.push(...rows);
-    } catch {}
-    const seen = new Set<string>();
-    const now = Date.now();
-    for (const candidate of candidates) {
-      if (seen.has(candidate.id)) continue;
-      seen.add(candidate.id);
-      if (!candidate.createdAt) continue;
-      const ageMs = now - candidate.createdAt.getTime();
-      if (ageMs < 0 || ageMs > WECOM_OPERATOR_TTL_MS) continue;
-      const stream = getWecomBridgeStream(adapter, candidate.id);
-      if (typeof stream === 'object' && stream !== null) return candidate;
-    }
-    return null;
-  }
-
   /**
    * 团队记忆索引（prompt hint 富集专用，2026-09-30 起按受众规则分流）：
    *
@@ -3520,15 +3470,9 @@ export class WorkerDispatcher
       systemOpts.teamMode = true;
       systemOpts.taskId = '';
     }
-    // opencode 原生 agent：成员显式选择时才传（null → 不带 agent 字段，保持原行为）
-    const opencodeAgentName = teamMemberId
-      ? await this.resolveMemberOpencodeAgentName(teamMemberId)
-      : null;
-    // 执行 agent 优先级：成员显式绑定的外部 agent（opencodeAgentName，含岗位外部槽位
-    // 预填）是用户的选择，无条件胜出；无外部绑定时才用内部策略候选——目标 Agent 行经
-    // resolvePolicyAgentCandidate 映射出 `vteam-<agentKey>`（todo 10 起只认 agentKey，
-    // 非法/缺席 → 无候选），且仍受 worker 能力位门控（能力位只门控内部候选，不门控
-    // 外部绑定）；两者皆无 → 省略 agent 键，由引擎默认。
+    // 执行 agent：目标 Agent 行经 resolvePolicyAgentCandidate 映射出 `vteam-<agentKey>`
+    // （todo 10 起只认 agentKey，非法/缺席 → 无候选），且受 worker 能力位门控；
+    // 无候选 → 省略 agent 键，由引擎默认。
     // 是否"计划模式"是所绑定 agent 自身的属性：用户要用计划 agent 就直接绑定计划 agent，
     // 平台不代选、也不注入计划指令。
     //
@@ -3542,15 +3486,13 @@ export class WorkerDispatcher
     const policyCandidateSupported =
       policyCandidateAgent !== null &&
       workerSupportsAgentPolicies(worker, policyCandidateAgent);
-    const resolvedAgentName: string | null =
-      opencodeAgentName ??
-      (policyCandidateSupported ? policyCandidateAgent : null);
+    const resolvedAgentName: string | null = policyCandidateSupported
+      ? policyCandidateAgent
+      : null;
     // 陈旧留痕（批次 D-3）：本次点名靠的是**上次已知**的权限集，不是本轮的——运维必须
-    // 看得出"这一轮跑的是陈旧权限集"。只在本轮**确实**依赖陈旧报告时记（外部显式绑定
-    // 胜出时与陈旧无关，不记）。
+    // 看得出"这一轮跑的是陈旧权限集"。
     if (
       resolvedAgentName !== null &&
-      !opencodeAgentName &&
       policyCandidateSupported &&
       workerAgentPoliciesStale(worker)
     ) {
@@ -5264,37 +5206,6 @@ export class WorkerDispatcher
   }
 
   /**
-   * 团队成员选择的 opencode 原生 agent 名（TeamMember.opencodeAgentName）。
-   *
-   * 非空 → 分派时下发 `agent` 字段，由 opencode 内核按该 agent 的
-   * prompt/permission 执行（vteam 只做传递，不自造 agent 语义）；null → 不带该字段，
-   * 行为与引入本特性前逐字节一致（零回归）。
-   *
-   * 容错：查询失败不阻断分派，回退 null（同 resolveMemberOverrideModelId 的增强特性容错）。
-   */
-  private async resolveMemberOpencodeAgentName(
-    teamMemberId: string,
-  ): Promise<string | null> {
-    const repo = (this.prisma as any).teamMember;
-    if (!repo || typeof repo.findFirst !== 'function') {
-      return null;
-    }
-    try {
-      const row = (await repo.findFirst({
-        where: { id: teamMemberId },
-        select: { opencodeAgentName: true },
-      })) as { opencodeAgentName: string | null } | null;
-      return row?.opencodeAgentName ?? null;
-    } catch (err) {
-      void err; // 故意忽略：降级路径，错误原因不改变语义
-      this.logger.warn(
-        `成员 opencode agent 名查询失败 teamMemberId=${teamMemberId}，回退 null：${this.describeError(err)}`,
-      );
-      return null;
-    }
-  }
-
-  /**
    * 目标成员**岗位**的边界 correction 与工具屏蔽表（2026-09-21 capability model）。
    *
    * **两条通道分离**（有意）：
@@ -6442,10 +6353,6 @@ export class WorkerDispatcher
       return undefined;
     }
     return snap;
-  }
-
-  private clearDispatchSnapshot(teamId: string, teamMemberId: string): void {
-    this.dispatchSnapshots.delete(dispatchSnapshotKey(teamId, teamMemberId));
   }
 
   private clearDispatchSnapshotBySession(sessionId: string): void {

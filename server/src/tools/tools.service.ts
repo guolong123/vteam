@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { TOOL_ERRORS } from '../common/constants/tool.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -73,8 +74,8 @@ export class ToolsService implements OnModuleInit {
    * 返回 {items, total, page, pageSize}（对齐 agents.findMany 模式，items 为 Tool 全行，含 mcpServer）。
    */
   async findAll(query: QueryToolsDto = {}, viewer?: ToolViewer) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const includeDisabled = query.includeDisabled === true;
     const where: Prisma.ToolWhereInput = {
       source: query.source ? { equals: query.source } : undefined,
@@ -248,14 +249,7 @@ export class ToolsService implements OnModuleInit {
     });
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

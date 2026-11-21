@@ -16,25 +16,7 @@ import { TeamMembershipGuard } from '../common/guards/team-membership.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { INTEGRATIONS_ERRORS as MSG_ERRORS } from '../message-channels/message-channel.constants';
 import { BindMessageChannelsDto } from './dto/bind-message-channels.dto';
-
-function maskSecrets(
-  secrets: Record<string, any> | null | undefined,
-): Record<string, string> {
-  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) {
-    return {};
-  }
-  return Object.keys(secrets as Record<string, unknown>).reduce(
-    (acc, k) => ({ ...acc, [k]: '***' }),
-    {} as Record<string, string>,
-  );
-}
-
-function maskChannel(row: any): any {
-  return {
-    ...row,
-    secrets: maskSecrets(row.secrets as Record<string, any> | null),
-  };
-}
+import { maskChannel, maskSecrets } from '../common/mask-secrets';
 
 @ApiTags('tasks')
 @ApiBearerAuth()

@@ -374,10 +374,6 @@ export default function TeamDetailPage() {
     <div data-testid="team-detail-root" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", padding: `${space.xl}px`, overflow: "auto" }}>
     <div style={{ width: "100%", maxWidth: 1120, display: "flex", flexDirection: "column", gap: space.lg, ...baseFont }}>
       <button type="button" data-testid="back-to-teams" onClick={() => router.push("/teams")} style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: space.xs, border: "none", background: "none", color: neutral[500], fontSize: fontSize.sm, cursor: "pointer", padding: 0, fontFamily: fontFamily.body }}>← 返回团队列表</button>
-      <div data-testid="team-task-entrypoints" style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-        <button type="button" data-testid="team-task-board-link" onClick={() => router.push(`/board?teamId=${encodeURIComponent(team.id)}`)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.pill, border: "1px solid #0D9488", backgroundColor: "var(--color-surface)", color: "#0D9488", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>任务看板 →</button>
-        <button type="button" data-testid="team-task-history-link" onClick={() => router.push(`/teams/${encodeURIComponent(team.id)}/tasks`)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>历史任务 →</button>
-      </div>
       {/* 头卡：名称 + 描述 + 操作同一行组 */}
       <section style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.md }}>
         <div style={{ display: "flex", alignItems: "center", gap: space.md }}>

@@ -2334,12 +2334,12 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
     }
   });
 
-  it('回归：agent 把计划写在 .omo/plans/ 时也能读到（OmO 实际落点）', async () => {
-    // 装了 OmO 后，计划模式下主 Agent 产出的文件落在 <dir>/.omo/plans/，
-    // 只读 .opencode/plans/ 会得到空列表（实测：计划已写出但页面显示"暂无计划"）
-    const plansDir = join(workDir, '.omo', 'plans');
+  it('回归：计划写在 .vteam/plans/（新布局）时也能读到', async () => {
+    // V1 引擎接缝后 vteam 资产固定在 .vteam/；只读 .opencode/plans/ 会漏掉新布局，
+    // 表现为「计划已写出但页面显示暂无计划」。
+    const plansDir = join(workDir, '.vteam', 'plans');
     await fsp.mkdir(plansDir, { recursive: true });
-    await fsp.writeFile(join(plansDir, 'plan.md'), '# OmO 计划', 'utf8');
+    await fsp.writeFile(join(plansDir, 'plan.md'), '# vteam 计划', 'utf8');
 
     const exec = serverWith({ workDir });
     const bound = await exec.start();
@@ -2347,18 +2347,18 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
       const res = await getPlanFiles(bound, { token: TOKEN });
       expect(res.status).toBe(200);
       expect(res.body.files.map((f: any) => f.name)).toEqual(['plan.md']);
-      expect(res.body.files[0].content).toBe('# OmO 计划');
+      expect(res.body.files[0].content).toBe('# vteam 计划');
     } finally {
       await exec.stop();
     }
   });
 
-  it('两个位置都有文件时合并返回（.omo 优先，同名去重）', async () => {
+  it('两个位置都有文件时合并返回（.opencode/plans 优先，同名去重）', async () => {
     await seedPlan(workDir, 'only-opencode.md', 'A');
-    const omoDir = join(workDir, '.omo', 'plans');
-    await fsp.mkdir(omoDir, { recursive: true });
-    await fsp.writeFile(join(omoDir, 'only-omo.md'), 'B', 'utf8');
-    await fsp.writeFile(join(omoDir, 'only-opencode.md'), 'B-wins', 'utf8');
+    const vteamDir = join(workDir, '.vteam', 'plans');
+    await fsp.mkdir(vteamDir, { recursive: true });
+    await fsp.writeFile(join(vteamDir, 'only-vteam.md'), 'B', 'utf8');
+    await fsp.writeFile(join(vteamDir, 'only-opencode.md'), 'B-wins', 'utf8');
 
     const exec = serverWith({ workDir });
     const bound = await exec.start();
@@ -2367,9 +2367,9 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
       const byName = Object.fromEntries(
         res.body.files.map((f: any) => [f.name, f.content]),
       );
-      expect(Object.keys(byName).sort()).toEqual(['only-omo.md', 'only-opencode.md']);
-      // 同名时以 .omo/plans（优先级首位）为准
-      expect(byName['only-opencode.md']).toBe('B-wins');
+      expect(Object.keys(byName).sort()).toEqual(['only-opencode.md', 'only-vteam.md']);
+      // 同名时以 .opencode/plans（优先级首位，同时是上传落点）为准
+      expect(byName['only-opencode.md']).toBe('A');
     } finally {
       await exec.stop();
     }
@@ -2391,26 +2391,22 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
     }
   });
 
-  it('三目录各放一个 .md → 合并返回三个条目（含 .omo/drafts，正文内联）', async () => {
+  it('两个目录各放一个 .md → 合并返回两个条目（正文内联）', async () => {
     await seedPlan(workDir, 'a-opencode.md', '# opencode 计划');
-    const omoDir = join(workDir, '.omo', 'plans');
-    await fsp.mkdir(omoDir, { recursive: true });
-    await fsp.writeFile(join(omoDir, 'b-omo.md'), '# omo 计划', 'utf8');
-    const draftsDir = join(workDir, '.omo', 'drafts');
-    await fsp.mkdir(draftsDir, { recursive: true });
-    await fsp.writeFile(join(draftsDir, 'c-draft.md'), '# 草稿计划', 'utf8');
+    const vteamDir = join(workDir, '.vteam', 'plans');
+    await fsp.mkdir(vteamDir, { recursive: true });
+    await fsp.writeFile(join(vteamDir, 'b-vteam.md'), '# vteam 计划', 'utf8');
 
     const exec = serverWith({ workDir });
     const bound = await exec.start();
     try {
       const res = await getPlanFiles(bound, { token: TOKEN });
       expect(res.status).toBe(200);
-      expect(res.body.files).toHaveLength(3);
+      expect(res.body.files).toHaveLength(2);
       const byName = Object.fromEntries(
         res.body.files.map((f: any) => [f.name, f]),
       );
-      // .omo/drafts 下的文件出现在结果中
-      expect(Object.keys(byName).sort()).toEqual(['a-opencode.md', 'b-omo.md', 'c-draft.md']);
+      expect(Object.keys(byName).sort()).toEqual(['a-opencode.md', 'b-vteam.md']);
       for (const f of res.body.files) {
         expect(f).toEqual(
           expect.objectContaining({
@@ -2421,14 +2417,14 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
           }),
         );
       }
-      expect(byName['c-draft.md'].content).toBe('# 草稿计划');
+      expect(byName['b-vteam.md'].content).toBe('# vteam 计划');
     } finally {
       await exec.stop();
     }
   });
 
-  it('三目录均存在但无 .md → 200 {files: []} 不报错（空目录是常态）', async () => {
-    for (const rel of ['.omo/plans', '.opencode/plans', '.omo/drafts']) {
+  it('两目录均存在但无 .md → 200 {files: []} 不报错（空目录是常态）', async () => {
+    for (const rel of ['.opencode/plans', '.vteam/plans']) {
       await fsp.mkdir(join(workDir, rel), { recursive: true });
     }
     const exec = serverWith({ workDir });
@@ -2442,14 +2438,11 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
     }
   });
 
-  it('三目录同名 x.md 内容不同 → 首个命中目录（.omo/plans）胜出（优先级不回归）', async () => {
+  it('两目录同名 x.md 内容不同 → 首个命中目录（.opencode/plans）胜出（优先级不回归）', async () => {
     await seedPlan(workDir, 'x.md', 'opencode 内容');
-    const omoDir = join(workDir, '.omo', 'plans');
-    await fsp.mkdir(omoDir, { recursive: true });
-    await fsp.writeFile(join(omoDir, 'x.md'), 'omo 内容', 'utf8');
-    const draftsDir = join(workDir, '.omo', 'drafts');
-    await fsp.mkdir(draftsDir, { recursive: true });
-    await fsp.writeFile(join(draftsDir, 'x.md'), 'draft 内容', 'utf8');
+    const vteamDir = join(workDir, '.vteam', 'plans');
+    await fsp.mkdir(vteamDir, { recursive: true });
+    await fsp.writeFile(join(vteamDir, 'x.md'), 'vteam 内容', 'utf8');
 
     const exec = serverWith({ workDir });
     const bound = await exec.start();
@@ -2458,8 +2451,8 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
       expect(res.status).toBe(200);
       expect(res.body.files).toHaveLength(1);
       expect(res.body.files[0].name).toBe('x.md');
-      // PLAN_DOCS_DIRS 顺序即优先级：.omo/plans > .opencode/plans > .omo/drafts
-      expect(res.body.files[0].content).toBe('omo 内容');
+      // PLAN_DOCS_DIRS 顺序即优先级：.opencode/plans > .vteam/plans
+      expect(res.body.files[0].content).toBe('opencode 内容');
     } finally {
       await exec.stop();
     }
@@ -2572,7 +2565,7 @@ describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
     }
   });
 
-  it('成功：200 {name, updatedAt} 且 <directory>/.omo/plans/ 出现该文件（目录自动创建）', async () => {
+  it('成功：200 {name, updatedAt} 且 <directory>/.opencode/plans/ 出现该文件（目录自动创建）', async () => {
     const exec = serverWith({ workDir });
     const bound = await exec.start();
     try {
@@ -2585,7 +2578,7 @@ describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
       expect(res.body.name).toBe('uploaded.md');
       expect(typeof res.body.updatedAt).toBe('string');
       const written = await fsp.readFile(
-        join(workDir, '.omo', 'plans', 'uploaded.md'),
+        join(workDir, '.opencode', 'plans', 'uploaded.md'),
         'utf8',
       );
       expect(written).toBe('# 上传的计划');
@@ -2595,7 +2588,7 @@ describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
   });
 
   it('同目录同名覆盖写（上传即替换，不做版本堆叠）', async () => {
-    const plansDir = join(workDir, '.omo', 'plans');
+    const plansDir = join(workDir, '.opencode', 'plans');
     await fsp.mkdir(plansDir, { recursive: true });
     await fsp.writeFile(join(plansDir, 'same.md'), '旧内容', 'utf8');
     const exec = serverWith({ workDir });
@@ -2625,7 +2618,7 @@ describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
       );
       expect(ok.status).toBe(200);
       await expect(
-        fsp.stat(join(workDir, '.omo', 'plans', 'fallback.md')),
+        fsp.stat(join(workDir, '.opencode', 'plans', 'fallback.md')),
       ).resolves.toBeTruthy();
     } finally {
       await exec.stop();
@@ -2779,434 +2772,7 @@ describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
   });
 });
 
-describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', () => {
-  const TOKEN = 'tok';
-  let workDir: string;
-  /** OmO 配置落点隔离目录（落点已从工作目录改为用户级 ~/.omo/omo.jsonc）。 */
-  let omoDir: string;
-  let prevOmoDir: string | undefined;
 
-  beforeEach(async () => {
-    workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-'));
-    omoDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-cfg-'));
-    prevOmoDir = process.env.OMO_CONFIG_DIR;
-    process.env.OMO_CONFIG_DIR = omoDir;
-  });
-
-  afterEach(async () => {
-    if (prevOmoDir === undefined) delete process.env.OMO_CONFIG_DIR;
-    else process.env.OMO_CONFIG_DIR = prevOmoDir;
-    await fsp.rm(workDir, { recursive: true, force: true });
-    await fsp.rm(omoDir, { recursive: true, force: true });
-  });
-
-  function serverFor(opts: { workDir?: string | null; token?: string } = {}): ExecServer {
-    const { driver } = mockDriver();
-    const { sender } = createSender();
-    return new ExecServer({
-      port: 0,
-      driver,
-      sender,
-      workerToken: opts.token ?? TOKEN,
-      // 缺省用本用例的临时 workDir；显式传 null 才表示"未配置 workDir"
-      workDir: opts.workDir === null ? undefined : (opts.workDir ?? workDir),
-      logger: SILENT_LOGGER,
-    });
-  }
-
-  function req(
-    port: number,
-    method: string,
-    body?: unknown,
-    token?: string,
-  ): Promise<{ status: number; body: any }> {
-    return new Promise((resolve, reject) => {
-      const data = body === undefined ? '' : JSON.stringify(body);
-      const headers: Record<string, string> = {};
-      if (token !== undefined) headers['X-Worker-Token'] = token;
-      if (data) {
-        headers['Content-Type'] = 'application/json';
-        headers['Content-Length'] = String(Buffer.byteLength(data));
-      }
-      const r = http.request(
-        { host: '127.0.0.1', port, path: '/omo-config', method, headers },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
-          res.on('end', () => {
-            const raw = Buffer.concat(chunks).toString('utf8');
-            let parsed: any = raw;
-            try { parsed = JSON.parse(raw); } catch { /* 原文 */ }
-            resolve({ status: res.statusCode ?? 0, body: parsed });
-          });
-        },
-      );
-      r.on('error', reject);
-      if (data) r.write(data);
-      r.end();
-    });
-  }
-
-  it('鉴权：缺失/错误 token → 401', async () => {
-    const exec = serverFor();
-    const bound = await exec.start();
-    try {
-      expect((await req(bound, 'GET')).status).toBe(401);
-      expect((await req(bound, 'GET', undefined, 'wrong')).status).toBe(401);
-      expect((await req(bound, 'POST', { agents: {} }, 'wrong')).status).toBe(401);
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('未配置 workDir → 400（不猜目录）', async () => {
-    const exec = serverFor({ workDir: null });
-    const bound = await exec.start();
-    try {
-      expect((await req(bound, 'GET', undefined, TOKEN)).status).toBe(400);
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('GET：无配置时返回空 agents + available 全量 agent 名', async () => {
-    const exec = serverFor();
-    const bound = await exec.start();
-    try {
-      const res = await req(bound, 'GET', undefined, TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.agents).toEqual({});
-      expect(res.body.available).toEqual(
-        expect.arrayContaining(['sisyphus', 'prometheus', 'atlas']),
-      );
-      expect(res.body.available).toHaveLength(14);
-      // 透出生效文件路径：全新环境（无文件）→ 指向用户级落点
-      expect(res.body.configPath).toBe('~/.omo/omo.jsonc');
-      expect(res.body.configKind).toBe('none');
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('POST：写入后 GET 回读一致，且落到用户级 ~/.omo/omo.jsonc（不写工作目录）', async () => {
-    const exec = serverFor();
-    const bound = await exec.start();
-    try {
-      const post = await req(
-        bound,
-        'POST',
-        { agents: { sisyphus: 'opencode/big-pickle', prometheus: 'opencode/big-pickle' } },
-        TOKEN,
-      );
-      expect(post.status).toBe(200);
-      expect(post.body.agents).toEqual({
-        sisyphus: 'opencode/big-pickle',
-        prometheus: 'opencode/big-pickle',
-      });
-      const get = await req(bound, 'GET', undefined, TOKEN);
-      expect(get.body.agents).toEqual(post.body.agents);
-      // 写入必须落用户级落点（工作目录不得出现配置文件）
-      const onDisk = JSON.parse(
-        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
-      );
-      await expect(
-        fsp.stat(join(workDir, '.omo', 'omo.jsonc')),
-      ).rejects.toThrow();
-      expect(onDisk.agents.sisyphus).toEqual({ model: 'opencode/big-pickle' });
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('POST：增量合并（只改传入项，其余保留）+ 空串清除覆盖', async () => {
-    const exec = serverFor();
-    const bound = await exec.start();
-    try {
-      await req(bound, 'POST', { agents: { sisyphus: 'a/one', atlas: 'a/two' } }, TOKEN);
-      const merged = await req(bound, 'POST', { agents: { sisyphus: 'b/three' } }, TOKEN);
-      expect(merged.body.agents).toEqual({ sisyphus: 'b/three', atlas: 'a/two' });
-      const cleared = await req(bound, 'POST', { agents: { sisyphus: '' } }, TOKEN);
-      expect(cleared.body.agents).toEqual({ atlas: 'a/two' });
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('POST：agents 缺失/非对象/值非字符串 → 400', async () => {
-    const exec = serverFor();
-    const bound = await exec.start();
-    try {
-      expect((await req(bound, 'POST', {}, TOKEN)).status).toBe(400);
-      expect((await req(bound, 'POST', { agents: [] }, TOKEN)).status).toBe(400);
-      expect((await req(bound, 'POST', { agents: 'x' }, TOKEN)).status).toBe(400);
-      expect(
-        (await req(bound, 'POST', { agents: { sisyphus: 123 } }, TOKEN)).status,
-      ).toBe(400);
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('保存后触发重启：响应带 restart=executed（配置需重启才生效）', async () => {
-    const restartServe = jest.fn().mockResolvedValue('executed');
-    const { driver } = mockDriver();
-    const { sender } = createSender();
-    const exec = new ExecServer({
-      port: 0,
-      driver,
-      sender,
-      workerToken: TOKEN,
-      workDir,
-      restartServe,
-      logger: SILENT_LOGGER,
-    });
-    const bound = await exec.start();
-    try {
-      const res = await req(bound, 'POST', { agents: { sisyphus: 'a/b' } }, TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.restart).toBe('executed');
-      expect(restartServe).toHaveBeenCalledTimes(1);
-      // 重启原因要能区分是 OmO 配置触发的（便于日志排障）
-      expect(String(restartServe.mock.calls[0][0])).toContain('omo-config');
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('有活跃会话时重启挂起：restart=pending 透传给前端（保存仍算成功）', async () => {
-    const restartServe = jest.fn().mockResolvedValue('pending');
-    const { driver } = mockDriver();
-    const { sender } = createSender();
-    const exec = new ExecServer({
-      port: 0, driver, sender, workerToken: TOKEN, workDir,
-      restartServe, logger: SILENT_LOGGER,
-    });
-    const bound = await exec.start();
-    try {
-      const res = await req(bound, 'POST', { agents: { atlas: 'a/b' } }, TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.restart).toBe('pending');
-      // 配置已落盘（不因挂起而回滚）
-      const onDisk = JSON.parse(
-        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
-      );
-      expect(onDisk.agents.atlas).toEqual({ model: 'a/b' });
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('未注入 restartServe → restart=skipped，保存照常成功（旧行为兼容）', async () => {
-    const exec = serverFor();
-    const bound = await exec.start();
-    try {
-      const res = await req(bound, 'POST', { agents: { sisyphus: 'a/b' } }, TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.restart).toBe('skipped');
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('重启失败不导致保存失败：restart=skipped，配置仍落盘', async () => {
-    const restartServe = jest.fn().mockRejectedValue(new Error('serve 起不来'));
-    const { driver } = mockDriver();
-    const { sender } = createSender();
-    const exec = new ExecServer({
-      port: 0, driver, sender, workerToken: TOKEN, workDir,
-      restartServe, logger: SILENT_LOGGER,
-    });
-    const bound = await exec.start();
-    try {
-      const res = await req(bound, 'POST', { agents: { sisyphus: 'a/b' } }, TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.restart).toBe('skipped');
-      const onDisk = JSON.parse(
-        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
-      );
-      expect(onDisk.agents.sisyphus).toEqual({ model: 'a/b' });
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('GET 不触发重启（只有写路径才重启）', async () => {
-    const restartServe = jest.fn().mockResolvedValue('executed');
-    const { driver } = mockDriver();
-    const { sender } = createSender();
-    const exec = new ExecServer({
-      port: 0, driver, sender, workerToken: TOKEN, workDir,
-      restartServe, logger: SILENT_LOGGER,
-    });
-    const bound = await exec.start();
-    try {
-      await req(bound, 'GET', undefined, TOKEN);
-      expect(restartServe).not.toHaveBeenCalled();
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('非 GET/POST 方法 → 405', async () => {
-    const exec = serverFor();
-    const bound = await exec.start();
-    try {
-      expect((await req(bound, 'DELETE', undefined, TOKEN)).status).toBe(405);
-    } finally {
-      await exec.stop();
-    }
-  });
-});
-
-describe('ExecServer：GET /omo-agent-prompt（按需取单 agent 提示词）', () => {
-  const TOKEN = 'tok';
-  let workDir: string;
-
-  beforeEach(async () => {
-    workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-prompt-'));
-  });
-  afterEach(async () => {
-    await fsp.rm(workDir, { recursive: true, force: true });
-  });
-
-  function serverWith(listAgents: jest.Mock): ExecServer {
-    const { driver } = mockDriver();
-    const { sender } = createSender();
-    (driver as any).listAgents = listAgents;
-    return new ExecServer({
-      port: 0, driver, sender, workerToken: TOKEN, workDir, logger: SILENT_LOGGER,
-    });
-  }
-
-  function get(port: number, qs: string, token?: string): Promise<{ status: number; body: any }> {
-    return new Promise((resolve, reject) => {
-      const headers: Record<string, string> = {};
-      if (token !== undefined) headers['X-Worker-Token'] = token;
-      const r = http.request(
-        { host: '127.0.0.1', port, path: `/omo-agent-prompt${qs}`, method: 'GET', headers },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
-          res.on('end', () => {
-            const raw = Buffer.concat(chunks).toString('utf8');
-            let parsed: any = raw;
-            try { parsed = JSON.parse(raw); } catch { /* 原文 */ }
-            resolve({ status: res.statusCode ?? 0, body: parsed });
-          });
-        },
-      );
-      r.on('error', reject);
-      r.end();
-    });
-  }
-
-  const AGENTS = [
-    { name: 'Prometheus - Plan Builder', description: 'Plan agent', mode: 'primary', prompt: 'You are Prometheus' },
-    { name: 'oracle', description: 'Read-only consultant', mode: 'subagent', prompt: 'You are Oracle' },
-  ];
-
-  it('鉴权：缺失/错误 token → 401', async () => {
-    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
-    const bound = await exec.start();
-    try {
-      expect((await get(bound, '?name=oracle')).status).toBe(401);
-      expect((await get(bound, '?name=oracle', 'wrong')).status).toBe(401);
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('缺 name → 400', async () => {
-    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
-    const bound = await exec.start();
-    try {
-      expect((await get(bound, '', TOKEN)).status).toBe(400);
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('配置键名（prometheus）能匹配 serve 展示名（"Prometheus - Plan Builder"）', async () => {
-    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
-    const bound = await exec.start();
-    try {
-      const res = await get(bound, '?name=prometheus', TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.prompt).toBe('You are Prometheus');
-      expect(res.body.name).toBe('Prometheus - Plan Builder');
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('展示名（含 " - 描述" 后缀）也能匹配', async () => {
-    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
-    const bound = await exec.start();
-    try {
-      const res = await get(bound, `?name=${encodeURIComponent('Prometheus - Plan Builder')}`, TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.prompt).toBe('You are Prometheus');
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('未注册的 agent → 404 且说明原因（不是 500）', async () => {
-    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
-    const bound = await exec.start();
-    try {
-      const res = await get(bound, '?name=hephaestus', TOKEN);
-      expect(res.status).toBe(404);
-      expect(String(res.body.error)).toContain('未注册');
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('prompt 为空的原生 agent → 200 + empty:true（不报错）', async () => {
-    const exec = serverWith(
-      jest.fn().mockResolvedValue([{ name: 'build', description: 'Build', mode: 'primary', prompt: '' }]),
-    );
-    const bound = await exec.start();
-    try {
-      const res = await get(bound, '?name=build', TOKEN);
-      expect(res.status).toBe(200);
-      expect(res.body.empty).toBe(true);
-      expect(res.body.prompt).toBe('');
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('driver 抛错 → 502', async () => {
-    const exec = serverWith(jest.fn().mockRejectedValue(new Error('serve down')));
-    const bound = await exec.start();
-    try {
-      expect((await get(bound, '?name=oracle', TOKEN)).status).toBe(502);
-    } finally {
-      await exec.stop();
-    }
-  });
-
-  it('非 GET → 405', async () => {
-    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
-    const bound = await exec.start();
-    try {
-      const status = await new Promise<number>((resolve, reject) => {
-        const r = http.request(
-          { host: '127.0.0.1', port: bound, path: '/omo-agent-prompt?name=oracle', method: 'POST',
-            headers: { 'X-Worker-Token': TOKEN } },
-          (res) => { res.resume(); resolve(res.statusCode ?? 0); },
-        );
-        r.on('error', reject);
-        r.end();
-      });
-      expect(status).toBe(405);
-    } finally {
-      await exec.stop();
-    }
-  });
-});
 
 /**
  * sensitive-command-tool todo 4：POST /secret-command token 保护同步路由。

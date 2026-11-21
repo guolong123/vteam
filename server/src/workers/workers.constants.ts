@@ -22,8 +22,6 @@ export const WORKER_STATUS = {
   DEGRADED: 'degraded',
 } as const;
 
-export type WorkerStatus = (typeof WORKER_STATUS)[keyof typeof WORKER_STATUS];
-
 export const WORKER_ERRORS = {
   WORKER_NOT_FOUND: 'WORKER_NOT_FOUND',
   TOKEN_INVALID: 'WORKER_TOKEN_INVALID',

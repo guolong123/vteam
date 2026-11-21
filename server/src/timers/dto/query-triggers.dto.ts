@@ -1,8 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import { TRIGGER_KIND } from '../../common/constants/trigger.constants';
 import { TRIGGER_STATUS } from '../trigger.service';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /**
  * GET /triggers 查询参数（scope/status/kind/team/task 过滤 + 分页，
@@ -12,7 +12,7 @@ import { TRIGGER_STATUS } from '../trigger.service';
  * teamId/taskId 走 payload JSON 精确匹配（当前排期方均写 payload.teamId，
  * 见 platform-mcp scheduleReceiptNudge/scheduleReviewRoundTimeout）。
  */
-export class QueryTriggersDto {
+export class QueryTriggersDto extends PaginatedQueryDto {
   @ApiPropertyOptional({ description: '归属域类型过滤（精确匹配）' })
   @IsOptional()
   @IsString()
@@ -54,26 +54,4 @@ export class QueryTriggersDto {
   @IsOptional()
   @IsIn(Object.values(TRIGGER_KIND))
   kind?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({
-    description: '每页条数（1..100）',
-    default: 20,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  pageSize?: number;
 }

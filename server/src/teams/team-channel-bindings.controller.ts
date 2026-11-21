@@ -20,25 +20,7 @@ import {
   BindTeamMessageChannelsDto,
   BindTeamNotificationChannelsDto,
 } from './dto/bind-team-channels.dto';
-
-function maskSecrets(
-  secrets: Record<string, any> | null | undefined,
-): Record<string, string> {
-  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) {
-    return {};
-  }
-  return Object.keys(secrets as Record<string, unknown>).reduce(
-    (acc, k) => ({ ...acc, [k]: '***' }),
-    {} as Record<string, string>,
-  );
-}
-
-function maskChannel(row: any): any {
-  return {
-    ...row,
-    secrets: maskSecrets(row.secrets as Record<string, any> | null),
-  };
-}
+import { maskChannel, maskSecrets } from '../common/mask-secrets';
 
 /** 渠道→团队的绑定独占性检查结果（供 message / notification 两条绑定路径复用）。 */
 interface ExclusiveBindingConflict {

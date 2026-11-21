@@ -145,13 +145,8 @@ model AgentRole {
   /// 预填默认 Agent（内部，可选）。删除被绑定的 Agent 时仅清空本列（SetNull），
   /// 不阻塞 Agent 删除（review fix m8）。回填不设置本列，仅 7 个 builtin 行指向模板 Agent。
   ///
-  /// 与 `defaultOpencodeAgentName` **互斥**：一个角色至多绑定一个默认 Agent 槽位
-  /// （内部 id 或外部引擎名）。写入侧由 AgentRolesService 强制（两者同时非空 → 400
-  /// `AGENT_ROLE_DEFAULT_SLOT_CONFLICT`；设置其一自动清空另一个），二者皆空亦合法。
+  /// 缺省亦可为空（角色不预填任何 Agent，成员加入时须显式指定 agentId）。
   defaultAgentId String? @map("default_agent_id")
-  /// 预填默认**外部引擎** Agent 名（opencode agent 名，如 `Prometheus - Plan Builder`；
-  /// 含空格/大写，原样保存不裁剪内容）。与 `defaultAgentId` 互斥，规则见上一字段注释。
-  defaultOpencodeAgentName String? @map("default_opencode_agent_name")
   /// 岗位**业务能力点矩阵**（2026-09-21 role-owned capability model）：`Record<string, boolean>`，
   /// 键为 `platform-capability.constants.ts` 目录的 capability key（如 `task.create`）。
   /// **显式 `false` ⇒ 拒绝；缺失键 ⇒ 允许（default-allow）**。这是服务端 `vteam_*` 调用
@@ -198,11 +193,6 @@ model TeamMember {
   /// 成员角色（agent_roles）。onDelete: Restrict —— 在用角色不可静默删除，
   /// 必须先解绑成员再删角色（FK 报错即显式拦截，绝不静默置空）。
   roleId         String?  @map("role_id")
-  /// opencode 原生 agent 名（opencode.json 的 agent 节 key，如 build/plan/自定义名）。
-  /// null = 不指定（prompt_async 不带 agent 字段，用 serve 默认 agent）——存量行 NULL 行为不变。
-  /// 非 null 时 dispatch 下发 prompt_async 的 agent 字段，由 opencode 内核按该 agent 的
-  /// prompt/permission 执行（vteam 只传递，不自造 agent 语义）。
-  opencodeAgentName String? @map("opencode_agent_name")
   createdAt      DateTime @default(now()) @map("created_at")
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)

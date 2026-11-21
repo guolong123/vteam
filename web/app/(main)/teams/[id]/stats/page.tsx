@@ -707,7 +707,7 @@ export default function TeamStatsPage() {
         <div style={{ marginTop: space.lg }}>
           <Panel testId="status-panel" title="当前任务状态分布" subtitle="实时盘子（非区间口径）">
             <div data-testid="status-mix">
-              <ClickableBar onActivate={() => router.push(`/board?teamId=${teamId}`)}>
+              <ClickableBar onActivate={() => router.push(`/teams/${teamId}`)}>
                 <StackedBar segments={statusSegments} height={14} />
               </ClickableBar>
               <div style={{ display: "flex", gap: space.md, marginTop: space.sm, flexWrap: "wrap" }}>

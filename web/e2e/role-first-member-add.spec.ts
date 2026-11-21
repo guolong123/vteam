@@ -31,7 +31,6 @@ const SERVER_URL = "http://localhost:13000";
 const SEED_TEAM_NAME = "vteam开发团队";
 const RUN_TAG = `t14-${Date.now().toString(36)}`;
 /** 任务要求举例的外部引擎名；实时清单里存在则用精确名，否则取首个可选项。 */
-const EXTERNAL_PREFERRED = "Prometheus - Plan Builder";
 
 interface AgentRole {
   id: string;
@@ -54,13 +53,6 @@ interface TeamDto {
   id: string;
   name: string;
   members: TeamMember[];
-}
-
-interface OpencodeAgentEntry {
-  name: string;
-  mode: string;
-  governed: boolean;
-  hidden?: boolean;
 }
 
 function authHeaders(accessToken: string) {
@@ -141,65 +133,6 @@ async function createRole(
 }
 
 /** 实时外部引擎清单（!governed && !hidden && 非 subagent）；degraded/空 → 调用方 skip。 */
-async function engineExternal(
-  request: APIRequestContext,
-  token: string,
-): Promise<{ names: string[]; degraded: boolean }> {
-  let last = { names: [] as string[], degraded: true };
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    try {
-      const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
-        headers: authHeaders(token),
-        timeout: 5_000,
-      });
-      if (res.ok()) {
-        const body = (await res.json()) as {
-          agents: OpencodeAgentEntry[];
-          degraded?: boolean;
-        };
-        last = {
-          degraded: !!body.degraded,
-          names: body.agents
-            .filter((a) => !a.governed && !a.hidden && a.mode !== "subagent")
-            .map((a) => a.name),
-        };
-      }
-    } catch (error) {
-      if (!(error instanceof Error)) throw error;
-      last = { names: [], degraded: true };
-    }
-    if (!last.degraded && last.names.length > 0) return last;
-    if (attempt < 29) await new Promise((resolve) => setTimeout(resolve, 2_000));
-  }
-  return last;
-}
-
-/** 记录浏览器发出的 POST /teams/:id/members 请求体（role-first 断言的原始证据）。 */
-function recordMemberPosts(page: Page): { teamId: string; body: Record<string, unknown> }[] {
-  const posts: { teamId: string; body: Record<string, unknown> }[] = [];
-  page.on("request", (req) => {
-    if (req.method() !== "POST") return;
-    const m = new URL(req.url()).pathname.match(/^\/api\/v1\/teams\/([^/]+)\/members$/);
-    if (!m) return;
-    let body: Record<string, unknown> = {};
-    try {
-      body = ((req.postDataJSON() as Record<string, unknown> | null) ?? {}) as Record<
-        string,
-        unknown
-      >;
-    } catch {
-      body = {};
-    }
-    posts.push({ teamId: m[1], body });
-  });
-  return posts;
-}
-
-/**
- * 清理一次性 fixture：DELETE 幂等（404 = 已删即达成），
- * 5xx（MySQL 写冲突/死锁等瞬时态）退避重试若干次，避免把噪声写进证据。
- * team 先删、role 后删：防角色被成员引用触发 409 AGENT_ROLE_IN_USE。
- */
 async function deleteWithRetry(
   request: APIRequestContext,
   token: string,
@@ -238,6 +171,26 @@ async function cleanup(
   }
 }
 
+function recordMemberPosts(page: Page): { teamId: string; body: Record<string, unknown> }[] {
+  const posts: { teamId: string; body: Record<string, unknown> }[] = [];
+  page.on("request", (req) => {
+    if (req.method() !== "POST") return;
+    const m = new URL(req.url()).pathname.match(/^\/api\/v1\/teams\/([^/]+)\/members$/);
+    if (!m) return;
+    let body: Record<string, unknown> = {};
+    try {
+      body = ((req.postDataJSON() as Record<string, unknown> | null) ?? {}) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      body = {};
+    }
+    posts.push({ teamId: m[1], body });
+  });
+  return posts;
+}
+
 test.describe("task-14 · role-first member add", () => {
   test("(a) 团队创建 role-only：成员 agentId = 角色 defaultAgentId（请求体无 agentId）", async ({
     request,
@@ -274,28 +227,16 @@ test.describe("task-14 · role-first member add", () => {
     }
   });
 
-  test("(a+b) 详情页添加成员：role-only 无 agentId；外部岗位不再要求执行 Agent → 落占位系统 Agent（reload）", async ({
+  test("(a) 详情页添加成员：role-only 无 agentId → 落角色 defaultAgentId（reload）", async ({
     page,
     request,
   }) => {
     test.setTimeout(240_000);
     const token = await adminToken(request);
-    const { names, degraded } = await engineExternal(request, token);
-    expect(degraded, "worker catalog 在 readiness 窗口内应可用").toBe(false);
-    expect(names.length, "worker catalog 应包含外部 Agent").toBeGreaterThan(0);
-    const externalName = names.includes(EXTERNAL_PREFERRED)
-      ? EXTERNAL_PREFERRED
-      : names[0];
-
     const internalRole = await createRole(request, token, {
       name: `qa-t14-internal-${RUN_TAG}`,
       key: `qa-t14-internal-${RUN_TAG}`,
       defaultAgentId: "a_tester",
-    });
-    const externalRole = await createRole(request, token, {
-      name: `qa-t14-external-${RUN_TAG}`,
-      key: `qa-t14-external-${RUN_TAG}`,
-      defaultOpencodeAgentName: externalName,
     });
     let teamId: string | null = null;
     try {
@@ -309,7 +250,7 @@ test.describe("task-14 · role-first member add", () => {
       await page.goto(`/teams/${team.id}`);
       await expect(page.getByTestId("team-detail-root")).toBeVisible({ timeout: 20_000 });
 
-      // ---- (a) role-only：选岗位即提交就绪（无执行 Agent 槽位），请求体不带 agentId ----
+      // role-only：选岗位即提交就绪（无执行 Agent 槽位），请求体不带 agentId
       const aliasA = `qa-t14-role-only-${RUN_TAG}`;
       await page.getByTestId("add-member-toggle").click();
       await expect(page.getByTestId("add-member-panel")).toBeVisible();
@@ -317,6 +258,7 @@ test.describe("task-14 · role-first member add", () => {
         page.locator(`[data-testid="add-member-role-select"] option[value="${internalRole.id}"]`),
       ).toHaveCount(1, { timeout: 15_000 });
       await page.getByTestId("add-member-role-select").selectOption(internalRole.id);
+      // 执行 Agent 由角色默认值决定，界面不提供第二个选择器。
       await expect(page.getByTestId("add-member-agent-select")).toHaveCount(0);
       await page.getByTestId("add-member-alias").fill(aliasA);
       await page.getByTestId("add-member-confirm").click();
@@ -327,8 +269,7 @@ test.describe("task-14 · role-first member add", () => {
       expect("agentId" in posts[0].body).toBe(false);
       expect(posts[0].body.alias).toBe(aliasA);
 
-      // reload：新增成员行仍在（渲染面，别名是 input value 而非文本），
-      // 且 API 回读 agentId = 角色 defaultAgentId。
+      // reload：新增成员行仍在，且 API 回读 agentId = 角色 defaultAgentId。
       const afterA = await getTeam(request, token, team.id);
       const memberA = afterA.members.find((m) => m.alias === aliasA);
       expect(memberA).toBeTruthy();
@@ -340,51 +281,11 @@ test.describe("task-14 · role-first member add", () => {
       expect(memberA!.roleId).toBe(internalRole.id);
       expect(memberA!.agentId).toBe(internalRole.defaultAgentId);
       expect(memberA!.agentId).toBe("a_tester");
-      expect(memberA!.opencodeAgentName ?? null).toBe(null);
-
-      // ---- (b) 外部绑定岗位：可选中（文案「（外部）」）→ 无提示/无执行 Agent 槽位 →
-      //          role-only 提交成功 → 落占位系统 Agent + opencodeAgentName ----
-      const aliasB = `qa-t14-external-${RUN_TAG}`;
-      const roleOption = page.locator(
-        `[data-testid="add-member-role-select"] option[value="${externalRole.id}"]`,
-      );
-      await page.getByTestId("add-member-toggle").click();
-      await expect(page.getByTestId("add-member-panel")).toBeVisible();
-      await expect(roleOption).toHaveCount(1, { timeout: 15_000 });
-      await expect(roleOption).toContainText("（外部）");
-      await page.getByTestId("add-member-role-select").selectOption(externalRole.id);
-
-      // 移除「外部岗位必须另选执行 Agent」的要求后：提示与槽位均不存在。
-      await expect(page.getByTestId("add-member-external-hint")).toHaveCount(0);
-      await expect(page.getByTestId("add-member-agent-select")).toHaveCount(0);
-      await page.getByTestId("add-member-alias").fill(aliasB);
-      const postsBefore = posts.length;
-      await page.getByTestId("add-member-confirm").click();
-      await expect(page.getByTestId("add-member-panel")).toHaveCount(0, { timeout: 15_000 });
-      await expect.poll(() => posts.length, { timeout: 10_000 }).toBe(postsBefore + 1);
-      const bodyB = posts[posts.length - 1].body;
-      expect(bodyB.roleId).toBe(externalRole.id);
-      expect("agentId" in bodyB).toBe(false);
-
-      // reload：成员行可见；API 回读 agentId = 平台占位系统 Agent、opencodeAgentName = 外部引擎名。
-      const afterB = await getTeam(request, token, team.id);
-      const memberB = afterB.members.find((m) => m.alias === aliasB);
-      expect(memberB).toBeTruthy();
-      await page.reload();
-      await expect(page.getByTestId("team-detail-root")).toBeVisible({ timeout: 20_000 });
-      const rowB = page.locator(`[data-testid="member-row"][data-member-id="${memberB!.id}"]`);
-      await expect(rowB).toBeVisible({ timeout: 15_000 });
-      await expect(rowB.getByTestId("member-alias-input")).toHaveValue(aliasB);
-      expect(memberB!.roleId).toBe(externalRole.id);
-      expect(memberB!.agentId).toBe("a_external");
-      expect(memberB!.opencodeAgentName).toBe(externalName);
     } finally {
-      await cleanup(request, token, teamId ? [teamId] : [], [
-        internalRole.id,
-        externalRole.id,
-      ]);
+      await cleanup(request, token, teamId ? [teamId] : [], [internalRole.id]);
     }
   });
+
 
   test("(c) 会话页仍零 <select>、零 message-agent-select", async ({ page, request }) => {
     await loginAsAdmin(page);

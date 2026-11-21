@@ -4,8 +4,8 @@
  * 从 docs/agent-platform/prototypes/_shared/nav.tsx 原样迁移（rail 优先）。
  * 结构 / 样式 / data-testid 与原型一致；token 引用统一走 src/theme/tokens.ts。
  * 8 个导航项（teams / agents / workers / models / git-repos / skills / integrations / system），
- * 团队为全局入口与登录后默认工作台（/teams，Task 14）；任务看板/创建/产出物归属团队上下文
- * （/board?teamId=、/tasks/new?teamId=、/artifacts?teamId=），无独立 Dock 图标。
+ * 团队为全局入口与登录后默认工作台（/teams，Task 14）；建任务/产出物归属团队上下文
+ * （/tasks/new?teamId=、/docs?teamId=），无独立 Dock 图标。
  * users / roles / memories 收敛进「系统管理」（system，/system）；子导航在 /system 页内呈现。
  * 对齐 06 篇 Dock 导航与 Cmd+K 命令面板「导航」组——该组由 NAV_ITEMS **单源派生**
  * （见 cmdk-panel.tsx DEFAULT_CMDK_NAV_ITEMS），增删导航项无需两处同步。

@@ -125,13 +125,6 @@ export interface OpencodeServerOptions {
   isolationScope?: OpencodeIsolationScope;
   /** 日志输出；默认 console */
   logger?: Logger;
-  /**
-   * OmO 启用开关的读取回调（index.ts 注入 readOmoEnabled(workDir)）。
-   * ⚠️ v2 已无 `--pure` flag → 该开关**不再影响启动参数**，仅用于告警
-   * （插件抑制由 T16b 的隔离配置域承接）。
-   * 缺省不注入 = 恒为启用（保持既有行为）。
-   */
-  omoEnabled?: () => boolean;
 }
 
 /**
@@ -503,9 +496,7 @@ export class OpencodeServer {
   /**
    * 是否请求了「纯净基线」（v1 语义：不加载外部插件）。
    *
-   * 两个来源，任一为「关」即请求纯净基线：
-   *   1. `OPENCODE_PURE` 环境变量为真值 —— 运维级一刀切（对照 token 开销/排障用）；
-   *   2. `omoEnabledProvider()` 返回 false —— 用户在 worker 详情页关掉了 OmO 开关。
+   * 唯一来源：`OPENCODE_PURE` 环境变量为真值 —— 运维级一刀切（对照 token 开销/排障用）。
    *
    * ⚠️ **v2 已无 `--pure` flag**（`opencode serve --pure` 直接 exit 1）→ 本方法**不再拼
    * flag**，只用于告警：等价的「抑制第三方插件 / AGENTS.md 注入」语义由 **T16b 的隔离
@@ -527,8 +518,7 @@ export class OpencodeServer {
         return true;
       }
     }
-    // 用户开关（缺省注入时视为开启，保持既有行为）
-    return this.options.omoEnabled ? !this.options.omoEnabled() : false;
+    return false;
   }
 
   /** spawn serve 子进程；detached + stdio pipe；env 注入 OPENCODE_SERVER_PASSWORD + 隔离配置域。 */
@@ -549,7 +539,7 @@ export class OpencodeServer {
     // 配置域**承接（子进程拿不到宿主的 HOME/XDG_CONFIG_HOME → 全局插件不在作用域内）。
     if (this.isPureMode()) {
       this.options.logger?.warn(
-        '[opencode-server] OPENCODE_PURE / OmO 开关在 v2 上已失效（v2 无 --pure flag，传入会 exit 1）：' +
+        '[opencode-server] OPENCODE_PURE 在 v2 上已失效（v2 无 --pure flag，传入会 exit 1）：' +
           '本 worker 不再拼 --pure；插件抑制由隔离配置域（spawn env 的 HOME/XDG_*）承接',
       );
     }

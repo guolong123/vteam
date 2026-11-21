@@ -2,9 +2,7 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
-  NotFoundException,
   Param,
   ParseIntPipe,
   Post,
@@ -27,6 +25,7 @@ import {
   QueryTeamArtifactsDto,
   RestoreArtifactDto,
 } from './dto/artifact.dto';
+import { assertTeamAccess } from '../common/team-access';
 
 /**
  * 产出物端点（09 篇 §3.6 Artifacts / 12 篇 §6 文档库）。
@@ -163,25 +162,6 @@ export class ArtifactsController {
     teamId: string,
     userId: string,
   ): Promise<void> {
-    const team = await (this.prisma as any).team.findUnique({
-      where: { id: teamId },
-      select: { id: true },
-    });
-    if (!team) {
-      throw new NotFoundException({
-        code: 'TEAM_NOT_FOUND',
-        message: `团队 ${teamId} 不存在`,
-      });
-    }
-    const member = await (this.prisma as any).teamUserMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
-      select: { id: true },
-    });
-    if (!member) {
-      throw new ForbiddenException({
-        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该团队成员',
-      });
-    }
+    return assertTeamAccess(this.prisma, teamId, { userId });
   }
 }

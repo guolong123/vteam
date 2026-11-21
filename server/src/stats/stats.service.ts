@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -38,6 +37,7 @@ import type {
   StatsTotals,
   StatsWindow,
 } from './stats.types';
+import { assertTeamAccess } from '../common/team-access';
 
 /** 调用方上下文（全局 JwtAuthGuard 填充的 request.user 之 userId）。 */
 export interface StatsViewer {
@@ -979,21 +979,11 @@ export class StatsService {
     teamId: string,
     viewer?: StatsViewer,
   ): Promise<void> {
-    if (viewer?.id) {
-      const membership = await this.prisma.teamUserMember.findUnique({
-        where: { teamId_userId: { teamId, userId: viewer.id } },
-        select: { id: true },
-      });
-      if (membership) {
-        return;
-      }
-      if (await isPlatformAdminByUserId(this.prisma, viewer.id)) {
-        return;
-      }
-    }
-    throw new ForbiddenException({
-      code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-      message: '您不是该团队成员',
+    // 读门：成员或平台管理员；不校验团队存在性（分享链接按历史口径）。见 common/team-access。
+    await assertTeamAccess(this.prisma, teamId, {
+      userId: viewer?.id,
+      allowPlatformAdmin: true,
+      onMissingTeam: 'forbidden',
     });
   }
 

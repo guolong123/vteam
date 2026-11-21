@@ -266,160 +266,51 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline.yaml --w
 - 存量部署修复（不重装）：`UPDATE mcp_servers SET url='http://vteam-server:3000/api/v1/platform-mcp' WHERE name='keta-platform';` 然后 `kubectl rollout restart sts/vteam-worker`（injectMcp 启动时执行）。
 - 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/vteam-worker && opencode mcp list` 才能读到注入的 opencode.json。⚠️ **opencode v2 已移除 `--pure`**（传了会 `Unrecognized flag` 并 exit 1）——v2 下**不带 `--pure` 探测**；宿主的全局配置/插件隔离由 worker 的**隔离配置域**（`OPENCODE_ISOLATION_ROOT`）保证（见 07 篇 §12.1）。
 
-### 4.5 内置插件 OmO（oh-my-openagent）
+### 4.5 内置插件 OmO（oh-my-openagent）——**已于 2026-11-21 下线**
 
-worker 镜像**内置** OmO 插件，用**官方安装器**在构建期完成安装，无需目标环境联网。
+OmO 插件**不再随 worker 镜像发布**（`worker/Dockerfile` 里的安装块已删除，`bun` 依赖一并移除）。
 
-| 项 | 值 |
-|----|----|
-| 上游 | https://github.com/code-yeongyu/oh-my-openagent（npm 包 `oh-my-opencode`，别名 `oh-my-openagent`） |
-| 安装方式 | `bunx oh-my-openagent@latest install --no-tui --platform=opencode --skip-auth`（Dockerfile 构建期） |
-| 插件声明 | `<WORK_DIR>/opencode.json` 的 **`plugins`** 节（v2 段名；v1 是 `plugin`）（worker 启动注入时写入，幂等） |
-| agent 模型配置 | `<WORK_DIR>/.omo/omo.jsonc`（**实际生效**；旧位置 `.opencode/oh-my-openagent.jsonc` 仅在其不存在时接管） |
-| 生效前提 | ⚠️ **opencode v2 已移除 `--pure`**（v1 里 `--pure` = 不加载外部插件）。v2 下的等价手段是**隔离配置域**（`OPENCODE_ISOLATION_ROOT`，见 07 篇 §12.1）；另注意 **v1 形态的插件实现不会在 v2 运行**（官方迁移指南明写）⇒ **v2 线按"OmO 关闭"上线**（详见 **§8.5**：镜像能力标记 `/opt/omo-bundled.json` 的 `v2` 字段 = `false` ⇒ 注入器不注册 OmO，并清掉历史遗留条目） |
+**为什么下线**（两条独立原因，任一即已足够）：
 
-> ⚠️ **不要与 `oh-my-opencode-slim` 混淆**。后者（`alvinunreal/oh-my-opencode-slim`）是第三方
-> 精简 fork，agent 集（orchestrator/explorer/…）与 OmO 完全不同。早期 vteam 误装过 slim；
-> worker 的注入器现在会**自动清除**配置里的 slim 条目并写入 OmO，避免两者并存冲突。
+1. **技术上从未生效**：镜像能力标记 `/opt/omo-bundled.json` 的 `v2` 字段为 `false`——内置的
+   OmO 是 **v1 插件形态**（导出 `{server}`），而 opencode v2 只加载 v2 形态（导出 `{id, setup}`）。
+   打开 v1 驱动的时代早已结束（`driver/index.ts` 的 T18 单轨收口），因此注入器的
+   `resolveOmoRegistration()` **恒返回 false**：条目从未被注册，插件从未被加载。
+2. **数据面无使用**：生产库 `team_members.opencode_agent_name` 与
+   `agent_roles.default_opencode_agent_name` 两列非空计数均为 **0**；worker 工作区里也不存在
+   任何 `.omo/` 目录。
 
-**`--pure` 与环境变量 `OPENCODE_PURE`（⚠️ opencode v2 已失效）**
+**一并移除的内容**（若在旧文档/旧镜像里见到，均属历史）：
 
-> ⚠️ **订正（2026-10-20，opencode v2 适配）**：**v2 没有 `--pure`**——`opencode serve --pure` 会打印 `Unrecognized flag` 并 **exit 1**，`opencode mcp list --pure` 同理。因此：
-> - **worker 不再拼 `--pure`**：`OPENCODE_PURE` / OmO 开关在 v2 上**降级为"只做告警"**（worker 启动日志里明确写出"该开关在 v2 已失效"），**不再有任何抑制效果**；
-> - v1 时代"用 `--pure` 抑制第三方插件 / `AGENTS.md` 注入"的语义，改由**隔离配置域**承接：serve 子进程的 `HOME` / `XDG_*` 全部指向 `OPENCODE_ISOLATION_ROOT`（缺省 `<HOME>/.opencode-iso`）⇒ 宿主的全局配置 / 全局插件 / 全局 `AGENTS.md` 不在作用域内。**这是唯一可靠手段**（`plugins: []` / `instructions: []` / `experimental` / `OPENCODE_CONFIG*` 全是 no-op；`plugins:["-*"]` 不可用；`plugins:["-<id>"]` 可精确禁用单个插件）——逐条实测见 07 篇 §12.1；
-> - 残留：受管目录（`/etc/opencode` 等）**不受 XDG 控制**（v2 仍会 watch 它），只有 `policies` 能压 ⇒ **不是 100% 等价于 `--pure`**。
+| 项 | 现状 |
+|----|------|
+| 镜像安装（`bunx oh-my-openagent install`）与 `/opt/omo-bundled.json` | 已删除（`worker/Dockerfile`） |
+| `<WORK_DIR>/opencode.json` 的 `plugins` 节 OmO 条目 | 不再写入；**历史遗留条目也不再主动清理**（迁移清理逻辑随功能删除） |
+| `<WORK_DIR>/.omo/omo-enabled.json` 开关 | 已删除（`resources/omo-enabled.ts`） |
+| `<WORK_DIR>/.omo/omo.jsonc` 模型配置与 14 个 agent 种子 | 已删除（`resources/omo-config.ts`） |
+| worker 执行端点 `GET/POST /omo-config`、`GET /omo-agent-prompt` | 已删除（`exec/exec-server.ts`） |
+| 控制面 `GET/PATCH /agents/omo-config`、`GET /agents/omo-agent-prompt` | 已删除（`agents.controller.ts`） |
+| worker 详情页「OmO 编排插件」卡、`/agents` 的「外部 Agent」Tab | 已删除（前端） |
+| 计划文档探测目录 `.omo/plans`、`.omo/drafts` | 已从 `PLAN_DOCS_DIRS` 移除（改为 `.opencode/plans` + `.vteam/plans`） |
 
-serve 默认**不带** `--pure`（v2 下也不可能带），以便加载 OmO。需要纯净基线（对照 token 开销）时：
+> 存量 worker 的持久化卷里可能仍残留 `.omo/` 目录与 `opencode.json` 中的 OmO 条目。它们
+> **不会被读取**（v2 不加载 v1 插件），可以安全手工删除，不影响任何功能。
 
-| 取值 | v1 行为 | **v2 行为（当前）** |
-|------|----------|--------------------|
-| 未设置（默认） | 非 pure，加载插件（OmO 生效） | 同左（但**隔离配置域**已保证宿主全局插件不进作用域） |
-| `true`/`1`/`yes`/`on`/`y` | `--pure`，不加载插件（input tokens 约 1900，非 pure 约 7601） | ⚠️ **开关失效**——worker 只打一条告警，**不拼 `--pure`**；要抑制全局插件请用 `OPENCODE_ISOLATION_ROOT` 隔离配置域 |
+**`OPENCODE_PURE` 仍然有效（但与 OmO 无关）**
+
+`OPENCODE_PURE` 是运维级「纯净基线」开关，用于对照 token 开销。⚠️ **v2 没有 `--pure`**——
+`opencode serve --pure` 会打印 `Unrecognized flag` 并 **exit 1**，因此 worker 不再拼该 flag，
+只打一条「该开关在 v2 已失效」的告警。v1 时代「抑制第三方插件 / `AGENTS.md` 注入」的语义
+改由**隔离配置域**承接：serve 子进程的 `HOME` / `XDG_*` 全部指向 `OPENCODE_ISOLATION_ROOT`
+（缺省 `<HOME>/.opencode-iso`）⇒ 宿主的全局配置 / 全局插件 / 全局 `AGENTS.md` 不在作用域内。
+逐条实测见 07 篇 §12.1。
 
 > ⚠️ **`OPENCODE_PURE` 不能设为空串**：它同时是 opencode 自身解析的布尔环境变量，空串会让 serve
 > 直接启动失败（`SchemaError: Expected "true"|...|"false"..., got ""`）。因此 compose 里**不要**
 > 写成 `OPENCODE_PURE: ${OPENCODE_PURE:-}`（未设时会生成空串）；默认整条注释掉即可。
 > worker 侧对空串/纯空白会主动删除该变量兜底（见 `opencode-server.ts` 的 `isPureMode()`）。
 
-**验证 OmO 是否真的加载**（serve 静默加载插件，stdout 无提示）：
 
-```bash
-# 1) serve 命令行不含 --pure
-docker compose exec worker sh -c 'tr "\0" " " < /proc/$(pgrep -f "opencode serve" | head -1)/cmdline'
-
-# 2) 看 GET /api/agent 是否出现 OmO 的 agent（出现 Sisyphus/Prometheus 即已加载）
-#    ⚠️ v2 端点是 /api/agent（v1 是 /agent）；v2 恒开鉴权，需带 Basic 头
-curl -s -H "Authorization: Bearer $TOKEN" http://<server>/api/v1/agents/opencode | jq '.agents[].name'
-#   期望可见：Sisyphus - ultraworker / Hephaestus - Deep Agent / Prometheus - Plan Builder 等
-#   ⚠️ 该判据只是"控制面代理的观测面"；插件是否真的被 v2 加载，权威判据是 serve 日志的
-#      `msg="loading plugin"` 行 + 工具是否出现在模型请求的 tools[]（GET /api/plugin 不可靠）
-```
-
-**OmO agent 与 vteam 职责映射**
-
-OmO 注册的 primary agent（**v2 端点是 `GET /api/agent`**（v1 是 `GET /agent`）返回的**展示名**）：
-
-| agent | 展示名 | vteam 职责 |
-|-------|--------|-----------|
-| sisyphus | `Sisyphus - ultraworker` | 执行（主编排/派发） |
-| prometheus | `Prometheus - Plan Builder` | **计划** |
-| hephaestus | `Hephaestus - Deep Agent` | 执行 |
-| atlas | `Atlas`（执行落地） | 执行 |
-
-> ⚠️ OmO 的 agent 名是**展示名**（`<Name> - <描述>`），而配置文件里用小写键（`prometheus`）。
-> `opencode-agent-duty.ts` 为此取 ` - ` 前的基底名再判定——若按整串精确匹配，OmO 的 agent
-> 永远命中不了职责表，表现为"选了计划 agent 却不进计划模式"（实测踩坑，已加回归测试）。
-
-**开关与配置入口：worker 详情页**
-
-OmO 是**与 worker 绑定**的能力（插件在镜像里、配置在 worker workDir、开关只影响该 worker
-的 serve 启动），因此入口在 **Worker 详情页**内的「OmO 编排插件」卡片，不是全局页面。
-
-| 操作 | 效果 |
-|------|------|
-| 开关**关闭** | ⚠️ **v2 下 `--pure` 已失效**——worker 只打告警，**不再以 `--pure` 启动**（v2 无此 flag，传入会 exit 1）。要抑制全局插件请用 `OPENCODE_ISOLATION_ROOT` 隔离配置域；模型配置**保留**。<br>✅ **开关现在直接决定配置**：注入器在写 `plugins` 节时读这个开关，关闭时**不注册** OmO 条目并清掉历史条目（此前它只影响一个早已失效的 flag，"看得见、不生效"） |
-| 开关**开启** | v1 线：正常加载插件，可配置各 agent 模型。**v2 线：无效**——镜像内置的是 **v1 形态**入口，v2 不会加载它（见 **§8.5**）；平台核心功能不受影响 |
-| 保存配置 | 写盘后**自动重启 serve** 生效（有会话进行中则排队，见下） |
-
-> ⚠️ **镜像未内置 OmO 时不显示该卡片，也无法开启**：worker 启动时读镜像内能力标记
-> `/opt/omo-bundled.json`（Dockerfile 构建期写入），`GET /agents/omo-config` 返回
-> `bundled` 字段供前端判断；对未内置的 worker 调用 `enabled:true` 返回 **400**
-> （明确告知镜像不含 OmO），而不是静默接受一个永远不生效的 true。
->
-> 开关状态存 `<WORK_DIR>/.omo/omo-enabled.json`，**不写进 OmO 自己的配置文件**——
-> 那个文件由 OmO 管理（会迁移/重写），混进去迟早被覆盖。读取缺省为 true，
-> 坏文件也不会把功能悄悄关掉。
-
-**`capabilities.models` 不下发给前端（重要）**
-
-`GET /workers/:id` 返回的 `capabilities` 已**剔除 `models` 字段**：那是 serve 探测到的
-**全量模型目录**（实测 7701 项），只用于注册时入库同步（`syncFromWorkerCapabilities`），
-对展示无用。原样透传会让单次响应达 **253KB**；剔除后 **0.8KB**（缩小约 330 倍）。
-
-> 需要"可用模型"请看 `capabilities.executableModels`（真正可执行的那几个）。
-> `models` 仍照常入库到模型目录，删除的只是 API 响应里的冗余。
-
-**「可用模型」的口径（重要）**
-
-worker 详情页的「可用模型」取 `capabilities.executableModels`——worker 侧用 CLI
-（`opencode models`，带鉴权过滤）探测的**真正可执行**清单，与 OmO 配置页的模型下拉同源。
-
-> ⚠️ **不要用 `capabilities.models`**：那是 serve 探测到的**全部模型目录**（实测 7699 条），
-> 绝大多数没有可用凭据；直接渲染会把页面撑到几万像素且严重误导（实测踩坑）。
-> 兜底顺序：`executableModels` → 目录中 `enabled=true` 的模型 → 空（显示"未上报"）。
-
-**API**（供脚本/自动化；页面走同一组接口）
-
-- `GET /api/v1/agents/omo-config?workerId=` → `{agents, available, enabled, bundled, configPath, configKind, workerId, degraded}`
-  （`available` 是 OmO 的可配 agent 清单，来自其包内 schema，不硬编码在 vteam；
-  `bundled`=镜像是否内置 OmO，`enabled`=用户开关）
-- `GET /api/v1/agents/omo-agent-prompt?workerId=&name=` → 单个 agent 的系统提示词
-  （`{name, description, mode, prompt, empty}`）。**按需拉取**：全部 agent 的 prompt 合计
-  约 106KB（Sisyphus 单个 33KB），故不随列表下发；动作页「提示词」按钮点开才请求。
-  `name` 支持配置键（`prometheus`）或 serve 展示名（`Prometheus - Plan Builder`）；
-  该 agent 当前未注册（如 `hephaestus` 需 GPT 系模型）→ **400** 并说明原因。
-- `PATCH /api/v1/agents/omo-config?workerId=` body：
-  - `{agents:{"<name>":"<providerID>/<modelID>"}}` —— **增量合并**（只改提交项）；
-    值传空串 = 清除该 agent 的覆盖，回落 OmO 默认
-  - `{enabled: true|false}` —— 切换插件开关（与 agents 可同时提交，也可只提交其一）
-  - 响应含 `restart`（`executed`/`pending`/`skipped`），表示 serve 是否已重启
-
-> 模型值必须是 `providerID/modelID`（如 `opencode/big-pickle`）。
-> ⚠️ 不要用 `/models` 接口返回的 `id`——那是模型目录主键（`md_` 前缀），写进 OmO 配置无法解析。
-
-**配置落点与优先级（实测确认，勿凭直觉改）**
-
-OmO 按以下顺序找配置，**先命中者胜**：
-
-| 顺序 | 路径 | 说明 |
-|------|------|------|
-| 1 | `<WORK_DIR>/.omo/omo.jsonc` | **当前生效**（OmO 迁移后的新位置；带 `"[opencode]"` 平台分段与 `_migrations`） |
-| 2 | `<WORK_DIR>/.opencode/oh-my-openagent.jsonc` | 旧位置；**仅当上面不存在时**才被读取（扁平 `agents`） |
-
-> ⚠️ 两份同时存在时 `.omo/omo.jsonc` 胜出，旧文件变成**死配置**——改它完全不生效。
-> 实证：分别把两份设成不同模型、重启、看会话实际使用的模型，只有 `.omo` 那份生效。
-> worker 的读写逻辑（`resources/omo-config.ts`）会自动选择生效的那份，并在接口
-> `configPath` / `configKind` 字段回传实际路径，配置页顶部也会显示"生效配置：…"。
-
-**OmO 会自动迁移**：它检测到旧位置的配置后，会把文件搬到 `.omo/omo.jsonc`
-（旧文件备份进 `.omo/migration-backup-<时间戳>/` 并删除原文件）。这是 OmO 自身行为，
-不是 vteam 写的——所以**不要**手工在 `.opencode/` 下维护这份配置。
-
-配置**在 serve 启动时读取**：改完配置需要重启 serve 才生效。
-
-**保存后自动重启**：配置页（`PATCH /api/v1/agents/omo-config`）保存后，worker 会复用
-`RestartCoordinator` 触发 serve 重启，响应 `restart` 字段给出结果：
-
-| restart | 含义 |
-|---------|------|
-| `executed` | 无活跃会话，已立即重启 —— 下个会话即用新模型 |
-| `pending` | 有活跃会话，重启**已排队**，会话归零后自动执行（不会打断进行中的 agent） |
-| `skipped` | 未注入重启回调，或重启失败（配置已落盘，下次自然重启生效） |
-
-> 重启失败**不会**让保存失败：配置已写盘，只是本次未即时生效，日志会告警。
-
-**格式**：新位置带平台分段 `{ "[opencode]": { "agents": {…} }, "_migrations": […] }`，
-旧位置是扁平 `{ "agents": {…} }`。worker 读写时**保持该文件原有形状**，不动其他键。
 ### 4.6 opencode CLI 版本策略（已改为**锁版本**）
 
 > ⚠️ **订正（2026-10-20，opencode v2 适配）**：本节原文写的是"**不锁版本**，每次构建取 registry 最新版（`npm i -g opencode-ai`）"。**该策略已废止**——v2 的契约已冻结到可锁版本的程度，平台改为**锁版**：`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC=@opencode/cli@2.0.32`（**不是** `opencode-ai`，那是冻结在 1.19.3 的 v1 线）。配套地：worker **启动期做版本闸门**（`opencode --version` 解析出主版本，**major < 2 → fail-fast**），上报值规范化为 semver 串，与控制面的版本过滤对齐。依据：07 篇 §6 / §12.3、`.omo/plans/opencode-v2-adaptation.md` 的 D2 / T1。
@@ -672,7 +563,7 @@ curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health
 | 1 | **v2 线的 server 镜像** | 控制面改调 worker 执行端点 | 与 worker 同批换（事实 2）；**并且必须先于 worker 就位**——server 侧的 MCP 状态校验必须**先**接受 v2 的五态（事实 5）：否则新 worker 上报 `pending`/`disabled` ⇒ 整条心跳 400 ⇒ worker 判离线 |
 | 2 | **v2 线的 worker 镜像** | 内含 opencode CLI，**钉死** `@opencode/cli@2.0.32`（Dockerfile `ARG OPENCODE_CLI_SPEC`）；同一镜像还带平台自己的工具插件（`.opencode/plugins/*.ts`，v1/v2 双形态） | 与 server 同批换（事实 2）；**必须在 server 之后**（事实 5）；**回滚镜像也会把 CLI 一起回滚**（v1 线钉的是 `opencode-ai` = 1.19.3） |
 | 3 | **注入配置**（`<WORK_DIR>/opencode.json`） | 由 worker 的注入器在启动时重写：v1 段名 → v2 段名（`agent:`→`agents:`、`prompt`→`system`、`permission{}`→`permissions[]`、`mcp:`→`mcp.servers:`、`plugin:`→`plugins:`） | 配置在**持久卷**上（镜像不是）⇒ 旧段名会一直留在文件里。v2 遇到 v1 段会**静默归一化**（角色提示可能整段丢失且**零告警**）⇒ 注入器每次写盘前都做幂等迁移 |
-| 4 | **OmO 插件条目** | v2 线的 worker **不注册** OmO（镜像内置的是 v1 形态入口，v2 不加载） | 见 §8.5 |
+| 4 | ~~**OmO 插件条目**~~ | **已下线**（2026-11-21）：镜像不再安装 OmO，注入器不再注册条目 | 见 §4.5 |
 
 > **注入配置是"静默降级"的头号来源**：`<WORK_DIR>/opencode.json` 的形态不对时，平台**不
 > 报错**，只是角色提示/权限规则悄悄不生效。所以 §8.3 把"归一化诊断计数 = 0"列为**硬闸门**。
@@ -1114,7 +1005,7 @@ curl -s -H "Authorization: Bearer $JWT" http://<server>/api/v1/workers | jq '.[]
 - [ ] **心跳无 400**（server 侧 `POST /workers/:id/heartbeat` 无 400 计数）——
       有 400 ⇒ server 还没接受五态（事实 5）
 - [ ] 一条真实 @ 触发走完：ACK → 首字 → 终态 → 产出物落库（`uploads` 有文件、DB 有 artifact 行）
-- [ ] worker 日志无插件加载失败（OmO 在 v2 **不加载**，这是预期，见 §8.5）
+- [ ] worker 日志无插件加载失败（OmO 已随镜像下线，任何 OmO 加载失败都应视为残留配置）
 
 **阶段 2 —— 10%**：目标 worker 规模 N ⇒ `replicas = max(1, round(0.1N))`，
 观察 ≥1 个工作日 ⇒ **闸门 G2 = G1 的全部条目**。
@@ -1140,7 +1031,7 @@ curl -s -H "Authorization: Bearer $JWT" http://<server>/api/v1/workers | jq '.[]
 | **完成判定准确率** | "有文本无终态"不再被误判完成 | worker 日志 `[exec] 执行完成` 的条数 vs server 侧 `sessions` 转 `idle` 的条数（同一时间窗） | 两者对不上 ⇒ 查终态判定（`step-finish` part 是否存在；v2 由驱动合成） |
 | **MCP 状态上报** | 不再出现"全部未连接" | `GET /api/v1/workers` 的 `mcpStatus`（每服务器**五态** `connected`/`pending`/`disabled`/`failed`/`needs_auth`） | 全 failed ⇒ 查 `WORKER_MCP_URL` / seed 的 MCP URL（集群内是服务名 `vteam-server`）；探针失败会以 `probe_failed` 显式上报，不会静默。**`pending`（还在连）与 `disabled`（配了但关着）都不是 failed，属正常态**；**心跳 400** ⇒ server 还没接受五态（见 §8.0 事实 5） |
 | **`durable.seq` 幂等** | 重放下重复落库 = 0 | server 日志 `[dedup] 跳过重复事件`（debug 级，需开 debug 日志才可见） | 重复落库 ⇒ 幂等键口径漂移（worker 重启后 `evw_<bootId>_<seq>` 会变，靠上游 `durable.aggregateID+seq` 兜底） |
-| **插件加载** | 无 `plugin load failed` | worker 的 serve 日志：`msg="loading plugin"`（`GET /api/plugin` 不可靠，历史上返回过 total=0） | v2 下**不应**有 OmO 加载失败——若出现，说明注入器仍注册了 v1 形态的 OmO（见 §8.5） |
+| **插件加载** | 无 `plugin load failed` | worker 的 serve 日志：`msg="loading plugin"`（`GET /api/plugin` 不可靠，历史上返回过 total=0） | 任何 OmO 加载失败都说明**存量卷里仍留着 OmO 条目**（见 §4.5），删掉即可 |
 
 ### 8.4 版本闸门与"混跑窗口"（当前是失效的，必须知道）
 

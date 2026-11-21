@@ -24,9 +24,9 @@ import {
   TASK_STATUS,
   TASK_TRANSITIONS,
 } from '../common/constants/task.constants';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { IdGeneratorService } from '../common/id-generator';
 import { roleKeyOf, roleLabelOf } from '../common/agent-role-label';
-import { EXTERNAL_SYSTEM_AGENT_ID } from '../common/constants/agent-role.constants';
 import { resyncIdPrefix } from '../common/id-resync';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -64,8 +64,6 @@ type TeamMemberView = {
   overrideModelId?: string | null;
   /** 成员级首选 worker（软引用，成员显式 > 团队 > 自动调度；null/空 = 不覆盖，跟随团队）。 */
   preferredWorkerId?: string | null;
-  /** opencode 原生 agent 选择（null = 用 opencode 默认 agent）。 */
-  opencodeAgentName?: string | null;
   agent: { id: string; name: string };
   /** 成员绑定角色（`TeamMember.roleId → AgentRole`）；未绑 → null，标签回退 agent.name。 */
   role?: { key: string; name: string } | null;
@@ -635,8 +633,8 @@ export class TasksService implements OnModuleInit {
 
   /** 看板列表：团队作用域（teamId 可选）+ 五态/优先级筛选 + 分页（page 默认 1、pageSize 默认 20 上限 100），created_at desc。 */
   async findAll(query: QueryTasksDto & { teamId?: string }) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const where: Prisma.TaskWhereInput = {
       ...(query.teamId ? { teamId: query.teamId } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -1977,13 +1975,7 @@ export class TasksService implements OnModuleInit {
           alias: m.alias ?? this.defaultAlias(m.agent, m.seq, m.role),
           seq: m.seq,
           workDir:
-            m.workDir ??
-            this.defaultAgentWorkDir(
-              m.agent,
-              m.seq,
-              m.role,
-              !!m.opencodeAgentName,
-            ),
+            m.workDir ?? this.defaultAgentWorkDir(m.agent, m.seq, m.role),
           name: m.agent.name,
           // D1（agent-role-decommission todo 5）：字段名保留 `role`，值为绑定角色的机器键
           // `AgentRole.key`（web `ROLE_KEYS.includes`/`toRole` 消费；`AgentRole.name` 只用于别名）。
@@ -1991,14 +1983,9 @@ export class TasksService implements OnModuleInit {
           main: m.id === mainMemberId,
           enabled: true,
           overrideModelId: m.overrideModelId ?? null,
-          // opencode 原生 agent 选择（null = 用 opencode 默认 agent）。
-          // ⚠️ 必须与 team DTO 同步返回：会话页成员面板优先读 currentTask.instances
-          // （web session/page.tsx agentMembers），任务 DTO 缺此字段会把团队侧的正确值
-          // 覆盖成 null，表现为「切换后徽章回显丢失」（实测踩坑，同 overrideModelId 旧坑）。
-          opencodeAgentName: m.opencodeAgentName ?? null,
           // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
           // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
-          // 正确值被 null 覆盖，表现为「切换后回显丢失」（同上方 opencodeAgentName 旧坑）。
+          // 正确值被 null 覆盖，表现为「切换后回显丢失」。
           preferredWorkerId: m.preferredWorkerId ?? null,
           // 成员会话**当前实际绑定**的 worker（运行节点）；null = 尚无会话 / 会话未绑定节点。
           // 与 preferredWorkerId（配置偏好）是两个维度：改偏好后实际绑定可能尚未迁移，
@@ -2051,19 +2038,13 @@ export class TasksService implements OnModuleInit {
    * is_0000000010：实例默认持久化工作目录 `/data/vteam-worker/<sanitize(agent.name)>`（统一持久化）。
    * agent 名称可能含中文/空格/斜杠等非 ASCII 字符，做 ASCII 化映射（非法字符 → `-`），
    * 避免路径穿越/非法字符导致目录不可用；同 agent 同任务多实例追加 `-<seq>` 防共享串数据。
-   *
-   * 外部绑定岗位（`externalBound`）：成员共用占位 Agent `a_external`，沿用 `agent.name` 会让
-   * 不同外部岗位落同一目录 → 优先取岗位名，与 `defaultAlias` 同口径（镜像 teams 域规则）。
    */
   private defaultAgentWorkDir(
     agent: { name: string; id?: string },
     seq: number,
-    role?: { key: string; name: string } | null,
-    externalBound = false,
+    _role?: { key: string; name: string } | null,
   ): string {
-    const base = sanitizeWorkDirName(
-      externalBound && role ? role.name : (agent.name ?? agent.id ?? 'agent'),
-    );
+    const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
     return seq > 1
       ? `/data/vteam-worker/${base}-${seq}`
       : `/data/vteam-worker/${base}`;
@@ -2072,28 +2053,23 @@ export class TasksService implements OnModuleInit {
   /**
    * 成员 ⇄ 角色绑定解析（唯一优先级判定点的任务侧镜像）。
    *
-   * 逐字复刻 `teams.service.ts resolveMemberBinding` 规则 1–5（单一事实来源，
+   * 逐字复刻 `teams.service.ts resolveMemberBinding` 规则 1–4（单一事实来源，
    * 该方法是唯一可改判定点，此处只做镜像）：
    *   1. 显式 `agentId` 恒胜出；2. `roleId`-only 用 `defaultAgentId` 预填；
-   *   3. 角色无默认 Agent：外部绑定（`defaultOpencodeAgentName` 非空）→ 占位系统 Agent
-   *      `a_external`；两槽位皆空 → 400 `ROLE_DEFAULT_AGENT_MISSING`；
-   *   4. `roleId` 必填（Q5：平台不支持无岗位成员）→ 缺 roleId → 400 `MEMBER_ROLE_REQUIRED`；
-   *   5. 显式 `opencodeAgentName` 恒胜出，否则用 `defaultOpencodeAgentName` 预填，否则 null。
+   *   3. 角色无默认 Agent → 400 `ROLE_DEFAULT_AGENT_MISSING`；
+   *   4. `roleId` 必填（Q5：平台不支持无岗位成员）→ 缺 roleId → 400 `MEMBER_ROLE_REQUIRED`。
    * 错误码与 teams 域 `TEAM_ERRORS` 同值（跨域同名字符串，便于调用方统一断言）。
    */
   private async resolveTaskMemberBinding(input: {
     agentId?: string;
     roleId?: string;
-    opencodeAgentName?: string | null;
   }): Promise<{
     agentId: string;
     roleId: string | null;
     role: { key: string; name: string } | null;
-    opencodeAgentName: string | null;
   }> {
     const explicitAgentId = input.agentId?.trim() || null;
     const roleId = input.roleId?.trim() || null;
-    const explicitOpencodeAgentName = input.opencodeAgentName?.trim() || null;
 
     // 规则 4（Q5）：成员必须绑定岗位——缺 roleId 一律拒绝，不提供无岗位兼容路径。
     if (!roleId) {
@@ -2110,7 +2086,6 @@ export class TasksService implements OnModuleInit {
         key: true,
         name: true,
         defaultAgentId: true,
-        defaultOpencodeAgentName: true,
       },
     });
     if (!role) {
@@ -2120,30 +2095,17 @@ export class TasksService implements OnModuleInit {
       });
     }
     const roleBinding = { key: role.key, name: role.name };
-    const resolvedOpencodeAgentName =
-      explicitOpencodeAgentName ||
-      role.defaultOpencodeAgentName?.trim() ||
-      null;
 
     if (explicitAgentId) {
       return {
         agentId: explicitAgentId,
         roleId,
         role: roleBinding,
-        opencodeAgentName: resolvedOpencodeAgentName,
       };
     }
 
     if (!role.defaultAgentId) {
-      // 规则 3：外部绑定岗位落占位 Agent；两槽位皆空的角色仍保持 ROLE_DEFAULT_AGENT_MISSING。
-      if (role.defaultOpencodeAgentName?.trim()) {
-        return {
-          agentId: EXTERNAL_SYSTEM_AGENT_ID,
-          roleId,
-          role: roleBinding,
-          opencodeAgentName: resolvedOpencodeAgentName,
-        };
-      }
+      // 规则 3：角色没有任何可预填绑定位 → 要求显式 agentId。
       throw new BadRequestException({
         code: 'ROLE_DEFAULT_AGENT_MISSING',
         message: `角色 ${roleId} 未设置默认 Agent，请显式指定 agentId`,
@@ -2153,7 +2115,6 @@ export class TasksService implements OnModuleInit {
       agentId: role.defaultAgentId,
       roleId,
       role: roleBinding,
-      opencodeAgentName: resolvedOpencodeAgentName,
     };
   }
 
@@ -2168,7 +2129,6 @@ export class TasksService implements OnModuleInit {
     agents: {
       agentId?: string;
       roleId?: string;
-      opencodeAgentName?: string | null;
       alias?: string;
       workDir?: string;
     }[],
@@ -2195,19 +2155,13 @@ export class TasksService implements OnModuleInit {
         item.alias?.trim() || this.defaultAlias(agent, seq, binding.role);
       const workDir =
         item.workDir?.trim() ||
-        this.defaultAgentWorkDir(
-          agent,
-          seq,
-          binding.role,
-          !!binding.opencodeAgentName,
-        );
+        this.defaultAgentWorkDir(agent, seq, binding.role);
       const member = await (tx as any).teamMember.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),
           teamId,
           agentId: binding.agentId,
           roleId: binding.roleId,
-          opencodeAgentName: binding.opencodeAgentName,
           alias,
           seq,
           workDir,
@@ -2217,7 +2171,6 @@ export class TasksService implements OnModuleInit {
         id: member.id,
         agentId: binding.agentId,
         roleId: binding.roleId,
-        opencodeAgentName: binding.opencodeAgentName,
         alias,
         seq,
         workDir,
@@ -2242,14 +2195,7 @@ export class TasksService implements OnModuleInit {
     };
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

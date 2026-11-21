@@ -1,12 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsIn, IsOptional, IsString } from 'class-validator';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /**
  * GET /models 查询参数（enabled 过滤 + providerID/modelID/name 模糊搜索 + 分页，
  * 对齐 QueryMcpServersDto 模式，返回 {items, total, page, pageSize}）。
  */
-export class QueryModelsDto {
+export class QueryModelsDto extends PaginatedQueryDto {
   @ApiPropertyOptional({
     description: '启用状态过滤（true 仅启用 / false 仅停用），缺省返回全部',
   })
@@ -47,24 +48,6 @@ export class QueryModelsDto {
   @IsOptional()
   @IsString()
   name?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({ description: '每页条数', default: 20, minimum: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  pageSize?: number;
 
   @ApiPropertyOptional({
     description: 'provider 类型过滤（cloud|local|custom）',

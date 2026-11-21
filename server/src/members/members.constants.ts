@@ -11,8 +11,6 @@ export const MEMBER_STATUS = {
   disabled: 'disabled',
 } as const;
 
-export type MemberStatus = (typeof MEMBER_STATUS)[keyof typeof MEMBER_STATUS];
-
 /**
  * 成员提示词与 Agent 提示词的关系（members.prompt_mode）。
  *

@@ -12,8 +12,6 @@
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { neutral, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 import { NavDock, NavTopBar, CmdKPanel, NAV_ITEMS, DEFAULT_CMDK_ITEMS } from "./index";
@@ -56,7 +54,7 @@ const KEY_LOOKUP: Record<string, string> = {
     Object.entries(KEY_TO_PATH).map(([key, path]) => [path.slice(1), key])
   ),
   /** Dock 无独立 board/tasks/docs 图标：任务看板/创建/文档站均归属团队上下文
-   * （/board?teamId=、/tasks/new?teamId=、/docs?teamId=；旧 /artifacts?teamId= 已重定向至 /docs）→ 高亮「团队管理」入口 */
+   * （/tasks/new?teamId=、/docs?teamId=；旧 /artifacts?teamId= 已重定向至 /docs）→ 高亮「团队管理」入口 */
   members: "teams",
   board: "teams",
   tasks: "teams",
@@ -123,26 +121,11 @@ function roleLabel(name?: string): string {
   return name ? (ROLE_LABEL[name] ?? name) : "";
 }
 
-/** GET /tasks?teamId= 分页响应（仅页头计数取 total，pageSize=1 最小化传输）。 */
-interface BoardTasksResponse {
-  items: unknown[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-/** GET /workers 条目（页头「Agent 在线」统计仅需 status：在线 = status !== 'offline'）。 */
-interface WorkerSummaryRow {
-  id: string;
-  status: string;
-}
-
 /** 页面标题（顶栏左侧，无面包屑时展示；对齐各页原型 NavTopBar） */
 const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   teams: { title: "团队与成员", subtitle: "团队列表与平台成员库 · 一个入口" },
   chat: { title: "会话", subtitle: "群聊与成员私聊 · 微信式会话列表" },
   members: { title: "团队与成员", subtitle: "团队列表与平台成员库 · 一个入口" },
-  board: { title: "任务看板", subtitle: "" },
   issues: { title: "Issue 管理", subtitle: "任务内 issue 协作与状态流转" },
   agents: { title: "Agent 管理", subtitle: "配置角色、技能与权限" },
   workers: { title: "Worker 节点", subtitle: "查看与管理 Worker 节点" },
@@ -170,10 +153,6 @@ function resolvePageTitle(pathname: string): { title: string; subtitle: string }
   }
   const exact = EXTRA_PAGE_TITLE[pathname];
   if (exact) return exact;
-  // /board 页保留专属标题（Dock key 映射已并入 teams，此处按路径先命中）
-  if (parts[0] === "board") {
-    return PAGE_TITLE.board;
-  }
   // /docs（团队文档站）与 /docs/[taskId] 都是独立工作区页：此前未命中任何映射，
   // 落到兜底标题「任务看板」——顶栏写着"任务看板"而内容是文档站（用户实测错位）。
   if (parts[0] === "docs") {
@@ -250,42 +229,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
   }, [user]);
 
-  // /board 页头计数（ISSUE-001）：原 PAGE_TITLE.board subtitle 硬编码 mock 值
-  // （「5 个任务 · 4 个 Agent 在线」源自原型 mock），改为按 URL ?teamId= 动态取数。
-  const isBoard = pathname.split("/")[1] === "board";
-  const [boardTeamId, setBoardTeamId] = useState<string | null>(null);
-  useEffect(() => {
-    if (pathname.split("/")[1] === "board") {
-      setBoardTeamId(new URLSearchParams(window.location.search).get("teamId"));
-    } else {
-      setBoardTeamId(null);
-    }
-  }, [pathname]);
-
-  // 任务总数：GET /tasks?teamId= 的 total（与看板页同源，三方对照基准）
-  const boardTasks = useQuery({
-    queryKey: ["board-tasks", boardTeamId],
-    queryFn: () =>
-      api.get<BoardTasksResponse>("/tasks", {
-        query: { teamId: boardTeamId!, page: 1, pageSize: 1 },
-      }),
-    enabled: hydrated && !!token && isBoard && !!boardTeamId,
-  });
-  // Agent 在线数：平台在线 worker（status != offline，Agent 无在线态，Worker 为在线源）
-  const boardWorkers = useQuery({
-    queryKey: ["workers"],
-    queryFn: () => api.get<WorkerSummaryRow[]>("/workers"),
-    enabled: hydrated && !!token && isBoard,
-  });
-
-  const boardSubtitle = useMemo(() => {
-    if (!isBoard) return page.subtitle;
-    const total = boardTasks.data?.total;
-    const onlineCount = boardWorkers.data?.filter((w) => w.status !== "offline").length;
-    if (total === undefined || onlineCount === undefined) return "";
-    return `${total} 个任务 · ${onlineCount} 个 Agent 在线`;
-  }, [isBoard, page.subtitle, boardTasks.data, boardWorkers.data]);
-
   // Cmd+K / Ctrl+K 快捷键唤起命令面板
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -326,7 +269,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* 顶栏（文档流顶部） */}
       <NavTopBar
         title={page.title}
-        subtitle={boardSubtitle}
+        subtitle={page.subtitle}
         userName={user?.displayName ?? "运营者"}
         userRole={user ? roleLabel(user.roleName) : undefined}
         onCmdKClick={() => setCmdkOpen(true)}

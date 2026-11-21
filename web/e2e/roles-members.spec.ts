@@ -36,14 +36,6 @@ interface AgentRole {
   name: string;
   type: string;
   defaultAgentId: string | null;
-  defaultOpencodeAgentName: string | null;
-}
-
-interface OpencodeAgentEntry {
-  name: string;
-  mode: string;
-  hidden?: boolean;
-  governed: boolean;
 }
 
 interface TeamMember {
@@ -84,13 +76,6 @@ async function save(path: string | undefined, page: Page) {
   await page.screenshot({ path, fullPage: true });
 }
 
-/** Viewport snapshot（fullPage 在本应用不可靠：主区域是内部滚动容器，需先 scrollIntoView）。 */
-async function snap(path: string | undefined, page: Page) {
-  if (!path) return;
-  mkdirSync(dirname(path), { recursive: true });
-  await page.screenshot({ path });
-}
-
 function recordEvidence(entry: Record<string, unknown>) {
   const path = process.env.T7_EVIDENCE_JSON;
   if (!path) return;
@@ -111,38 +96,6 @@ async function openRolesTab(page: Page) {
   await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
   await page.getByTestId("manage-tab").filter({ hasText: "角色" }).click();
   await expect(page.getByTestId("agent-role-root")).toBeVisible({ timeout: 15_000 });
-}
-
-/** 引擎实时外部清单（!governed && !hidden），非硬编码；持续不可用时由测试硬失败。 */
-async function engineExternal(
-  request: APIRequestContext,
-  token: string,
-): Promise<{ names: string[]; degraded: boolean }> {
-  let last = { names: [] as string[], degraded: true };
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    try {
-      const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
-        headers: authHeaders(token),
-        timeout: 5_000,
-      });
-      if (res.ok()) {
-        const body = (await res.json()) as {
-          agents: OpencodeAgentEntry[];
-          degraded?: boolean;
-        };
-        last = {
-          names: body.agents.filter((a) => !a.governed && !a.hidden).map((a) => a.name),
-          degraded: body.degraded === true,
-        };
-      }
-    } catch (error) {
-      if (!(error instanceof Error)) throw error;
-      last = { names: [], degraded: true };
-    }
-    if (!last.degraded && last.names.length > 0) return last;
-    if (attempt < 29) await new Promise((resolve) => setTimeout(resolve, 2_000));
-  }
-  return last;
 }
 
 test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
@@ -332,182 +285,6 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
         headers: authHeaders(token),
       });
       console.log(`[cleanup] team ${team.id} DELETE -> ${del.status()}`);
-    }
-  });
-
-  // issue 3（todo 7 web 切片）：角色编辑器的单一 Agent 选择器承载「内部 XOR 外部」槽位，
-  // 外部选择必须经 API 持久化到 defaultOpencodeAgentName 且 defaultAgentId 为 null；反向切换
-  // （外部 → 内部）必须原子清空外部槽位。名字来自实时引擎清单，绝不硬编码。
-  test("4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空）", async ({
-    page,
-    request,
-  }) => {
-    test.setTimeout(240_000);
-    const token = await adminToken(request);
-    const { names, degraded } = await engineExternal(request, token);
-    expect(degraded, "worker catalog 在 readiness 窗口内应可用").toBe(false);
-    expect(names.length, "worker catalog 应包含外部 Agent").toBeGreaterThan(0);
-    const externalName = names[0];
-    const roleKey = `qa-t7-ext-${RUN_TAG}`;
-
-    await loginAsAdmin(page);
-    await openRolesTab(page);
-
-    await page.getByTestId("role-create-button").click();
-    await page.getByTestId("role-key-input").fill(roleKey);
-    await page.getByTestId("role-name-input").fill(`QA 外部槽位 ${RUN_TAG}`);
-    await page
-      .getByTestId("role-default-agent")
-      .selectOption(`external:${externalName}`);
-    await expect(page.getByTestId("role-default-agent")).toHaveAttribute("data-slot", "external");
-    await page.getByTestId("role-save-button").click();
-
-    const createdItem = page.locator(`[data-testid="role-item"][data-role-key="${roleKey}"]`);
-    await expect(createdItem).toBeVisible({ timeout: 15_000 });
-
-    let roleId: string | null = null;
-    try {
-      const list = (await (
-        await request.get(`${SERVER_URL}/api/v1/agent-roles?pageSize=100`, {
-          headers: authHeaders(token),
-        })
-      ).json()) as { items: AgentRole[] };
-      const created = list.items.find((r) => r.key === roleKey);
-      expect(created).toBeTruthy();
-      roleId = created!.id;
-      // 列表项文案必须如实指向外部绑定，不得谎报「未设置」
-      await expect(createdItem).toContainText(externalName);
-      await expect(createdItem).not.toContainText("未设置");
-
-      // API 事实：外部槽位落库、内部槽位为 null
-      await expect
-        .poll(
-          async () =>
-            (await (
-              await request.get(`${SERVER_URL}/api/v1/agent-roles/${created!.id}`, {
-                headers: authHeaders(token),
-              })
-            ).json()) as AgentRole,
-          { timeout: 15_000 },
-        )
-        .toMatchObject({ defaultOpencodeAgentName: externalName, defaultAgentId: null });
-
-      // reload 后仍选中外部项（持久化，不是仅前端态）
-      await page.goto("/agents");
-      await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
-      await page.getByTestId("manage-tab").filter({ hasText: "角色" }).click();
-      await page.locator(`[data-testid="role-item"][data-role-key="${roleKey}"]`).click();
-      const select = page.getByTestId("role-default-agent");
-      await expect(select).toHaveValue(`external:${externalName}`);
-      await expect(select).toHaveAttribute("data-slot", "external");
-
-      // 证据：选择器可见且选中外部项（先滚到主区域滚动容器内再截图）
-      await page.setViewportSize({ width: 1280, height: 900 });
-      await expect(page.getByTestId("role-default-agent-note")).toContainText("个外部 Agent", {
-        timeout: 20_000,
-      });
-      await select.scrollIntoViewIfNeeded();
-      await snap(process.env.T7_ROLE_AGENT_SCREENSHOT, page);
-
-      recordEvidence({
-        test: "role_external_slot_roundtrip_external_leg",
-        external_name: externalName,
-        engine_external_count: names.length,
-        persisted_default_opencode_agent_name: externalName,
-        persisted_default_agent_id: null,
-        selected_after_reload: true,
-      });
-
-      // 反向：切到内部 Agent → 保存 → 外部槽位被原子清空
-      await select.selectOption("internal:a_tester");
-      await expect(select).toHaveAttribute("data-slot", "internal");
-      await page.getByTestId("role-save-button").click();
-      await expect(page.getByTestId("role-action-error")).toHaveCount(0);
-
-      await expect
-        .poll(
-          async () =>
-            (await (
-              await request.get(`${SERVER_URL}/api/v1/agent-roles/${created!.id}`, {
-                headers: authHeaders(token),
-              })
-            ).json()) as AgentRole,
-          { timeout: 15_000 },
-        )
-        .toMatchObject({ defaultAgentId: "a_tester", defaultOpencodeAgentName: null });
-
-      await page.goto("/agents");
-      await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
-      await page.getByTestId("manage-tab").filter({ hasText: "角色" }).click();
-      await page.locator(`[data-testid="role-item"][data-role-key="${roleKey}"]`).click();
-      await expect(page.getByTestId("role-default-agent")).toHaveValue("internal:a_tester");
-      await expect(page.getByTestId("role-default-agent")).toHaveAttribute("data-slot", "internal");
-
-      recordEvidence({
-        test: "role_external_slot_roundtrip_internal_leg",
-        switched_to_internal: "a_tester",
-        persisted_default_agent_id: "a_tester",
-        persisted_default_opencode_agent_name: null,
-        selected_after_reload: true,
-      });
-
-      // 槽位不变量的错误面：服务端 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT 必须可见、具体，
-      // 绝不静默吞掉。单选择器 UI 不可能发出双非空请求，故用 route mock 精确植入该 400。
-      let patchHits = 0;
-      const conflictRoute = async (route: import("@playwright/test").Route) => {
-        const req = route.request();
-        if (req.method() === "PATCH" && /\/agent-roles\/[^/]+$/.test(new URL(req.url()).pathname)) {
-          patchHits += 1;
-          await route.fulfill({
-            status: 400,
-            contentType: "application/json",
-            body: JSON.stringify({
-              code: "AGENT_ROLE_DEFAULT_SLOT_CONFLICT",
-              message: "默认 Agent 槽位至多一个：defaultAgentId 与 defaultOpencodeAgentName 不能同时设置",
-            }),
-          });
-          return;
-        }
-        await route.fallback();
-      };
-      await page.route("**/api/v1/agent-roles/**", conflictRoute);
-      await page.getByTestId("role-default-agent").selectOption("internal:a_developer");
-      await page.getByTestId("role-save-button").click();
-      const error = page.getByTestId("role-action-error");
-      await expect(error).toBeVisible({ timeout: 15_000 });
-      await expect(error).toContainText("槽位冲突");
-      await expect(error).toContainText("二选一");
-      expect(patchHits).toBeGreaterThan(0);
-      await page.unroute("**/api/v1/agent-roles/**", conflictRoute);
-
-      // 失败的保存不得改动已持久化的状态：reload 后仍是内部槽位 a_tester
-      await page.goto("/agents");
-      await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
-      await page.getByTestId("manage-tab").filter({ hasText: "角色" }).click();
-      await page.locator(`[data-testid="role-item"][data-role-key="${roleKey}"]`).click();
-      await expect(page.getByTestId("role-default-agent")).toHaveValue("internal:a_tester");
-      const stillInternal = (await (
-        await request.get(`${SERVER_URL}/api/v1/agent-roles/${created!.id}`, {
-          headers: authHeaders(token),
-        })
-      ).json()) as AgentRole;
-      expect(stillInternal.defaultAgentId).toBe("a_tester");
-
-      recordEvidence({
-        test: "slot_conflict_surface",
-        mocked_status: 400,
-        mocked_code: "AGENT_ROLE_DEFAULT_SLOT_CONFLICT",
-        error_visible: true,
-        error_mentions_slot_conflict: true,
-        persisted_state_unchanged_after_failed_save: true,
-      });
-    } finally {
-      if (roleId) {
-        const del = await request.delete(`${SERVER_URL}/api/v1/agent-roles/${roleId}`, {
-          headers: authHeaders(token),
-        });
-        console.log(`[cleanup] throwaway role ${roleId} DELETE -> ${del.status()}`);
-      }
     }
   });
 });

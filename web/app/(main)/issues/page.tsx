@@ -39,6 +39,7 @@ import type {
   IssuesResponse,
   UpdateIssuePayload,
 } from "@/src/types/issues";
+import { formatDateTime } from "@/lib/datetime-format";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -129,15 +130,6 @@ function TagBadge({ tag, idx }: { tag: string; idx: number }) {
       {tag}
     </span>
   );
-}
-
-/** ISO 时间 → 展示串（YYYY-MM-DD HH:mm，对齐管理页时间展示）。 */
-function formatTime(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /* ------------------------------ 创建 / 编辑弹窗 ------------------------------ */
@@ -552,7 +544,7 @@ function IssueRow({ issue, agents, onEdit, onDelete, onOpenDetail }: IssueRowPro
             创建者：{creator ?? "—"}
           </span>
           <span aria-hidden style={{ color: neutral[300] }}>·</span>
-          <span data-testid="issue-created-at">{formatTime(issue.createdAt)}</span>
+          <span data-testid="issue-created-at">{formatDateTime(issue.createdAt)}</span>
         </div>
       </div>
 
