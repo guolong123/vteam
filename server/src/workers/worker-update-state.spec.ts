@@ -136,7 +136,13 @@ describe('版本比对（占位串不是事实）', () => {
  */
 describe('占位版本串不参与版本比对', () => {
   it('manual-* / local-compose / dev 两两组合 → 都不可比对', () => {
-    const placeholders = ['manual-20261121', 'manual-20261114', 'local-compose', 'dev', 'container-unstamped'];
+    const placeholders = [
+      'manual-20261121',
+      'manual-20261114',
+      'local-compose',
+      'dev',
+      'container-unstamped',
+    ];
     for (const code of placeholders) {
       for (const expected of placeholders) {
         expect(isComparableCodeVersion(code)).toBe(false);

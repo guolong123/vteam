@@ -1686,9 +1686,12 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     // - `true`  → 控制面显示「更新」按钮，一键下发；
     // - `false` → 显示「升级命令」让用户复制（Windows 缺省关闭 / 无 systemd）；
     // - `undefined`（旧 worker 未上报）→ 同样按"不能自动升级"处理（不能假设它能）。
-    const caps = worker.capabilities as { engineCapabilities?: { selfUpdate?: boolean } } | null;
+    const caps = worker.capabilities as {
+      engineCapabilities?: { selfUpdate?: boolean };
+    } | null;
     const reportedSelfUpdate = caps?.engineCapabilities?.selfUpdate;
-    const canSelfUpdate = typeof reportedSelfUpdate === 'boolean' ? reportedSelfUpdate : undefined;
+    const canSelfUpdate =
+      typeof reportedSelfUpdate === 'boolean' ? reportedSelfUpdate : undefined;
     const installKind = resolveInstallKind({ name: worker.name });
     return {
       id: worker.id,
@@ -1718,7 +1721,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
               canSelfUpdate,
               installKind,
               serverUrl: resolvePublicBaseUrl(),
-              reason: selfUpdateDisabledReason({ installKind, reported: canSelfUpdate }),
+              reason: selfUpdateDisabledReason({
+                installKind,
+                reported: canSelfUpdate,
+              }),
             }),
       mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],
     };

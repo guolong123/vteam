@@ -27,8 +27,12 @@ describe('resolveInstallKind（安装方式判定）', () => {
   });
 
   it('显式 platform 优先于主机名推断', () => {
-    expect(resolveInstallKind({ name: 'DESKTOP-abc', platform: 'linux' })).toBe('linux');
-    expect(resolveInstallKind({ name: 'foo', platform: 'win32' })).toBe('windows');
+    expect(resolveInstallKind({ name: 'DESKTOP-abc', platform: 'linux' })).toBe(
+      'linux',
+    );
+    expect(resolveInstallKind({ name: 'foo', platform: 'win32' })).toBe(
+      'windows',
+    );
   });
 
   it('认不出 → unknown（不瞎猜）', () => {
@@ -42,7 +46,11 @@ describe('buildUpgradeHint（升级指引）', () => {
 
   it('能自更新（canSelfUpdate=true）→ 不给手动命令', () => {
     expect(
-      buildUpgradeHint({ canSelfUpdate: true, installKind: 'linux', serverUrl: SERVER }),
+      buildUpgradeHint({
+        canSelfUpdate: true,
+        installKind: 'linux',
+        serverUrl: SERVER,
+      }),
     ).toBeUndefined();
   });
 
@@ -112,12 +120,18 @@ describe('buildUpgradeHint（升级指引）', () => {
       serverUrl: SERVER,
     });
     // 脚本下载 + -SrcUrl 都必须是 WEB 占位符
-    expect(hint!.command).toContain(`${UPGRADE_WEB_PLACEHOLDER}/install-worker.ps1`);
-    expect(hint!.command).toContain(`${UPGRADE_WEB_PLACEHOLDER}/worker-src.tar.gz`);
+    expect(hint!.command).toContain(
+      `${UPGRADE_WEB_PLACEHOLDER}/install-worker.ps1`,
+    );
+    expect(hint!.command).toContain(
+      `${UPGRADE_WEB_PLACEHOLDER}/worker-src.tar.gz`,
+    );
     // -Server 必须是 SERVER 占位符
     expect(hint!.command).toContain(`-Server ${UPGRADE_SERVER_PLACEHOLDER}`);
     // 关键：脚本地址绝不能是 SERVER 占位符（那就是 404 的成因）
-    expect(hint!.command).not.toContain(`${UPGRADE_SERVER_PLACEHOLDER}/install-worker.ps1`);
+    expect(hint!.command).not.toContain(
+      `${UPGRADE_SERVER_PLACEHOLDER}/install-worker.ps1`,
+    );
     // -SrcUrl 必须显式给（缺省会回退 $Server/worker-src.tar.gz ⇒ 404）
     expect(hint!.command).toContain('-SrcUrl');
   });
@@ -128,9 +142,13 @@ describe('buildUpgradeHint（升级指引）', () => {
       installKind: 'linux',
       serverUrl: SERVER,
     });
-    expect(hint!.command).toContain(`${UPGRADE_WEB_PLACEHOLDER}/install-worker.sh`);
+    expect(hint!.command).toContain(
+      `${UPGRADE_WEB_PLACEHOLDER}/install-worker.sh`,
+    );
     expect(hint!.command).toContain(`--server ${UPGRADE_SERVER_PLACEHOLDER}`);
-    expect(hint!.command).not.toContain(`${UPGRADE_SERVER_PLACEHOLDER}/install-worker.sh`);
+    expect(hint!.command).not.toContain(
+      `${UPGRADE_SERVER_PLACEHOLDER}/install-worker.sh`,
+    );
   });
 
   it('占位符后紧跟单斜杠（前端替换后不会出现 //）', () => {
@@ -140,7 +158,9 @@ describe('buildUpgradeHint（升级指引）', () => {
       serverUrl: SERVER,
     });
     // 脚本地址用 WEB 占位符（不是 SERVER），且替换后不会出现双斜杠
-    expect(hint!.command).toContain(`${UPGRADE_WEB_PLACEHOLDER}/install-worker.sh`);
+    expect(hint!.command).toContain(
+      `${UPGRADE_WEB_PLACEHOLDER}/install-worker.sh`,
+    );
     expect(hint!.command).not.toContain('//install-worker.sh');
   });
 
@@ -164,13 +184,19 @@ describe('selfUpdateDisabledReason（解释为什么不给一键升级）', () =
   });
 
   it('Windows 明确关闭 → 说明原因（用户能自己开）', () => {
-    const reason = selfUpdateDisabledReason({ installKind: 'windows', reported: false });
+    const reason = selfUpdateDisabledReason({
+      installKind: 'windows',
+      reported: false,
+    });
     expect(reason).toContain('Windows');
     expect(reason).toContain('-Force');
   });
 
   it('其它平台 → 通用说明（不含 Windows 字样）', () => {
-    const reason = selfUpdateDisabledReason({ installKind: 'linux', reported: false });
+    const reason = selfUpdateDisabledReason({
+      installKind: 'linux',
+      reported: false,
+    });
     expect(reason).not.toContain('Windows');
     expect(reason).toContain('不支持自动升级');
   });

@@ -67,7 +67,9 @@ export function resolveInstallKind(input: {
  *
  * 优先级：`WORKER_PUBLIC_BASE_URL` > 空串（前端补 origin）。
  */
-export function resolvePublicBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+export function resolvePublicBaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   return (env['WORKER_PUBLIC_BASE_URL'] ?? '').trim().replace(/\/+$/, '');
 }
 
@@ -150,9 +152,11 @@ export function buildUpgradeHint(input: {
   const command = commandFor(input.installKind);
   const summaryByKind: Record<WorkerInstallKind, string> = {
     linux: '在 worker 主机上执行（幂等：保留 .env 的 token/密码）',
-    windows: '在 worker 主机上以管理员 PowerShell 执行（重跑安装器 = 升级，保留 .env）',
+    windows:
+      '在 worker 主机上以管理员 PowerShell 执行（重跑安装器 = 升级，保留 .env）',
     docker: '在 worker 所在主机执行（拉取新镜像并重建容器）',
-    unknown: '未识别出安装方式：请重跑该节点原来的安装脚本（Linux 用 install-worker.sh，Windows 用 install-worker.ps1 -Force）',
+    unknown:
+      '未识别出安装方式：请重跑该节点原来的安装脚本（Linux 用 install-worker.sh，Windows 用 install-worker.ps1 -Force）',
   };
   return {
     summary: summaryByKind[input.installKind],
