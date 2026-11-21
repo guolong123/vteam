@@ -255,6 +255,13 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
    */
   private readonly liveChunkChannel = new Map<string, 'plugin' | 'frame'>();
 
+  /**
+   * patch 变更后是否还有一个**排队中的**运行时重载（有在途回合时置位）。
+   *
+   * 见 `reloadForPatch`：配置变更不能打断在跑的那一轮，只能等它 `turn/end`。
+   */
+  private patchReloadPending = false;
+
   /** createSession 时指定的 preset 身份（供 sendMessage 首次绑定时复用）。 */
   private readonly pendingPresetIds = new Map<string, string>();
 
@@ -1185,6 +1192,64 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
     this.eventSubscribers.clear();
   }
 
+  /**
+   * 本运行时当前是否有在途回合（有 ⇒ 配置变更必须排队，不能关进程）。
+   *
+   * 判据与 `sessionIsLive` 同源：`pendingTurn` 存在 = 本轮还没收到 `turn/end`。
+   */
+  get isBusy(): boolean {
+    return [...this.sessions.values()].some((m) => m.pendingTurn !== undefined);
+  }
+
+  /**
+   * patch 变更后**重载运行时**（下次 spawn 会用 `--patch` 重新读取磁盘上的新文件）。
+   *
+   * ── 为什么需要 ────────────────────────────────────────────────────────
+   * DSH 的 profile patch 只在 spawn 时读取，**不监听文件变化**。所以
+   * 「平台上新增/修改了一条 MCP」写进 patch 之后，若不同时换掉运行时，
+   * agent 仍然跑在**旧进程**上 ⇒ 新工具不存在（用户看到的就是"改了没生效"）。
+   *
+   * ── 与 inline 重启的区别（为什么不是简单 close()）────────────────────
+   * `close()` 会清空会话镜像、pending 表与事件订阅 ⇒ 正在跑的那一轮直接丢事件
+   * （`turn/end` 收不到 ⇒ `awaitCompletion` 卡死、消息永久 processing）。故：
+   * - **有在途回合** ⇒ 不关进程，只登记 `patchReloadPending`，等本轮 `turn/end`
+   *   之后由 `notifyTurnEnd` 触发（`maybeReloadForPatch`）；
+   * - **空闲** ⇒ 立即 close，下次 `sendMessage` 走 `ensureStarted` 重新握手。
+   *
+   * @returns true = 已立即重载；false = 有在途回合，已排队
+   */
+  async reloadForPatch(): Promise<boolean> {
+    if (this.isBusy) {
+      this.patchReloadPending = true;
+      this.logger.info('[dsh-driver] patch 已变更：本轮在跑，重载排队到 turn/end 之后');
+      return false;
+    }
+    await this.reloadIdleForPatch();
+    return true;
+  }
+
+  /** 关掉空闲运行时（下次 spawn 读新 patch）；保留会话 id 与持久化历史。 */
+  private async reloadIdleForPatch(): Promise<void> {
+    this.patchReloadPending = false;
+    // 会话镜像**保留**：DSH 侧会话持久化，重新 spawn 后按需 resume；
+    // 但 system 已注入过的标记要保留（否则下一轮会往用户消息前面再塞一遍 system）。
+    for (const mirror of this.sessions.values()) {
+      mirror.pendingTurn = undefined;
+      mirror.lastOutcome = undefined;
+    }
+    await this.client.close();
+    this.logger.info(
+      '[dsh-driver] patch 变更已生效：运行时会话已关闭（下次下发按新 patch 重新 spawn）',
+    );
+  }
+
+  /**
+   * patch 变更是否有排队中的重载（供上层诊断/测试）。
+   */
+  get hasPendingPatchReload(): boolean {
+    return this.patchReloadPending;
+  }
+
   // ── 内部：启动与事件消费 ──────────────────────────────────────────────
 
   /** 懒启动运行时（首次使用时握手）。 */
@@ -1543,9 +1608,33 @@ export class DshDriver implements OpenCodeDriver, EngineEventChannel {
 
   private notifyTurnEnd(sessionId: string): void {
     const list = this.turnEndWaiters.get(sessionId);
-    if (list === undefined) return;
-    this.turnEndWaiters.delete(sessionId);
-    for (const resolve of list) resolve();
+    if (list !== undefined) {
+      this.turnEndWaiters.delete(sessionId);
+      for (const resolve of list) resolve();
+    }
+    // ⚠️ **必须放在 waiter 判空之外**：`turn/end` 到达时未必有等待者
+    // （例如上层走轮询路而非 awaitCompletion，或本轮由 steer 触发）。
+    // 之前把调度写进 `list === undefined` 的早退分支后面 ⇒ 没有等待者时
+    // 排队中的 patch 重载**永远不会执行** ⇒ "改了配置要等下次会话"。
+    this.schedulePatchReloadIfIdle();
+  }
+
+  /**
+   * 排队中的 patch 重载：等**所有**会话都空下来再关运行时。
+   *
+   * 为什么延到下一个 tick：`turn/end` 的等待者刚 resolve，上层还要读消息镜像、
+   * 上送终态事件。立刻 `close()` 会在这些动作**之前**掐掉运行时（虽然镜像还在内存，
+   * 但任何一次 RPC 都会拿到"客户端已关闭"）。留一个 tick 让收尾先跑完。
+   */
+  private schedulePatchReloadIfIdle(): void {
+    if (!this.patchReloadPending || this.isBusy) return;
+    const timer = setTimeout(() => {
+      if (!this.patchReloadPending || this.isBusy) return;
+      void this.reloadIdleForPatch().catch((err: unknown) => {
+        this.logger.warn(`[dsh-driver] 排队中的 patch 重载失败：${(err as Error).message}`);
+      });
+    }, 0);
+    timer.unref?.();
   }
 
   private notifyIdle(sessionId: string): void {
