@@ -115,6 +115,23 @@ export interface WorkerItem {
   rolledBack: boolean;
   /** worker-self-update：是否有可用更新（server 计算：双版本存在且不等；'dev'/缺省 → false）。 */
   updateAvailable: boolean;
+  /**
+   * 该节点能否**自己完成升级**（worker 上报 `engineCapabilities.selfUpdate`）。
+   * - `true`：显示「更新」按钮，一键下发；
+   * - `false`：显示「升级命令」，点开复制让用户自己执行；
+   * - `undefined`：旧 worker 未上报 ⇒ 按"不能自动升级"处理（不假设它能）。
+   */
+  canSelfUpdate?: boolean;
+  /** 手动升级指引（server 计算；能自更新时为 undefined）。 */
+  upgradeHint?: {
+    /** 一句话说明（该在哪台机器上怎么执行）。 */
+    summary: string;
+    /** 可复制执行的命令；`kind=unknown` 时为空串（只给文字说明）。 */
+    command: string;
+    kind: "linux" | "windows" | "docker" | "unknown";
+    /** 为什么不能一键升级（解释给用户看，避免以为按钮坏了）。 */
+    reason?: string;
+  };
 }
 
 /** 自更新执行状态 → 展示文案（五态契约见 plan worker-self-update Todo 4；未知值原样展示）。 */
@@ -300,4 +317,75 @@ export function SectionHeader({
       {right}
     </div>
   );
+}
+
+/**
+ * 该版本串是否是**占位/非发布值**（不参与版本比对）。
+ *
+ * 与 server 侧 `NON_RELEASED_CODE_VERSION_PATTERNS` **同义**（前端不能 import server 代码，
+ * 故此处复写一份；两端口径由各自的单测钉住）。
+ *
+ * 为什么需要它：`local-compose`（compose 占位）/ `manual-<日期>`（Windows 安装戳）
+ * 都不是"发布到哪个版本"的答案。不排除它们 ⇒ 升级成功后仍永久显示「待更新」
+ *（`manual-20261121` ≠ `local-compose`，用户实测踩到）。
+ */
+export function isNonReleasedVersion(raw: string): boolean {
+  const v = raw.trim();
+  return (
+    /^dev$/i.test(v) ||
+    /^local-compose$/i.test(v) ||
+    /^manual-/i.test(v) ||
+    /^unknown$/i.test(v) ||
+    /^container-unstamped$/i.test(v)
+  );
+}
+
+/* ------------------------------ 升级命令地址推导 ------------------------------ */
+
+/**
+ * 判断 hostname 是否回环（127.0.0.1 / localhost / [::1]）。
+ *
+ * 为什么重要：升级命令要在 **worker 主机**上执行，而回环地址在那台机器上指向**它自己**
+ * ⇒ 命令必然失败（连不到控制面）。安装页早有同款判定（`isLoopbackOrigin`），
+ * 升级指引这里复用同一口径，避免两处对"什么是回环"认知分叉。
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "127.0.0.1" || h === "::1";
+}
+
+/**
+ * 由浏览器当前 origin 推导**控制面 server 基址**（升级命令里要填的地址）。
+ *
+ * 规则与安装页一致：web 端口 13001 → server 13000（compose 固定映射）；
+ * 其它端口原样沿用（反代同域场景 server 与 web 同源）。
+ *
+ * ⚠️ 返回的是「**当前访问地址**」——用户用 `http://10.0.0.5:13001` 打开就得到
+ * `http://10.0.0.5:13000`，不会是 127.0.0.1。只有在用户自己用回环地址打开时才是回环，
+ * 此时调用方应提示"远程节点需换成局域网 IP"（无法自动得知控制面在局域网里的 IP）。
+ */
+/**
+ * 静态资源基址（install-worker.ps1 / worker-src.tar.gz 所在处）。
+ *
+ * 为什么不复用 `deriveServerBase`：这些文件由 **web** 静态目录提供，
+ * 而 compose 里 web 与 server 是**两个端口**（13001 / 13000）。
+ * 早先两者混用 ⇒ 命令去 server 端口取脚本 ⇒ `Cannot GET /install-worker.ps1` 404。
+ * 反代同域部署时 web 与 server 同源，此时二者相等（无需分别显示）。
+ */
+export function deriveWebBase(origin: string): string {
+  try {
+    return new URL(origin).toString().replace(/\/$/, "");
+  } catch {
+    return origin.replace(/\/$/, "");
+  }
+}
+
+export function deriveServerBase(origin: string): string {
+  try {
+    const u = new URL(origin);
+    if (u.port === "13001") u.port = "13000";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return origin.replace(/\/$/, "");
+  }
 }

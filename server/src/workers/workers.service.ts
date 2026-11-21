@@ -41,6 +41,12 @@ import {
   normalizeOpencodeVersion,
 } from './worker-version';
 import {
+  buildUpgradeHint,
+  resolveInstallKind,
+  resolvePublicBaseUrl,
+  selfUpdateDisabledReason,
+} from './worker-upgrade-hint';
+import {
   computeUpdateAvailable,
   isCodeVersionAligned,
   normalizeReportedUpdateState,
@@ -1673,6 +1679,17 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     // 期望版本来自 server env（部署期常量，不落库）——每请求实时读，与心跳响应同源。
     const expectedVersion = resolveExpectedCodeVersion() ?? null;
     const codeVersion = worker.codeVersion ?? null;
+
+    // ── 能否自更新 + 安装方式（供升级指引）────────────────────────────
+    //
+    // `selfUpdate` 由 worker 上报（`engineCapabilities.selfUpdate`）：
+    // - `true`  → 控制面显示「更新」按钮，一键下发；
+    // - `false` → 显示「升级命令」让用户复制（Windows 缺省关闭 / 无 systemd）；
+    // - `undefined`（旧 worker 未上报）→ 同样按"不能自动升级"处理（不能假设它能）。
+    const caps = worker.capabilities as { engineCapabilities?: { selfUpdate?: boolean } } | null;
+    const reportedSelfUpdate = caps?.engineCapabilities?.selfUpdate;
+    const canSelfUpdate = typeof reportedSelfUpdate === 'boolean' ? reportedSelfUpdate : undefined;
+    const installKind = resolveInstallKind({ name: worker.name });
     return {
       id: worker.id,
       name: worker.name,
@@ -1688,6 +1705,21 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       updateState: normalizeReportedUpdateState(worker.updateState) ?? null,
       rolledBack: this.jsonScalarToBoolean(worker.rolledBack),
       updateAvailable: computeUpdateAvailable(codeVersion, expectedVersion),
+      // ── 升级指引（本轮新增）─────────────────────────────────────────
+      //
+      // 为什么不能只靠 updateAvailable：它依赖 server env `CODE_VERSION`，而本地/内网
+      // 部署常不配它 ⇒ 恒为 false ⇒ **UI 一个提示都没有**（用户以为已是最新）。
+      // 这里给出与 CODE_VERSION 无关的降级路径：能否自更新 + 该怎么手动升级。
+      canSelfUpdate,
+      upgradeHint:
+        canSelfUpdate === true
+          ? undefined
+          : buildUpgradeHint({
+              canSelfUpdate,
+              installKind,
+              serverUrl: resolvePublicBaseUrl(),
+              reason: selfUpdateDisabledReason({ installKind, reported: canSelfUpdate }),
+            }),
       mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],
     };
   }

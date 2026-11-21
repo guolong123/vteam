@@ -34,8 +34,15 @@ import {
   WorkerStatusBadge,
   cardStyle,
   SectionHeader,
+  WORKER_UPDATE_STATE_LABEL,
+  deriveServerBase,
+  deriveWebBase,
+  isNonReleasedVersion,
+  isLoopbackHost,
   type WorkerDetail,
 } from "../shared";
+import { hasPermission } from "@/lib/permissions";
+import { ConfirmDialog, UpgradeCommandDialog } from "@/src/components/ui";
 import { OmoPanel, OpencodeAgentsPanel } from "./omo-panel";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -281,7 +288,9 @@ function MaxInstancesControl({
 export default function WorkerDetailPage() {
   const params = useParams<{ id: string }>();
   const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
   const workerId = params.id;
+  const queryClient = useQueryClient();
 
   /* 1s tick：驱动相对时间重算（数据本身由轮询刷新） */
   const [, setTick] = useState(0);
@@ -302,6 +311,48 @@ export default function WorkerDetailPage() {
   /* 引擎判定：dsh 节点没有 opencode serve，卡片字段与文案都不同（缺省 opencode 兼容存量 worker） */
   const engine: "opencode" | "dsh" = worker?.capabilities?.engine === "dsh" ? "dsh" : "opencode";
   const isDsh = engine === "dsh";
+
+  /* ── 升级入口（与列表页同一套二分逻辑，口径必须一致）─────────────────
+     - canSelfUpdate === true ⇒「更新」按钮（下发 update-worker 指令）；
+     - 否则（false / undefined=旧 worker）⇒「升级命令」弹窗（复制命令人工执行）。
+     可见性**只看 `updateAvailable`**（= server 判定确实存在版本差异）。
+     ⚠️ 不要把 `upgradeHint` 也算进去（曾这样做，是 bug）：那是"节点不能自更新"的
+     说明，在版本已对齐时同样存在 ⇒ 升级完成后入口永远挂着。
+     列表卡片与详情页共用同一判定口径，避免两处漂移。 */
+  const canEdit = hasPermission(user?.permissions, "workers", "edit");
+  const canSelfUpdate = worker?.canSelfUpdate === true;
+  const detailUpdateEntryVisible = worker !== undefined && worker.updateAvailable;
+
+  /* 控制面 server 基址：命令模板里的 {{SERVER_URL}} 由浏览器按**当前访问 origin** 替换
+     （`deriveServerBase`：web 13001 → server 13000，与安装页同一套规则）。
+     回环地址单独标记 —— 远程 worker 上的 127.0.0.1 指向它自己。 */
+  const [serverBase, setServerBase] = useState("");
+  const [webBase, setWebBase] = useState("");
+  const [loopbackOrigin, setLoopbackOrigin] = useState(false);
+  useEffect(() => {
+    setServerBase(deriveServerBase(window.location.origin));
+    setWebBase(deriveWebBase(window.location.origin));
+    setLoopbackOrigin(isLoopbackHost(window.location.hostname));
+  }, []);
+
+  /* 两个对话框：一键更新（确认）/ 手动升级命令（复制）。互斥出现。 */
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [upgradeDialogOpen, setUpgradeDialogOpen] = useState(false);
+
+  /* 一键更新：POST /workers/:id/update（与列表页同一接口；目标版本由 server env 决定）。
+     成功后刷新详情（updateState 会随心跳变成 pending → downloading → restarting）。 */
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      api.post<{ status: string; version: string | null }>(`/workers/${workerId}/update`),
+    onSuccess: () => {
+      setUpdateDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["worker", workerId] });
+    },
+  });
+  const updateBusy = updateMutation.isPending;
+  /* 依赖 updateBusy，故在 mutation 之后计算（避免 TDZ） */
+  const detailUpdateDisabled =
+    canSelfUpdate ? !canEdit || worker?.status === "offline" || updateBusy : !canEdit;
 
   /**
    * 模型目录：只取 **enabled** 的（与"可用模型"口径一致，也是模型名映射的数据源）。
@@ -558,6 +609,134 @@ export default function WorkerDetailPage() {
             </div>
           </section>
 
+          {/* 版本与升级卡（2026-11-21 新增）
+              ── 为什么详情页需要它 ────────────────────────────────────────
+              列表卡片有「待更新」徽章与「更新/升级命令」按钮，但详情页**一个字都没有**
+              ⇒ 用户进详情后无从判断"这台机器该不该升级、怎么升"。
+              这里把 codeVersion ↔ expectedVersion 的对比、以及升级入口集中呈现；
+              入口形态与列表页一致：能自更新 ⇒「更新」按钮，否则 ⇒「升级命令」弹窗。 */}
+          <section data-testid="worker-detail-upgrade" style={cardStyle()}>
+            <SectionHeader icon="⤒" title="版本与升级" />
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: space.md,
+              }}
+            >
+              <InfoRow
+                label="运行版本"
+                value={worker.codeVersion ?? "未上报"}
+              />
+              <InfoRow
+                label="期望版本"
+                value={
+                  worker.expectedVersion === null || worker.expectedVersion === undefined
+                    ? "未配置（server 未设 CODE_VERSION，无更新语义）"
+                    : isNonReleasedVersion(worker.expectedVersion)
+                      ? `${worker.expectedVersion}（占位值，不参与版本比对）`
+                      : worker.expectedVersion
+                }
+              />
+              <InfoRow
+                label="自更新能力"
+                value={
+                  worker.canSelfUpdate === true
+                    ? "支持（可一键更新）"
+                    : worker.canSelfUpdate === false
+                      ? "不支持（需手动升级）"
+                      : "未上报（旧版本 worker）"
+                }
+              />
+              {worker.updateState !== null && worker.updateState !== undefined && (
+                <InfoRow
+                  label="更新状态"
+                  value={
+                    WORKER_UPDATE_STATE_LABEL[worker.updateState] ?? worker.updateState
+                  }
+                />
+              )}
+            </div>
+
+            {worker.rolledBack && (
+              <div
+                data-testid="worker-detail-rolled-back"
+                style={{
+                  fontSize: fontSize.sm,
+                  color: "var(--color-warning-text)",
+                  backgroundColor: "var(--color-warning-bg)",
+                  border: "1px solid var(--color-warning-border)",
+                  borderRadius: radius.md,
+                  padding: space.sm,
+                  lineHeight: 1.6,
+                }}
+              >
+                ⚠ 该节点曾因新版本异常
+                <strong>自动回滚</strong>
+                。请确认问题已修复后再升级（回滚标志为粘滞，需人工处理后才会消失）。
+              </div>
+            )}
+
+            {/* 升级入口：与列表页同一套二分逻辑（能自更新 → 按钮；否则 → 复制命令） */}
+            {detailUpdateEntryVisible ? (
+              <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  data-testid={
+                    canSelfUpdate ? "worker-detail-update-button" : "worker-detail-upgrade-manual-button"
+                  }
+                  disabled={detailUpdateDisabled}
+                  title={
+                    !canEdit
+                      ? "无 workers.edit 权限"
+                      : worker.status === "offline"
+                        ? "离线节点无法接收更新指令"
+                        : !canSelfUpdate
+                          ? "该节点不能自动升级，点开复制升级命令"
+                          : "下载新版本并在空闲时重启生效"
+                  }
+                  onClick={() => {
+                    if (canSelfUpdate) {
+                      setUpdateDialogOpen(true);
+                    } else {
+                      setUpgradeDialogOpen(true);
+                    }
+                  }}
+                  style={{
+                    ...baseFont,
+                    padding: `${space.sm - 1}px ${space.md}px`,
+                    borderRadius: radius.md,
+                    border: `1px solid ${
+                      detailUpdateDisabled ? neutral[100] : "var(--color-warning-border)"
+                    }`,
+                    backgroundColor: detailUpdateDisabled
+                      ? neutral[100]
+                      : "var(--color-warning-bg)",
+                    color: detailUpdateDisabled ? neutral[400] : "var(--color-warning-text)",
+                    fontSize: fontSize.md,
+                    fontWeight: 600,
+                    cursor: detailUpdateDisabled ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {canSelfUpdate ? "更新到期望版本" : "查看升级命令"}
+                </button>
+                <span style={{ fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.5 }}>
+                  {canSelfUpdate
+                    ? "后台下载新版本，节点空闲时自动重启生效（不打断进行中的会话）"
+                    : (worker.upgradeHint?.reason ?? "该节点需要手动升级")}
+                </span>
+              </div>
+            ) : (
+              <div style={{ fontSize: fontSize.sm, color: neutral[500] }}>
+                {worker.expectedVersion === null ||
+                worker.expectedVersion === undefined ||
+                isNonReleasedVersion(worker.expectedVersion)
+                  ? "无更新语义：server 的期望版本未配置或为占位值（如 local-compose / manual-*），不做版本比对"
+                  : "运行版本与期望版本一致，无需升级"}
+              </div>
+            )}
+          </section>
+
           {/* 运行时信息卡（按引擎分叉：dsh 没有 serve，控制面只连执行端点） */}
           <section data-testid="worker-detail-runtime" style={cardStyle()}>
             <SectionHeader icon="⬢" title={isDsh ? "dsh 运行时" : "opencode 运行时"} />
@@ -570,10 +749,23 @@ export default function WorkerDetailPage() {
             >
               <InfoRow label="引擎" value={ENGINE_LABEL[engine]} />
               {isDsh ? (
-                <InfoRow
-                  label="执行端点"
-                  value={`${worker.capabilities?.baseUrl ?? "未上报"}${worker.capabilities?.execPort !== undefined ? `:${worker.capabilities.execPort}` : ":4198"}`}
-                />
+                <>
+                  {/* dsh 也有自己的引擎版本（含 `-rc.N`）；此前这个分支被整体跳过 ⇒ 详情页看不到版本。
+                      ⚠️ 优先读 engineCapabilities.engineVersion：顶层 opencodeVersion 会被 server
+                      归一化（会抹掉 `-rc.5`），那是调度过滤用的键，不是展示用的精确版本。 */}
+                  <InfoRow
+                    label="版本"
+                    value={
+                      (worker.capabilities as { engineCapabilities?: { engineVersion?: string } } | undefined)
+                        ?.engineCapabilities?.engineVersion ??
+                      (worker.opencodeVersion !== "unknown" ? worker.opencodeVersion : "未上报")
+                    }
+                  />
+                  <InfoRow
+                    label="执行端点"
+                    value={`${worker.capabilities?.baseUrl ?? "未上报"}${worker.capabilities?.execPort !== undefined ? `:${worker.capabilities.execPort}` : ":4198"}`}
+                  />
+                </>
               ) : (
                 <>
                   <InfoRow label="版本" value={worker.opencodeVersion} />
@@ -819,6 +1011,50 @@ export default function WorkerDetailPage() {
           <OpencodeAgentsPanel workerId={workerId} />
         </div>
       )}
+
+      {/* 一键更新二次确认（能自更新的节点；与列表页的「更新」按钮同语义） */}
+      <ConfirmDialog
+        testid="worker-detail-update"
+        open={updateDialogOpen}
+        title="更新 Worker"
+        description={
+          worker
+            ? `确认把节点「${worker.name ?? worker.id}」更新到 ${worker.expectedVersion ?? "期望版本"}？` +
+              "指令经心跳下发，worker 会在空闲时下载并重启（不打断进行中的会话）。"
+            : undefined
+        }
+        confirmLabel="确认更新"
+        pendingLabel="下发中…"
+        danger={false}
+        submitting={updateMutation.isPending}
+        onClose={() => {
+          if (!updateMutation.isPending) setUpdateDialogOpen(false);
+        }}
+        onConfirm={() => updateMutation.mutate()}
+      />
+      {updateMutation.isError && (
+        <div
+          role="alert"
+          data-testid="worker-detail-update-error"
+          style={{ fontSize: fontSize.sm, color: "#DC2626", maxWidth: 960, margin: "0 auto" }}
+        >
+          {isApiError(updateMutation.error) ? updateMutation.error.message : "下发更新失败，请稍后重试"}
+        </div>
+      )}
+
+      {/* 手动升级命令：不能自更新的节点（Windows 缺省关闭 / 旧 worker）在这里复制命令。
+          与上面的「更新」按钮互斥：能自更新的节点 upgradeHint 为 undefined，不会走到这里。 */}
+      <UpgradeCommandDialog
+        open={upgradeDialogOpen}
+        workerLabel={worker?.name ?? worker?.id ?? workerId}
+        summary={worker?.upgradeHint?.summary ?? ""}
+        command={worker?.upgradeHint?.command ?? ""}
+        serverBase={serverBase}
+        webBase={webBase}
+        loopback={loopbackOrigin}
+        reason={worker?.upgradeHint?.reason}
+        onClose={() => setUpgradeDialogOpen(false)}
+      />
     </div>
   );
 }

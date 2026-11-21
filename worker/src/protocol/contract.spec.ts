@@ -183,8 +183,8 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {  it('Register
     expect(parsed.seq).toBe(42);
   });
 
-  it('WorkerEventPayload.type 受 WorkerEventType 枚举约束（编译期），枚举 9 事件点号命名', () => {
-    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(9);
+  it('WorkerEventPayload.type 受 WorkerEventType 枚举约束（编译期），枚举 10 事件点号命名', () => {
+    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(10);
     for (const name of Object.values(WORKER_EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }

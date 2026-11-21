@@ -14,10 +14,18 @@ const FOCUSABLE = [
 /**
  * 弹窗焦点陷阱：open 时把焦点移入容器、Tab/Shift+Tab 循环、Esc 关闭、关闭后焦点回到触发器。
  * 返回的 ref 需要挂到弹窗容器上。
+ *
+ * @param initialFocus - 打开时优先聚焦的选择器（缺省 = 第一个可聚焦元素）。
+ *
+ * ⚠️ 为什么需要它：缺省行为会聚焦**第一个 input**。对于"展示一段待复制文本"的弹窗，
+ * 焦点落在 input 里会让用户按 Ctrl+C 时复制到 **input 自身的选区**（通常是空），
+ * 而不是页面上选中的那段文本 ⇒ 表现为"没法复制"。这类弹窗应显式指定聚焦目标
+ * （如操作按钮），把焦点留在输入框之外。
  */
 export function useFocusTrap<T extends HTMLElement>(
   open: boolean,
   onClose: () => void,
+  initialFocus?: string,
 ): RefObject<T | null> {
   const ref = useRef<T | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -29,8 +37,9 @@ export function useFocusTrap<T extends HTMLElement>(
     const el = ref.current;
     if (!el) return;
 
-    // 把焦点移到第一个可聚焦元素（优先 autofocus）
+    // 把焦点移到：显式指定的目标 → autofocus → 第一个可聚焦元素
     const first =
+      (initialFocus === undefined ? null : el.querySelector<HTMLElement>(initialFocus)) ??
       el.querySelector<HTMLElement>("[autofocus]") ??
       el.querySelector<HTMLElement>(FOCUSABLE);
     first?.focus();
@@ -67,7 +76,7 @@ export function useFocusTrap<T extends HTMLElement>(
       // 关闭后焦点回到触发器
       triggerRef.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open, onClose, initialFocus]);
 
   return ref;
 }
