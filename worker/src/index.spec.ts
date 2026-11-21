@@ -59,6 +59,7 @@ import {
   resolveExecutableModels,
   resolveModels,
   resolveRuntimeMaxInstances,
+  resolveEngineCapabilities,
   RUNTIME_CONFIG_FILE,
   warnLoopbackAdvertiseHost,
   writeGitCredsToServeScope,
@@ -1896,6 +1897,47 @@ describe('buildCapabilities：engineVersion 上报', () => {
   it('缺省 engineVersion → unknown（兼容旧调用方）', async () => {
     const caps = await buildCapabilities(null, 'http://worker');
     expect(caps.engineCapabilities?.engineVersion).toBe('unknown');
+  });
+});
+
+/**
+ * 能力位单一来源（P6 收口）：上报的能力位必须**等于**引擎模块自己的声明。
+ *
+ * 事故预防：此前 `buildCapabilities` 内联了一份逐位硬编码的能力矩阵，
+ * 与 `engine/{opencode/capabilities,dsh/runtime}` 中的真值构成 AB 双实现——
+ * 引擎侧改了能力位、上报侧忘了改，控制面就会按「支持」去调一个不存在的端点，
+ * 且**没有任何测试会红**。本套断言把两侧钉死。
+ */
+describe('buildCapabilities：能力位与引擎声明同源', () => {
+  it('opencode：等于 opencodeCapabilities(version)', async () => {
+    const { opencodeCapabilities } = await import('./engine/opencode/capabilities');
+    const caps = await buildCapabilities(
+      null, 'http://worker', undefined, undefined, undefined, 5, undefined, 'opencode', '2.3.2',
+    );
+    expect(caps.engineCapabilities).toEqual({
+      ...opencodeCapabilities('2.3.2'),
+      selfUpdate: false,
+    });
+  });
+
+  it('dsh：等于 dshCapabilities(version)', async () => {
+    const { dshCapabilities } = await import('./engine/dsh/runtime');
+    const caps = await buildCapabilities(
+      null, 'http://worker', undefined, undefined, undefined, 5, undefined, 'dsh', '0.2.2-rc.5',
+    );
+    expect(caps.engineCapabilities).toEqual({
+      ...dshCapabilities('0.2.2-rc.5'),
+      selfUpdate: false,
+    });
+  });
+
+  it('selfUpdate 由控制面侧参数决定（不污染引擎能力位）', async () => {
+    const caps = await buildCapabilities(
+      null, 'http://worker', undefined, undefined, undefined, 5, undefined, 'dsh', '0.2.2-rc.5', true,
+    );
+    expect(caps.engineCapabilities?.selfUpdate).toBe(true);
+    const { dshCapabilities } = await import('./engine/dsh/runtime');
+    expect(dshCapabilities('0.2.2-rc.5')).not.toHaveProperty('selfUpdate');
   });
 });
 

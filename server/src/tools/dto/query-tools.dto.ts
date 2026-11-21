@@ -1,13 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import { TOOL_EXECUTIONS, TOOL_SOURCES } from './create-tool.dto';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /**
  * GET /tools 查询参数（source/execution/enabled 过滤 + name 搜索 + 分页，
  * 对齐 QueryAgentsDto 模式，返回 {items, total, page, pageSize}）。
  */
-export class QueryToolsDto {
+export class QueryToolsDto extends PaginatedQueryDto {
   @ApiPropertyOptional({
     description: '工具来源过滤（builtin/custom/mcp），缺省返回全部',
     enum: TOOL_SOURCES,
@@ -63,22 +64,4 @@ export class QueryToolsDto {
   @IsOptional()
   @IsString()
   mcpServer?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({ description: '每页条数', default: 20, minimum: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  pageSize?: number;
 }

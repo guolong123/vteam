@@ -26,12 +26,8 @@ export function opencodeCapabilities(engineVersion: string): EngineCapabilities 
     perMessageModelSwitch: true,
     // GET /todos
     todos: true,
-    // GET /agents（per-directory 发现 opencode.json）
-    externalAgents: true,
     // GET /integrations（集成注册表）
     integrations: true,
-    // GET/POST /omo-config（OmO 是 opencode 生态的插件）
-    omoConfig: true,
     // `.opencode/plans/*.md`（既有约定；P1 起优先读 `.vteam/plans`，见 WorkspaceLayout）
     planFiles: true,
     // prompt body 的 delivery: 'steer'

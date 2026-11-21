@@ -19,6 +19,7 @@ import {
   type RoleBoundary,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
@@ -605,8 +606,8 @@ export class ExecutionPolicyService implements OnModuleInit {
    * type 缺省返回全部（含 template 只读策略）；分页 page 从 1 起、pageSize 默认 20 上限 100。
    */
   async findAll(query: QueryExecutionPoliciesDto = {}) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const where = { type: query.type ? { equals: query.type } : undefined };
 
     const [total, rows] = await this.prisma.$transaction([
@@ -1116,14 +1117,7 @@ export class ExecutionPolicyService implements OnModuleInit {
     });
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

@@ -116,40 +116,6 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("create-task-button")).toBeVisible();
   });
 
-  test("4/17 task-board /board（团队任务看板）", async ({ page }) => {
-    await page.goto(`/board?teamId=${PAGES_TEAM_ID}`);
-    await expectNavShell(page);
-    await expect(page.getByTestId("task-board-root")).toBeVisible();
-    await expect(page.getByTestId("status-filter")).toBeVisible();
-    await expect(page.getByTestId("task-card").first()).toBeVisible();
-    await expect(page.getByTestId("status-badge").first()).toBeVisible();
-  });
-
-  test("4b/17 board-drawer 看板卡片开抽屉不进聊天", async ({ page, request }) => {
-    // 空库时自建一个看板任务夹具（Bearer 同 7/17 原因）
-    const cards = page.getByTestId("task-card");
-    await page.goto(`/board?teamId=${PAGES_TEAM_ID}`);
-    await expectNavShell(page);
-    if ((await cards.count()) === 0) {
-      const login = await request.post("/api/v1/auth/login", {
-        data: { username: "seed-admin", password: "Admin@123456" },
-      });
-      const { accessToken } = await login.json();
-      await request.post("/api/v1/tasks", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        data: { teamId: PAGES_TEAM_ID, title: PAGES_TASK_TITLE, priority: "medium" },
-      });
-      await page.reload();
-    }
-    await page.getByTestId("task-card").first().getByTestId("status-badge").first().click();
-    await expect(page.getByTestId("task-detail-drawer")).toBeVisible();
-    // 卡片点击不再跳转 /tasks/:id
-    expect(page.url()).toContain("/board");
-    await expect(page.getByTestId("enter-team-session-drawer")).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("task-detail-drawer")).toHaveCount(0);
-  });
-
   test("5/17 agent-config /agents", async ({ page }) => {
     await page.goto("/agents");
     await expectNavShell(page);
@@ -350,44 +316,6 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       expect(((await after.json()) as { currentTaskId: string | null }).currentTaskId ?? null).toBeNull();
     }
     await request.delete(`/api/v1/teams/${teamId}`, { headers });
-  });
-
-  test("team detail exposes task board and history task entry points", async ({ page }) => {
-    const teamId = "tm_0000000001";
-    await page.goto(`/teams/${teamId}`);
-
-    const boardLink = page.getByTestId("team-task-board-link");
-    const historyLink = page.getByTestId("team-task-history-link");
-    await expect(boardLink).toBeVisible();
-    await expect(historyLink).toBeVisible();
-
-    await boardLink.click();
-    await expect(page).toHaveURL(new RegExp(`/board\\?teamId=${teamId}`));
-
-    await page.goBack();
-    await expect(historyLink).toBeVisible();
-    await historyLink.click();
-    await expect(page).toHaveURL(new RegExp(`/teams/${teamId}/tasks`));
-  });
-
-  test("board without teamId shows explicit team selection", async ({ page }) => {
-    await page.goto("/board");
-    const selection = page.getByTestId("board-team-selection");
-    await page.waitForFunction(() => {
-      const url = new URL(window.location.href);
-      return url.searchParams.has("teamId") || document.querySelector('[data-testid="board-team-options"], [data-testid="board-team-empty"]') !== null;
-    });
-    const options = page.getByTestId("board-team-option");
-    if ((await options.count()) > 0) {
-      await expect(selection).toBeVisible();
-      await options.first().click();
-      await expect(page).toHaveURL(/\/board\?teamId=/);
-    } else if (await page.getByTestId("board-team-empty").count()) {
-      await expect(selection).toBeVisible();
-      await expect(page.getByTestId("board-team-empty")).toBeVisible();
-    } else {
-      await expect(page).toHaveURL(/\/board\?teamId=/);
-    }
   });
 
   // 任务历史摘要 / 会话 ?task= 参数两用例在文件末尾独立 describe（需自建团队与特定任务状态，勿并入此处）。

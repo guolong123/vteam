@@ -28,7 +28,7 @@ import { unwrapV2List } from './driver/v2-driver';
 import { SystemHandoffStore } from './driver/v2-system-handoff';
 import { DriverModelInfo } from './driver/opencode-driver';
 import type { OpenCodeDriver } from './driver/opencode-driver';
-import type { WorkerEngineKind } from './engine';
+import type { EngineCapabilities, WorkerEngineKind } from './engine';
 import { DshDriver } from './driver/dsh-driver';
 import { DshPoolDriver } from './driver/dsh-pool-driver';
 import { DshCredentialApplier, DshResourceInjector, resolveDefaultRoute } from './engine/dsh/injector';
@@ -70,8 +70,6 @@ import {
 } from './runtime/opencode-version';
 import { ExecServer } from './exec/exec-server';
 import { InjectReport, ResourceInjector } from './resources/injector';
-import { readOmoEnabled } from './resources/omo-enabled';
-import { seedOmoAgentModels } from './resources/omo-config';
 import { RestartCoordinator } from './restart/restart-coordinator';
 import {
   ConfigReloadOutcome,
@@ -778,6 +776,30 @@ export async function registerWithPersistentRetry<T>(
  */
 export function detectEngineVersion(engine: WorkerEngineKind, dshBin?: string): string {
   return engine === 'dsh' ? detectDshVersionRaw(dshBin) : detectOpencodeVersion();
+}
+
+/**
+ * 按引擎取**引擎自身声明的能力位**（`EngineCapabilities`）。
+ *
+ * 为什么在这里转一手而不是直接 import 两个引擎模块：
+ * - **延迟加载**：opencode 的实现不拉 dsh 的 vendored 插件路径，反之亦然
+ *   （与 `engine/index.ts` 的 `createEngine` 同一约束）；
+ * - **单一来源**：能力矩阵只存在于各引擎模块内（`opencodeCapabilities` /
+ *   `dshCapabilities`），上报路径不再复制一份，避免"上报说支持、实现不支持"。
+ *
+ * @param engine - 引擎类型
+ * @param engineVersion - 引擎真实版本串（含 `-rc.N`；缺省 `'unknown'`）
+ */
+export async function resolveEngineCapabilities(
+  engine: WorkerEngineKind,
+  engineVersion: string,
+): Promise<EngineCapabilities> {
+  if (engine === 'dsh') {
+    const { dshCapabilities } = await import('./engine/dsh/runtime');
+    return dshCapabilities(engineVersion);
+  }
+  const { opencodeCapabilities } = await import('./engine/opencode/capabilities');
+  return opencodeCapabilities(engineVersion);
 }
 
 /** T4b 注入执行器通过 onCommands 注册的命令处理回调（处理心跳携带的下行命令）。 */
@@ -1624,33 +1646,14 @@ export async function buildCapabilities(
   const browserTools = isAgentBrowserAvailable() ? BROWSER_TOOLS.map((t) => t.name) : [];
   const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...browserTools, ...injected.tools])];
   // P6：引擎与能力位上报（server 据此跳过引擎不支持的端点，而非猜引擎行为）。
-  const engineBits =
-    engine === 'dsh'
-      ? {
-          // 引擎真实版本（保留 `-rc.N` 预发布标签；顶层 opencodeVersion 不含它）
-          engineVersion,
-          selfUpdate,
-          perMessageModelSwitch: false,
-          todos: false,
-          externalAgents: false,
-          integrations: false,
-          omoConfig: false,
-          planFiles: false,
-          steer: false,
-          mcpStatusProbe: false,
-        }
-      : {
-          engineVersion,
-          selfUpdate,
-          perMessageModelSwitch: true,
-          todos: true,
-          externalAgents: true,
-          integrations: true,
-          omoConfig: true,
-          planFiles: true,
-          steer: true,
-          mcpStatusProbe: true,
-        };
+  // 能力位**只有引擎实现知道**（见 engine/{opencode/capabilities,dsh/runtime}）；
+  // 这里只负责补上控制面侧字段（selfUpdate），不复制能力矩阵——
+  // 之前 index.ts 内联了一份逐位相等的副本，两个来源一旦漂移就会出现
+  // 「上报说支持、引擎其实不支持」的静默故障。
+  const engineBits = {
+    ...(await resolveEngineCapabilities(engine, engineVersion)),
+    selfUpdate,
+  };
 
   return {
     maxInstances,
@@ -1889,7 +1892,6 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // OmO 开关：⚠️ v2 已无 --pure flag → 该开关不再影响启动参数，仅用于告警
     // （插件抑制由 T16b 的隔离配置域承接）。每次 spawn 时读取，
     // 故开关变更后只要重启 serve 即生效（配置页保存时会触发重启）。
-    omoEnabled: () => readOmoEnabled(config.workDir),
   });
 
   // T8：驱动经工厂构造（业务层只依赖 OpenCodeDriver 接缝；T18 起只有 v2 实现）。
@@ -2665,7 +2667,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // T4b：启动链——先注入平台资源（serve 启动前落盘，opencode 启动时才能扫描到），
   // 再拉起 serve；注入失败不阻断启动（后续心跳 reload-config 命令可重拉修复）。
   // 独立模式（WORKER_STANDALONE=true）：跳过控制面资源注入（无 server 可达），
-  // 本地工具注入（git/browser，上方已执行）与 omo 种子保留；随后跳过注册/心跳。
+  // 本地工具注入（git/browser，上方已执行）保留；随后跳过注册/心跳。
   void (async () => {
     // P5 修正：dsh 引擎**也要**执行资源注入（此前整块跳过，导致 skills/技能完全不下发）。
     //
@@ -2674,7 +2676,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // ".agents/skills" / ".dsh/skills" / "skills"）。injector 已改为**双写**
     // （`.opencode/skills` + `.dsh/skills`），故两引擎共用同一条注入链路。
     //
-    // 仍留给 opencode 的部分：openocde.json 的 mcp/agents 节、omo 种子——这些 dsh 不读，
+    // 仍留给 opencode 的部分：openocde.json 的 mcp/agents 节——这些 dsh 不读，
     // 但**写入无害**（只是多几个小文件）；换来的是"一份注入代码服务两引擎"，
     // 避免像现在这样双路径维护（本次 skills 漏下发就是跳过注入导致的）。
     if (config.standalone) {
@@ -2682,16 +2684,6 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // T18：注入被跳过 ⇒ `plugins` 段没人写 ⇒ v2 内置 `opencode.browser` 会静默遮蔽
       // 平台自己的 browser 工具 ⇒ 此处补写（详见 ensureStandaloneProjectConfig）。
       ensureStandaloneProjectConfig(injector);
-      try {
-        const seeded = seedOmoAgentModels(config.workDir);
-        if (seeded) {
-          console.log(
-            `[worker] omo 模型种子已写入: ${Object.entries(seeded).map(([k, v]) => `${k}=${v}`).join(', ')}`,
-          );
-        }
-      } catch (err) {
-        console.warn(`[worker] omo 模型种子写入失败（不阻断启动）: ${(err as Error).message}`);
-      }
     } else {
     try {
       const report = await injector.injectAll();
@@ -2701,20 +2693,6 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         `[worker] 平台资源注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers` +
           (config.engine === 'dsh' ? '（dsh：skills 双写 .dsh/skills）' : ''),
       );
-      // omo 子代理模型种子：新数据卷无配置文件时写入内置默认（已有则跳过，用户页面/API 修改优先）
-      // dsh 模式跳过：OmO 是 opencode 生态插件，dsh 不读该配置（写了只是垃圾文件）
-      if (config.engine !== 'dsh') {
-        try {
-          const seeded = seedOmoAgentModels(config.workDir);
-          if (seeded) {
-            console.log(
-              `[worker] omo 模型种子已写入: ${Object.entries(seeded).map(([k, v]) => `${k}=${v}`).join(', ')}`,
-            );
-          }
-        } catch (err) {
-          console.warn(`[worker] omo 模型种子写入失败（不阻断启动）: ${(err as Error).message}`);
-        }
-      }
     } catch (err) {
       console.warn(
         `[worker] 平台资源注入失败（继续启动 serve，心跳命令可重拉）: ${(err as Error).message}`,

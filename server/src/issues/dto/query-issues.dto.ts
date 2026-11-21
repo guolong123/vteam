@@ -1,7 +1,7 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import { ISSUE_STATUS } from '../issues.constants';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /**
  * GET /issues 查询参数（remove-project-dimension todo 4）。
@@ -10,7 +10,7 @@ import { ISSUE_STATUS } from '../issues.constants';
  * - teamId：按团队过滤（issue.task.teamId 命中该团队的全部任务 issue，团队成员校验）。
  * status/assigneeAgentId 可选过滤；分页对齐 tasks 看板（page 默认 1、pageSize 默认 20）。
  */
-export class QueryIssuesDto {
+export class QueryIssuesDto extends PaginatedQueryDto {
   @ApiPropertyOptional({
     description: '任务 id（按任务过滤，与 teamId 二选一）',
   })
@@ -37,26 +37,4 @@ export class QueryIssuesDto {
   @IsOptional()
   @IsString()
   assigneeAgentId?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({
-    description: '每页条数（上限 100）',
-    default: 20,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  pageSize?: number;
 }

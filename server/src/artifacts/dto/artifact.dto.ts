@@ -9,6 +9,7 @@ import {
   Min,
 } from 'class-validator';
 import { ARTIFACT_CATEGORIES, ARTIFACT_TYPES } from '../artifacts.constants';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /**
  * POST /tasks/:id/artifacts 旁路提交 body（09 篇 §3.6，P1 辅助入口）。
@@ -50,7 +51,7 @@ export class CreateArtifactDto {
 }
 
 /** GET /tasks/:id/artifacts 查询参数（type/accepted 筛选 + 分页，对齐 QueryTasksDto 模式）。 */
-export class QueryArtifactsDto {
+export class QueryArtifactsDto extends PaginatedQueryDto {
   @ApiPropertyOptional({
     description: '产出物类型筛选（text/doc/file/plan），缺省返回全部',
     enum: ARTIFACT_TYPES,
@@ -74,24 +75,6 @@ export class QueryArtifactsDto {
   @IsOptional()
   @IsIn(ARTIFACT_CATEGORIES)
   category?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({ description: '每页条数', default: 20, minimum: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  pageSize?: number;
 }
 
 /**

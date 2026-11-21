@@ -52,6 +52,7 @@ import type {
 } from "@/src/components/tasks/task-detail-types";
 import { docIdFor } from "@/src/components/tasks/task-detail-types";
 import { type RoleKey, ROLE_KEYS, neutral, space, radius, fontSize, fontFamily, messageFontSize, shadow } from "@/src/theme/tokens";
+import { formatClockTime } from "@/lib/datetime-format";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -67,7 +68,6 @@ type SessionAgent = {
   preferredWorkerId: string | null;
   /** 会话当前实际绑定的 worker 节点（null = 尚无会话 / 未绑定）。 */
   currentWorkerId: string | null;
-  opencodeAgentName: string | null;
 };
 
 function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[] {
@@ -75,10 +75,6 @@ function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[]
     const role = instance.role && (ROLE_KEYS as readonly string[]).includes(instance.role)
       ? (instance.role as RoleKey)
       : toRole(instance.agentId) ?? "developer";
-    const opencodeAgentName =
-      "opencodeAgentName" in instance && typeof instance.opencodeAgentName === "string"
-        ? instance.opencodeAgentName
-        : null;
     // 任务实例 DTO 的成员级首选 worker（服务端 tasks.service 投影与团队 DTO 同值返回）；
     // TaskInstance 类型未声明该字段（成员展示形状 MemberView 才有），照抄上一行 in 收窄读法，缺一层即回显丢失。
     const preferredWorkerId =
@@ -103,7 +99,6 @@ function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[]
       overrideModelId: instance.overrideModelId ?? null,
       preferredWorkerId,
       currentWorkerId,
-      opencodeAgentName,
     };
   });
 }
@@ -117,14 +112,6 @@ function toRole(agentId: string): RoleKey | null {
   if ((ROLE_KEYS as readonly string[]).includes(rest)) return rest as RoleKey;
   return null;
 }
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
 /** 消息 DTO attachments 数组元素的宽松读取形状（服务端已校验，前端仍防御脏数据/历史广播）。 */
 type RawMessageAttachment = {
   url: string;
@@ -706,7 +693,6 @@ export function TeamSessionView({
         overrideModelId: m.overrideModelId ?? null,
         preferredWorkerId: m.preferredWorkerId ?? null,
         currentWorkerId: m.currentWorkerId ?? null,
-        opencodeAgentName: (m as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
       };
     });
   }, [panelTask, team]);
@@ -2201,7 +2187,7 @@ export function TeamSessionView({
                         whiteSpace: "nowrap",
                       }}
                     >
-                      新一轮 · {formatTime(msg.createdAt)}
+                      新一轮 · {formatClockTime(msg.createdAt)}
                     </span>
                     <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
                   </div>
@@ -2253,7 +2239,7 @@ export function TeamSessionView({
                     type="agent"
                     author={author}
                     role={undefined}
-                    time={formatTime(msg.createdAt)}
+                    time={formatClockTime(msg.createdAt)}
                     senderType="external"
                     attachments={attachments}
                     resolveArtifactDoc={resolveArtifactDoc}
@@ -2288,7 +2274,7 @@ export function TeamSessionView({
                     return withSeparator(
                       <React.Fragment key={msg.id}>
                         {flushProc(msg.id)}
-                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
+                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatClockTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
                       </React.Fragment>,
                     );
                   }
@@ -2296,7 +2282,7 @@ export function TeamSessionView({
                   return withSeparator(
                     <React.Fragment key={msg.id}>
                       {flushProc(`tail-${msg.id}`)}
-                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
+                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatClockTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
                     </React.Fragment>,
                   );
                 }
@@ -2312,7 +2298,7 @@ export function TeamSessionView({
                     bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)}
                     author={author}
                     role={role}
-                    time={formatTime(msg.createdAt)}
+                    time={formatClockTime(msg.createdAt)}
                     streaming={msg.status === "processing"}
                     isMentionMe={isMentionMe}
                     attachments={attachments}
@@ -2328,9 +2314,9 @@ export function TeamSessionView({
                 const systemText = ((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string;
                 return withSeparator(
                   systemText.length > SYSTEM_MARKER_COLLAPSE_THRESHOLD ? (
-                    <SystemMarker key={msg.id} text={systemText} time={formatTime(msg.createdAt)} />
+                    <SystemMarker key={msg.id} text={systemText} time={formatClockTime(msg.createdAt)} />
                   ) : (
-                    <ChatBubble key={msg.id} text={systemText} type="system" time={formatTime(msg.createdAt)} />
+                    <ChatBubble key={msg.id} text={systemText} type="system" time={formatClockTime(msg.createdAt)} />
                   ),
                 );
               }
@@ -2347,7 +2333,7 @@ export function TeamSessionView({
                  */
                 if (!cleaned && rawText) return null;
                 return withSeparator(
-                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} initials={initials} status={msg.status} />,
+                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatClockTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} initials={initials} status={msg.status} />,
                 );
               }
               });
@@ -2378,7 +2364,7 @@ export function TeamSessionView({
                 </button>
               </div>
             )}
-            {errorLabel && <MsgError kind={errorLabel.kind} detail={errorLabel.detail} time={formatTime(new Date().toISOString())} />}
+            {errorLabel && <MsgError kind={errorLabel.kind} detail={errorLabel.detail} time={formatClockTime(new Date().toISOString())} />}
             {/* B12：瞬态 session 状态行复用 LoadingIndicator 的容器（testid=session-status，指示点 testid=session-status-dots）；仍在 messages.map 之外追加，不进消息数组。 */}
             {!hideInlineStatus && sessionLabel && <LoadingIndicator label={sessionLabel} testid="session-status" dotsTestId="session-status-dots" />}
           </div>

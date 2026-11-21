@@ -9,6 +9,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { MCP_SERVER_ERRORS } from '../common/constants/mcp-server.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -169,8 +170,8 @@ export class McpServersService implements OnModuleInit {
    * 返回列表中对内置 vteam 条目覆盖 url；未上报/用户侧访问不覆盖。
    */
   async findAll(query: QueryMcpServersDto = {}, workerId?: string) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const where: Prisma.McpServerWhereInput = {
       type: query.type ? { equals: query.type } : undefined,
       enabled: query.enabled === undefined ? undefined : query.enabled,
@@ -549,14 +550,7 @@ export class McpServersService implements OnModuleInit {
     });
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

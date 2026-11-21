@@ -43,7 +43,6 @@ import {
 } from "../shared";
 import { hasPermission } from "@/lib/permissions";
 import { ConfirmDialog, UpgradeCommandDialog } from "@/src/components/ui";
-import { OmoPanel, OpencodeAgentsPanel } from "./omo-panel";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -1001,14 +1000,6 @@ export default function WorkerDetailPage() {
             )}
           </section>
 
-          {/* OmO 编排插件卡：开关 + agent 模型配置。
-              放在这里而不是全局页面，因为 OmO 是**与 worker 绑定**的能力：
-              插件装在镜像里、配置写在 worker workDir、开关只影响该 worker 的 serve 启动。
-              镜像未内置 OmO 时该组件自身返回 null（不渲染空卡）。 */}
-          <OmoPanel workerId={workerId} enabled={worker.status !== "offline"} />
-
-          {/* opencode Agents 只读卡：与 OmO 面板平级，不受 OmO 开关影响 */}
-          <OpencodeAgentsPanel workerId={workerId} />
         </div>
       )}
 

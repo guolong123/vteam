@@ -279,7 +279,7 @@ export default function StatsDashboardPage() {
                 value={fmtInt(totals.tasksCreated)}
                 unit="个"
                 icon="☰"
-                onClick={() => router.push(activeTeamIds.length === 1 ? `/board?teamId=${activeTeamIds[0]}` : "/board")}
+                onClick={() => router.push(activeTeamIds.length === 1 ? `/teams/${activeTeamIds[0]}` : "/teams")}
                 delta={computeDelta(totals.tasksCreated, prevTotals?.tasksCreated)}
                 deltaTone="up-good"
                 deltaHint={prevTotals ? `对比上一个 ${days} 天（${fmtInt(prevTotals.tasksCreated)}）` : "无可比区间"}
@@ -291,7 +291,7 @@ export default function StatsDashboardPage() {
                 value={fmtInt(totals.tasksCompleted)}
                 unit="个"
                 icon="✓"
-                onClick={() => router.push(activeTeamIds.length === 1 ? `/board?teamId=${activeTeamIds[0]}` : "/board")}
+                onClick={() => router.push(activeTeamIds.length === 1 ? `/teams/${activeTeamIds[0]}` : "/teams")}
                 delta={computeDelta(totals.tasksCompleted, prevTotals?.tasksCompleted)}
                 deltaTone="up-good"
                 deltaHint={

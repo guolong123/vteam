@@ -34,9 +34,6 @@ export const EXTERNAL_USER_EDITABLE_FIELDS = [
   'contact',
 ] as const;
 
-export type ExternalUserEditableField =
-  (typeof EXTERNAL_USER_EDITABLE_FIELDS)[number];
-
 export const EXTERNAL_USERS_ERRORS = {
   EXTERNAL_USER_NOT_FOUND: 'EXTERNAL_USER_NOT_FOUND',
 } as const;

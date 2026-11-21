@@ -14,6 +14,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { MEMORY_LEVELS } from '../memory.constants';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /**
  * GET /memories 查询参数（level/teamId/autoInject/archived 过滤 + keyword 内容搜索 + 分页，
@@ -24,7 +25,7 @@ import { MEMORY_LEVELS } from '../memory.constants';
  * global ∪ 自己团队收窄，非 admin 不加 archived 跨团队行）；新增 archived 三态过滤
  * （归档复用 deletedAt 软删列，不引入 enabled/category 新状态列）。
  */
-export class QueryMemoriesDto {
+export class QueryMemoriesDto extends PaginatedQueryDto {
   @ApiPropertyOptional({
     description: '记忆等级过滤（team/role/global），缺省返回全部',
     enum: Object.values(MEMORY_LEVELS),
@@ -75,30 +76,6 @@ export class QueryMemoriesDto {
   @IsOptional()
   @IsString()
   keyword?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({
-    description: '每页条数（默认 20，上限 100）',
-    default: 20,
-    minimum: 1,
-    maximum: 100,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  pageSize?: number;
 }
 
 /**

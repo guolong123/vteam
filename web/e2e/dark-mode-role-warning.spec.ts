@@ -1,19 +1,19 @@
 import { mkdirSync } from "node:fs";
 import { LANDING_ADMIN } from "@/lib/landing";
 import { dirname } from "node:path";
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 /**
  * opencode-native-permissions-and-fixes todo 8 · dark-mode role selection + warnings
  * =================================================================================
- * 角色选中态 (`role-item`) 与外部-agent 警示块原来是硬编码浅色 hex，
- * 深色下整块发白。现改为 globals.css 的 `:root`/`.dark` 变量对
- * (`--color-role-*-{color,bg,border}`、`--color-warning-{text,bg,border}`)，
+ * 角色选中态 (`role-item`) 原来是硬编码浅色 hex，深色下整块发白。
+ * 现改为 globals.css 的 `:root`/`.dark` 变量对（`--color-role-*-{color,bg,border}`），
  * 浅色值逐字节等于原 hex（无浅色回归），深色为半透明 tint。
  *
- * 1. dark：选中 role-item 的计算背景是深色变量（非 #EFF6FF、非 #ffffff）；
- *    警示块文字/背景/边框用深色变量。
+ * 1. dark：选中 role-item 的计算背景是深色变量（非 #EFF6FF、非 #ffffff）。
  * 2. light：同一断言等于浅色变量（= 原 hex，无回归）。
+ *
+ * 注：原本还覆盖「外部 Agent 警示块」的配色，该面板已随外部 agent 功能下线移除。
  *
  * 主题走应用自己的 `theme-toggle`（theme-store → html.dark），与真实用户一致。
  * 截图用 viewport + scrollIntoViewIfNeeded（fullPage 在本应用不可靠：主区域是内部滚动容器）。
@@ -24,7 +24,6 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
  */
 
 // 浅色变量 = 原硬编码 hex（逐字节相等，无回归的证明锚点）。
-const SERVER_URL = "http://localhost:13000";
 const LIGHT = {
   roleProductBg: "rgb(239, 246, 255)", // #EFF6FF
   warningText: "rgb(180, 83, 9)", // #B45309
@@ -58,95 +57,9 @@ async function openRolesTab(page: Page) {
   await expect(page.getByTestId("role-item").first()).toBeVisible({ timeout: 15_000 });
 }
 
-async function openExternalTab(page: Page) {
-  await page.goto("/agents");
-  await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
-  await page.getByTestId("manage-tab").filter({ hasText: "外部 Agent" }).click();
-  await expect(page.getByTestId("external-agents-root")).toBeVisible({ timeout: 15_000 });
-}
-
-async function waitForStableWorkerCatalog(request: APIRequestContext): Promise<void> {
-  const login = await request.post(`${SERVER_URL}/api/v1/auth/login`, {
-    data: { username: "admin", password: "admin123" },
-  });
-  expect(login.ok()).toBeTruthy();
-  const { accessToken } = (await login.json()) as { accessToken: string };
-  let consecutive = 0;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    try {
-      const response = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        timeout: 5_000,
-      });
-      if (response.ok()) {
-        const body = (await response.json()) as {
-          agents?: unknown[];
-          degraded?: boolean;
-        };
-        consecutive =
-          body.degraded !== true && (body.agents?.length ?? 0) > 0
-            ? consecutive + 1
-            : 0;
-        if (consecutive >= 10) return;
-      } else {
-        consecutive = 0;
-      }
-    } catch (error) {
-      if (!(error instanceof Error)) throw error;
-      consecutive = 0;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-  }
-  throw new Error("worker catalog 未在 240 秒稳定窗口内就绪");
-}
-
-async function waitForExternalPanel(page: Page): Promise<boolean> {
-  let ready = false;
-  try {
-    await expect
-      .poll(
-        async () => {
-          ready =
-            (await page.getByTestId("external-agent-item").count()) > 0 &&
-            (await page.getByTestId("external-agents-unavailable").count()) === 0 &&
-            (await page.getByTestId("external-agents-empty").count()) === 0;
-          return ready;
-        },
-        { timeout: 90_000 },
-      )
-      .toBe(true);
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    return false;
-  }
-  return ready;
-}
-
-async function expectExternalPanelReady(page: Page): Promise<void> {
-  expect(
-    await waitForExternalPanel(page),
-    "外部 Agent 面板在 readiness 窗口内应可用",
-  ).toBe(true);
-}
-
-async function computed(page: Page, selector: string, props: string[]) {
-  return page.evaluate(
-    (arg: { sel: string; ps: string[] }) => {
-      const el = document.querySelector(arg.sel);
-      if (!el) return null;
-      const cs = getComputedStyle(el);
-      const out: Record<string, string> = {};
-      for (const p of arg.ps) out[p] = cs.getPropertyValue(p);
-      return out;
-    },
-    { sel: selector, ps: props },
-  ) as Promise<Record<string, string> | null>;
-}
-
 test.describe("Todo 8 · dark-mode role selection + warnings", () => {
-  test("dark 主题：选中 role-item 与警示块无浅色硬编码", async ({ page, request }) => {
+  test("dark 主题：选中 role-item 无浅色硬编码", async ({ page }) => {
     test.setTimeout(300_000);
-    await waitForStableWorkerCatalog(request);
     await loginAsAdmin(page);
     await setTheme(page, "dark");
     await openRolesTab(page);
@@ -161,27 +74,7 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
     // 半透明 tint：alpha 通道存在（rgba），区别于原不透明浅色
     expect(roleBg).toMatch(/^rgba\(/);
 
-    await openExternalTab(page);
-    await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, {
-      timeout: 20_000,
-    });
-    await expectExternalPanelReady(page);
-    const warning = page.getByTestId("external-agent-item-warning").first();
-    await expect(warning).toBeVisible({ timeout: 15_000 });
-    const w = await warning.evaluate((el) => {
-      const cs = getComputedStyle(el);
-      return {
-        color: cs.color,
-        backgroundColor: cs.backgroundColor,
-        borderColor: cs.borderTopColor,
-      };
-    });
-    expect(w.color).not.toBe(LIGHT.warningText);
-    expect(w.backgroundColor).not.toBe(LIGHT.warningBg);
-    expect(w.borderColor).not.toBe(LIGHT.warningBorder);
-    expect(w.backgroundColor).toMatch(/^rgba\(/);
-
-    await warning.scrollIntoViewIfNeeded();
+    // 证据截图：角色选中态（外部 Agent 面板已随该功能下线移除）
     const shot = process.env.T8_SCREENSHOT;
     if (shot) {
       mkdirSync(dirname(shot), { recursive: true });
@@ -189,9 +82,8 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
     }
   });
 
-  test("light 主题：同一位置等于原浅色 hex（无回归）", async ({ page, request }) => {
+  test("light 主题：同一位置等于原浅色 hex（无回归）", async ({ page }) => {
     test.setTimeout(300_000);
-    await waitForStableWorkerCatalog(request);
     await loginAsAdmin(page);
     await setTheme(page, "light");
     await openRolesTab(page);
@@ -205,28 +97,5 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
       (el) => getComputedStyle(el).backgroundColor,
     );
     expect(roleBg).toBe(LIGHT.roleProductBg);
-
-    await openExternalTab(page);
-    await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, {
-      timeout: 20_000,
-    });
-    await expectExternalPanelReady(page);
-    const warning = page.getByTestId("external-agent-item-warning").first();
-    await expect(warning).toBeVisible({ timeout: 15_000 });
-    const w = await warning.evaluate((el) => {
-      const cs = getComputedStyle(el);
-      return {
-        color: cs.color,
-        backgroundColor: cs.backgroundColor,
-        borderColor: cs.borderTopColor,
-      };
-    });
-    expect(w.color).toBe(LIGHT.warningText);
-    expect(w.backgroundColor).toBe(LIGHT.warningBg);
-    expect(w.borderColor).toBe(LIGHT.warningBorder);
-
-    // 无用变量守卫：computed() helper 保持被引用（供后续扩展）。
-    const probe = await computed(page, '[data-testid="external-agents-root"]', ["display"]);
-    expect(probe?.display).toBeTruthy();
   });
 });

@@ -44,9 +44,7 @@ export interface DshRuntimeOptions extends DshDriverOptions {
  *
  * **全部为 false 的项都是"DSH 确实没有"**，不是"尚未实现"：
  * - `todos`: SDK 协议不暴露计划步骤（P0 报告）
- * - `externalAgents`: 无 agent 目录概念（角色由提示词承载）
  * - `integrations`: 无集成注册表
- * - `omoConfig`: OmO 是 opencode 生态插件
  * - `planFiles`: DSH 不读 `.opencode/plans`（vteam 改用 `.vteam/plans`，见 WorkspaceLayout）
  * - `mcpStatusProbe`: SDK 协议无 MCP 状态查询
  * - `steer`: 需 vendored 插件（P5），P2 阶段按 queue 降级
@@ -57,9 +55,7 @@ export function dshCapabilities(engineVersion: string): EngineCapabilities {
     engineVersion,
     perMessageModelSwitch: false,
     todos: false,
-    externalAgents: false,
     integrations: false,
-    omoConfig: false,
     planFiles: false,
     steer: false,
     mcpStatusProbe: false,

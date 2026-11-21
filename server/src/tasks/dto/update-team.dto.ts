@@ -30,15 +30,6 @@ export class TeamInstanceInput {
   @IsString()
   alias?: string;
 
-  @ApiPropertyOptional({
-    description:
-      'opencode 原生 agent 选择（显式值恒胜出；未给时用角色默认外部名预填，规则见 teams.service resolveMemberBinding 规则 5）',
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(64)
-  opencodeAgentName?: string;
-
   @ApiPropertyOptional({ description: '实例工作目录' })
   @IsOptional()
   @IsString()

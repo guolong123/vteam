@@ -54,6 +54,7 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
+import { formatClockTime } from "@/lib/datetime-format";
 
 interface ChatMessage {
   id: string;
@@ -83,12 +84,6 @@ function headerPresenceRank(seat: {
   if (!status) return 2;
   if (status.busyState === "running") return 0;
   return status.lastTurnOutcome ? 1 : 2;
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
 function ChatPageContent() {
@@ -1019,7 +1014,7 @@ function ChatPageContent() {
                     bodyText={text}
                     author={sender?.name ?? (isGroup ? "Agent" : title)}
                     role={role}
-                    time={formatTime(msg.createdAt)}
+                    time={formatClockTime(msg.createdAt)}
                     messageStatus={msg.status}
                   />
                 );
@@ -1029,7 +1024,7 @@ function ChatPageContent() {
                   key={msg.id}
                   text={text}
                   type="user"
-                  time={formatTime(msg.createdAt)}
+                  time={formatClockTime(msg.createdAt)}
                   status={msg.status}
                 />
               );
@@ -1335,7 +1330,7 @@ function ConversationRow({
             {item.badge}
           </span>
           {item.pinned && <span style={{ fontSize: 10, color: "#B45309" }}>置顶</span>}
-          <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400] }}>{item.lastMessage ? formatTime(item.lastMessage.createdAt) : ""}</span>
+          <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400] }}>{item.lastMessage ? formatClockTime(item.lastMessage.createdAt) : ""}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.xs, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1439,16 +1434,15 @@ function GroupContextPanel({
               <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无任务</span>
             ) : (
               tasks.slice(0, 6).map((task) => (
-                <a key={task.id} href={`/teams/${team?.id ?? ""}/tasks`} style={{ textDecoration: "none", display: "flex", flexDirection: "column", gap: 4, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>
+                <div key={task.id} style={{ display: "flex", flexDirection: "column", gap: 4, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>
                   <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.title}</span>
                   <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: statusColor(task.status) }}>
                     <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: statusColor(task.status) }} />
                     {statusLabel(task.status)}
                   </span>
-                </a>
+                </div>
               ))
             )}
-            <a href={`/teams/${team?.id ?? ""}/tasks`} style={{ textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>查看全部任务 →</a>
           </>
         )}
 
@@ -1651,7 +1645,7 @@ function GroupMemberContextPanel({
         <span style={{ fontSize: fontSize.xs, color: neutral[700] }}>{presence.label}</span>
         {lastActive && (
           <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400], flexShrink: 0 }}>
-            {formatTime(lastActive)}
+            {formatClockTime(lastActive)}
           </span>
         )}
       </div>

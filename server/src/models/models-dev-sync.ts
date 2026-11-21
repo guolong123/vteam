@@ -45,13 +45,6 @@ export interface SyncedModelCapabilities {
   limit?: { context?: number; output?: number };
 }
 
-/** 单个模型的能力同步结果。 */
-export interface SyncedModelCapability {
-  providerID: string;
-  modelID: string;
-  capabilities: SyncedModelCapabilities;
-}
-
 /** models.dev 原始模型条目（只声明我们读的字段，其余忽略）。 */
 interface ModelsDevModel {
   id?: unknown;

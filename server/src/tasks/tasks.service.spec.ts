@@ -1159,8 +1159,6 @@ describe('TasksService', () => {
           main: false,
           enabled: true,
           overrideModelId: null,
-          // opencode 原生 agent 选择随 instances 下发（会话页成员面板优先读该来源）
-          opencodeAgentName: null,
           // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
           preferredWorkerId: null,
           // 成员会话当前实际绑定的 worker（运行节点）：必须与团队 DTO 同步，缺一侧会被 null 覆盖
@@ -1179,8 +1177,6 @@ describe('TasksService', () => {
           main: false,
           enabled: true,
           overrideModelId: null,
-          // opencode 原生 agent 选择随 instances 下发（会话页成员面板优先读该来源）
-          opencodeAgentName: null,
           // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
           preferredWorkerId: null,
           // 成员会话当前实际绑定的 worker（运行节点）：必须与团队 DTO 同步，缺一侧会被 null 覆盖
@@ -1329,14 +1325,14 @@ describe('TasksService', () => {
         mainAgentMemberId: 'tmm_0000000001',
       });
       prisma.teamMember.findMany.mockResolvedValue([
-        tmmRow('tmm_0000000001', 'a_product', { opencodeAgentName: 'plan' }),
+        tmmRow('tmm_0000000001', 'a_product'),
         tmmRow('tmm_0000000002', 'a_developer'),
       ]);
       (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
 
       const result = await service.findOne('t_0000000001');
 
-      // 主成员绑定 plan agent 也不再产出任何计划开关字段（职责约定通道已随开关一并下线）。
+      // 计划开关字段已随开关一并下线（与成员绑定哪个 agent 无关）。
       expect(Object.keys(result).filter((k) => /plan.?mode/i.test(k))).toEqual(
         [],
       );
@@ -3838,7 +3834,6 @@ describe('TasksService', () => {
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
           roleId: 'r_developer',
-          opencodeAgentName: null,
           alias: '开发者-1',
           seq: 1,
           workDir: '/data/vteam-worker/开发者',
@@ -3919,7 +3914,6 @@ describe('TasksService', () => {
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
           roleId: 'r_developer',
-          opencodeAgentName: null,
           alias: '开发者-2',
           seq: 2,
           workDir: '/data/vteam-worker/开发者-2',
@@ -4151,7 +4145,7 @@ describe('TasksService', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
-    it('roleId-only：从角色默认 Agent/外部名预填 agentId + opencodeAgentName（规则 2+5）', async () => {
+    it('roleId-only：从角色默认 Agent 预填 agentId（规则 2）', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
@@ -4159,7 +4153,6 @@ describe('TasksService', () => {
         key: 'developer',
         name: '开发者',
         defaultAgentId: 'a_developer',
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
       });
       idGen.nextId
         .mockResolvedValueOnce('tmm_0000000003')
@@ -4177,76 +4170,7 @@ describe('TasksService', () => {
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
           roleId: 'r_developer',
-          opencodeAgentName: 'Prometheus - Plan Builder',
           alias: '开发者-1',
-        }),
-      });
-    });
-
-    it('显式 agentId 恒胜出：不被角色默认 Agent 覆盖，但外部槽位仍预填（规则 1+5）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
-      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
-        id: 'r_developer',
-        key: 'developer',
-        name: '开发者',
-        defaultAgentId: 'a_product',
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-      idGen.nextId
-        .mockResolvedValueOnce('tmm_0000000003')
-        .mockResolvedValueOnce('m_0000000001');
-      const txModels = mockTeamTx();
-
-      await service.updateTeam(
-        't_0000000001',
-        {
-          addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }],
-        },
-        userId,
-      );
-
-      expect(txModels.teamMember.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          agentId: 'a_developer',
-          roleId: 'r_developer',
-          opencodeAgentName: 'Prometheus - Plan Builder',
-        }),
-      });
-    });
-
-    it('显式 opencodeAgentName 恒胜出：覆盖角色默认外部名（规则 5）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
-      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
-        id: 'r_developer',
-        key: 'developer',
-        name: '开发者',
-        defaultAgentId: 'a_developer',
-        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
-      });
-      idGen.nextId
-        .mockResolvedValueOnce('tmm_0000000003')
-        .mockResolvedValueOnce('m_0000000001');
-      const txModels = mockTeamTx();
-
-      await service.updateTeam(
-        't_0000000001',
-        {
-          addInstances: [
-            {
-              roleId: 'r_developer',
-              opencodeAgentName: 'My Custom Agent',
-            },
-          ],
-        },
-        userId,
-      );
-
-      expect(txModels.teamMember.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          agentId: 'a_developer',
-          opencodeAgentName: 'My Custom Agent',
         }),
       });
     });
@@ -4300,66 +4224,6 @@ describe('TasksService', () => {
         expect(e).toBeInstanceOf(NotFoundException);
         expect((e as NotFoundException).getResponse()).toMatchObject({
           code: 'ROLE_NOT_FOUND',
-        });
-      }
-      expect(txModels.teamMember.create).not.toHaveBeenCalled();
-      expect(realtime.broadcast).not.toHaveBeenCalled();
-    });
-
-    it('roleId-only 外部绑定角色 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
-      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
-        id: 'r_external',
-        key: 'external',
-        name: '外部角色',
-        defaultAgentId: null,
-        defaultOpencodeAgentName: 'Some External',
-      });
-      idGen.nextId
-        .mockResolvedValueOnce('tmm_0000000003')
-        .mockResolvedValueOnce('m_0000000001');
-      const txModels = mockTeamTx();
-
-      await service.updateTeam(
-        't_0000000001',
-        { addInstances: [{ roleId: 'r_external' }] },
-        userId,
-      );
-
-      expect(txModels.teamMember.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          agentId: 'a_external',
-          roleId: 'r_external',
-          opencodeAgentName: 'Some External',
-        }),
-      });
-    });
-
-    it('roleId-only 但角色两槽位皆空 → 400 ROLE_DEFAULT_AGENT_MISSING（规则 3）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
-      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
-        id: 'r_general',
-        key: 'general',
-        name: '通用',
-        defaultAgentId: null,
-        defaultOpencodeAgentName: null,
-      });
-      idGen.nextId.mockResolvedValueOnce('tmm_0000000003');
-      const txModels = mockTeamTx();
-
-      try {
-        await service.updateTeam(
-          't_0000000001',
-          { addInstances: [{ roleId: 'r_general' }] },
-          userId,
-        );
-        fail('应抛出 BadRequestException');
-      } catch (e) {
-        expect(e).toBeInstanceOf(BadRequestException);
-        expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: 'ROLE_DEFAULT_AGENT_MISSING',
         });
       }
       expect(txModels.teamMember.create).not.toHaveBeenCalled();
@@ -5253,7 +5117,6 @@ describe('TasksService', () => {
       seq: 1,
       workDir: '/data/vteam-worker/产品经理',
       overrideModelId: null,
-      opencodeAgentName: null,
       preferredWorkerId: 'w_0000000001',
       agent: { id: 'a_product', name: '产品经理' },
       role: { id: 'r_product', key: 'product', name: '产品经理' },
@@ -5309,7 +5172,6 @@ describe('TasksService', () => {
       seq: 1,
       workDir: '/data/vteam-worker/产品经理',
       overrideModelId: null,
-      opencodeAgentName: null,
       preferredWorkerId: 'w_0000000009',
       agent: { id: 'a_product', name: '产品经理' },
       role: { id: 'r_product', key: 'product', name: '产品经理' },

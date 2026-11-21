@@ -16,6 +16,7 @@ import {
 } from '../common/decorators/current-user.decorator';
 import { DOCS_SITE_ERRORS } from './docs-site.constants';
 import { PrototypesService, TeamPrototypeListItem } from './prototypes.service';
+import { assertTeamAccess } from '../common/team-access';
 
 /**
  * 文档站数据端点（docs-artifacts-merge T11：磁盘镜像层已退役，DB-only）。
@@ -141,25 +142,6 @@ export class TeamPrototypesController {
     teamId: string,
     userId: string,
   ): Promise<void> {
-    const team = await (this.prisma as any).team.findUnique({
-      where: { id: teamId },
-      select: { id: true },
-    });
-    if (!team) {
-      throw new NotFoundException({
-        code: 'TEAM_NOT_FOUND',
-        message: `团队 ${teamId} 不存在`,
-      });
-    }
-    const member = await (this.prisma as any).teamUserMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
-      select: { id: true },
-    });
-    if (!member) {
-      throw new ForbiddenException({
-        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该团队成员',
-      });
-    }
+    return assertTeamAccess(this.prisma, teamId, { userId });
   }
 }

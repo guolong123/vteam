@@ -269,6 +269,6 @@ describeReal('注入的 opencode.json 被真 opencode v2 加载（T15 硬闸门�
     expect(info.plugin).toBeUndefined();
     expect(info.agents).toBeDefined();
     expect(info.mcp.servers).toBeDefined();
-    expect(info.plugins).toEqual(['oh-my-openagent@latest', '-opencode.browser']);
+    expect(info.plugins).toEqual(['-opencode.browser']);
   });
 });

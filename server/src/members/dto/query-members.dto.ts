@@ -1,10 +1,10 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import { MEMBER_STATUS } from '../members.constants';
+import { PaginatedQueryDto } from '../../common/dto/paginated-query.dto';
 
 /** GET /members 查询参数（keyword/roleId/status + 分页）。 */
-export class QueryMembersDto {
+export class QueryMembersDto extends PaginatedQueryDto {
   @ApiPropertyOptional({ description: '关键字：成员名 / Agent 名模糊匹配' })
   @IsOptional()
   @IsString()
@@ -22,27 +22,4 @@ export class QueryMembersDto {
   @IsOptional()
   @IsIn([MEMBER_STATUS.active, MEMBER_STATUS.disabled])
   status?: string;
-
-  @ApiPropertyOptional({
-    description: '页码（从 1 起）',
-    default: 1,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @ApiPropertyOptional({
-    description: '每页条数（1-100）',
-    default: 20,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  pageSize?: number;
 }

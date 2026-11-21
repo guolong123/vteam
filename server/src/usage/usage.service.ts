@@ -1,7 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPlatformAdminByUserId } from '../users/admin-permission';
+import { assertTeamAccess } from '../common/team-access';
 
 /**
  * 调用方上下文（全局 JwtAuthGuard 填充的 request.user 之 userId）。
@@ -215,21 +216,10 @@ export class UsageService {
     teamId: string,
     viewer?: UsageViewer,
   ): Promise<void> {
-    const membership = viewer?.id
-      ? await this.prisma.teamUserMember.findUnique({
-          where: { teamId_userId: { teamId, userId: viewer.id } },
-          select: { id: true },
-        })
-      : null;
-    if (membership) {
-      return;
-    }
-    if (viewer?.id && (await isPlatformAdminByUserId(this.prisma, viewer.id))) {
-      return;
-    }
-    throw new ForbiddenException({
-      code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-      message: '您不是该团队成员',
+    await assertTeamAccess(this.prisma, teamId, {
+      userId: viewer?.id,
+      allowPlatformAdmin: true,
+      onMissingTeam: 'forbidden',
     });
   }
 }

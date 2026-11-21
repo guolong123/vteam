@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
@@ -84,8 +85,8 @@ export class MemoriesService implements OnModuleInit {
         message: `非法记忆级别：${query.level}（仅支持 team/role/global，任务级记忆已删除）`,
       });
     }
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const isAdmin = await this.resolvePlatformAdmin(viewer);
     // 非管理员的可见团队集：无 viewer（如未认证直入 service）视为空集 → 只剩 global 行（fail closed）。
     const viewerTeamIds = isAdmin
@@ -484,14 +485,7 @@ export class MemoriesService implements OnModuleInit {
     return memberships.map((m) => m.teamId);
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

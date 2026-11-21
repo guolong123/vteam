@@ -12,8 +12,8 @@ import {
   MESSAGE_STATUS,
   SENDER_TYPE,
 } from '../common/constants/event.constants';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { roleKeyOf, roleLabelOf } from '../common/agent-role-label';
-import { EXTERNAL_SYSTEM_AGENT_ID } from '../common/constants/agent-role.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -116,7 +116,6 @@ interface TeamMemberPlan {
   role: { key: string; name: string } | null;
   alias?: string;
   workDir?: string;
-  opencodeAgentName: string | null;
   memberName?: string;
 }
 
@@ -300,9 +299,7 @@ export class TeamsService implements OnModuleInit {
           plan.alias?.trim() ||
           plan.memberName?.trim() ||
           this.defaultAlias(agent, seq, plan.role);
-        const workDir =
-          plan.workDir?.trim() ||
-          this.defaultWorkDir(agent, seq, plan.role, !!plan.opencodeAgentName);
+        const workDir = plan.workDir?.trim() || this.defaultWorkDir(agent, seq);
         // 旧 roleId/agentId 路径：自动补平台成员并绑定，避免建群后成员库看不到。
         if (!platformMemberId) {
           platformMemberId = await this.autoCreateMemberForSeat(tx, {
@@ -320,9 +317,6 @@ export class TeamsService implements OnModuleInit {
             memberId: platformMemberId ?? null,
             agentId: plan.agentId,
             roleId: plan.roleId ?? null,
-            // 外部槽位预填（规则 5，resolveMemberBinding）：角色绑定外部引擎 agent 时随角色来；
-            // 显式/角色都无 → null（存量行为不变）。
-            opencodeAgentName: plan.opencodeAgentName ?? null,
             alias,
             seq,
             workDir,
@@ -418,8 +412,8 @@ export class TeamsService implements OnModuleInit {
   }
 
   async findAll(query: QueryTeamsDto) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const where: any = {};
     if (query.name?.trim()) {
       where.name = { contains: query.name.trim() };
@@ -958,9 +952,7 @@ export class TeamsService implements OnModuleInit {
         dto.alias?.trim() ||
         plan.memberName?.trim() ||
         this.defaultAlias(agent, seq, plan.role);
-      const workDir =
-        dto.workDir?.trim() ||
-        this.defaultWorkDir(agent, seq, plan.role, !!plan.opencodeAgentName);
+      const workDir = dto.workDir?.trim() || this.defaultWorkDir(agent, seq);
       if (!platformMemberId) {
         platformMemberId = await this.autoCreateMemberForSeat(tx, {
           baseName: `${alias}（${team.name}）`,
@@ -976,8 +968,6 @@ export class TeamsService implements OnModuleInit {
           memberId: platformMemberId ?? null,
           agentId: plan.agentId,
           roleId: plan.roleId,
-          // 外部槽位预填（规则 5，resolveMemberBinding）：显式成员值 > 角色默认外部名 > null。
-          opencodeAgentName: plan.opencodeAgentName,
           alias,
           seq,
           workDir,
@@ -1259,7 +1249,6 @@ export class TeamsService implements OnModuleInit {
     if (dto.preferredWorkerId !== undefined)
       data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
     /** 角色重绑解析出的外部槽位默认值（规则 5）；仅在成员当前值为空时才应用（prefill ≠ override）。 */
-    let prefilledOpencodeAgentName: string | null = null;
     if (dto.agentId !== undefined || dto.roleId !== undefined) {
       // 同一优先级判定点（resolveMemberBinding）：显式 agentId 优先；只改 roleId 时用其默认
       // Agent 预填。roleId 显式清空（null/空串）不再允许——Q5：平台不支持无岗位成员。
@@ -1275,19 +1264,11 @@ export class TeamsService implements OnModuleInit {
         data.agentId = dto.agentId.trim();
         if (dto.roleId !== undefined) {
           data.roleId = dto.roleId.trim();
-          // 角色重绑时解析其外部槽位（显式 agentId 只锁内部选择，不锁外部预填）。
-          prefilledOpencodeAgentName = (
-            await this.resolveMemberBinding({
-              agentId: data.agentId,
-              roleId: dto.roleId,
-            })
-          ).opencodeAgentName;
         }
       } else {
         const binding = await this.resolveMemberBinding({ roleId: dto.roleId });
         data.agentId = binding.agentId;
         data.roleId = binding.roleId;
-        prefilledOpencodeAgentName = binding.opencodeAgentName;
       }
       if (data.agentId && data.agentId !== member.agentId) {
         const nextAgent = await this.prisma.agent.findUnique({
@@ -1301,26 +1282,6 @@ export class TeamsService implements OnModuleInit {
           });
         }
       }
-    }
-    if (dto.opencodeAgentName !== undefined) {
-      // 空串 → null（清除选择，回 opencode 默认 agent）；非空 → 弱校验后落库。
-      // 弱校验：worker 可能离线，无法实时核对，故仅在取得清单时告警、不阻断写入
-      // （执行期若 agent 不存在，由 opencode 报错并经既有 agent.status error 通路回流）。
-      const name = dto.opencodeAgentName?.trim() || null;
-      data.opencodeAgentName = name;
-      if (name) {
-        await this.warnIfOpencodeAgentUnknown(
-          name,
-          data.agentId ?? member.agentId,
-        );
-      }
-    } else if (
-      prefilledOpencodeAgentName &&
-      !member.opencodeAgentName?.trim()
-    ) {
-      // 规则 5 预填（prefill ≠ override）：仅当本次未显式给 opencodeAgentName 且成员当前值为空
-      // 时写入；已持久化的成员值绝不被角色默认值覆盖。
-      data.opencodeAgentName = prefilledOpencodeAgentName;
     }
     if (Object.keys(data).length === 0) {
       return this.findOne(teamId);
@@ -1343,38 +1304,6 @@ export class TeamsService implements OnModuleInit {
       { type: 'team', id: teamId },
     );
     return this.findOne(teamId);
-  }
-
-  /**
-   * opencodeAgentName 弱校验：能取到清单则核对，取不到（无在线 worker/worker 离线/
-   * 旧版无 GET /agent）静默放行——**绝不因校验失败阻断用户写入**。
-   *
-   * 设计取舍：agent 是否真实存在，权威判定在 opencode 执行期（不存在则报错并经
-   * agent.status error 回流前端）。此处仅做「尽力告警」，避免把 worker 可用性
-   * 耦合进团队成员编辑这一纯配置操作。
-   */
-  private async warnIfOpencodeAgentUnknown(
-    agentName: string,
-    agentId: string,
-  ): Promise<void> {
-    try {
-      const workerId = await this.workersService.assignWorker();
-      if (!workerId) {
-        return;
-      }
-      const agents = await this.workerClient.listAgents({ id: workerId });
-      if (agents.length === 0) {
-        return;
-      }
-      if (!agents.some((a) => a.name === agentName)) {
-        this.logger.warn(
-          `[teams] opencodeAgentName="${agentName}"（agent=${agentId}）不在 worker ${workerId} 的 agent 清单中，` +
-            `仍按用户意图写入；执行期若不存在将由 opencode 报错`,
-        );
-      }
-    } catch {
-      // 弱校验：任何异常都不影响写入
-    }
   }
 
   /**
@@ -1585,31 +1514,16 @@ export class TeamsService implements OnModuleInit {
    *   1. 显式 `agentId` **恒胜出**——用户明确选了 agent，就绝不被角色的默认值覆盖。
    *   2. 只给 `roleId`（未显式给 `agentId`）→ 用 `AgentRole.defaultAgentId` 预填 `agentId`
    *      （「选岗位，Agent 随岗位来」）。
-   *   3. `roleId` 指向的角色 `defaultAgentId` 为空：
-   *      - 若角色**外部绑定**（`defaultOpencodeAgentName` 非空）→ 落到平台占位系统 Agent
-   *        `a_external`（`TeamMember.agentId` NOT NULL 的落点；不写 `defaultAgentId`，
-   *        避免与外部槽位互斥、且不改变外部绑定展示）；用户只选岗位即可，平台不再索要第二个 Agent。
-   *      - 否则（两个槽位皆空，如 `ar_general`）→ 400 `ROLE_DEFAULT_AGENT_MISSING`
-   *        （角色没有任何可预填绑定位，无法只凭岗位定位 Agent）。
+   *   3. `roleId` 指向的角色 `defaultAgentId` 为空 → 400 `ROLE_DEFAULT_AGENT_MISSING`
+   *      （角色没有任何可预填绑定位，无法只凭岗位定位 Agent）。
    *   4. **`roleId` 必填**（Q5：平台不支持无岗位成员）→ 缺 `roleId`（或显式解绑）→ 400
    *      `MEMBER_ROLE_REQUIRED`。这是服务端唯一权威判定点；`AddMemberDto`/`UpdateMemberDto`
    *      仅注释说明，不在此加 `IsNotEmpty`（内部调用方也走本方法）。
-   *   5. **外部槽位对称预填**（规则 2 的镜像，opencode-native todo 7）：显式
-   *      `opencodeAgentName` **恒胜出**；未显式给时用 `AgentRole.defaultOpencodeAgentName`
-   *      预填 `TeamMember.opencodeAgentName`（角色绑定外部引擎 agent 时，成员随角色来）。
-   *      显式 `agentId` 分支同样解析外部槽位——角色槽位互斥意味着外部角色必然没有
-   *      `defaultAgentId`，缺此解析会让角色的外部选择落空。
-   *      角色默认外部名是**附加**预填，永不替代 `agentId`。
-   *
-   * **调用侧契约（prefill ≠ override）**：`updateMember` 只在本次请求未显式给
-   * `opencodeAgentName` **且**成员当前值为空时，才把本方法解析出的外部名写入；
-   * 已持久化的非空成员值绝不被角色默认值覆盖（成员级显式选择优先于角色默认）。
    */
   private async resolveMemberBinding<
     T extends {
       agentId?: string;
       roleId?: string;
-      opencodeAgentName?: string | null;
     },
   >(
     input: T,
@@ -1618,12 +1532,10 @@ export class TeamsService implements OnModuleInit {
       agentId: string;
       roleId: string | null;
       role: { key: string; name: string } | null;
-      opencodeAgentName: string | null;
     }
   > {
     const explicitAgentId = input.agentId?.trim() || null;
     const roleId = input.roleId?.trim() || null;
-    const explicitOpencodeAgentName = input.opencodeAgentName?.trim() || null;
 
     // 规则 4（Q5）：成员必须绑定岗位——缺 roleId 一律拒绝，不提供无岗位兼容路径。
     if (!roleId) {
@@ -1641,7 +1553,6 @@ export class TeamsService implements OnModuleInit {
         key: true,
         name: true,
         defaultAgentId: true,
-        defaultOpencodeAgentName: true,
       },
     });
     if (!role) {
@@ -1651,11 +1562,6 @@ export class TeamsService implements OnModuleInit {
       });
     }
     const roleBinding = { key: role.key, name: role.name };
-    // 规则 5：显式 > 角色默认外部名。
-    const resolvedOpencodeAgentName =
-      explicitOpencodeAgentName ||
-      role.defaultOpencodeAgentName?.trim() ||
-      null;
 
     if (explicitAgentId) {
       // 规则 1：显式 agentId 优先；roleId 必填并随行持久化（不覆盖 agent 选择）。
@@ -1664,21 +1570,11 @@ export class TeamsService implements OnModuleInit {
         agentId: explicitAgentId,
         roleId,
         role: roleBinding,
-        opencodeAgentName: resolvedOpencodeAgentName,
       };
     }
 
     if (!role.defaultAgentId) {
-      // 规则 3：外部绑定岗位落占位 Agent；两槽位皆空的角色仍保持 ROLE_DEFAULT_AGENT_MISSING。
-      if (role.defaultOpencodeAgentName?.trim()) {
-        return {
-          ...input,
-          agentId: EXTERNAL_SYSTEM_AGENT_ID,
-          roleId,
-          role: roleBinding,
-          opencodeAgentName: resolvedOpencodeAgentName,
-        };
-      }
+      // 规则 3：角色没有任何可预填绑定位 → 要求显式 agentId。
       throw new BadRequestException({
         code: TEAM_ERRORS.ROLE_DEFAULT_AGENT_MISSING,
         message: `角色 ${roleId} 未设置默认 Agent，请显式指定 agentId`,
@@ -1690,7 +1586,6 @@ export class TeamsService implements OnModuleInit {
       agentId: role.defaultAgentId,
       roleId,
       role: roleBinding,
-      opencodeAgentName: resolvedOpencodeAgentName,
     };
   }
 
@@ -1746,7 +1641,6 @@ export class TeamsService implements OnModuleInit {
         role: role ? { key: role.key, name: role.name } : null,
         alias: input.alias,
         workDir: input.workDir,
-        opencodeAgentName: input.opencodeAgentName ?? null,
         memberName: member.name,
       };
     }
@@ -1755,7 +1649,6 @@ export class TeamsService implements OnModuleInit {
       const binding = await this.resolveMemberBinding({
         agentId: newMember.agentId,
         roleId: newMember.roleId,
-        opencodeAgentName: null,
       } as any);
       return {
         memberId: null,
@@ -1766,7 +1659,6 @@ export class TeamsService implements OnModuleInit {
         role: binding.role,
         alias: input.alias,
         workDir: input.workDir,
-        opencodeAgentName: binding.opencodeAgentName,
         memberName: newMember.name,
       };
     }
@@ -1780,7 +1672,6 @@ export class TeamsService implements OnModuleInit {
       role: binding.role,
       alias: input.alias,
       workDir: input.workDir,
-      opencodeAgentName: binding.opencodeAgentName,
     };
   }
 
@@ -1841,19 +1732,13 @@ export class TeamsService implements OnModuleInit {
   /**
    * 实例默认工作目录 `/data/vteam-worker/<sanitize(base)>`（同实例多成员追加 `-<seq>`）。
    *
-   * `base` 默认取 `agent.name`（存量行为逐字节不变）。**外部绑定岗位**的成员共用平台占位
-   * Agent（`a_external`），沿用 `agent.name` 会让不同外部岗位的实例落进同一目录；此时优先取
-   * 岗位名 `role.name`，与 `defaultAlias` 的 `roleLabelOf` 同口径（如 `Sisyphus-1`）。
+   * `base` 取 `agent.name`（存量行为逐字节不变）。
    */
   private defaultWorkDir(
     agent: { name: string; id?: string },
     seq: number,
-    role?: { key: string; name: string } | null,
-    externalBound = false,
   ): string {
-    const base = sanitizeWorkDirName(
-      externalBound && role ? role.name : (agent.name ?? agent.id ?? 'agent'),
-    );
+    const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
     return seq > 1
       ? `/data/vteam-worker/${base}-${seq}`
       : `/data/vteam-worker/${base}`;
@@ -2054,7 +1939,6 @@ export class TeamsService implements OnModuleInit {
       })(),
       // opencode 原生 agent 选择（null = 用 opencode 默认 agent）——前端成员面板据此
       // 渲染/高亮当前选择；缺此字段会导致「切换后回显丢失」。
-      opencodeAgentName: m.opencodeAgentName,
       agent: m.agent
         ? {
             id: m.agent.id,
@@ -2101,15 +1985,8 @@ export class TeamsService implements OnModuleInit {
     };
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }
 

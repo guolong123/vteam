@@ -89,17 +89,3 @@ export const GATE_SPEC_FILES: GateSpecEntry[] = [
     gates: ['toolAllows'],
   },
 ];
-
-/** 改前基线（套件未改动时实测）：server 侧。 */
-export const SERVER_GATE_BASELINE = {
-  suites: 14,
-  tests: 165,
-  snapshots: 1,
-} as const;
-
-/** 改前基线（套件未改动时实测）：worker 侧。 */
-export const WORKER_GATE_BASELINE = {
-  suites: 2,
-  tests: 88,
-  snapshots: 0,
-} as const;

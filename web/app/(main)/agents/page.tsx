@@ -47,7 +47,6 @@ import { useAuthStore } from "@/lib/stores/authStore";
 import { AgentAvatar, ConfirmDialog, PageWindow, SegmentedTabs } from "@/src/components/ui";
 import { AgentRolesTab } from "@/src/components/agents/AgentRolesTab";
 import { agentRolesApi } from "@/src/api/agent-roles";
-import { ExternalAgentsPanel } from "@/src/components/agents/ExternalAgentsPanel";
 import { type AvailableModel } from "@/src/types/models";
 import {
   type RoleKey,
@@ -2588,10 +2587,9 @@ export default function AgentConfigPage() {
   const canEditAgent = hasPermission(user?.permissions, "agents", "edit");
   const queryClient = useQueryClient();
 
-  // Tab 1 Agent（既有内容，行为不变）/ Tab 2 角色（AgentRole 岗位管理，todo 7）
-  // Tab 3 外部 Agent（third-party-agent-display todo 2）：引擎上报但不受 vteam 治理的 agent
-  // 只读展示（名称/描述/mode/提示词）+ 逐条非治理警告；无任何权限/工具/提示词编辑控件。
-  const [tab, setTab] = useState<"agent" | "role" | "external">("agent");
+  // Tab 1 Agent（既有内容，行为不变）/ Tab 2 角色（AgentRole 岗位管理，todo 7）。
+  // 原 Tab 3「外部 Agent」（引擎上报的只读 agent 列表）已随该功能下线移除。
+  const [tab, setTab] = useState<"agent" | "role">("agent");
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -2823,15 +2821,12 @@ export default function AgentConfigPage() {
         items={[
           { key: "agent", label: "Agent" },
           { key: "role", label: "角色" },
-          { key: "external", label: "外部 Agent" },
         ]}
         active={tab}
-        onChange={(k) => setTab(k as "agent" | "role" | "external")}
+        onChange={(k) => setTab(k as "agent" | "role")}
       />
       {tab === "role" ? (
         <AgentRolesTab canCreate={canCreateAgent} canEdit={canEditAgent} canDelete={canDeleteAgent} />
-      ) : tab === "external" ? (
-        <ExternalAgentsPanel />
       ) : (
       <>
       {/* 窗口内保持左右双栏（列表 320px + 配置面板），原根容器行布局下移一层 */}

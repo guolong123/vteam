@@ -78,26 +78,12 @@ export const AGENT_ROLE_ERRORS = {
   AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND: 'AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND',
   /** capabilities 含目录外能力点键 / 非 boolean 值 → 400。 */
   AGENT_ROLE_CAPABILITY_KEY_INVALID: 'AGENT_ROLE_CAPABILITY_KEY_INVALID',
-  /** 默认 Agent 槽位冲突（`defaultAgentId` 与 `defaultOpencodeAgentName` 同时非空）→ 400。 */
-  AGENT_ROLE_DEFAULT_SLOT_CONFLICT: 'AGENT_ROLE_DEFAULT_SLOT_CONFLICT',
   /** 角色被团队成员引用（FK ON DELETE RESTRICT）→ 409，不可静默删除。 */
   AGENT_ROLE_IN_USE: 'AGENT_ROLE_IN_USE',
 } as const;
 
 export type AgentRoleErrorCode =
   (typeof AGENT_ROLE_ERRORS)[keyof typeof AGENT_ROLE_ERRORS];
-
-/**
- * `defaultOpencodeAgentName`（外部引擎 Agent 名）的 DTO 长度上限。
- *
- * 实测依据（2026-09-20，live worker `GET /agent?directory=/data/vteam-worker`）：
- * 引擎返回 23 个 agent，最长名为 `Prometheus - Plan Builder`（25 字符）；
- * oh-my-openagent 4.19.4 的 display-name 表（dist/index.js `AGENT_DISPLAY_NAMES`）
- * 最长亦为 25。但 display 名可由用户 `overrides[].displayName` 自定义（无固有上限），
- * 故不取「当前最长」，取 128 留足余量；同时与列宽 `VARCHAR(128)` 一致。
- * 名字含空格/大写，仅限长、不做格式约束。
- */
-export const AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH = 128 as const;
 
 /** 内置角色行定义（7 个模板角色；`defaultAgentId` 指向 seed 的模板 Agent）。 */
 export interface BuiltinAgentRole {
@@ -180,21 +166,18 @@ export const BUILTIN_AGENT_ROLES: readonly BuiltinAgentRole[] = [
  * `sortOrder` 紧随内置 1..7（8..10，`ar_general`=100 不冲突）；
  * `rolePrompt` 一行式，风格对齐 `agent-role-prompts.constants.ts` 的 `# 角色：` 身份行。
  *
- * 2026-10-21（opencode v2 适配）：默认 Agent 槽位由「**外部引擎名**」
- * （`defaultOpencodeAgentName` = OmO 的 `Sisyphus - ultraworker` /
- * `Prometheus - Plan Builder` / `Atlas - Plan Executor`）改为「**平台 Agent**」
- * （`defaultAgentId` = `agents` 表的 `a_developer` / `a_plan`）：opencode v2 移除了
- * v1 插件 API ⇒ 镜像内置的 OmO（v1 形态）在 v2 上不加载 ⇒ 那三个 agent 名在 v2 上
- * **不存在**（实测 v2.0.32：设会话 agent 返回 204 静默接受，下一轮抛
- * `Agent not found` ⇒ 无回复、无回退）⇒ 派发到这三个岗位的成员每一轮都失败。
- * 平台注入的 `vteam-*` agent 在 v2 上存在 ⇒ 改绑平台 Agent 后重新可派发。
- * 槽位互斥（至多一个非空；两槽位同为空 ⇒ 400 `ROLE_DEFAULT_AGENT_MISSING`）。
+ * 默认执行身份一律是**平台 Agent**（`defaultAgentId` = `agents` 表的 `a_developer` /
+ * `a_plan` 等）。2026-10-21（opencode v2 适配）起不再绑定「**外部引擎名**」：
+ * v2 移除了 v1 插件 API ⇒ 镜像内置的 OmO（v1 形态）在 v2 上不加载 ⇒ 那些 agent 名在
+ * v2 上**不存在**（实测 v2.0.32：设会话 agent 返回 204 静默接受，下一轮抛
+ * `Agent not found` ⇒ 无回复、无回退）⇒ 派发到这些岗位的成员每一轮都失败。
+ * 平台注入的 `vteam-*` agent 在 v2 上存在 ⇒ 绑平台 Agent 才能正常派发。
  */
 export interface ExternalAgentRole {
   id: string;
   key: string;
   name: string;
-  /** 平台默认 Agent（`agents.id`）；与 `defaultOpencodeAgentName` 互斥。 */
+  /** 平台默认 Agent（`agents.id`）。 */
   defaultAgentId: string;
   sortOrder: number;
   rolePrompt: string;
@@ -288,18 +271,15 @@ export const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
 /**
  * 外部绑定岗位成员的平台占位 Agent（系统行，2026-09-21）。
  *
- * `TeamMember.agentId` 为 NOT NULL 的 `agents.id` 外键，而外部绑定岗位
- * （`defaultOpencodeAgentName` 非空、无内部默认 Agent）**不再**要求用户另选一个内部执行
- * Agent —— 服务端 `resolveMemberBinding` 直接把成员落到这个固定占位行。它只作平台记账
- * （别名 / 工作目录 / `execute({agentId})` 引用的外键落点），不承载任何能力：
- * `agentKey` 与 `policyId` 均为 NULL，故 `buildAgentPolicies()` 的自定义块
- * （要求两者非空）天然忽略它；成员的平台工具权限来自岗位 `AgentRole.capabilities`。
+ * ⚠️ **新写入路径已不存在**（2026-11-21「外部 agent」功能下线）：服务端不再把成员落到
+ * 本占位行。保留它只为**存量数据**——`members.agent_id` 是 NOT NULL 外键，删行会让已绑定的
+ * 成员外键失败（实测当前库仍有 2 个成员指向它）。
  *
- * 不写入 `AgentRole.defaultAgentId`：外部岗位的「外部槽位」语义由
- * `defaultOpencodeAgentName` 表达，且该列与 `defaultAgentId` 互斥（设置其一自动清空另一个）。
+ * 它本身不承载任何能力：`agentKey` 与 `policyId` 均为 NULL，故 `buildAgentPolicies()` 的
+ * 自定义块（要求两者非空）天然忽略它；成员的平台工具权限来自岗位 `AgentRole.capabilities`。
  *
- * 2026-10-21：seed 预置的三个外部岗位已改绑**平台 Agent**（内部槽位）⇒ 它们**不再**落到
- * 本占位行；占位行仍为「运营者在 UI 上自建的外部绑定岗位」保留（那条路径仍走外部槽位）。
+ * 影响：指向本行的成员没有可派发的平台 Agent（派发时 `resolvePolicyAgentCandidate` 返回
+ * null ⇒ 省略 agent 键）。运维应把这些成员改绑到真实平台 Agent（团队页改席位 Agent）。
  */
 export const EXTERNAL_SYSTEM_AGENT_ID = 'a_external' as const;
 

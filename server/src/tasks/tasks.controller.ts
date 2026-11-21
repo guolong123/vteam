@@ -17,6 +17,7 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import {
@@ -116,8 +117,8 @@ export class TasksController {
           .filter((t): t is string => typeof t === 'string' && t.length > 0),
       ),
     ];
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     if (teamIds.length === 0) {
       return { items: [], total: 0, page, pageSize };
     }
@@ -495,16 +496,7 @@ export class TasksController {
     };
   }
 
-  /** 无 teamId 聚合路径的分页归一化（与 service 侧看板语义一致：page 默认 1）。 */
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
-  /** 无 teamId 聚合路径的分页归一化（pageSize 默认 20 上限 100，防无 teamId 全量分页爆炸）。 */
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

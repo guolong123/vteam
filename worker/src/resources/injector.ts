@@ -48,8 +48,6 @@ import {
   resolveVteamMcpTimeoutMs,
   VTEAM_MCP_SERVER_NAME,
 } from './mcp-servers-record';
-import { readOmoAgents, writeOmoAgents } from './omo-config';
-import { OMO_BUNDLED_MARKER, readOmoEnabled } from './omo-enabled';
 import {
   AgentPoliciesResponse,
   buildAgentDefinitions,
@@ -302,7 +300,6 @@ const MCP_OAUTH_FIELD_RENAMES: Readonly<Record<string, string>> = {
  * OmO 是"安装器 + 插件"形态，包由 bun 在运行时按此说明解析，写死路径反而与安装器
  * 生成的状态脱节。
  */
-const OMO_PLUGIN_ENTRY = 'oh-my-openagent@latest';
 
 /**
  * 禁用 v2 内置浏览器插件的条目（实测 opencode v2.0.28：内置插件 id = `opencode.browser`）。
@@ -317,39 +314,6 @@ const OMO_PLUGIN_ENTRY = 'oh-my-openagent@latest';
  * 一起关掉 → `Agent not found: "build"`；精确 id 不影响其它内置插件）。
  */
 const DISABLE_BUILTIN_BROWSER_ENTRY = '-opencode.browser';
-/**
- * 判定 plugin 条目是否指向 OmO（正式名 oh-my-openagent，旧正式名 oh-my-opencode）。
- *
- * ⚠️ 必须**排除** `oh-my-opencode-slim`——那是第三方精简 fork，与 OmO 是两个不同插件。
- * 早期 vteam 误装过 slim，其条目残留在持久化卷的 opencode.json 里；若用宽松匹配
- * （如 /oh-my-(openagent|opencode)/ 会被 "oh-my-opencode-slim" 命中），就会把 slim
- * 误判成"OmO 已在"，于是永不写入真正的 OmO 条目 → 插件静默不加载（实测踩坑）。
- */
-const OMO_ENTRY_RE = /(^|\/)oh-my-(openagent|opencode)(@|$|\/)/;
-/** 第三方精简 fork 条目：从配置中清除，避免与 OmO 并存冲突。 */
-const OMO_SLIM_ENTRY_RE = /oh-my-opencode-slim/;
-
-/**
- * 内置 OmO 的 **v2 形态入口**能力标记：`/opt/omo-bundled.json` 的 `v2` 字段
- * （Dockerfile 构建期写入；见 `worker/Dockerfile` 的 `omo capability marker`）。
- *
- * ── 为什么需要它（v2 适配的核心坑） ─────────────────────────────────────
- * v2 的三个破坏性变更之一就是**插件 API**：v1 插件导出 `{server}`，v2 插件导出
- * `{id, setup}` ⇒ **v1 形态的插件实现在 v2 不会运行**（官方迁移指南明写）。
- * 而镜像里内置的 OmO 是 `bunx oh-my-openagent@latest install --platform=opencode`
- * 装出来的 **v1 形态**包 ⇒ 在 v2 上**注册了也加载不了**：
- * - `plugins` 是 **v2 合法键** ⇒ **不会**产生「配置归一化诊断」（那个闸门查不到它）；
- * - serve 只会报一条插件加载失败 ⇒ **静默失败**（平台其余能力照常工作）。
- * ⇒ 必须由**镜像**显式声明"我内置的 OmO 有没有 v2 形态入口"，注入器据此决定
- * **是否注册**——不能靠猜，也不能靠"注册了看报不报错"（那是静默失败）。
- *
- * 标记语义：
- * - `v2: true`  → 内置 OmO **有 v2 形态入口** → 可注册；
- * - `v2: false` → 内置 OmO **只有 v1 形态** → **不注册**（并清掉历史残留条目）；
- * - **字段缺失 / 文件不存在** → **未知** → 保持既有行为（注册）并打一条告警
- *   （"不知道" ≠ "知道不能用"；镜像作者应显式声明该字段）。
- */
-const OMO_BUNDLED_V2_CAPABILITY_FIELD = 'v2';
 /**
  * 已删除的 role-guard 插件条目匹配（任意历史写法）：`plugin` 数组清理用。
  * 与 `purgeLegacyGuardArtifacts` 配套——只匹配该层，不误伤用户手写条目。
@@ -636,7 +600,6 @@ export class ResourceInjector {
     this.migrateLegacySections(config);
     const manifest = this.readManifest();
     const names = this.mergeMcpSection(config, servers, manifest.mcpServers ?? []);
-    this.injectOmoPlugin(config);
     this.disableBuiltinBrowserPlugin(config);
     this.writeConfig(configPath, config);
     this.writeManifest({ ...manifest, mcpServers: names });
@@ -681,7 +644,6 @@ export class ResourceInjector {
     }
     this.cleanupByManifest('agentNames', agentNames, config);
     this.purgeLegacyGuardArtifacts(config);
-    this.injectOmoPlugin(config);
     this.disableBuiltinBrowserPlugin(config);
     this.writeConfig(configPath, config);
     return { enabled: true, names: agentNames };
@@ -737,7 +699,6 @@ export class ResourceInjector {
     this.cleanupByManifest('agentNames', agentNames, config);
 
     this.purgeLegacyGuardArtifacts(config);
-    this.injectOmoPlugin(config);
     this.disableBuiltinBrowserPlugin(config);
     this.writeConfig(configPath, config);
     return { mcpServers: names, agentPolicies: { enabled: true, names: agentNames } };
@@ -792,7 +753,6 @@ export class ResourceInjector {
       agentNames: preserved,
       agentPoliciesStale: true,
     });
-    this.injectOmoPlugin(config);
     this.disableBuiltinBrowserPlugin(config);
     this.writeConfig(configPath, config);
     if (preserved.length > 0) {
@@ -1074,108 +1034,6 @@ export class ResourceInjector {
   }
 
   /**
-   * 声明 OmO（oh-my-openagent）到 opencode.json 的 **`plugins` 节**（v2 原生段名）。
-   *
-   * 插件由**官方安装器在镜像构建期**注册（见 Dockerfile：`bunx oh-my-openagent install
-   * --no-tui --platform=opencode --skip-auth`），它会把条目写进 $HOME/.config/opencode/
-   * opencode.json。但 opencode 运行时的 cwd 是 <workDir>（/data/vteam-worker），读的是
-   * <workDir>/opencode.json——两份配置不是同一个文件，所以这里必须把插件条目同步进来，
-   * 否则 serve 根本不会加载 OmO。
-   *
-   * 合并策略（与 mcp 节同思路，幂等）：
-   * - 已存在指向 OmO 的条目（任意写法：包名 / @latest / 路径）→ 不重复追加；
-   * - 用户手写的其他 plugin 条目一律保留。
-   *
-   * ⚠️ **注册是有条件的**（`resolveOmoRegistration`）：v1 形态的插件实现在 v2 不会运行，
-   * 而镜像内置的 OmO 正是 v1 形态 ⇒ 在 v2 上注册它只会让 serve 静默地加载失败
-   * （`plugins` 是合法键 ⇒ **不产生**归一化诊断 ⇒ 那个闸门查不到）。
-   * 故：用户开关关闭、或镜像声明内置 OmO 只有 v1 形态时，**不注册**，并清掉
-   * 持久卷上历史遗留的 OmO 条目（升级路径必须清，否则老条目会一直留在配置里）。
-   */
-  private injectOmoPlugin(config: Record<string, unknown>): void {
-    const raw = Array.isArray(config[SECTION_PLUGINS])
-      ? (config[SECTION_PLUGINS] as unknown[]).slice()
-      : [];
-    // 迁移清理：移除历史误装的 slim fork 条目（与 OmO 不是同一个插件）
-    const existing = raw.filter(
-      (entry) => !(typeof entry === 'string' && OMO_SLIM_ENTRY_RE.test(entry)),
-    );
-    if (!this.resolveOmoRegistration()) {
-      const kept = existing.filter(
-        (entry) => !(typeof entry === 'string' && OMO_ENTRY_RE.test(entry)),
-      );
-      if (kept.length !== existing.length) {
-        this.logger?.warn?.(
-          '[inject] 已从 opencode.json 的 plugins 节移除 OmO 条目（v2 不会加载 v1 形态插件，' +
-            '留着只会静默失败）',
-        );
-      }
-      config[SECTION_PLUGINS] = kept;
-      return;
-    }
-    const already = existing.some(
-      (entry) => typeof entry === 'string' && OMO_ENTRY_RE.test(entry),
-    );
-    if (!already) {
-      existing.push(OMO_PLUGIN_ENTRY);
-    }
-    config[SECTION_PLUGINS] = existing;
-  }
-
-  /**
-   * 是否应当注册 OmO 插件条目（两个条件都要满足）。
-   *
-   * ① **用户开关**：`<workDir>/.omo/omo-enabled.json`（缺省 true）。此前该开关**完全
-   *    不影响配置**——关掉它只是让 serve 少拼一个 `--pure`（v2 已无此 flag ⇒ 早已失效），
-   *    配置里的 OmO 条目照写 ⇒ 开关"看得见、不生效"。现在它**直接决定配置**。
-   * ② **镜像能力标记**：`/opt/omo-bundled.json` 的 `v2` 字段（true=有 v2 形态入口 /
-   *    false=只有 v1 形态 / 缺失=未知）。false ⇒ 不注册（v2 加载不了）；缺失 ⇒ 保持
-   *    既有行为并告警。
-   */
-  private resolveOmoRegistration(): boolean {
-    if (!readOmoEnabled(this.workDir)) {
-      return false;
-    }
-    const capability = this.bundledOmoV2Capability();
-    if (capability === false) {
-      this.logger?.info?.(
-        '[inject] 不注册 OmO：镜像内置的 OmO 只有 v1 形态入口（{server}），' +
-          'opencode v2 只加载 v2 形态（{id, setup}）⇒ 注册了也只会静默失败。' +
-          '（v2 线按「OmO 关闭」上线，见 docs/deployment.md §8.5）',
-      );
-      return false;
-    }
-    if (capability === null) {
-      this.logger?.warn?.(
-        `[inject] 内置 OmO 是否具备 v2 形态入口未知（${OMO_BUNDLED_MARKER} 缺少 ` +
-          `"${OMO_BUNDLED_V2_CAPABILITY_FIELD}" 字段）→ 按既有行为注册 OmO 条目；` +
-          '若该 OmO 是 v1 形态，它在 v2 上不会加载（静默失败）',
-      );
-    }
-    return true;
-  }
-
-  /**
-   * 读镜像能力标记：`/opt/omo-bundled.json` 的 `v2` 字段。
-   *
-   * @returns true=有 v2 形态入口 / false=只有 v1 形态 / null=未知（文件不存在或字段缺失）
-   */
-  private bundledOmoV2Capability(): boolean | null {
-    try {
-      const raw = JSON.parse(fs.readFileSync(OMO_BUNDLED_MARKER, 'utf8')) as {
-        [OMO_BUNDLED_V2_CAPABILITY_FIELD]?: unknown;
-      };
-      const value = raw?.[OMO_BUNDLED_V2_CAPABILITY_FIELD];
-      if (typeof value === 'boolean') {
-        return value;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * 禁用 v2 内置浏览器插件（**必须**：它占着 `browser` 这个工具名，会静默遮蔽平台自己的
    * browser 工具——工具进了全局注册表，但模型的 `tools[]` 里没有它，模型永远调不到，
    * 且**全程无报错**）。
@@ -1184,7 +1042,7 @@ export class ResourceInjector {
    * `plugins` 节加 `"-opencode.browser"` 后，平台的 `browser` 工具正常出现在 `tools[]`。
    * 精确 id 禁用是 T6 唯一验证过的安全手段（`["-*"]` 会把内置 agent/provider 一起关掉）。
    *
-   * 与 `injectOmoPlugin` 同一入口（两者都写 `plugins` 节，单写者）。
+   * 本方法写 `plugins` 节（单写者）。
    */
   private disableBuiltinBrowserPlugin(config: Record<string, unknown>): void {
     const raw = Array.isArray(config[SECTION_PLUGINS])
@@ -1194,16 +1052,6 @@ export class ResourceInjector {
       raw.push(DISABLE_BUILTIN_BROWSER_ENTRY);
     }
     config[SECTION_PLUGINS] = raw;
-  }
-
-  /** 写入 OmO 的 agent→模型配置（委托 omo-config 模块，与 exec-server 共用同一实现）。 */
-  async writeOmoConfig(agents: Record<string, string>): Promise<string> {
-    return writeOmoAgents(this.workDir, agents);
-  }
-
-  /** 读取 OmO 的 agent→模型配置（扁平 name→model）。 */
-  readOmoConfig(): Record<string, string> {
-    return readOmoAgents(this.workDir);
   }
 
   // ------------------------------------------------------------------

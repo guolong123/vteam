@@ -22,6 +22,7 @@ import type {
   IssueItem,
   UpdateIssuePayload,
 } from "@/src/types/issues";
+import { formatDateTime } from "@/lib/datetime-format";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -121,14 +122,6 @@ function TagBadge({ tag, idx }: { tag: string; idx: number }) {
 }
 
 /** ISO 时间 → 展示串（YYYY-MM-DD HH:mm）。 */
-function formatTime(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export interface IssueDetailModalProps {
   /** 目标 issue id；null 关闭。 */
   issueId: string | null;
@@ -425,7 +418,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                 创建者：{issue.creatorUserName ?? issue.creatorAgentName ?? "—"}
               </span>
               <span aria-hidden style={{ color: neutral[300] }}>·</span>
-              <span data-testid="issue-detail-created-at">{formatTime(issue.createdAt)}</span>
+              <span data-testid="issue-detail-created-at">{formatDateTime(issue.createdAt)}</span>
               <span aria-hidden style={{ color: neutral[300] }}>·</span>
               <span data-testid="issue-detail-task">{issue.taskTitle ?? issue.taskId}</span>
             </div>
@@ -451,7 +444,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                   {issue.rejectReason || <span style={{ color: neutral[400] }}>—</span>}
                 </div>
                 <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
-                  {formatTime(issue.rejectedAt)}
+                  {formatDateTime(issue.rejectedAt)}
                 </div>
               </div>
             )}
@@ -504,7 +497,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                               {statusLabel(act.fromStatus)} → {statusLabel(act.toStatus)}
                             </span>
                           )}
-                          <span style={{ color: neutral[400], marginLeft: "auto" }}>{formatTime(act.createdAt)}</span>
+                          <span style={{ color: neutral[400], marginLeft: "auto" }}>{formatDateTime(act.createdAt)}</span>
                         </div>
                         {act.action === "transition" && act.metadata && typeof act.metadata.reason === "string" && (
                           <div style={{ color: neutral[500], marginTop: 2, lineHeight: 1.5 }}>

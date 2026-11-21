@@ -50,15 +50,6 @@ export const NON_TERMINAL_TASK_STATUSES: readonly TaskStatus[] = [
   TASK_STATUS.pending_review,
 ];
 
-/**
- * 终态任务状态集：completed（已验收完成）/ archived（已归档）。
- * 团队名下所有任务皆为此集（或团队根本没有任何任务）时，即视为「没有未完成的任务」。
- */
-export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = [
-  TASK_STATUS.completed,
-  TASK_STATUS.archived,
-];
-
 export const TASK_PRIORITY = {
   high: 'high',
   medium: 'medium',

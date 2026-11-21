@@ -17,7 +17,7 @@
  *   挂在 Tab 1（引擎原生权限）。本组件绝无 permission/tools 编辑器。
  * - 数据源：/api/v1/agent-roles（唯一数据路径，不另起并行来源）；
  *   默认 Agent 是**单一选择器**（issue 3/todo 7）：本平台 Agent 与引擎外部 Agent 同列，
- *   互斥写入 defaultAgentId XOR defaultOpencodeAgentName（服务端同样强制「至多一个」）。
+ *   默认 Agent 只有 defaultAgentId 一个槽位（外部引擎名槽位已随该功能下线移除）。
  *   能力点目录（key / 中文名 / 覆盖工具）见 `src/api/role-capabilities.ts`。
  */
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
@@ -67,28 +67,11 @@ interface AgentOption {
   role: string | null;
 }
 
-/** GET /agents/opencode 条目（对齐服务端 WorkerAgentInfo + governed）。 */
-interface OpencodeAgentEntry {
-  name: string;
-  mode: "primary" | "subagent" | "all";
-  hidden?: boolean;
-  governed: boolean;
-}
-
-interface OpencodeAgentsResponse {
-  agents: OpencodeAgentEntry[];
-  workerId: string | null;
-  degraded: boolean;
-}
-
-type EngineState = "loading" | "ready" | "unavailable";
-
 interface RoleDraft {
   key: string;
   name: string;
   description: string;
   defaultAgentId: string;
-  defaultOpencodeAgentName: string;
   /** 完整能力点 map（目录键恒在 + 目录外键保留）；保存时整份提交（自描述）。 */
   capabilities: Record<string, boolean>;
   /** true = 服务端 `capabilities === null`（从未保存）→ 当前 map 为出厂默认。 */
@@ -101,7 +84,6 @@ const EMPTY_DRAFT: RoleDraft = {
   name: "",
   description: "",
   defaultAgentId: "",
-  defaultOpencodeAgentName: "",
   capabilities: factoryCapabilityMap(),
   capabilitiesFromFactory: true,
   rolePrompt: "",
@@ -114,49 +96,25 @@ function draftOf(role: AgentRoleDto): RoleDraft {
     name: role.name,
     description: role.description ?? "",
     defaultAgentId: role.defaultAgentId ?? "",
-    defaultOpencodeAgentName: role.defaultOpencodeAgentName ?? "",
     capabilities: caps.map,
     capabilitiesFromFactory: caps.fromFactory,
     rolePrompt: role.rolePrompt ?? "",
   };
 }
 
-/**
- * 单一选择器 ↔ 两个互斥槽位的编码（服务端 AGENT_ROLE_DEFAULT_SLOT_CONFLICT 约束「至多一个」）：
- *   "" → 未设置（两槽位都清空）；`internal:<agentId>` → defaultAgentId；
- *   `external:<name>` → defaultOpencodeAgentName。前缀让槽位归属在 DOM 值与 data 属性上可断言。
- */
+/** 默认 Agent 选择器取值：空串 = 未设置，否则为平台 Agent id。 */
 const SLOT_UNSET = "";
-const INTERNAL_SLOT_PREFIX = "internal:";
-const EXTERNAL_SLOT_PREFIX = "external:";
 
-function slotValueOf(draft: RoleDraft): string {
-  if (draft.defaultAgentId) return `${INTERNAL_SLOT_PREFIX}${draft.defaultAgentId}`;
-  if (draft.defaultOpencodeAgentName) return `${EXTERNAL_SLOT_PREFIX}${draft.defaultOpencodeAgentName}`;
-  return SLOT_UNSET;
+/**
+ * 选择器取值 → draft（仅需写 defaultAgentId，不存在第二个槽位）。
+ */
+function applySlotValue(value: string): Pick<RoleDraft, "defaultAgentId"> {
+  return { defaultAgentId: value };
 }
 
-function applySlotValue(value: string): Pick<RoleDraft, "defaultAgentId" | "defaultOpencodeAgentName"> {
-  if (value.startsWith(INTERNAL_SLOT_PREFIX)) {
-    return {
-      defaultAgentId: value.slice(INTERNAL_SLOT_PREFIX.length),
-      defaultOpencodeAgentName: "",
-    };
-  }
-  if (value.startsWith(EXTERNAL_SLOT_PREFIX)) {
-    return {
-      defaultAgentId: "",
-      defaultOpencodeAgentName: value.slice(EXTERNAL_SLOT_PREFIX.length),
-    };
-  }
-  return { defaultAgentId: "", defaultOpencodeAgentName: "" };
-}
-
-/** 列表项文案：外部绑定必须如实显示，绝不因 defaultAgentId 为空而谎报「未设置」。 */
+/** 列表项文案：未绑定默认 Agent 时如实显示「未设置」。 */
 function describeDefaultSlot(role: AgentRoleDto): string {
-  if (role.defaultAgentId) return role.defaultAgentId;
-  if (role.defaultOpencodeAgentName) return `${role.defaultOpencodeAgentName}（外部）`;
-  return "未设置";
+  return role.defaultAgentId || "未设置";
 }
 
 function deriveCloneKey(source: AgentRoleDto, existing: AgentRoleDto[]): string {
@@ -199,23 +157,6 @@ export function AgentRolesTab({
     [agentsQuery.data],
   );
 
-  // 引擎外部 Agent 清单（与 ExternalAgentsPanel 同源同过滤；workerId 缺省由服务端自动选 worker）。
-  // governed/hidden 条目不是外部选项；已保存但不在清单里的名字由 foreignExternalName 兜底展示。
-  const opencodeAgentsQuery = useQuery({
-    queryKey: ["agents", "opencode", "role-default-options"],
-    queryFn: () => api.get<OpencodeAgentsResponse>("/agents/opencode", { query: {} }),
-    retry: false,
-  });
-  const externalAgents = useMemo(
-    () => (opencodeAgentsQuery.data?.agents ?? []).filter((a) => !a.governed && !a.hidden),
-    [opencodeAgentsQuery.data],
-  );
-  const engineState: EngineState = opencodeAgentsQuery.isPending
-    ? "loading"
-    : opencodeAgentsQuery.isError || (opencodeAgentsQuery.data?.degraded ?? false)
-      ? "unavailable"
-      : "ready";
-
   const selected = roles.find((r) => r.id === selectedId) ?? null;
   const isBuiltin = selected?.type === "builtin";
   const readOnly = creating ? false : isBuiltin;
@@ -225,11 +166,7 @@ export function AgentRolesTab({
   const capabilitiesReadOnly = creating ? !canCreate : !canEdit;
   const canSaveCapabilities = creating ? canCreate : !!selected && canEdit;
 
-  // 已保存的外部名若不在本次引擎回答里（引擎降级/条目下线/加载中），仍作为选中项展示——绝不静默丢弃。
-  const draftExternalName = draft.defaultOpencodeAgentName;
-  const externalNameKnown = externalAgents.some((a) => a.name === draftExternalName);
-  const foreignExternalName = draftExternalName !== "" && !externalNameKnown ? draftExternalName : null;
-  const defaultSlotValue = slotValueOf(draft);
+  const defaultSlotValue = draft.defaultAgentId || SLOT_UNSET;
 
   useEffect(() => {
     if (!creating && !selectedId && roles.length > 0) {
@@ -247,7 +184,6 @@ export function AgentRolesTab({
   const saveMutation = useMutation({
     mutationFn: async () => {
       const internal = draft.defaultAgentId || null;
-      const external = draft.defaultOpencodeAgentName || null;
       // 能力点整份提交（目录键恒在 + 目录外键保留）：存储值自描述，前端不依赖「缺失=允许」推断。
       const capabilities = draft.capabilities;
       if (creating) {
@@ -257,7 +193,6 @@ export function AgentRolesTab({
           type: "custom",
           description: draft.description.trim() || undefined,
           defaultAgentId: internal,
-          defaultOpencodeAgentName: external,
           capabilities,
           rolePrompt: draft.rolePrompt,
         });
@@ -272,7 +207,6 @@ export function AgentRolesTab({
         name: draft.name.trim(),
         description: draft.description.trim() || null,
         defaultAgentId: internal,
-        defaultOpencodeAgentName: external,
         capabilities,
         rolePrompt: draft.rolePrompt,
       });
@@ -289,9 +223,7 @@ export function AgentRolesTab({
         isApiError(err)
           ? err.code === "AGENT_ROLE_KEY_CONFLICT"
             ? "该标识已被占用"
-            : err.code === "AGENT_ROLE_DEFAULT_SLOT_CONFLICT"
-              ? "默认 Agent 槽位冲突：内部与外部只能二选一，请重新选择后再保存"
-              : err.message
+            : err.message
           : "保存失败，请稍后重试",
       );
     },
@@ -305,7 +237,6 @@ export function AgentRolesTab({
         type: "custom",
         description: source.description ?? undefined,
         defaultAgentId: source.defaultAgentId,
-        defaultOpencodeAgentName: source.defaultOpencodeAgentName,
         // 克隆沿用来源岗位的**生效**能力点（含 null→出厂默认的情况），存储值自描述。
         capabilities: normalizeCapabilities(source.capabilities).map,
         rolePrompt: source.rolePrompt ?? undefined,
@@ -670,43 +601,22 @@ export function AgentRolesTab({
               <select
                 id="role-default-agent"
                 data-testid="role-default-agent"
-                data-slot={defaultSlotValue === SLOT_UNSET ? "unset" : defaultSlotValue.startsWith(INTERNAL_SLOT_PREFIX) ? "internal" : "external"}
+                data-slot={defaultSlotValue === SLOT_UNSET ? "unset" : "internal"}
                 value={defaultSlotValue}
                 disabled={readOnly || agentsQuery.isPending}
                 onChange={(e) => setDraft((d) => ({ ...d, ...applySlotValue(e.target.value) }))}
                 style={inputStyle}
               >
                 <option value="">未设置</option>
-                {foreignExternalName && (
-                  <option value={`${EXTERNAL_SLOT_PREFIX}${foreignExternalName}`}>
-                    {foreignExternalName}
-                    {engineState === "ready"
-                      ? "（引擎未上报）"
-                      : engineState === "loading"
-                        ? "（引擎列表加载中）"
-                        : "（引擎列表不可用）"}
-                  </option>
-                )}
-                <optgroup label="本平台 Agent">
-                  {agentOptions.map((a) => (
-                    <option key={a.id} value={`${INTERNAL_SLOT_PREFIX}${a.id}`}>{a.name}（{a.id}）</option>
-                  ))}
-                </optgroup>
-                <optgroup label="外部 Agent（引擎原生）">
-                  {externalAgents.map((a) => (
-                    <option key={a.name} value={`${EXTERNAL_SLOT_PREFIX}${a.name}`}>{a.name}</option>
-                  ))}
-                </optgroup>
+                {agentOptions.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}（{a.id}）</option>
+                ))}
               </select>
               <span
                 data-testid="role-default-agent-note"
                 style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5, marginTop: space.xs }}
               >
-                {engineState === "ready"
-                  ? `${externalAgents.length} 个外部 Agent（引擎上报，不含 vteam 策略 Agent）；内部与外部只能选一个`
-                  : engineState === "loading"
-                    ? "引擎 Agent 列表加载中…（已保存的外部选择仍保留）"
-                    : "引擎 Agent 列表不可用（worker 离线或版本不支持），当前仅显示已保存的选择。"}
+                只选本平台 Agent：执行身份与权限由平台 Agent + 岗位能力点共同决定。
               </span>
             </div>
 

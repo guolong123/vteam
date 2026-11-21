@@ -42,12 +42,8 @@ export interface EngineCapabilities {
   perMessageModelSwitch: boolean;
   /** 是否暴露计划步骤（todos）给控制面。 */
   todos: boolean;
-  /** 是否暴露外部 agent 目录（/agents 端点有意义）。 */
-  externalAgents: boolean;
   /** 是否暴露集成注册表（/integrations 端点有意义）。 */
   integrations: boolean;
-  /** 是否支持 OmO 相关配置面（/omo-config 端点有意义）。 */
-  omoConfig: boolean;
   /** 是否支持计划文档发现（/plan-files 端点有意义）。 */
   planFiles: boolean;
   /** 是否支持在途 steer 注入（否则降级为排队）。 */

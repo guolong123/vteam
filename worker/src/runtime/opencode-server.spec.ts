@@ -222,7 +222,7 @@ describe('OpencodeServer', () => {
     expect(server.isRunning).toBe(true);
     expect(server.version).toBe('1.18.15');
 
-    // 默认非 --pure：内置插件（omo）需非 pure 才会加载
+    // 默认非 --pure（v2 无该 flag）
     expect(mockedSpawn).toHaveBeenCalledWith(
       'opencode',
       ['serve', '--port', '4199', '--hostname', '127.0.0.1', '--print-logs'],
@@ -251,7 +251,7 @@ describe('OpencodeServer', () => {
     await newServer({ port: 4199, logger }).start();
     expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('OPENCODE_PURE / OmO 开关在 v2 上已失效'),
+      expect.stringContaining('OPENCODE_PURE 在 v2 上已失效'),
     );
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('不再拼 --pure'));
 
@@ -261,28 +261,10 @@ describe('OpencodeServer', () => {
     await newServer({ port: 4199, logger: logger2 }).start();
     expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
     expect(logger2.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining('OPENCODE_PURE / OmO 开关在 v2 上已失效'),
+      expect.stringContaining('OPENCODE_PURE 在 v2 上已失效'),
     );
   });
 
-  it('T2：OmO 开关关闭（omoEnabled=false）同样不再拼 --pure，只告警', async () => {
-    const logger = makeLogger();
-    const server = new OpencodeServer({
-      port: 4199,
-      serverPassword: 'test-pw',
-      command: 'opencode',
-      healthCheckTimeoutMs: 1000,
-      healthCheckIntervalMs: 20,
-      serveLogFilePath: path.join(os.tmpdir(), `absent-opencode-log-${process.pid}`),
-      logger,
-      omoEnabled: () => false,
-    });
-    await server.start();
-    expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('OPENCODE_PURE / OmO 开关在 v2 上已失效'),
-    );
-  });
 
   it('OPENCODE_PURE 为 0/false/no/未设 → 不带 --pure（只有显式真值才切纯净）', async () => {
     for (const falsy of ['0', 'false', 'no', 'off', 'n']) {

@@ -61,7 +61,7 @@ function FilePreviewContent() {
       router.back();
       return;
     }
-    router.push("/board");
+    router.push("/teams");
   };
   const artifactId = params.get("artifactId") ?? "";
   const artifactTaskId = params.get("taskId") ?? "";

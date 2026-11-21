@@ -14,6 +14,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ModelCredential, Prisma } from '@prisma/client';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -147,8 +148,8 @@ export class ModelsService implements OnModuleInit {
    * （对齐 mcp-servers/tools findAll 模式）。
    */
   async findAll(query: QueryModelsDto = {}) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const where: Prisma.ModelWhereInput = {
       enabled: query.enabled === undefined ? undefined : query.enabled,
       providerID: query.providerID ? query.providerID : undefined,
@@ -2061,14 +2062,7 @@ export class ModelsService implements OnModuleInit {
     });
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

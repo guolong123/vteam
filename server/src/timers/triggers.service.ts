@@ -13,6 +13,7 @@ import {
   type TriggerSource,
 } from '../common/constants/trigger.constants';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { roleKeyOf } from '../common/agent-role-label';
 import { TRIGGER_STATUS } from './trigger.service';
 import { QueryTriggersDto } from './dto/query-triggers.dto';
@@ -91,8 +92,8 @@ export class TriggersService {
    *（对齐 tools.findAll/memories.findAll 契约与 normalize 口径）。
    */
   async findAll(query: QueryTriggersDto = {}, viewer: TriggerViewer) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const where = await this.buildWhere(query, viewer);
     if (where === null) {
       return { items: [], total: 0, page, pageSize };
@@ -775,14 +776,7 @@ export class TriggersService {
     return fallback;
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

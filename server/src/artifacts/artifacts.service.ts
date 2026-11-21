@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizePage, normalizePageSize } from '../common/pagination';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -524,8 +525,8 @@ export class ArtifactsService implements OnModuleInit {
    * 故先取 task 内候选再聚合）。
    */
   async findByTask(taskId: string, query: QueryArtifactsDto = {}) {
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const accepted =
       query.accepted === undefined ? undefined : query.accepted === 'true';
 
@@ -591,8 +592,8 @@ export class ArtifactsService implements OnModuleInit {
         message: `团队 ${teamId} 不存在`,
       });
     }
-    const page = this.normalizePage(query.page);
-    const pageSize = this.normalizePageSize(query.pageSize);
+    const page = normalizePage(query.page);
+    const pageSize = normalizePageSize(query.pageSize);
     const accepted =
       query.accepted === undefined ? undefined : query.accepted === 'true';
 
@@ -796,11 +797,6 @@ export class ArtifactsService implements OnModuleInit {
     return dto;
   }
 
-  private normalizePage(page?: number): number {
-    const p = Number(page ?? 1);
-    return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
-  }
-
   /** P2：从 fileRef/标题派生落盘原始文件名（fileRef 路径尾段优先；无扩展名 → 标题兜底）。 */
   private fileNameFromRef(fileRef: string | undefined, title: string): string {
     const base = fileRef ? (fileRef.split(/[\\/]/).pop() ?? '') : '';
@@ -811,8 +807,6 @@ export class ArtifactsService implements OnModuleInit {
   }
 
   private normalizePageSize(pageSize?: number): number {
-    const ps = Number(pageSize ?? 20);
-    if (!Number.isFinite(ps)) return 20;
-    return Math.min(Math.max(Math.floor(ps), 1), 100);
+    return normalizePageSize(pageSize);
   }
 }

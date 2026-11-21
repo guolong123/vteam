@@ -61,11 +61,6 @@ export const SESSION_COMPACT_CONFIG_SPECS: readonly PlatformConfigSpec[] = [
   },
 ] as const;
 
-/** 配置键名集合（服务层白名单）。 */
-export const PLATFORM_CONFIG_KEYS: ReadonlySet<string> = new Set(
-  SESSION_COMPACT_CONFIG_SPECS.map((s) => s.key),
-);
-
 /** 按键取规格；未知键返回 undefined。 */
 export function findPlatformConfigSpec(
   key: string,

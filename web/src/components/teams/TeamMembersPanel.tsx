@@ -25,7 +25,7 @@ export interface OpencodeAgentItem {
 /**
  * 用户可选的 opencode agent 判定（展示层统一规则）。
  * subagent 用户不可控（只能由主 agent 派生），hidden 为系统内部——两者都不展示。
- * 后端 GET /agents/opencode 保持全量返回（dispatcher 透传需要），过滤只在展示层做。
+ * 岗位选人只按平台 Agent 判定（外部引擎 agent 绑定已随该功能下线移除）。
  */
 export function isSelectableOpencodeAgent(a: OpencodeAgentItem): boolean {
   return !a.hidden && a.mode !== "subagent";
@@ -1000,7 +1000,6 @@ export function TeamMembersPanel({
                     data-role={role.key}
                     data-role-id={role.id}
                     data-default-agent={role.defaultAgentId ?? ""}
-                    data-default-external={role.defaultOpencodeAgentName ?? ""}
                     aria-label={`添加${role.name}实例`}
                     onClick={() => pickRole(role)}
                     style={{
