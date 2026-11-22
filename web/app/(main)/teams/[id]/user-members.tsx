@@ -243,7 +243,7 @@ export function UserMembersSection({
             padding: `${space.sm + 2}px ${space.lg}px`,
             borderRadius: radius.md,
             border: "none",
-            backgroundColor: "#0D9488",
+            backgroundColor: "var(--color-brand-fill)",
             color: "#FFF",
             fontSize: fontSize.md,
             fontWeight: 500,
@@ -266,7 +266,7 @@ export function UserMembersSection({
             borderRadius: radius.md,
             backgroundColor: "rgba(239,68,68,0.10)",
             border: "1px solid rgba(239,68,68,0.22)",
-            color: "#B91C1C",
+            color: "var(--color-danger-text)",
             fontSize: fontSize.sm,
           }}
         >

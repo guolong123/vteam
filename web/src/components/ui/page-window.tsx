@@ -4,12 +4,12 @@
  * PageWindow：资源管理页统一窗口容器（与 skills/issues/models 页一致）。
  * =============================================================
  * - 外层 main：内容区内边距（padding xl），flex 纵向；
- * - 内层 div：maxWidth 1080 居中 + 纵向 gap lg，窄屏自动占满（width 100%）。
+ * - 内层 div：maxWidth 缺省 layout.normal(1080) 居中 + 纵向 gap lg，窄屏自动占满。
  * - 聊天/看板等全高工作区页面不使用本组件（保持全屏）。
  * - token 引用统一走 src/theme/tokens.ts，不散落魔法值。
  */
 import type { CSSProperties, ReactNode } from "react";
-import { space } from "@/src/theme/tokens";
+import { space, layout } from "@/src/theme/tokens";
 
 export interface PageWindowProps {
   children: ReactNode;
@@ -31,7 +31,7 @@ export interface PageWindowProps {
   className?: string;
 }
 
-export function PageWindow({ children, maxWidth = 1080, fluid = false, gap = space.lg, fill = false, testId = "page-window", style, className }: PageWindowProps) {
+export function PageWindow({ children, maxWidth = layout.normal, fluid = false, gap = space.lg, fill = false, testId = "page-window", style, className }: PageWindowProps) {
   return (
     <main
       data-testid={testId}
@@ -39,7 +39,7 @@ export function PageWindow({ children, maxWidth = 1080, fluid = false, gap = spa
       style={{
         flex: 1,
         minHeight: 0,
-        padding: `${space.xl}px`,
+        padding: `${layout.contentTop}px ${space.xl}px ${space.xl}px`,
         ...(fill ? { display: "flex", flexDirection: "column" as const } : {}),
         ...style,
       }}

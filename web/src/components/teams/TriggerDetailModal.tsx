@@ -130,13 +130,13 @@ export function TriggerDetailModal({
         {t.skipReason && (
           <DetailRow
             label="跳过原因"
-            value={<span style={{ color: "#B45309" }}>{t.skipReason}</span>}
+            value={<span style={{ color: "var(--color-warn-text)" }}>{t.skipReason}</span>}
           />
         )}
         {t.lastError && (
           <DetailRow
             label="最后错误"
-            value={<span style={{ color: "#DC2626" }}>{t.lastError}</span>}
+            value={<span style={{ color: "var(--color-danger-text)" }}>{t.lastError}</span>}
           />
         )}
         <DetailRow label="触发器 ID" value={t.id} mono />
@@ -152,7 +152,7 @@ export function TriggerDetailModal({
               borderRadius: radius.md,
               border: "1px solid rgba(239,68,68,0.22)",
               backgroundColor: "rgba(239,68,68,0.06)",
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               fontSize: fontSize.sm,
               fontWeight: 500,
               cursor: "pointer",

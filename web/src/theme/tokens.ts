@@ -55,10 +55,11 @@ export interface StatusTheme {
 
 /** 任务状态五色：进行中=青蓝 / 阻塞中=红 / 待验收=琥珀 / 已完成=绿 / 已归档=灰（深色下半透明） */
 export const statusColors: Record<StatusKey, StatusTheme> = {
-  "进行中": { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
-  "阻塞中": { color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  "待验收": { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  "已完成": { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  // 全部走 CSS 变量（视觉优化清单 AES-05）：暗色下自动提亮，避免浅底深字在深色卡片上发虚。
+  "进行中": { color: "var(--color-status-progress-text)", bg: "var(--color-status-progress-bg)", border: "var(--color-status-progress-border)" },
+  "阻塞中": { color: "var(--color-status-blocked-text)", bg: "var(--color-status-blocked-bg)", border: "var(--color-status-blocked-border)" },
+  "待验收": { color: "var(--color-status-review-text)", bg: "var(--color-status-review-bg)", border: "var(--color-status-review-border)" },
+  "已完成": { color: "var(--color-status-done-text)", bg: "var(--color-status-done-bg)", border: "var(--color-status-done-border)" },
   "已归档": { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 };
 
@@ -91,6 +92,22 @@ export const mention = {
 
 /* ---------------------------------- 间距（4px 基准） ---------------------------------- */
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
+
+/* ---------------------------------- 版心 ---------------------------------- */
+/**
+ * 版心宽度三档（视觉优化清单 AES-18）：此前全站有 960 / 1080 / 1200 / 1280 四档，
+ * 加上各页自定义 padding，实际出现 19 种内容宽度。收敛为：
+ * - wide   1280：数据表格 / 看板（信息密度优先）
+ * - normal 1080：表单 / 面板类（默认，PageWindow 缺省值）
+ * - narrow  960：详情 / 阅读类（单列长文，控制行长）
+ */
+export const layout = {
+  wide: 1280,
+  normal: 1080,
+  narrow: 960,
+  /** 内容区上边距（视觉优化清单 AES-17：此前首屏内容起点在 0~289px 之间跳） */
+  contentTop: 24,
+} as const;
 
 /* ---------------------------------- 圆角 ---------------------------------- */
 export const radius = { sm: 6, md: 10, lg: 14, pill: 999 } as const;

@@ -24,8 +24,8 @@ import {
 import { neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 
 /** 二进制档位配色（与 Agent 权限矩阵 toolEffectMeta 的 allow / deny 同值）。 */
-const ALLOWED_COLOR = "#059669";
-const DENIED_COLOR = "#DC2626";
+const ALLOWED_COLOR = "var(--color-success-text)";
+const DENIED_COLOR = "var(--color-danger-text)";
 
 const rowStyle: CSSProperties = {
   display: "flex",

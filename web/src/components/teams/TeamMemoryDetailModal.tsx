@@ -60,7 +60,7 @@ const actionButtonStyle = {
 
 const dangerButtonStyle = {
   ...actionButtonStyle,
-  color: "#DC2626",
+  color: "var(--color-danger-text)",
   border: "1px solid rgba(220,38,38,0.28)",
 } as const;
 

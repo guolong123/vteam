@@ -16,7 +16,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar, ConfirmDialog, EmptyState, PageWindow, SearchableSelect } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog, EmptyState, MetricCard, PageWindow, PrimaryButton, RowAction, RowActions, SearchableSelect } from "@/src/components/ui";
 import { NAV_TOPBAR_HEIGHT } from "@/src/components/layout";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
@@ -37,6 +37,7 @@ import {
   fontSize,
   fontFamily,
   shadow,
+  layout,
 } from "@/src/theme/tokens";
 
 interface AgentOption {
@@ -475,11 +476,12 @@ export default function MembersPage() {
   ).length;
 
   return (
-    <PageWindow maxWidth={1200} gap={space.md} style={{ position: "relative" }}>
+    <PageWindow maxWidth={layout.wide} gap={space.md} style={{ position: "relative" }}>
+      <style>{TABLE_CSS}</style>
       <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
         <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
           <button type="button" data-testid="unified-tab-teams" onClick={() => router.push("/teams")} style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "transparent", color: neutral[500], fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>团队</button>
-          <button type="button" data-testid="unified-tab-members" style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "var(--color-surface)", color: "#0F766E", fontSize: fontSize.sm, fontWeight: 700, cursor: "pointer", fontFamily: fontFamily.body, boxShadow: shadow.sm }}>成员</button>
+          <button type="button" data-testid="unified-tab-members" style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "var(--color-surface)", color: "var(--color-accent-text)", fontSize: fontSize.sm, fontWeight: 700, cursor: "pointer", fontFamily: fontFamily.body, boxShadow: shadow.sm }}>成员</button>
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: space.md }}>
@@ -491,9 +493,9 @@ export default function MembersPage() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
           {canCreate && (
-            <button type="button" data-testid="create-member-button" onClick={openCreate} style={primaryButtonStyle}>
+            <PrimaryButton testid="create-member-button" onClick={openCreate}>
               ＋ 新建成员
-            </button>
+            </PrimaryButton>
           )}
         </div>
       </div>
@@ -506,7 +508,7 @@ export default function MembersPage() {
       </div>
 
       {notice && (
-        <div data-testid="members-notice" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.30)", color: "#0F766E", fontSize: fontSize.sm }}>
+        <div data-testid="members-notice" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-accent-soft)", border: "1px solid rgba(13,148,136,0.30)", color: "var(--color-accent-text)", fontSize: fontSize.sm }}>
           {notice}
         </div>
       )}
@@ -542,12 +544,12 @@ export default function MembersPage() {
       </div>
 
       <div style={{ border: `1px solid ${neutral[200]}`, borderRadius: radius.lg, overflow: "hidden", backgroundColor: "var(--color-surface)" }}>
-        <div style={{ display: "grid", gridTemplateColumns: GRID_COLUMNS, gap: space.sm, padding: `${space.sm}px ${space.md}px`, backgroundColor: neutral[50], borderBottom: `1px solid ${neutral[200]}`, fontSize: fontSize.xs, color: neutral[500], fontWeight: 600 }}>
+        <div className="table-head" style={{ display: "grid", gridTemplateColumns: GRID_COLUMNS, gap: space.sm, padding: `${space.sm}px ${space.md}px`, backgroundColor: neutral[50], borderBottom: `1px solid ${neutral[200]}`, fontSize: fontSize.xs, color: neutral[500], fontWeight: 600 }}>
           <span>成员</span>
           <span>岗位</span>
           <span>绑定 Agent</span>
           <span>私有工作目录 / 模型</span>
-          <span style={{ textAlign: "center" }}>群聊</span>
+          <span style={{ textAlign: "right" }}>群聊</span>
           <span style={{ textAlign: "center" }}>状态</span>
           <span style={{ textAlign: "right" }}>操作</span>
         </div>
@@ -564,10 +566,11 @@ export default function MembersPage() {
                 key={member.id}
                 data-testid="member-row"
                 data-member-id={member.id}
-                style={{ display: "grid", gridTemplateColumns: GRID_COLUMNS, gap: space.sm, padding: `${space.sm + 2}px ${space.md}px`, alignItems: "center", borderBottom: `1px solid ${neutral[100]}` }}
+                className="table-row"
+                style={{ display: "grid", gridTemplateColumns: GRID_COLUMNS, gap: space.sm, padding: `${space.sm + 2}px ${space.md}px`, alignItems: "center", borderBottom: `1px solid ${neutral[100]}`, minHeight: 56 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
-                  <AgentAvatar role={roleKey} size="sm" />
+                  <AgentAvatar role={roleKey} size="md" />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</div>
                     <div style={{ fontSize: 10, color: neutral[400], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.id}</div>
@@ -586,9 +589,9 @@ export default function MembersPage() {
                   </div>
                   <div style={{ fontSize: 10, color: neutral[400] }}>{member.defaultModel?.name ?? "默认模型未指定"}</div>
                 </div>
-                <span style={{ textAlign: "center", fontSize: fontSize.sm, color: member.groupCount > 0 ? "#0F766E" : neutral[400] }}>{member.groupCount}</span>
+                <span style={{ textAlign: "right", fontSize: fontSize.sm, color: member.groupCount > 0 ? "var(--color-accent-text)" : neutral[400], fontVariantNumeric: "tabular-nums" }}>{member.groupCount}</span>
                 <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: 2, alignItems: "center" }}>
-                  <span style={{ fontSize: fontSize.xs, color: member.status === "active" ? "#0F766E" : neutral[400] }}>
+                  <span style={{ fontSize: fontSize.xs, color: member.status === "active" ? "var(--color-accent-text)" : neutral[400] }}>
                     {STATUS_LABEL[member.status] ?? member.status}
                   </span>
                   <span
@@ -597,7 +600,7 @@ export default function MembersPage() {
                       fontSize: 10,
                       color:
                         member.session?.busyState === "running"
-                          ? "#B45309"
+                          ? "var(--color-warn-text)"
                           : member.session
                             ? neutral[400]
                             : neutral[300],
@@ -610,38 +613,36 @@ export default function MembersPage() {
                       : "未建会话"}
                   </span>
                 </div>
-                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <RowActions>
                   {canEdit && (
-                    <button type="button" onClick={() => openEdit(member)} style={linkButtonStyle}>编辑</button>
+                    <RowAction tone="accent" onClick={() => openEdit(member)}>编辑</RowAction>
                   )}
                   {canEdit && (
-                    <button
-                      type="button"
+                    <RowAction
+                      tone="accent"
                       onClick={() => toggleMutation.mutate({ member, status: member.status === "active" ? "disabled" : "active" })}
-                      style={linkButtonStyle}
                     >
                       {member.status === "active" ? "停用" : "恢复"}
-                    </button>
+                    </RowAction>
                   )}
                   {canEdit && (
-                    <button type="button" onClick={() => setResetTarget(member)} style={linkButtonStyle}>重置会话</button>
+                    <RowAction tone="accent" onClick={() => setResetTarget(member)}>重置会话</RowAction>
                   )}
                   {canDelete && (
-                    <button
-                      type="button"
-                      data-testid="member-delete"
+                    <RowAction
+                      tone="danger"
+                      testid="member-delete"
                       onClick={() => setDeleteTarget(member)}
                       title={
                         member.groupCount > 0
                           ? `该成员在 ${member.groupCount} 个群聊中，删除时会一并移出`
                           : "删除成员"
                       }
-                      style={{ ...linkButtonStyle, color: "#B91C1C" }}
                     >
                       删除
-                    </button>
+                    </RowAction>
                   )}
-                </div>
+                </RowActions>
               </div>
             );
           })
@@ -693,7 +694,7 @@ export default function MembersPage() {
 
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: space.xl, display: "flex", flexDirection: "column", gap: space.lg }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>成员名称 <span style={{ color: "#DC2626" }}>必填</span></span>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>成员名称 <span style={{ color: "var(--color-danger-text)" }}>必填</span></span>
                 <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="留空自动生成，例如：胡一开" style={inputStyle} />
               </div>
 
@@ -709,7 +710,7 @@ export default function MembersPage() {
                         type="button"
                         data-testid="member-role-chip"
                         onClick={() => setForm({ ...form, roleId: role.id })}
-                        style={{ padding: "5px 12px", borderRadius: radius.pill, border: `1px solid ${active ? "#0D9488" : neutral[200]}`, backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)", color: active ? "#0F766E" : neutral[600], fontSize: fontSize.xs, fontWeight: active ? 700 : 500, cursor: "pointer", fontFamily: fontFamily.body }}
+                        style={{ padding: "5px 12px", borderRadius: radius.pill, border: `1px solid ${active ? "var(--color-accent-text)" : neutral[200]}`, backgroundColor: active ? "var(--color-accent-soft)" : "var(--color-surface)", color: active ? "var(--color-accent-text)" : neutral[600], fontSize: fontSize.xs, fontWeight: active ? 700 : 500, cursor: "pointer", fontFamily: fontFamily.body }}
                       >
                         {role.name}
                       </button>
@@ -761,7 +762,7 @@ export default function MembersPage() {
                         data-testid={`member-prompt-mode-${item.mode}`}
                         aria-pressed={active}
                         onClick={() => setForm({ ...form, promptMode: item.mode })}
-                        style={{ flex: 1, padding: "5px 10px", border: "none", borderRadius: radius.sm, backgroundColor: active ? "var(--color-surface)" : "transparent", color: active ? "#0F766E" : neutral[500], fontSize: fontSize.xs, fontWeight: active ? 700 : 500, cursor: "pointer", fontFamily: fontFamily.body, boxShadow: active ? shadow.sm : "none" }}
+                        style={{ flex: 1, padding: "5px 10px", border: "none", borderRadius: radius.sm, backgroundColor: active ? "var(--color-surface)" : "transparent", color: active ? "var(--color-accent-text)" : neutral[500], fontSize: fontSize.xs, fontWeight: active ? 700 : 500, cursor: "pointer", fontFamily: fontFamily.body, boxShadow: active ? shadow.sm : "none" }}
                       >
                         {item.label}
                       </button>
@@ -793,7 +794,7 @@ export default function MembersPage() {
                     <span style={{ color: neutral[400] }}>会话 ID</span>
                     <span style={{ color: neutral[700], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memberDetailQuery.data?.session?.id ?? "—"}</span>
                     <span style={{ color: neutral[400] }}>状态</span>
-                    <span style={{ color: memberDetailQuery.data?.session?.busyState === "running" ? "#B45309" : "#0F766E" }}>
+                    <span style={{ color: memberDetailQuery.data?.session?.busyState === "running" ? "var(--color-warn-text)" : "var(--color-accent-text)" }}>
                       {memberDetailQuery.data?.session ? (memberDetailQuery.data.session.busyState === "running" ? "处理中" : "空闲") : "未建立"}
                     </span>
                     <span style={{ color: neutral[400] }}>上下文</span>
@@ -812,7 +813,7 @@ export default function MembersPage() {
                     onClick={() => {
                       if (window.confirm(`确认重置成员「${editing.name}」的全局会话？消息/记忆不受影响。`)) resetSessionMutation.mutate(editing);
                     }}
-                    style={{ alignSelf: "flex-start", padding: "4px 12px", borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.45)", backgroundColor: "var(--color-surface)", color: "#DC2626", fontSize: fontSize.xs, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}
+                    style={{ alignSelf: "flex-start", padding: "4px 12px", borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.45)", backgroundColor: "var(--color-surface)", color: "var(--color-danger-text)", fontSize: fontSize.xs, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}
                   >
                     {resetSessionMutation.isPending ? "重置中…" : "重置全局会话"}
                   </button>
@@ -902,7 +903,7 @@ export default function MembersPage() {
                           <span style={{ fontSize: fontSize.xs, color: neutral[500] }}>
                             暂无消息渠道（需先在「集成」创建并启用）
                           </span>
-                          <Link href="/integrations" style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}>
+                          <Link href="/integrations" style={{ fontSize: fontSize.xs, color: "var(--color-accent-text)", textDecoration: "none", fontWeight: 600 }}>
                             去集成页创建消息渠道 →
                           </Link>
                         </div>
@@ -939,7 +940,7 @@ export default function MembersPage() {
                           </span>
                           <Link
                             href="/integrations"
-                            style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}
+                            style={{ fontSize: fontSize.xs, color: "var(--color-accent-text)", textDecoration: "none", fontWeight: 600 }}
                           >
                             去集成页创建通知渠道 →
                           </Link>
@@ -958,14 +959,16 @@ export default function MembersPage() {
                 </div>
               )}
 
-              {formError && <div style={{ fontSize: fontSize.xs, color: "#B91C1C" }}>{formError}</div>}
+              {formError && <div style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>{formError}</div>}
             </div>
 
             <div style={{ flexShrink: 0, padding: `${space.md}px ${space.xl}px`, borderTop: `1px solid ${neutral[100]}`, display: "flex", alignItems: "center", gap: space.sm }}>
               <span style={{ fontSize: 10, color: neutral[400] }}>{editing === "new" ? "创建后不会自动加入任何群聊，需在群聊中勾选" : "修改配置对所有已加入的群聊生效"}</span>
               <span style={{ flex: 1 }} />
               <button type="button" onClick={closeForm} style={secondaryButtonStyle}>取消</button>
-              <button type="submit" disabled={createMutation.isPending || updateMutation.isPending} style={primaryButtonStyle}>{createMutation.isPending || updateMutation.isPending ? "保存中…" : "保存修改"}</button>
+              <PrimaryButton type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                {createMutation.isPending || updateMutation.isPending ? "保存中…" : "保存修改"}
+              </PrimaryButton>
             </div>
           </form>
         </div>
@@ -1025,7 +1028,16 @@ export default function MembersPage() {
   );
 }
 
-const GRID_COLUMNS = "minmax(180px,2.2fr) minmax(90px,1fr) minmax(120px,1.2fr) minmax(160px,1.6fr) 52px 76px minmax(120px,1.2fr)";
+
+/** 数据表格统一观感（视觉优化清单 AES-08）：hover 浅底 + 表头 sticky + 行高 56。 */
+const TABLE_CSS = `
+.table-row { transition: background-color .15s ease; }
+.table-row:hover { background-color: var(--color-neutral-50); }
+.table-head { position: sticky; top: 0; z-index: 1; }
+`;
+
+// 操作列从 1.2fr 提到 190px 固定：容纳「编辑/停用/重置会话/删除」一行不折行（视觉优化清单 AES-08 行高统一）
+const GRID_COLUMNS = "minmax(180px,2.2fr) minmax(80px,0.9fr) minmax(110px,1.1fr) minmax(150px,1.5fr) 48px 80px 190px";
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -1039,18 +1051,6 @@ const inputStyle: CSSProperties = {
   outline: "none",
 };
 
-const primaryButtonStyle: CSSProperties = {
-  padding: `${space.sm + 1}px ${space.lg}px`,
-  borderRadius: radius.md,
-  border: "none",
-  backgroundColor: "#0D9488",
-  color: "#FFF",
-  fontSize: fontSize.sm,
-  fontWeight: 600,
-  cursor: "pointer",
-  fontFamily: fontFamily.body,
-};
-
 const secondaryButtonStyle: CSSProperties = {
   padding: `${space.sm + 1}px ${space.lg}px`,
   borderRadius: radius.md,
@@ -1058,16 +1058,6 @@ const secondaryButtonStyle: CSSProperties = {
   backgroundColor: "var(--color-surface)",
   color: neutral[700],
   fontSize: fontSize.sm,
-  cursor: "pointer",
-  fontFamily: fontFamily.body,
-};
-
-const linkButtonStyle: CSSProperties = {
-  border: "none",
-  background: "none",
-  padding: 0,
-  color: "#0F766E",
-  fontSize: fontSize.xs,
   cursor: "pointer",
   fontFamily: fontFamily.body,
 };
@@ -1085,14 +1075,9 @@ function pagerStyle(disabled: boolean): CSSProperties {
   };
 }
 
+/** 指标卡统一走 MetricCard（视觉优化清单 AES-12）：此前本页 95px 高、Worker 页 56px 高。 */
 function StatCard({ label, value, hint }: { label: string; value: number; hint: string }) {
-  return (
-    <div style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.lg, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>
-      <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: neutral[900], marginTop: 2 }}>{value}</div>
-      <div style={{ fontSize: 10, color: neutral[400], marginTop: 2 }}>{hint}</div>
-    </div>
-  );
+  return <MetricCard label={label} value={value} hint={hint} />;
 }
 
 

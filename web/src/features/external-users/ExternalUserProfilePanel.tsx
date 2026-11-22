@@ -207,7 +207,7 @@ export function ExternalUserProfilePanel({
   if (detailQuery.isError || !detail) {
     return (
       <aside data-testid="external-user-profile-panel" style={panelStyle}>
-        <div role="alert" style={{ fontSize: fontSize.xs, color: "#B91C1C" }}>
+        <div role="alert" style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>
           {detailQuery.isError
             ? errorText(detailQuery.error)
             : "该外部用户不存在或不可见"}
@@ -376,14 +376,14 @@ export function ExternalUserProfilePanel({
             <span
               data-testid="external-user-saved"
               role="status"
-              style={{ fontSize: fontSize.xs, color: "#0F766E" }}
+              style={{ fontSize: fontSize.xs, color: "var(--color-accent-text)" }}
             >
               已保存
             </span>
           )}
         </div>
         {error && (
-          <div role="alert" style={{ fontSize: fontSize.xs, color: "#B91C1C" }}>
+          <div role="alert" style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>
             {error}
           </div>
         )}
@@ -419,7 +419,7 @@ export function ExternalUserProfilePanel({
                 justifyContent: "space-between",
                 gap: space.sm,
                 fontSize: fontSize.xs,
-                color: "#0F766E",
+                color: "var(--color-accent-text)",
                 padding: "4px 8px",
                 borderRadius: radius.sm,
                 backgroundColor: "rgba(13,148,136,0.06)",

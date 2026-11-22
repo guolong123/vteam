@@ -35,7 +35,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog, EmptyState, PageWindow, UpgradeCommandDialog } from "@/src/components/ui";
+import { ConfirmDialog, EmptyState, MetricCard, PageWindow, SectionTitle, UpgradeCommandDialog } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -276,7 +276,7 @@ function WorkerCard({
           title={`主机名：${worker.name ?? "未上报"}（仅展示标识，非详情路由主键——路由请用节点 ID ${worker.id}）`}
           style={{ fontSize: fontSize.sm, color: neutral[400], fontFamily: fontFamily.mono }}
         >
-          🖥 主机 {worker.name ?? "未命名节点"}
+          ⬢ 主机 {worker.name ?? "未命名节点"}
         </span>
         {worker.codeVersion && (
           <span
@@ -469,7 +469,7 @@ function WorkerCard({
           }}
         />
         上次心跳 {formatRelativeTime(worker.lastHeartbeatAt, now)}
-        <span style={{ marginLeft: "auto", color: neutral[300] }}>♥ {isOnline ? "活跃" : "失联"}</span>
+        <span style={{ marginLeft: "auto", color: neutral[400] }}>● {isOnline ? "活跃" : "失联"}</span>
       </div>
 
       {/* 操作：查看详情（→ /workers/:id）/ 重启 / 下线（UX-01 真实调用，workers.edit 权限） */}
@@ -790,45 +790,16 @@ export default function WorkersPage() {
         }}
       >
         {stats.map((s) => (
-          <div
+          <MetricCard
             key={s.label}
-            data-stat={s.label}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space.md,
-              padding: `${space.lg}px ${space.xl}px`,
-              borderRadius: radius.lg,
-              backgroundColor: "var(--color-surface)",
-              border: `1px solid ${neutral[200]}`,
-              boxShadow: shadow.sm,
-            }}
-          >
-            <span
-              aria-hidden
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: "50%",
-                flexShrink: 0,
-                backgroundColor: s.theme.color,
-                color: s.theme.color,
-                animation: s.pulse ? "workerpulse-ring 1.8s ease-out infinite" : undefined,
-              }}
-            />
-            <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>{s.label}</span>
-            <span
-              style={{
-                marginLeft: "auto",
-                fontSize: fontSize.xxl,
-                fontWeight: 700,
-                color: s.theme.color,
-                lineHeight: 1,
-              }}
-            >
-              {s.value}
-            </span>
-          </div>
+            testid="worker-stat-card"
+            dataAttrs={{ "data-stat": s.label }}
+            layout="inline"
+            label={s.label}
+            value={s.value}
+            dotColor={s.theme.color}
+            valueColor={s.theme.color}
+          />
         ))}
       </div>
 
@@ -882,14 +853,9 @@ export default function WorkersPage() {
           marginBottom: space.lg,
         }}
       >
-        <div>
-          <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
-            Worker 节点池
-          </div>
-          <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: 2 }}>
-            {items.length} 个节点 · 在线 {onlineCount} 个 · 新节点注册即自动入池
-          </div>
-        </div>
+        <SectionTitle subtitle={`${items.length} 个节点 · 在线 ${onlineCount} 个 · 新节点注册即自动入池`}>
+          Worker 节点池
+        </SectionTitle>
         <Link
           href="/workers/install"
           data-testid="install-worker-link"

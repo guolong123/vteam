@@ -31,7 +31,7 @@ import { useAuthStore } from "@/lib/stores/authStore";
 import { ConfirmDialog, EmptyState } from "@/src/components/ui";
 import { IssueStatusActions } from "@/src/components/tasks/issue-status-actions";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
-import { neutral, space, radius, fontSize, fontFamily, shadow, roles, type RoleKey } from "@/src/theme/tokens";
+import { neutral, space, radius, fontSize, fontFamily, shadow, roles, layout, type RoleKey } from "@/src/theme/tokens";
 import type {
   CreateIssuePayload,
   IssueItem,
@@ -795,7 +795,7 @@ export default function IssuesPage() {
       <main style={{ flex: 1, minHeight: 0, padding: `${space.xl}px` }}>
         <div
           style={{
-            maxWidth: 1080,
+            maxWidth: layout.normal,
             margin: "0 auto",
             display: "flex",
             flexDirection: "column",

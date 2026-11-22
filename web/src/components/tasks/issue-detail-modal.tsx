@@ -30,9 +30,9 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
   in_progress: { label: "进行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
-  resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  resolved: { label: "已解决", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-  rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  rejected: { label: "已拒绝", color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 操作记录动作中文文案（is_0000000013）。 */
@@ -89,9 +89,9 @@ function IssueStatusBadge({ status }: { status: IssueStatus }) {
 const TAG_THEMES: { color: string; bg: string; border: string }[] = [
   { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
-  { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  { color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  { color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
   { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
 ];
 
@@ -267,7 +267,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
             加载中…
           </div>
         ) : detailQuery.isError || !issue ? (
-          <div role="alert" style={{ fontSize: fontSize.md, color: "#DC2626", padding: `${space.xl}px 0`, textAlign: "center" }}>
+          <div role="alert" style={{ fontSize: fontSize.md, color: "var(--color-danger-text)", padding: `${space.xl}px 0`, textAlign: "center" }}>
             {isApiError(detailQuery.error) ? detailQuery.error.message : "加载 issue 详情失败"}
           </div>
         ) : (
@@ -437,7 +437,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                   border: `1px solid rgba(239,68,68,0.22)`,
                 }}
               >
-                <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "#B91C1C" }}>
+                <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "var(--color-danger-text)" }}>
                   拒绝原因
                 </div>
                 <div style={{ fontSize: fontSize.md, color: neutral[700], whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6 }}>
@@ -483,7 +483,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                               ? "#0D9488"
                               : act.action === "update"
                                 ? "#D97706"
-                                : "#059669",
+                                : "var(--color-success-text)",
                           flexShrink: 0,
                           marginTop: 5,
                         }}
@@ -524,7 +524,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
             </div>
 
             {(formError || updateMutation.isError) && (
-              <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>
+              <div role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", fontWeight: 500 }}>
                 {formError ?? (isApiError(updateMutation.error) ? updateMutation.error.message : "保存失败")}
               </div>
             )}

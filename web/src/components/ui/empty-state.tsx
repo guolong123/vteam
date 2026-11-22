@@ -20,6 +20,7 @@ export interface EmptyStateProps {
   description?: string;
   icon?: ReactNode;
   action?: ReactNode;
+  testid?: string;
   style?: CSSProperties;
   className?: string;
 }
@@ -29,12 +30,13 @@ export function EmptyState({
   description = "当前还没有内容，稍后再来看看。",
   icon,
   action,
+  testid,
   style,
   className,
 }: EmptyStateProps) {
   return (
     <div
-      data-testid="empty-state"
+      data-testid={testid ?? "empty-state"}
       className={className}
       style={{
         display: "flex",
@@ -60,16 +62,16 @@ export function EmptyState({
           alignItems: "center",
           justifyContent: "center",
           fontSize: 26,
-          color: neutral[400],
+          color: neutral[500],
         }}
       >
         {icon ?? "◌"}
       </div>
       <div>
-        <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[700] }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: neutral[800] }}>
           {title}
         </div>
-        <div style={{ fontSize: fontSize.md, color: neutral[400], marginTop: space.xs }}>
+        <div style={{ fontSize: fontSize.md, color: neutral[500], marginTop: space.xs, lineHeight: 1.6 }}>
           {description}
         </div>
       </div>

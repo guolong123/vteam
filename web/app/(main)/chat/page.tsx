@@ -593,8 +593,8 @@ function ChatPageContent() {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ fontSize: fontSize.lg, fontWeight: 700, color: neutral[900] }}>会话</div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button type="button" data-testid="new-group-chat" title="新建群聊" onClick={() => setShowNewGroup(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 群聊</button>
-                  <button type="button" data-testid="new-dm-button" title="发起新私聊" onClick={() => setShowDmPicker(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#0F766E", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 私聊</button>
+                  <button type="button" data-testid="new-group-chat" title="新建群聊" onClick={() => setShowNewGroup(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "var(--color-accent-text)", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 群聊</button>
+                  <button type="button" data-testid="new-dm-button" title="发起新私聊" onClick={() => setShowDmPicker(true)} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "var(--color-accent-text)", borderRadius: radius.sm, padding: "2px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>＋ 私聊</button>
                 </div>
               </div>
               <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
@@ -619,7 +619,7 @@ function ChatPageContent() {
                     type="button"
                     data-testid={`conversation-filter-${tab.key}`}
                     onClick={() => setConvFilter(tab.key)}
-                    style={{ flex: 1, padding: "4px 0", border: "none", borderRadius: radius.sm, cursor: "pointer", fontSize: fontSize.xs, fontWeight: 600, fontFamily: fontFamily.body, backgroundColor: convFilter === tab.key ? "var(--color-surface)" : "transparent", color: convFilter === tab.key ? "#0F766E" : neutral[500], boxShadow: convFilter === tab.key ? shadow.sm : undefined }}
+                    style={{ flex: 1, padding: "4px 0", border: "none", borderRadius: radius.sm, cursor: "pointer", fontSize: fontSize.xs, fontWeight: 600, fontFamily: fontFamily.body, backgroundColor: convFilter === tab.key ? "var(--color-surface)" : "transparent", color: convFilter === tab.key ? "var(--color-accent-text)" : neutral[500], boxShadow: convFilter === tab.key ? shadow.sm : undefined }}
                   >
                     {tab.label} {tab.count}
                   </button>
@@ -710,7 +710,7 @@ function ChatPageContent() {
                     );
                     if (!running) return null;
                     return (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: running.status === "blocked" ? "#B91C1C" : "#0F766E", backgroundColor: running.status === "blocked" ? "rgba(239,68,68,0.10)" : "rgba(13,148,136,0.10)", border: `1px solid ${running.status === "blocked" ? "rgba(239,68,68,0.25)" : "rgba(13,148,136,0.22)"}`, borderRadius: radius.pill, padding: "1px 8px" }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: running.status === "blocked" ? "var(--color-danger-text)" : "var(--color-accent-text)", backgroundColor: running.status === "blocked" ? "var(--color-danger-soft)" : "var(--color-accent-soft)", border: `1px solid ${running.status === "blocked" ? "rgba(239,68,68,0.25)" : "rgba(13,148,136,0.22)"}`, borderRadius: radius.pill, padding: "1px 8px" }}>
                         {running.status === "blocked" ? "阻塞中" : "进行中"}
                       </span>
                     );
@@ -753,7 +753,7 @@ function ChatPageContent() {
                 })}
               </div>
               <button type="button" onClick={() => setRightPanelMode((v) => (v === "full" ? "compact" : "full"))} style={{ fontSize: fontSize.xs, color: neutral[600], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>{rightPanelMode === "full" ? "精简面板" : "完整面板"}</button>
-              <button type="button" data-testid="group-settings-button" onClick={() => setShowMembersDrawer(true)} style={{ fontSize: fontSize.xs, color: "#0F766E", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>群设置</button>
+              <button type="button" data-testid="group-settings-button" onClick={() => setShowMembersDrawer(true)} style={{ fontSize: fontSize.xs, color: "var(--color-accent-text)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>群设置</button>
             </header>
 
             {/*
@@ -764,8 +764,8 @@ function ChatPageContent() {
             <div data-testid="group-member-switcher" style={{ display: "flex", alignItems: "flex-start", gap: 22, padding: `${space.md}px ${space.xl}px`, borderBottom: `1px solid ${neutral[100]}`, backgroundColor: "var(--color-surface)", overflowX: "auto" }}>
               <span style={{ fontSize: 10, color: neutral[400], whiteSpace: "nowrap", alignSelf: "center", letterSpacing: "0.02em" }}>成员切换</span>
               <button type="button" onClick={() => setFilterMemberId(null)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body }}>
-                <span style={{ width: 28, height: 28, borderRadius: "50%", backgroundColor: !filterMemberId ? "#0D9488" : neutral[100], color: !filterMemberId ? "#FFF" : neutral[500], display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>全</span>
-                <span style={{ fontSize: 10, color: !filterMemberId ? "#0F766E" : neutral[500], fontWeight: !filterMemberId ? 700 : 400 }}>全部</span>
+                <span style={{ width: 28, height: 28, borderRadius: "50%", backgroundColor: !filterMemberId ? "var(--color-brand-fill)" : neutral[100], color: !filterMemberId ? "#FFF" : neutral[500], display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>全</span>
+                <span style={{ fontSize: 10, color: !filterMemberId ? "var(--color-accent-text)" : neutral[500], fontWeight: !filterMemberId ? 700 : 400 }}>全部</span>
               </button>
               {(team?.members ?? []).map((seat) => {
                 const memberId = seat.memberId ?? "";
@@ -800,7 +800,7 @@ function ChatPageContent() {
                         />
                       )}
                     </span>
-                    <span style={{ fontSize: 10, color: selected ? "#0F766E" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 132, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memberChipLabel(seat)}</span>
+                    <span style={{ fontSize: 10, color: selected ? "var(--color-accent-text)" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 132, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memberChipLabel(seat)}</span>
                   </button>
                 );
               })}
@@ -819,7 +819,7 @@ function ChatPageContent() {
                     return `${name} ${runningWhere(s)}`;
                   }).join("；")}
                 </span>
-                <span style={{ color: "#B45309" }}>消息照常送达，不拦截，成员自行安排先后</span>
+                <span style={{ color: "var(--color-warn-text)" }}>消息照常送达，不拦截，成员自行安排先后</span>
               </div>
             )}
 
@@ -897,7 +897,7 @@ function ChatPageContent() {
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>{member?.name ?? title}</span>
-                  <span style={{ fontSize: 10, color: member?.status === "active" ? "#0F766E" : neutral[400], backgroundColor: member?.status === "active" ? "rgba(13,148,136,0.10)" : neutral[100], borderRadius: radius.pill, padding: "1px 8px" }}>
+                  <span style={{ fontSize: 10, color: member?.status === "active" ? "var(--color-accent-text)" : neutral[400], backgroundColor: member?.status === "active" ? "var(--color-accent-soft)" : neutral[100], borderRadius: radius.pill, padding: "1px 8px" }}>
                     {member?.status === "active" ? "启用中" : "已停用"}
                   </span>
                 </div>
@@ -907,9 +907,9 @@ function ChatPageContent() {
                 </div>
               </div>
               <span style={{ flex: 1 }} />
-              {dmNotice && <span style={{ fontSize: 10, color: "#0F766E", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dmNotice}</span>}
+              {dmNotice && <span style={{ fontSize: 10, color: "var(--color-accent-text)", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dmNotice}</span>}
               {(member?.session?.busyState === "running" || dmWaiting) && (
-                <span data-testid="dm-processing" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: fontSize.xs, color: "#B45309", backgroundColor: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: radius.pill, padding: "2px 10px" }}>
+                <span data-testid="dm-processing" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: fontSize.xs, color: "var(--color-warn-text)", backgroundColor: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: radius.pill, padding: "2px 10px" }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#F59E0B", animation: "pulse 1.2s infinite" }} />
                   {member?.session?.busyState === "running" || dmStreaming ? "处理中…" : "已发送，等待回复…"}
                 </span>
@@ -964,7 +964,7 @@ function ChatPageContent() {
               <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
               <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>{subtitle}</div>
             </div>
-            {active?.pinned && <span style={{ marginLeft: "auto", fontSize: 10, color: "#B45309", backgroundColor: "#FEF3C7", borderRadius: radius.pill, padding: "1px 8px" }}>置顶</span>}
+            {active?.pinned && <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--color-warn-text)", backgroundColor: "var(--color-warn-bg)", borderRadius: radius.pill, padding: "1px 8px" }}>置顶</span>}
           </div>
         </header>
 
@@ -1033,7 +1033,7 @@ function ChatPageContent() {
         </div>
 
         <footer style={{ borderTop: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", padding: `${space.sm}px ${space.lg}px ${space.md}px` }}>
-          {sendError && <div style={{ fontSize: fontSize.xs, color: "#B91C1C", marginBottom: 6 }}>{sendError}</div>}
+          {sendError && <div style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)", marginBottom: 6 }}>{sendError}</div>}
           <div style={{ display: "flex", gap: space.sm, alignItems: "flex-end" }}>
             <textarea
               data-testid="chat-input"
@@ -1054,7 +1054,7 @@ function ChatPageContent() {
               data-testid="chat-send"
               disabled={!input.trim() || sendMutation.isPending}
               onClick={submit}
-              style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: input.trim() ? "#0D9488" : neutral[200], color: "#FFF", fontWeight: 600, fontSize: fontSize.sm, cursor: input.trim() ? "pointer" : "default", fontFamily: fontFamily.body }}
+              style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: input.trim() ? "var(--color-brand-fill)" : neutral[200], color: "#FFF", fontWeight: 600, fontSize: fontSize.sm, cursor: input.trim() ? "pointer" : "default", fontFamily: fontFamily.body }}
             >
               {sendMutation.isPending ? "发送中…" : "发送"}
             </button>
@@ -1092,7 +1092,7 @@ function ChatPageContent() {
               <button type="button" onClick={() => setShowMembersDrawer(false)} style={{ border: "none", background: "none", fontSize: fontSize.lg, color: neutral[400], cursor: "pointer" }}>×</button>
             </div>
             <div style={{ padding: space.md, borderBottom: `1px solid ${neutral[100]}` }}>
-              <a href={`/teams/${teamId}`} style={{ display: "block", textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>＋ 添加成员 / 完整管理 →</a>
+              <a href={`/teams/${teamId}`} style={{ display: "block", textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "var(--color-accent-text)", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>＋ 添加成员 / 完整管理 →</a>
             </div>
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: space.md, display: "flex", flexDirection: "column", gap: 6 }}>
               {(team?.members ?? []).map((seat) => {
@@ -1104,12 +1104,12 @@ function ChatPageContent() {
                     <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m?.name ?? seat.member?.name ?? seat.alias}</div>
-                      <div style={{ fontSize: 10, color: busy ? "#B45309" : neutral[400] }}>
+                      <div style={{ fontSize: 10, color: busy ? "var(--color-warn-text)" : neutral[400] }}>
                         {m?.role?.name ?? "成员"} · {busy ? (groupName ? `正在「${groupName}」处理` : "其他群处理中") : "空闲"}
                       </div>
                     </div>
                     {seat.memberId && (
-                      <button type="button" disabled={resetMemberSessionMutation.isPending} onClick={() => { if (window.confirm(`确认重置成员「${m?.name ?? seat.alias}」的全局会话？消息/记忆保留。`)) resetMemberSessionMutation.mutate(seat.memberId as string); }} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "#B45309", borderRadius: radius.sm, padding: "2px 8px", fontSize: 10, cursor: "pointer", fontFamily: fontFamily.body }}>重置会话</button>
+                      <button type="button" disabled={resetMemberSessionMutation.isPending} onClick={() => { if (window.confirm(`确认重置成员「${m?.name ?? seat.alias}」的全局会话？消息/记忆保留。`)) resetMemberSessionMutation.mutate(seat.memberId as string); }} style={{ border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: "var(--color-warn-text)", borderRadius: radius.sm, padding: "2px 8px", fontSize: 10, cursor: "pointer", fontFamily: fontFamily.body }}>重置会话</button>
                     )}
                   </div>
                 );
@@ -1137,7 +1137,7 @@ function ChatPageContent() {
               {(directoryQuery.isPending ? [] : directory.filter((m) => !dmSearch.trim() || m.name.toLowerCase().includes(dmSearch.trim().toLowerCase()))).map((member) => {
                 const checked = groupMemberIds.includes(member.id);
                 return (
-                  <label key={member.id} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${checked ? "#0D9488" : neutral[200]}`, backgroundColor: checked ? "rgba(13,148,136,0.06)" : "var(--color-surface)", cursor: "pointer" }}>
+                  <label key={member.id} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${checked ? "var(--color-accent-text)" : neutral[200]}`, backgroundColor: checked ? "rgba(13,148,136,0.06)" : "var(--color-surface)", cursor: "pointer" }}>
                     <input type="checkbox" checked={checked} onChange={(e) => setGroupMemberIds((prev) => e.target.checked ? [...prev, member.id] : prev.filter((id) => id !== member.id))} />
                     <AgentAvatar role={toRoleKey(member.role?.key ?? null)} size="sm" />
                     <span style={{ flex: 1, minWidth: 0 }}>
@@ -1148,12 +1148,12 @@ function ChatPageContent() {
                 );
               })}
             </div>
-            {groupError && <div style={{ padding: `0 ${space.md}px`, fontSize: fontSize.xs, color: "#B91C1C" }}>{groupError}</div>}
+            {groupError && <div style={{ padding: `0 ${space.md}px`, fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>{groupError}</div>}
             <div style={{ padding: space.md, borderTop: `1px solid ${neutral[100]}`, display: "flex", alignItems: "center", gap: space.sm }}>
               <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已选 {groupMemberIds.length} 位成员</span>
               <span style={{ flex: 1 }} />
               <button type="button" onClick={() => setShowNewGroup(false)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>取消</button>
-              <button type="button" data-testid="create-group-submit" disabled={createGroupMutation.isPending} onClick={() => { if (!groupName.trim()) { setGroupError("请输入群聊名称"); return; } if (groupMemberIds.length === 0) { setGroupError("至少选择一位成员"); return; } createGroupMutation.mutate(); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: createGroupMutation.isPending ? "default" : "pointer", fontFamily: fontFamily.body }}>{createGroupMutation.isPending ? "创建中…" : "创建群聊"}</button>
+              <button type="button" data-testid="create-group-submit" disabled={createGroupMutation.isPending} onClick={() => { if (!groupName.trim()) { setGroupError("请输入群聊名称"); return; } if (groupMemberIds.length === 0) { setGroupError("至少选择一位成员"); return; } createGroupMutation.mutate(); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "var(--color-brand-fill)", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: createGroupMutation.isPending ? "default" : "pointer", fontFamily: fontFamily.body }}>{createGroupMutation.isPending ? "创建中…" : "创建群聊"}</button>
             </div>
           </div>
         </div>
@@ -1185,7 +1185,7 @@ function ChatPageContent() {
                       <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{member.name}</div>
                       <div style={{ fontSize: 10, color: neutral[400] }}>{member.role?.name ?? "成员"} · 已在 {member.groupCount} 个群</div>
                     </div>
-                    <span style={{ fontSize: 10, color: "#0F766E" }}>发起私聊 →</span>
+                    <span style={{ fontSize: 10, color: "var(--color-accent-text)" }}>发起私聊 →</span>
                   </button>
                 ))
               )}
@@ -1248,7 +1248,7 @@ function groupAvatarPalette(title: string): {
   // 原型群头像为渐变圆角方块：按群名哈希取一组渐变，白字。
   const palettes = [
     { from: "#818CF8", to: "#4F46E5" },
-    { from: "#2DD4BF", to: "#0D9488" },
+    { from: "#2DD4BF", to: "var(--color-brand-fill)" },
     { from: "#60A5FA", to: "#2563EB" },
     { from: "#FBBF24", to: "#EA580C" },
     { from: "#A78BFA", to: "#7C3AED" },
@@ -1291,7 +1291,7 @@ function ConversationRow({
       onClick={onClick}
       data-testid="conversation-item"
       data-conv-id={item.id}
-      style={{ width: "100%", textAlign: "left", border: "none", cursor: "pointer", display: "flex", gap: space.sm, alignItems: "center", padding: `${space.sm}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: active ? "rgba(13,148,136,0.10)" : "transparent", fontFamily: fontFamily.body }}
+      style={{ width: "100%", textAlign: "left", border: "none", cursor: "pointer", display: "flex", gap: space.sm, alignItems: "center", padding: `${space.sm}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: active ? "var(--color-accent-soft)" : "transparent", fontFamily: fontFamily.body }}
     >
       <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
         {item.type === "group" ? (
@@ -1326,10 +1326,10 @@ function ConversationRow({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
-          <span style={{ flexShrink: 0, fontSize: 10, color: item.type === "group" ? "#0F766E" : "#7C3AED", backgroundColor: item.type === "group" ? "rgba(13,148,136,0.10)" : "rgba(124,58,237,0.10)", borderRadius: radius.pill, padding: "0 6px" }}>
+          <span style={{ flexShrink: 0, fontSize: 10, color: item.type === "group" ? "var(--color-accent-text)" : "#7C3AED", backgroundColor: item.type === "group" ? "var(--color-accent-soft)" : "rgba(124,58,237,0.10)", borderRadius: radius.pill, padding: "0 6px" }}>
             {item.badge}
           </span>
-          {item.pinned && <span style={{ fontSize: 10, color: "#B45309" }}>置顶</span>}
+          {item.pinned && <span style={{ fontSize: 10, color: "var(--color-warn-text)" }}>置顶</span>}
           <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400] }}>{item.lastMessage ? formatClockTime(item.lastMessage.createdAt) : ""}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1337,7 +1337,7 @@ function ConversationRow({
             {conversationPreviewText(item)}
           </span>
           {item.unreadCount > 0 && (
-            <span style={{ marginLeft: "auto", minWidth: 18, height: 18, borderRadius: 9, backgroundColor: "#DC2626", color: "#FFF", fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
+            <span style={{ marginLeft: "auto", minWidth: 18, height: 18, borderRadius: 9, backgroundColor: "var(--color-danger-text)", color: "#FFF", fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
               {item.unreadCount > 99 ? "99+" : item.unreadCount}
             </span>
           )}
@@ -1351,7 +1351,7 @@ function MemberChip({ name, role, active }: { name: string; role: RoleKey; activ
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 44 }}>
       <AgentAvatar role={role} size="sm" />
-      <span style={{ fontSize: 10, color: active ? "#0F766E" : neutral[500], fontWeight: active ? 700 : 400, maxWidth: 52, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+      <span style={{ fontSize: 10, color: active ? "var(--color-accent-text)" : neutral[500], fontWeight: active ? 700 : 400, maxWidth: 52, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
     </div>
   );
 }
@@ -1370,9 +1370,9 @@ function statusLabel(status: string): string {
 }
 
 function statusColor(status: string): string {
-  if (status === "in_progress") return "#0F766E";
-  if (status === "blocked") return "#B91C1C";
-  if (status === "pending_review") return "#B45309";
+  if (status === "in_progress") return "var(--color-accent-text)";
+  if (status === "blocked") return "var(--color-danger-text)";
+  if (status === "pending_review") return "var(--color-warn-text)";
   if (status === "completed") return neutral[400];
   return neutral[500];
 }
@@ -1420,7 +1420,7 @@ function GroupContextPanel({
     <aside data-testid="group-context-panel" style={{ width, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
       <div style={{ display: "flex", borderBottom: `1px solid ${neutral[100]}`, flexShrink: 0 }}>
         {tabs.map((t) => (
-          <button key={t.key} type="button" data-testid={`group-context-tab-${t.key}`} onClick={() => setTab(t.key)} style={{ flex: 1, padding: `${space.md}px 0`, border: "none", borderBottom: tab === t.key ? "2px solid #0D9488" : "2px solid transparent", background: "none", cursor: "pointer", fontSize: fontSize.sm, fontWeight: tab === t.key ? 700 : 500, color: tab === t.key ? "#0F766E" : neutral[500], fontFamily: fontFamily.body }}>{t.label}</button>
+          <button key={t.key} type="button" data-testid={`group-context-tab-${t.key}`} onClick={() => setTab(t.key)} style={{ flex: 1, padding: `${space.md}px 0`, border: "none", borderBottom: tab === t.key ? "2px solid var(--color-brand-fill)" : "2px solid transparent", background: "none", cursor: "pointer", fontSize: fontSize.sm, fontWeight: tab === t.key ? 700 : 500, color: tab === t.key ? "var(--color-accent-text)" : neutral[500], fontFamily: fontFamily.body }}>{t.label}</button>
         ))}
       </div>
 
@@ -1454,11 +1454,11 @@ function GroupContextPanel({
               const busy = member?.session?.busyState === "running";
               const selected = filterMemberId === seat.id;
               return (
-                <button key={seat.id} type="button" onClick={() => onFilterMember(selected ? null : seat.id)} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${selected ? "#0F766E" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.06)" : "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}>
+                <button key={seat.id} type="button" onClick={() => onFilterMember(selected ? null : seat.id)} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${selected ? "var(--color-accent-text)" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.06)" : "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}>
                   <AgentAvatar role={toRoleKey(roleKeyById.get(seat.roleId ?? "") ?? null)} size="sm" />
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member?.name ?? seat.member?.name ?? seat.alias}</span>
-                    <span style={{ display: "block", fontSize: 10, color: busy ? "#B45309" : neutral[400] }}>{member?.role?.name ?? "成员"} · {busy ? "其他群处理中" : "在线/空闲"}</span>
+                    <span style={{ display: "block", fontSize: 10, color: busy ? "var(--color-warn-text)" : neutral[400] }}>{member?.role?.name ?? "成员"} · {busy ? "其他群处理中" : "在线/空闲"}</span>
                   </span>
                 </button>
               );
@@ -1483,7 +1483,7 @@ function GroupContextPanel({
                 </a>
               ))
             )}
-            <a href={`/docs?teamId=${team?.id ?? active?.contextTeamId ?? ""}`} style={{ textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开团队文档站 →</a>
+            <a href={`/docs?teamId=${team?.id ?? active?.contextTeamId ?? ""}`} style={{ textAlign: "center", padding: "6px 0", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "var(--color-accent-text)", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开团队文档站 →</a>
           </>
         )}
       </div>
@@ -1491,7 +1491,7 @@ function GroupContextPanel({
       <div style={{ flexShrink: 0, margin: space.md, padding: space.md, borderRadius: radius.md, border: `1px dashed ${neutral[300]}`, display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ fontSize: fontSize.xs, fontWeight: 700, color: neutral[700] }}>查看 Agent 会话</div>
         <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.6 }}>Agent 内部推理过程不广播到群聊，仅最终回复展示。</div>
-        <a href={`/chat?c=${encodeURIComponent(`dm:${(team?.members ?? [])[0]?.memberId ?? ""}`)}`} style={{ fontSize: fontSize.xs, color: "#0F766E", textDecoration: "none", fontWeight: 600 }}>打开成员会话 →</a>
+        <a href={`/chat?c=${encodeURIComponent(`dm:${(team?.members ?? [])[0]?.memberId ?? ""}`)}`} style={{ fontSize: fontSize.xs, color: "var(--color-accent-text)", textDecoration: "none", fontWeight: 600 }}>打开成员会话 →</a>
       </div>
     </aside>
   );
@@ -1731,7 +1731,7 @@ function MemberContextPanel({
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>全局会话（只读）</div>
         <div style={{ display: "grid", gridTemplateColumns: "76px 1fr", gap: "4px 8px", fontSize: fontSize.xs }}>
           <span style={{ color: neutral[400] }}>状态</span>
-          <span style={{ color: session?.busyState === "running" ? "#B45309" : "#0F766E" }}>{session ? (session.busyState === "running" ? "处理中" : "空闲") : "未建立"}</span>
+          <span style={{ color: session?.busyState === "running" ? "var(--color-warn-text)" : "var(--color-accent-text)" }}>{session ? (session.busyState === "running" ? "处理中" : "空闲") : "未建立"}</span>
           <span style={{ color: neutral[400] }}>会话 id</span>
           <span style={{ color: neutral[700], fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{session?.id ?? "—"}</span>
           <span style={{ color: neutral[400] }}>最近活跃群</span>
@@ -1748,7 +1748,7 @@ function MemberContextPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: fontSize.xs, fontWeight: 700, color: neutral[700] }}>运行配置</span>
           <span style={{ flex: 1 }} />
-          <span data-testid="member-config-autosave" style={{ fontSize: 10, color: saveMemberConfig.isPending ? "#B45309" : neutral[400] }}>
+          <span data-testid="member-config-autosave" style={{ fontSize: 10, color: saveMemberConfig.isPending ? "var(--color-warn-text)" : neutral[400] }}>
             {saveMemberConfig.isPending ? "保存中…" : "修改自动保存"}
           </span>
         </div>
@@ -1792,14 +1792,14 @@ function MemberContextPanel({
           <span style={{ color: neutral[400] }}>所在群聊</span>
           <span style={{ color: neutral[700] }}>{member?.groupCount ?? 0} 个</span>
         </div>
-        {saveMemberConfig.isError && <span style={{ fontSize: 10, color: "#B91C1C" }}>{errorText(saveMemberConfig.error)}</span>}
+        {saveMemberConfig.isError && <span style={{ fontSize: 10, color: "var(--color-danger-text)" }}>{errorText(saveMemberConfig.error)}</span>}
       </div>
 
       {(member?.groups ?? []).length > 0 && (
         <div style={{ borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>所在群聊</div>
           {(member?.groups ?? []).map((g) => (
-            <a key={g.teamId} href={`/chat?c=${encodeURIComponent(`group:${g.teamId}`)}`} style={{ textDecoration: "none", display: "flex", justifyContent: "space-between", fontSize: fontSize.xs, color: "#0F766E", padding: "4px 8px", borderRadius: radius.sm, backgroundColor: "rgba(13,148,136,0.06)" }}>
+            <a key={g.teamId} href={`/chat?c=${encodeURIComponent(`group:${g.teamId}`)}`} style={{ textDecoration: "none", display: "flex", justifyContent: "space-between", fontSize: fontSize.xs, color: "var(--color-accent-text)", padding: "4px 8px", borderRadius: radius.sm, backgroundColor: "rgba(13,148,136,0.06)" }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.teamName ?? g.teamId}</span>
               <span style={{ color: neutral[400] }}>#{g.seq}</span>
             </a>
@@ -1818,8 +1818,8 @@ function MemberContextPanel({
 
       <div style={{ marginTop: "auto", borderTop: `1px solid ${neutral[100]}`, paddingTop: space.sm, display: "flex", flexDirection: "column", gap: 6 }}>
         <a href={`/tasks/new?teamId=${member?.groups?.[0]?.teamId ?? ""}`} style={{ textAlign: "center", padding: "6px 10px", borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFF", fontSize: fontSize.xs, fontWeight: 700, textDecoration: "none" }}>发任务</a>
-        <button type="button" data-testid="reset-global-session" disabled={resetting} onClick={onReset} style={{ padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#B45309", fontSize: fontSize.xs, fontWeight: 600, cursor: resetting ? "default" : "pointer", fontFamily: fontFamily.body }}>{resetting ? "重置中…" : "重置全局会话"}</button>
-        <a href="/members" style={{ textAlign: "center", padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "#0F766E", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开成员库 →</a>
+        <button type="button" data-testid="reset-global-session" disabled={resetting} onClick={onReset} style={{ padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "var(--color-warn-text)", fontSize: fontSize.xs, fontWeight: 600, cursor: resetting ? "default" : "pointer", fontFamily: fontFamily.body }}>{resetting ? "重置中…" : "重置全局会话"}</button>
+        <a href="/members" style={{ textAlign: "center", padding: "6px 10px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, color: "var(--color-accent-text)", fontSize: fontSize.xs, fontWeight: 600, textDecoration: "none" }}>打开成员库 →</a>
       </div>
     </aside>
   );

@@ -35,7 +35,7 @@
  *   docs-loading / docs-error / docs-retry / docs-tab-bar / docs-tab-docs /
  *   docs-tab-protos / docs-proto-empty。
  */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -85,8 +85,8 @@ const ARTIFACT_TYPE_THEME: Record<
   { color: string; bg: string; border: string }
 > = {
   text: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
-  doc: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
-  file: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  doc: { color: "var(--color-accent-text)", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  file: { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
 };
 
 /** 类型中文名（三筛标签 / 类型徽章文案，与 artifacts 页同词）。 */
@@ -228,7 +228,7 @@ function CategoryBadge({ category }: { category: string | null }) {
         borderRadius: radius.sm,
         backgroundColor: classified ? "rgba(13,148,136,0.10)" : neutral[100],
         border: `1px solid ${classified ? "rgba(13,148,136,0.22)" : neutral[200]}`,
-        color: classified ? "#0D9488" : neutral[500],
+        color: classified ? "var(--color-accent-text)" : neutral[500],
         fontSize: fontSize.xs,
         fontWeight: 500,
         whiteSpace: "nowrap",
@@ -355,7 +355,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
                   borderRadius: radius.sm,
                   border: `1px solid ${neutral[200]}`,
                   backgroundColor: surface,
-                  color: "#0D9488",
+                  color: "var(--color-accent-text)",
                   fontSize: fontSize.sm,
                   fontWeight: 500,
                   textDecoration: "none",
@@ -455,7 +455,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         }}
       >
         {isDetailError ? (
-          <div role="alert" style={{ color: "#DC2626", fontSize: fontSize.md }}>
+          <div role="alert" style={{ color: "var(--color-danger-text)", fontSize: fontSize.md }}>
             {isApiError(detailError) ? detailError.message : "加载版本内容失败"}
           </div>
         ) : versionQuery.isPending ? (
@@ -590,7 +590,7 @@ function DocTreeRow({ item, docSlug, active, onSelect, onDeleted }: DocTreeRowPr
               whiteSpace: "nowrap",
               fontSize: fontSize.md,
               fontWeight: active ? 600 : 500,
-              color: active ? "#0D9488" : neutral[700],
+              color: active ? "var(--color-accent-text)" : neutral[700],
             }}
           >
             {item.title}
@@ -643,20 +643,30 @@ function DocTreeRow({ item, docSlug, active, onSelect, onDeleted }: DocTreeRowPr
           border: "none",
           cursor: deleteMutation.isPending ? "default" : "pointer",
           backgroundColor: hover ? "rgba(220,38,38,0.10)" : "transparent",
-          color: hover ? "#DC2626" : neutral[300],
+          color: hover ? "var(--color-danger-text)" : neutral[300],
           opacity: hover ? 1 : 0,
           transition: "opacity .15s, background-color .15s, color .15s",
           fontSize: fontSize.sm,
           lineHeight: 1,
         }}
       >
-        <span aria-hidden>🗑</span>
+        <span aria-hidden>✕</span>
       </button>
     </div>
   );
 }
 
 /* ------------------------------ 筛选 pill（artifacts 页范式，data-active 保留） ------------------------------ */
+/** 筛选组：小标签 + chip 组，解决同名「全部」不可分辨的问题（视觉优化清单 AES-13） */
+function FilterGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      <span style={{ fontSize: fontSize.xs, color: neutral[500], whiteSpace: "nowrap" }}>{label}</span>
+      {children}
+    </div>
+  );
+}
+
 function FilterPills({
   testId,
   options,
@@ -685,9 +695,12 @@ function FilterPills({
               borderRadius: radius.pill,
               fontSize: fontSize.sm,
               flexShrink: 0,
-              border: `1px solid ${isActive ? "#0D9488" : neutral[200]}`,
-              backgroundColor: isActive ? "#0D9488" : "var(--color-surface)",
-              color: isActive ? "#FFFFFF" : neutral[600],
+              // 选中态统一为「青边 + 浅青底 + 青字」（视觉优化清单 AES-13）：
+              // 此前是实心青底白字，与侧栏竖条、Tab 下划线构成第三套选中语言；
+              // 且底色误用了 accent-text 变量（暗色下是提亮值），暗色必然白字压浅底。
+              border: `1px solid ${isActive ? "var(--color-accent-text)" : neutral[200]}`,
+              backgroundColor: isActive ? "var(--color-accent-soft)" : "var(--color-surface)",
+              color: isActive ? "var(--color-accent-text)" : neutral[600],
               fontWeight: isActive ? 600 : 400,
               cursor: "pointer",
               fontFamily: fontFamily.body,
@@ -1042,7 +1055,7 @@ export default function DocsUnifiedPage() {
           {teamsQuery.isPending ? (
             <div style={{ fontSize: fontSize.md, color: neutral[400] }}>加载团队中…</div>
           ) : teamsQuery.isError ? (
-            <div data-testid="docs-error" role="alert" style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+            <div data-testid="docs-error" role="alert" style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
               {isApiError(teamsQuery.error) ? teamsQuery.error.message : "加载团队失败"}
             </div>
           ) : teams.length === 0 ? (
@@ -1152,29 +1165,32 @@ export default function DocsUnifiedPage() {
               ))}
             </select>
 
-            {/* 分类 chips（全部 + 八类 + 未分类） */}
-            <FilterPills
-              testId="category-filter-option"
-              options={categoryOptions}
-              activeKey={categoryKey}
-              onChange={handleCategoryChange}
-            />
-
-            {/* 类型筛（全部/结论文本/文档/文件） */}
-            <FilterPills
-              testId="type-filter-option"
-              options={TYPE_OPTIONS}
-              activeKey={typeKey}
-              onChange={handleTypeChange}
-            />
-
-            {/* 验收状态筛（全部/已验收/未验收） */}
-            <FilterPills
-              testId="accepted-filter-option"
-              options={ACCEPTED_OPTIONS}
-              activeKey={acceptedKey}
-              onChange={handleAcceptedChange}
-            />
+            {/* 三组筛选各带组名（视觉优化清单 AES-13）：此前三组都有「全部」且无组名，
+                同一条栏里出现 3 个同名 chip，用户分不清在控制哪一维。 */}
+            <FilterGroup label="分类">
+              <FilterPills
+                testId="category-filter-option"
+                options={categoryOptions}
+                activeKey={categoryKey}
+                onChange={handleCategoryChange}
+              />
+            </FilterGroup>
+            <FilterGroup label="类型">
+              <FilterPills
+                testId="type-filter-option"
+                options={TYPE_OPTIONS}
+                activeKey={typeKey}
+                onChange={handleTypeChange}
+              />
+            </FilterGroup>
+            <FilterGroup label="验收">
+              <FilterPills
+                testId="accepted-filter-option"
+                options={ACCEPTED_OPTIONS}
+                activeKey={acceptedKey}
+                onChange={handleAcceptedChange}
+              />
+            </FilterGroup>
           </div>
 
           {/* 主体：文档树（左）+ 内容查看（右）；双栏视口填充 + 各自内部滚动 */}
@@ -1297,7 +1313,7 @@ export default function DocsUnifiedPage() {
                     textAlign: "center",
                   }}
                 >
-                  <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+                  <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
                     {isApiError(error) ? error.message : "加载文档失败"}
                   </div>
                   <button

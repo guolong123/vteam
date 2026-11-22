@@ -193,9 +193,9 @@ const toolEffectMeta: Record<
   ToolEffect,
   { label: string; desc: string; color: string; bg: string; border: string }
 > = {
-  allow: { label: "允许", desc: "无需确认 · 只读/低风险", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  ask: { label: "询问", desc: "每次调用需确认 · 有副作用", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  deny: { label: "拒绝", desc: "白名单排除", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  allow: { label: "允许", desc: "无需确认 · 只读/低风险", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  ask: { label: "询问", desc: "每次调用需确认 · 有副作用", color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  deny: { label: "拒绝", desc: "白名单排除", color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 未知 effect 值归一化为 deny（effectOf 唯一出口之外不另设解析）。 */
@@ -281,7 +281,7 @@ function ToolEffectSelect({ toolName, value, readOnly, pending, onChange, testId
 
 /** 凭据状态双态（与 models-manage 页内定义完全一致；"扩展 token"范式页面内定义）。 */
 const credentialTheme = {
-  configured: { label: "已配置", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  configured: { label: "已配置", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   missing: { label: "未配置", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 } as const;
 
@@ -488,7 +488,7 @@ function roleBorder(role: RoleKey): string {
   return ROLE_BORDERS[role];
 }
 const ROLE_COLORS: Record<RoleKey, string> = {
-  product: "#0D9488", project_manager: "#0EA5E9", architect: "#8B5CF6", developer: "#10B981", tester: "#F59E0B", plan: "#475569",
+  product: "var(--color-accent-text)", project_manager: "#0EA5E9", architect: "#8B5CF6", developer: "#10B981", tester: "#F59E0B", plan: "#475569",
 };
 const ROLE_BGS: Record<RoleKey, string> = {
   product: "rgba(13,148,136,0.10)", project_manager: "rgba(14,165,233,0.10)", architect: "rgba(124,58,237,0.10)", developer: "rgba(16,185,129,0.10)", tester: "rgba(245,158,11,0.10)", plan: "rgba(71,85,105,0.10)",
@@ -662,7 +662,7 @@ function NativeRuleMapEditor({ name, value, seed, readOnly, pending, onChange }:
                   boxSizing: "border-box",
                   padding: `2px ${space.sm}px`,
                   borderRadius: radius.sm,
-                  border: `1px solid ${isCatchAll ? neutral[200] : error ? "#DC2626" : neutral[200]}`,
+                  border: `1px solid ${isCatchAll ? neutral[200] : error ? "var(--color-danger-text)" : neutral[200]}`,
                   backgroundColor: isCatchAll ? neutral[100] : "var(--color-surface, #fff)",
                   color: isCatchAll ? neutral[500] : neutral[800],
                   fontSize: fontSize.xs,
@@ -732,7 +732,7 @@ function NativeRuleMapEditor({ name, value, seed, readOnly, pending, onChange }:
                 )}
               </span>
               {error && (
-                <span data-testid="native-rule-error" data-code={error} style={{ fontSize: fontSize.xs, color: "#DC2626" }}>
+                <span data-testid="native-rule-error" data-code={error} style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>
                   {error === "empty" ? "glob 不能为空" : error === "too-long" ? `glob 最多 ${MAX_RULE_GLOB_LENGTH} 字符` : error === "duplicate" ? "glob 重复" : `规则最多 ${MAX_RULE_COUNT} 条`}
                 </span>
               )}
@@ -1139,7 +1139,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
             <span
               style={{
                 fontSize: fontSize.xs,
-                color: server && !server.enabled ? neutral[500] : "#0D9488",
+                color: server && !server.enabled ? neutral[500] : "var(--color-accent-text)",
                 backgroundColor: server && !server.enabled ? neutral[100] : "rgba(13,148,136,0.10)",
                 border: `1px solid ${server && !server.enabled ? neutral[200] : "rgba(13,148,136,0.22)"}`,
                 padding: "1px 6px",
@@ -1396,7 +1396,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
               当前没有已注册 worker，暂无可重启对象；新权限将在 worker 注册启动（injectAll()）时生效。
             </span>
           ) : restartDone ? (
-            <span data-testid="policy-restart-done" style={{ fontSize: fontSize.xs, color: "#0D9488" }}>
+            <span data-testid="policy-restart-done" style={{ fontSize: fontSize.xs, color: "var(--color-accent-text)" }}>
               重启命令已下发（{workers.length} 个 worker）；各 worker 重启完成后新权限生效。
             </span>
           ) : (
@@ -1414,7 +1414,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
                 fontSize: fontSize.sm,
                 fontWeight: 600,
                 color: "#FFFFFF",
-                backgroundColor: restartMutation.isPending ? neutral[400] : "#D97706",
+                backgroundColor: restartMutation.isPending ? neutral[400] : "var(--color-warn-text)",
                 border: "none",
                 borderRadius: radius.md,
                 padding: `${space.xs}px ${space.md}px`,
@@ -1443,7 +1443,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
           role="alert"
           style={{
             fontSize: fontSize.sm,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             display: "flex",
             alignItems: "center",
             gap: space.xs,
@@ -1632,7 +1632,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
                 borderRadius: radius.pill,
                 border: "1px solid rgba(239,68,68,0.22)",
                 backgroundColor: "var(--color-surface)",
-                color: "#DC2626",
+                color: "var(--color-danger-text)",
                 fontSize: fontSize.md,
                 fontWeight: 500,
                 cursor: "pointer",
@@ -1699,7 +1699,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
           role="alert"
           style={{
             fontSize: fontSize.sm,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             display: "flex",
             alignItems: "center",
             gap: space.xs,
@@ -1721,7 +1721,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
           role="alert"
           style={{
             fontSize: fontSize.sm,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             display: "flex",
             alignItems: "center",
             gap: space.xs,
@@ -1929,7 +1929,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
                     padding: `${space.xs + 1}px ${space.md}px`,
                     borderRadius: radius.pill,
                     border: "none",
-                    backgroundColor: "#0D9488",
+                    backgroundColor: "var(--color-brand-fill)",
                     color: "#FFFFFF",
                     fontSize: fontSize.xs,
                     fontWeight: 500,
@@ -1971,7 +1971,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
               alignItems: "center",
               gap: space.xs,
               fontSize: fontSize.xs,
-              color: "#D97706",
+              color: "var(--color-warn-text)",
               backgroundColor: "rgba(245,158,11,0.10)",
               border: `1px solid rgba(245,158,11,0.28)`,
               borderRadius: radius.md,
@@ -2196,7 +2196,7 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
         <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
           <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
             <label htmlFor="agent-name" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
-              Agent 名称 <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+              Agent 名称 <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>
             </label>
             <input
               id="agent-name"
@@ -2212,7 +2212,7 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
             <label htmlFor="agent-key" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
-              标识 agentKey <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+              标识 agentKey <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>
             </label>
             <input
               id="agent-key"
@@ -2228,7 +2228,7 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
               aria-invalid={showKeyError}
               style={{
                 ...inputBase,
-                borderColor: showKeyError ? "#DC2626" : neutral[200],
+                borderColor: showKeyError ? "var(--color-danger-text)" : neutral[200],
                 fontFamily: fontFamily.mono,
               }}
             />
@@ -2236,7 +2236,7 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
               执行体名为 vteam-{"<标识>"}；小写字母开头，仅含小写字母/数字/_/-，最多63字符，且不能以 vteam- 开头
             </span>
             {showKeyError && (
-              <span data-testid="agent-key-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>
+              <span data-testid="agent-key-error" role="alert" style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>
                 {keyError}
               </span>
             )}
@@ -2289,7 +2289,7 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
             role="alert"
             style={{
               fontSize: fontSize.sm,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               display: "flex",
               alignItems: "center",
               gap: space.xs,
@@ -2329,7 +2329,7 @@ function CreateAgentModal({ open, submitting, error, roleOptions, onClose, onSub
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: "none",
-              backgroundColor: "#0D9488",
+              backgroundColor: "var(--color-brand-fill)",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -2496,7 +2496,7 @@ function CloneAgentModal({ source, submitting, error, onClose, onSubmit }: Clone
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
             <label htmlFor="clone-key" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
-              标识 agentKey <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+              标识 agentKey <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>
             </label>
             <input
               id="clone-key"
@@ -2510,20 +2510,20 @@ function CloneAgentModal({ source, submitting, error, onClose, onSubmit }: Clone
               onBlur={() => setTouchedKey(true)}
               disabled={submitting}
               aria-invalid={showKeyError}
-              style={{ ...inputBase, borderColor: showKeyError ? "#DC2626" : neutral[200], fontFamily: fontFamily.mono }}
+              style={{ ...inputBase, borderColor: showKeyError ? "var(--color-danger-text)" : neutral[200], fontFamily: fontFamily.mono }}
             />
             <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
               执行体名为 vteam-{"<标识>"}；小写字母开头，仅含小写字母/数字/_/-，最多63字符，且不能以 vteam- 开头
             </span>
             {showKeyError && (
-              <span data-testid="agent-key-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>
+              <span data-testid="agent-key-error" role="alert" style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>
                 {keyError}
               </span>
             )}
           </div>
         </div>
         {error && (
-          <div data-testid="clone-agent-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}>
+          <div data-testid="clone-agent-error" role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", display: "flex", alignItems: "center", gap: space.xs }}>
             <span aria-hidden style={{ fontWeight: 700 }}>!</span>
             {error}
           </div>
@@ -2556,7 +2556,7 @@ function CloneAgentModal({ source, submitting, error, onClose, onSubmit }: Clone
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: "none",
-              backgroundColor: "#0D9488",
+              backgroundColor: "var(--color-brand-fill)",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -2874,7 +2874,7 @@ export default function AgentConfigPage() {
               textAlign: "center",
             }}
           >
-            <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+            <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
               {isApiError(error) ? error.message : "加载 Agent 列表失败"}
             </div>
             <button

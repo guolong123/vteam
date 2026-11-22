@@ -5,8 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog, SegmentedTabs } from "@/src/components/ui";
-import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
+import { ConfirmDialog, EmptyState, PrimaryButton, RowAction, SegmentedTabs } from "@/src/components/ui";
+import { neutral, space, radius, fontSize, fontFamily, shadow, layout } from "@/src/theme/tokens";
 import type {
   ApiAgent,
   AgentsResponse,
@@ -23,7 +23,7 @@ import type {
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 const authTypeTheme = {
-  ssh_key: { label: "SSH", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  ssh_key: { label: "SSH", color: "#0D9488", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   https_token: { label: "HTTPS", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 } as const;
 
@@ -33,7 +33,7 @@ const permTheme = {
 } as const;
 
 const statusTheme = {
-  configured: { label: "已配置", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  configured: { label: "已配置", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
 } as const;
 
 const rowCss = `
@@ -41,11 +41,12 @@ const rowCss = `
 .gr-repo-row:hover { background-color: var(--color-neutral-50); }
 `;
 
+/** 行内操作统一走 RowAction（视觉优化清单 AES-01）；页面级主 CTA 由调用方用 PrimaryButton。 */
 function ActionButton({ testid, label, onClick, disabled, primary }: { testid: string; label: string; onClick: () => void; disabled?: boolean; primary?: boolean }) {
   return (
-    <button type="button" data-testid={testid} onClick={onClick} disabled={disabled} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs + 2}px ${space.md + 2}px`, borderRadius: radius.pill, border: primary ? "none" : `1px solid ${neutral[200]}`, backgroundColor: primary ? "#0D9488" : "var(--color-surface)", color: primary ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: 500, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1, whiteSpace: "nowrap", fontFamily: fontFamily.body }}>
+    <RowAction testid={testid} onClick={onClick} disabled={disabled} tone={primary ? "accent" : "default"}>
       {label}
-    </button>
+    </RowAction>
   );
 }
 
@@ -123,7 +124,7 @@ function selectGrants(grants: GitGrantView[], agentId: string | null, writeOnly:
 
 function FilterChip({ active, label, count, onClick, testid }: { active: boolean; label: string; count?: number; onClick: () => void; testid?: string }) {
   return (
-    <button type="button" data-testid={testid} aria-pressed={active} onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: "3px 10px", borderRadius: radius.pill, border: `1px solid ${active ? "rgba(13,148,136,0.28)" : neutral[200]}`, backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)", color: active ? "#0D9488" : neutral[500], fontSize: fontSize.xs, fontWeight: active ? 600 : 500, lineHeight: 1.6, whiteSpace: "nowrap", cursor: "pointer", ...baseFont }}>
+    <button type="button" data-testid={testid} aria-pressed={active} onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: "3px 10px", borderRadius: radius.pill, border: `1px solid ${active ? "rgba(13,148,136,0.28)" : neutral[200]}`, backgroundColor: active ? "var(--color-accent-soft)" : "var(--color-surface)", color: active ? "#0D9488" : neutral[500], fontSize: fontSize.xs, fontWeight: active ? 600 : 500, lineHeight: 1.6, whiteSpace: "nowrap", cursor: "pointer", ...baseFont }}>
       {label}
       {count !== undefined && <span style={{ fontFamily: fontFamily.mono, opacity: 0.7 }}>{count}</span>}
     </button>
@@ -320,12 +321,12 @@ function GitRepoModal({ state, submitting, error, agents, credentials, onClose, 
           <button type="button" data-testid="git-repo-modal-cancel" aria-label="关闭" onClick={onClose} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, flexShrink: 0, borderRadius: "50%", border: "none", cursor: "pointer", backgroundColor: "transparent", color: neutral[400], fontSize: fontSize.lg, lineHeight: 1 }}>✕</button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>仓库地址 <span aria-hidden style={{ color: "#DC2626" }}>*</span></span>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>仓库地址 <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span></span>
           <input data-testid="git-repo-modal-url" type="text" placeholder="git@gitee.com:xishuhq/repo.git" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} disabled={submitting || !!editing} style={{ ...inputBase, fontFamily: fontFamily.mono, ...(editing ? { backgroundColor: neutral[50], color: neutral[500] } : {}) }} />
           {editing && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>仓库地址创建后不可修改</span>}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>关联凭证 <span aria-hidden style={{ color: "#DC2626" }}>*</span></span>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>关联凭证 <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span></span>
           <select data-testid="git-repo-modal-credential" value={credentialId} onChange={(e) => setCredentialId(e.target.value)} disabled={submitting} style={{ ...inputBase, cursor: "pointer" }}>
             {credentials.length === 0 && <option value="">暂无凭证，请先到“凭证”Tab 创建</option>}
             {credentials.map((c) => (<option key={c.id} value={c.id}>{c.name} · {c.authType === "ssh_key" ? "SSH" : "HTTPS"} · {c.fingerprint ?? ""}</option>))}
@@ -341,7 +342,7 @@ function GitRepoModal({ state, submitting, error, agents, credentials, onClose, 
               const checked = selectedAgents.has(a.id);
               const write = checked && writeAgents.has(a.id);
               return (
-                <label key={a.id} data-agent-id={a.id} data-checked={checked ? "true" : "false"} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: checked ? "rgba(13,148,136,0.10)" : "var(--color-surface)", border: `1px solid ${checked ? "rgba(13,148,136,0.22)" : neutral[200]}`, cursor: "pointer", fontSize: fontSize.md, color: neutral[700] }}>
+                <label key={a.id} data-agent-id={a.id} data-checked={checked ? "true" : "false"} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: checked ? "var(--color-accent-soft)" : "var(--color-surface)", border: `1px solid ${checked ? "rgba(13,148,136,0.22)" : neutral[200]}`, cursor: "pointer", fontSize: fontSize.md, color: neutral[700] }}>
                   <input type="checkbox" checked={checked} onChange={() => toggleAgent(a.id)} style={{ accentColor: "#0D9488" }} />
                   {a.name}
                   <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, marginLeft: "auto", padding: "0 6px", borderRadius: radius.sm, backgroundColor: write ? "rgba(245,158,11,0.10)" : "var(--color-surface)", border: `1px solid ${write ? "rgba(245,158,11,0.28)" : neutral[200]}`, opacity: checked ? 1 : 0.45 }}>
@@ -353,7 +354,7 @@ function GitRepoModal({ state, submitting, error, agents, credentials, onClose, 
             })}
           </div>
         </div>
-        {error && <div data-testid="git-repo-modal-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{error}</div>}
+        {error && <div data-testid="git-repo-modal-error" role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", display: "flex", alignItems: "center", gap: space.xs }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
           <button type="button" data-testid="git-repo-modal-cancel" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.md, fontWeight: 500, cursor: "pointer" }}>取消</button>
           <button type="button" data-testid="git-repo-modal-save" disabled={!canSave} onClick={handleSave} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500, cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.6, boxShadow: "0 6px 16px rgba(13,148,136,.3)" }}>{submitting ? "保存中…" : editing ? "保存配置" : "创建并授权"}</button>
@@ -400,11 +401,11 @@ function CredentialModal({ state, submitting, error, onClose, onSubmit }: Creden
           <button type="button" onClick={onClose} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: "50%", border: "none", backgroundColor: "transparent", color: neutral[400], fontSize: fontSize.lg }}>✕</button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>凭证名称 <span aria-hidden style={{ color: "#DC2626" }}>*</span></span>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>凭证名称 <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span></span>
           <input data-testid="git-credential-modal-name" type="text" placeholder="如 gitee-ssh-main" value={name} onChange={(e) => setName(e.target.value)} disabled={submitting} style={inputBase} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>认证方式 <span aria-hidden style={{ color: "#DC2626" }}>*</span></span>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>认证方式 <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span></span>
           <select data-testid="git-credential-modal-auth-type" value={authType} onChange={(e) => setAuthType(e.target.value as "ssh_key" | "https_token")} disabled={submitting || !!editing} style={{ ...inputBase, cursor: editing ? "default" : "pointer" }}>
             <option value="ssh_key">SSH 私钥</option>
             <option value="https_token">HTTPS Token</option>
@@ -412,7 +413,7 @@ function CredentialModal({ state, submitting, error, onClose, onSubmit }: Creden
           {editing && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>认证方式创建后不可修改</span>}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>{authType === "ssh_key" ? "SSH 私钥" : "HTTPS Token"} {editing && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>（留空=不更新）</span>}{!editing && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}</span>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>{authType === "ssh_key" ? "SSH 私钥" : "HTTPS Token"} {editing && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>（留空=不更新）</span>}{!editing && <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>}</span>
           {authType === "ssh_key" ? <textarea data-testid="git-credential-modal-key" rows={4} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" value={key} onChange={(e) => setKey(e.target.value)} disabled={submitting} style={{ ...inputBase, fontFamily: fontFamily.mono, resize: "vertical", minHeight: 96 }} /> : <input data-testid="git-credential-modal-key" type="password" placeholder="输入 HTTPS 访问 token" value={key} onChange={(e) => setKey(e.target.value)} disabled={submitting} style={{ ...inputBase, fontFamily: fontFamily.mono }} />}
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>明文仅提交一次，响应只返回脱敏 fingerprint</span>
         </div>
@@ -420,7 +421,7 @@ function CredentialModal({ state, submitting, error, onClose, onSubmit }: Creden
           <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>描述</span>
           <input data-testid="git-credential-modal-description" type="text" placeholder="可选说明" value={description} onChange={(e) => setDescription(e.target.value)} disabled={submitting} style={inputBase} />
         </div>
-        {error && <div data-testid="git-credential-modal-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626" }}>{error}</div>}
+        {error && <div data-testid="git-credential-modal-error" role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
           <button type="button" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.md, fontWeight: 500, cursor: "pointer" }}>取消</button>
           <button type="button" data-testid="git-credential-modal-save" disabled={!canSave} onClick={handleSave} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500, cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.6 }}> {submitting ? "保存中…" : editing ? "保存" : "创建"}</button>
@@ -498,10 +499,10 @@ export default function GitReposPage() {
   return (
     <div data-testid="git-repos-root" style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column", backgroundColor: neutral[50], fontFamily: fontFamily.body, overflow: "auto" }}>
       <style>{rowCss}</style>
-      <main style={{ flex: 1, minHeight: 0, padding: space.xl }}>
-        <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", flexDirection: "column", gap: space.lg }}>
+      <main style={{ flex: 1, minHeight: 0, padding: `${layout.contentTop}px ${space.xl}px ${space.xl}px` }}>
+        <div style={{ maxWidth: layout.wide, margin: "0 auto", display: "flex", flexDirection: "column", gap: space.lg }}>
           <div data-testid="git-repos-toolbar" style={{ display: "flex", alignItems: "center", gap: space.lg, flexWrap: "wrap" }}>
-            <span style={{ fontSize: fontSize.xl, fontWeight: 700, color: neutral[900] }}>仓库管理</span>
+            {/* 页内不再重复顶栏的「仓库管理」（视觉优化清单 AES-06），只留计数与说明 */}
             <span data-testid="git-repos-count" style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "2px 10px", fontFamily: fontFamily.mono }}>{filterActive ? `${filteredRepos.length} / ${repos.length} 个仓库` : `${repos.length} 个仓库`} · {credentials.length} 个凭证 · 已授权 {grantedAgentCount} 个 Agent</span>
             <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>{isAdmin ? "凭证加密存储 · 按活跃 Agent 下发" : "成员只读"}</span>
           </div>
@@ -531,18 +532,26 @@ export default function GitReposPage() {
               onChange={(k) => setTab(k as "repos" | "credentials")}
             />
             <div style={{ marginLeft: "auto", display: "flex", gap: space.sm, paddingBottom: 0 }}>
-              {isAdmin && tab === "repos" && <ActionButton testid="git-repos-add" label="新增仓库" primary onClick={() => { setModalError(null); setRepoModal({ mode: "create" }); }} />}
-              {isAdmin && tab === "credentials" && <ActionButton testid="git-credentials-add" label="新增凭证" primary onClick={() => { setModalError(null); setCredModal({ mode: "create" }); }} />}
+              {isAdmin && tab === "repos" && <PrimaryButton testid="git-repos-add" onClick={() => { setModalError(null); setRepoModal({ mode: "create" }); }}>新增仓库</PrimaryButton>}
+              {isAdmin && tab === "credentials" && <PrimaryButton testid="git-credentials-add" onClick={() => { setModalError(null); setCredModal({ mode: "create" }); }}>新增凭证</PrimaryButton>}
             </div>
           </div>
 
           {tab === "repos" ? (
-            reposQuery.isPending ? <div data-testid="git-repos-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div> : reposQuery.isError ? <div data-testid="git-repos-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md, padding: space.xl }}><div style={{ color: "#DC2626" }}>{isApiError(reposQuery.error) ? reposQuery.error.message : "加载失败"}</div><button data-testid="git-repos-retry" onClick={() => reposQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>重试</button></div> : (
+            reposQuery.isPending ? <div data-testid="git-repos-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div> : reposQuery.isError ? <div data-testid="git-repos-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md, padding: space.xl }}><div style={{ color: "var(--color-danger-text)" }}>{isApiError(reposQuery.error) ? reposQuery.error.message : "加载失败"}</div><button data-testid="git-repos-retry" onClick={() => reposQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>重试</button></div> : (
               <div data-testid="git-repos-list" style={{ display: "flex", flexDirection: "column", gap: space.md, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md, overflowX: "auto" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.md}px` }}><span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>已配置仓库</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>凭证按仓库粒度复用 · 授权 Agent 可 clone/pull/push</span></div>
                 <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.md, minWidth: REPO_ROW_MIN_WIDTH, padding: `${space.sm}px ${space.lg}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={REPO_COLS.url}>仓库</span><span style={REPO_COLS.auth}>认证</span><span style={REPO_COLS.cred}>凭证</span><span style={REPO_COLS.fingerprint}>指纹</span><span style={{ flex: 1, minWidth: GRANTS_MIN_WIDTH }}>授权 Agent</span><span style={REPO_COLS.status}>状态</span><span style={{ ...REPO_COLS.actions, textAlign: "right" }}>操作</span></div>
                 {filteredRepos.map((repo) => (<GitRepoRow key={repo.id} repo={repo} grants={grantsFor(repo)} isAdmin={isAdmin} onConfigure={(r) => { setModalError(null); setRepoModal({ mode: "edit", repo: r }); }} onDelete={(r) => { setModalError(null); setDeleteTarget(r); }} />))}
-                {repos.length === 0 && <div style={{ padding: space.xxl, textAlign: "center", fontSize: fontSize.md, color: neutral[400] }}>暂无仓库，{isAdmin ? "点右上角“新增仓库”并选择已有凭证" : "请管理员配置"}</div>}
+                {repos.length === 0 && (
+                  <EmptyState
+                    testid="git-repos-empty"
+                    icon="⌗"
+                    title="还没有仓库"
+                    description={isAdmin ? "新增仓库并选择已有凭证后即可授权 Agent 拉取代码" : "请管理员先配置仓库与凭证"}
+                    action={isAdmin ? <PrimaryButton testid="git-repos-empty-add" onClick={() => { setModalError(null); setRepoModal({ mode: "create" }); }}>新增仓库</PrimaryButton> : undefined}
+                  />
+                )}
                 {repos.length > 0 && filteredRepos.length === 0 && (
                   <div data-testid="git-repos-filter-empty" style={{ padding: space.xxl, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: space.md }}>
                     <span style={{ fontSize: fontSize.md, color: neutral[400] }}>没有匹配当前筛选的仓库</span>
@@ -552,12 +561,20 @@ export default function GitReposPage() {
               </div>
             )
           ) : (
-            credsQuery.isPending ? <div data-testid="git-credentials-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div> : credsQuery.isError ? <div data-testid="git-credentials-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md, padding: space.xl }}><div style={{ color: "#DC2626" }}>{isApiError(credsQuery.error) ? credsQuery.error.message : "加载失败"}</div><button data-testid="git-credentials-retry" onClick={() => credsQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>重试</button></div> : (
+            credsQuery.isPending ? <div data-testid="git-credentials-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div> : credsQuery.isError ? <div data-testid="git-credentials-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md, padding: space.xl }}><div style={{ color: "var(--color-danger-text)" }}>{isApiError(credsQuery.error) ? credsQuery.error.message : "加载失败"}</div><button data-testid="git-credentials-retry" onClick={() => credsQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>重试</button></div> : (
               <div data-testid="git-credentials-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md, overflowX: "auto" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.md}px` }}><span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>凭证池</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>一个凭证可关联多仓库 · 名称全局唯一</span></div>
                 <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.lg, minWidth: 1000, padding: `${space.sm}px ${space.xl}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={{ width: 200, flexShrink: 0 }}>凭证名称</span><span style={{ width: 84, flexShrink: 0 }}>认证</span><span style={{ width: 160, flexShrink: 0 }}>指纹</span><span style={{ flex: 1, minWidth: 120 }}>描述</span><span style={{ width: 88, flexShrink: 0 }}>状态</span><span style={{ width: 160, flexShrink: 0, textAlign: "right" }}>操作</span></div>
                 {credentials.map((c) => (<CredentialRow key={c.id} cred={c} isAdmin={isAdmin} onEdit={(cred) => { setModalError(null); setCredModal({ mode: "edit", cred }); }} onDelete={(cred) => { setModalError(null); setDeleteCredTarget(cred); }} />))}
-                {credentials.length === 0 && <div style={{ padding: space.xxl, textAlign: "center", fontSize: fontSize.md, color: neutral[400] }}>暂无凭证，{isAdmin ? "点右上角“新增凭证”" : "请管理员创建"}</div>}
+                {credentials.length === 0 && (
+                  <EmptyState
+                    testid="git-credentials-empty"
+                    icon="◈"
+                    title="还没有凭证"
+                    description={isAdmin ? "先添加 SSH / Token 凭证，仓库授权时直接复用" : "请管理员先创建凭证"}
+                    action={isAdmin ? <PrimaryButton testid="git-credentials-empty-add" onClick={() => { setModalError(null); setCredModal({ mode: "create" }); }}>新增凭证</PrimaryButton> : undefined}
+                  />
+                )}
               </div>
             )
           )}

@@ -106,16 +106,16 @@ export const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
 export const ISSUE_STATUS_BADGE: Record<TaskIssueItem["status"], { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
   in_progress: { label: "进行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
-  resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  resolved: { label: "已解决", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-  rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  rejected: { label: "已拒绝", color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 产出物类型四色：结论文本=紫 / 文档=蓝 / 文件=绿 / 计划=青。 */
 export const ARTIFACT_TYPE_THEME: Record<ArtifactApiType, { color: string }> = {
   text: { color: "#7C3AED" },
   doc: { color: "#0D9488" },
-  file: { color: "#059669" },
+  file: { color: "var(--color-success-text)" },
 };
 
 /** 产出物类型中文名。 */

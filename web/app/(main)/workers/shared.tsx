@@ -36,15 +36,15 @@ export const workerStatusTheme: Record<
   WorkerStatusLabel,
   { color: string; bg: string; border: string }
 > = {
-  在线: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  维护中: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  离线: { color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  在线: { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  维护中: { color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  离线: { color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 负载档位色（原型 :47-51）：高（红）/ 中（琥珀）/ 低（绿） */
 export function loadColor(pct: number): string {
-  if (pct >= 75) return "#DC2626";
-  if (pct >= 50) return "#D97706";
+  if (pct >= 75) return "var(--color-danger-text)";
+  if (pct >= 50) return "var(--color-warn-text)";
   return "#10B981";
 }
 
@@ -188,11 +188,11 @@ export const MCP_STATUS_THEME: Record<
   McpStatusEntry["status"],
   { label: string; mark: string; color: string; bg: string; border: string }
 > = {
-  connected: { label: "已连接", mark: "✅", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  pending: { label: "连接中", mark: "◐", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  connected: { label: "已连接", mark: "●", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  pending: { label: "连接中", mark: "◐", color: "var(--color-accent-text)", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   disabled: { label: "已停用", mark: "○", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-  failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  failed: { label: "连接失败", mark: "✗", color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  needs_auth: { label: "待授权", mark: "🔑", color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
 };
 
 /* ------------------------------ 内置 git 工具（17 篇 §4.1 七工具） ------------------------------ */

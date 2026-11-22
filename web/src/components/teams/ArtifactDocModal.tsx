@@ -81,7 +81,7 @@ export function ArtifactDocModal({
           data-testid="artifact-doc-modal-error"
           role="alert"
           style={{
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             backgroundColor: "rgba(239,68,68,0.08)",
             border: "1px solid rgba(239,68,68,0.14)",
             borderRadius: radius.sm,

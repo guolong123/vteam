@@ -30,7 +30,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { EmptyState, ConfirmDialog, PageWindow } from "@/src/components/ui";
+import { EmptyState, ConfirmDialog, MetricCard, PageWindow, PrimaryButton, RowAction, RowActions } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -47,13 +47,13 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 与 Agent 角色色，遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层。
  */
 const roleTheme = {
-  管理员: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)", mark: "◈" },
-  成员: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", mark: "●" },
+  管理员: { color: "var(--color-accent-text)", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)", mark: "◈" },
+  成员: { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", mark: "●" },
 } as const;
 
 const statusTheme = {
-  启用: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", mark: "✅" },
-  禁用: { color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)", mark: "⛔" },
+  启用: { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", mark: "●" },
+  禁用: { color: "var(--color-danger-text)", bg: "var(--color-danger-soft)", border: "rgba(239,68,68,0.22)", mark: "●" },
 } as const;
 
 /** 自定义角色兜底主题（GET /roles 除 admin/member 外的角色）：灰蓝 var(--color-neutral-600) 系，仿 statusColors 已归档 */
@@ -162,7 +162,7 @@ function RoleBadge({ label }: { label: string }) {
   );
 }
 
-/** 状态徽章（启用 ✅ 绿 / 禁用 ⛔ 红） */
+/** 状态徽章（启用 ● 绿 / 禁用 ● 红；圆点用几何符号，不混 emoji —— 视觉优化清单 AES-10） */
 function StatusBadge({ enabled }: { enabled: boolean }) {
   const label = enabled ? "启用" : "禁用";
   const theme = statusTheme[label];
@@ -213,23 +213,26 @@ function UserRow({
       data-testid="user-item"
       data-user-id={user.id}
       data-status={enabled ? "启用" : "禁用"}
+      className={enabled ? "table-row" : "table-row table-row-muted"}
       style={{
         display: "flex",
         alignItems: "center",
         gap: space.md,
         padding: `${space.md}px ${space.lg}px`,
+        minHeight: 56,
         borderBottom: `1px solid ${neutral[100]}`,
-        backgroundColor: enabled ? "var(--color-surface)" : neutral[50],
         ...baseFont,
       }}
     >
       {/* 头像 + 用户名 + 邮箱 */}
       <div style={{ display: "flex", alignItems: "center", gap: space.md, flex: 2, minWidth: 0 }}>
+        {/* 头像统一 36px 圆形（视觉优化清单 AES-11）：人=圆形、团队=圆角方形，
+            此前这里是自建 34px，与成员库 28 / 团队 36 三种尺寸并存 */}
         <span
           aria-hidden
           style={{
-            width: 34,
-            height: 34,
+            width: 36,
+            height: 36,
             flexShrink: 0,
             borderRadius: "50%",
             display: "inline-flex",
@@ -259,8 +262,8 @@ function UserRow({
       </div>
 
       {/* 所属团队数（GET /users _count.teamUserMembers 真实计数，MOCK-05） */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[700] }}>{user._count?.teamUserMembers ?? 0}</div>
+      <div style={{ flex: 1, minWidth: 0, textAlign: "right" }}>
+        <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[700], fontVariantNumeric: "tabular-nums" }}>{user._count?.teamUserMembers ?? 0}</div>
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>所属团队</div>
       </div>
 
@@ -269,68 +272,46 @@ function UserRow({
         <StatusBadge enabled={enabled} />
       </div>
 
-      {/* 操作：编辑 / 禁用 / 重置密码 */}
-      <div style={{ display: "flex", alignItems: "center", gap: space.sm, justifyContent: "flex-end" }}>
-        <button
-          type="button"
-          data-testid="user-edit-button"
-          data-user-id={user.id}
+      {/* 操作：编辑 / 禁用 / 重置密码（统一 RowAction 形态，见视觉优化清单 AES-01） */}
+      <RowActions>
+        <RowAction
+          testid="user-edit-button"
+          dataAttrs={{ "data-user-id": user.id }}
           onClick={() => onEdit(user)}
-          style={{
-            padding: `${space.sm - 1}px ${space.md}px`,
-            borderRadius: radius.md,
-            border: `1px solid ${neutral[200]}`,
-            backgroundColor: "var(--color-surface)",
-            color: neutral[700],
-            fontSize: fontSize.md,
-            cursor: "pointer",
-            fontFamily: fontFamily.body,
-          }}
         >
           编辑
-        </button>
-        <button
-          type="button"
-          data-testid="user-toggle-button"
-          data-user-id={user.id}
+        </RowAction>
+        <RowAction
+          tone={enabled ? "danger" : "default"}
+          testid="user-toggle-button"
+          dataAttrs={{ "data-user-id": user.id }}
           onClick={() => onToggle(user)}
-          style={{
-            padding: `${space.sm - 1}px ${space.md}px`,
-            borderRadius: radius.md,
-            border: `1px solid ${enabled ? "rgba(239,68,68,0.22)" : neutral[200]}`,
-            backgroundColor: enabled ? statusTheme["禁用"].bg : "var(--color-surface)",
-            color: enabled ? statusTheme["禁用"].color : neutral[600],
-            fontSize: fontSize.md,
-            cursor: "pointer",
-            fontFamily: fontFamily.body,
-          }}
         >
           {enabled ? "禁用" : "启用"}
-        </button>
-        <button
-          type="button"
-          data-testid="user-reset-button"
-          data-user-id={user.id}
+        </RowAction>
+        <RowAction
+          testid="user-reset-button"
+          dataAttrs={{ "data-user-id": user.id }}
           onClick={() => onReset(user)}
-          style={{
-            padding: `${space.sm - 1}px ${space.md}px`,
-            borderRadius: radius.md,
-            border: "1px solid transparent",
-            backgroundColor: neutral[100],
-            color: neutral[600],
-            fontSize: fontSize.md,
-            cursor: "pointer",
-            fontFamily: fontFamily.body,
-          }}
         >
           重置密码
-        </button>
-      </div>
+        </RowAction>
+      </RowActions>
     </div>
   );
 }
 
 /* ------------------------------ 新增用户弹层（受控开关：✕ / 遮罩 / Esc 关闭） ------------------------------ */
+
+
+/** 数据表格统一观感（视觉优化清单 AES-08）：hover 浅底 + 表头 sticky + 行高 56。 */
+const TABLE_CSS = `
+.table-row { transition: background-color .15s ease; }
+.table-row { background-color: var(--color-surface); }
+.table-row:hover { background-color: var(--color-neutral-50); }
+.table-row-muted { background-color: var(--color-neutral-50); }
+.table-head { position: sticky; top: 0; z-index: 1; }
+`;
 
 const formField: CSSProperties = {
   width: "100%",
@@ -574,7 +555,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
           <div
             role="alert"
             data-testid="user-form-error"
-            style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}
+            style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", display: "flex", alignItems: "center", gap: space.xs }}
           >
             <span aria-hidden style={{ fontWeight: 700 }}>!</span>
             {formError || error}
@@ -612,7 +593,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#0D9488",
+              backgroundColor: "var(--color-brand-fill)",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -765,7 +746,7 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
           <div
             role="alert"
             data-testid="user-reset-form-error"
-            style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}
+            style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", display: "flex", alignItems: "center", gap: space.xs }}
           >
             <span aria-hidden style={{ fontWeight: 700 }}>!</span>
             {formError || error}
@@ -802,7 +783,7 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#0D9488",
+              backgroundColor: "var(--color-brand-fill)",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -1024,7 +1005,7 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
           <div
             role="alert"
             data-testid="edit-user-error"
-            style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}
+            style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", display: "flex", alignItems: "center", gap: space.xs }}
           >
             <span aria-hidden style={{ fontWeight: 700 }}>!</span>
             {error}
@@ -1062,7 +1043,7 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#0D9488",
+              backgroundColor: "var(--color-brand-fill)",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -1191,7 +1172,7 @@ export default function UsersPage() {
 
   /* 统计条（对齐原型 4 卡；管理员/成员按角色名分组，已禁用按 enabled=false） */
   const stats = [
-    { label: "总用户", value: data?.total ?? items.length, theme: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" } },
+    { label: "总用户", value: data?.total ?? items.length, theme: { color: "var(--color-accent-text)", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" } },
     { label: "管理员", value: items.filter((u) => resolveRoleLabel(u.roleId, roles) === "管理员").length, theme: roleTheme["管理员"] },
     { label: "成员", value: items.filter((u) => resolveRoleLabel(u.roleId, roles) === "成员").length, theme: roleTheme["成员"] },
     { label: "已禁用", value: items.filter((u) => !u.enabled).length, theme: statusTheme["禁用"] },
@@ -1202,6 +1183,7 @@ export default function UsersPage() {
       testId="user-management-root"
       style={{ position: "relative", backgroundColor: neutral[50], fontFamily: fontFamily.body }}
     >
+      <style>{TABLE_CSS}</style>
       {/* 统计条（平台管理员视角：账号总量与角色分布） */}
       <div
         data-testid="user-stats"
@@ -1213,43 +1195,16 @@ export default function UsersPage() {
         }}
       >
         {stats.map((s) => (
-          <div
+          <MetricCard
             key={s.label}
-            data-stat={s.label}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space.md,
-              padding: `${space.lg}px ${space.xl}px`,
-              borderRadius: radius.lg,
-              backgroundColor: "var(--color-surface)",
-              border: `1px solid ${neutral[200]}`,
-              boxShadow: shadow.sm,
-            }}
-          >
-            <span
-              aria-hidden
-              style={{
-                width: 10,
-                height: 10,
-                flexShrink: 0,
-                borderRadius: "50%",
-                backgroundColor: s.theme.color,
-              }}
-            />
-            <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>{s.label}</span>
-            <span
-              style={{
-                marginLeft: "auto",
-                fontSize: fontSize.xxl,
-                fontWeight: 700,
-                color: s.theme.color,
-                lineHeight: 1,
-              }}
-            >
-              {s.value}
-            </span>
-          </div>
+            testid="user-stat-card"
+            dataAttrs={{ "data-stat": s.label }}
+            layout="inline"
+            label={s.label}
+            value={s.value}
+            dotColor={s.theme.color}
+            valueColor={s.theme.color}
+          />
         ))}
       </div>
 
@@ -1301,29 +1256,10 @@ export default function UsersPage() {
           />
         </div>
 
-        <button
-          type="button"
-          data-testid="add-user-button"
-          onClick={() => setFormOpen(true)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: space.xs,
-            padding: `${space.sm + 2}px ${space.lg}px`,
-            borderRadius: radius.pill,
-            border: "none",
-            backgroundColor: "#0D9488",
-            color: "#FFFFFF",
-            fontSize: fontSize.md,
-            fontWeight: 500,
-            cursor: "pointer",
-            boxShadow: "0 6px 16px rgba(13,148,136,.3)",
-            fontFamily: fontFamily.body,
-          }}
-        >
-          <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>+</span>
+        <PrimaryButton testid="add-user-button" onClick={() => setFormOpen(true)}>
+          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>+</span>
           新增用户
-        </button>
+        </PrimaryButton>
       </div>
 
       {/* 列表操作失败提示（禁用/启用） */}
@@ -1367,7 +1303,7 @@ export default function UsersPage() {
             border: `1px solid ${neutral[200]}`,
           }}
         >
-          <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+          <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
             {isApiError(error) ? error.message : "加载用户列表失败"}
           </div>
           <button
@@ -1414,6 +1350,7 @@ export default function UsersPage() {
         >
           {/* 表头 */}
           <div
+            className="table-head"
             style={{
               display: "flex",
               alignItems: "center",
@@ -1428,7 +1365,7 @@ export default function UsersPage() {
             }}
           >
             <span style={{ flex: 2, minWidth: 0 }}>用户</span>
-            <span style={{ flex: 1, minWidth: 0 }}>所属团队数</span>
+            <span style={{ flex: 1, minWidth: 0, textAlign: "right" }}>所属团队数</span>
             <span style={{ flex: 1, minWidth: 0 }}>状态</span>
             <span style={{ flex: 2, minWidth: 0, textAlign: "right" }}>操作</span>
           </div>

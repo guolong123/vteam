@@ -207,7 +207,7 @@ export function TaskInfoEditModal({
 
         <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
           <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>
-            任务标题 <span style={{ color: "#DC2626" }}>*</span>
+            任务标题 <span style={{ color: "var(--color-danger-text)" }}>*</span>
           </span>
           <input
             data-testid="task-edit-title-input"
@@ -367,14 +367,14 @@ export function TaskInfoEditModal({
             style={{ display: "none" }}
           />
           {uploadError && (
-            <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>
+            <div role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", fontWeight: 500 }}>
               {uploadError}
             </div>
           )}
         </div>
 
         {(formError || saveMutation.isError) && (
-          <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>
+          <div role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", fontWeight: 500 }}>
             {formError ?? (isApiError(saveMutation.error) ? saveMutation.error.message : "保存失败")}
           </div>
         )}

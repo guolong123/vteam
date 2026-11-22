@@ -74,7 +74,7 @@ export function PlanDocModal({
           style={{
             marginTop: space.md,
             fontSize: fontSize.xs,
-            color: "#B45309",
+            color: "var(--color-warn-text)",
             backgroundColor: "rgba(245,158,11,0.10)",
             border: "1px solid rgba(245,158,11,0.30)",
             borderRadius: radius.md,

@@ -135,7 +135,7 @@ function FilePreviewContent() {
             border: "none",
             background: "none",
             padding: 0,
-            color: "#0D9488",
+            color: "var(--color-accent-text)",
             fontSize: fontSize.sm,
             cursor: "pointer",
             fontFamily: fontFamily.body,
@@ -150,7 +150,7 @@ function FilePreviewContent() {
         <a
           href={url}
           download={name}
-          style={{ marginLeft: "auto", color: "#0D9488", fontSize: fontSize.sm, textDecoration: "none", border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, padding: "2px 10px" }}
+          style={{ marginLeft: "auto", color: "var(--color-accent-text)", fontSize: fontSize.sm, textDecoration: "none", border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, padding: "2px 10px" }}
         >
           下载原件
         </a>

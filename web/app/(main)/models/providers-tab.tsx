@@ -83,7 +83,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog } from "@/src/components/ui";
+import { ConfirmDialog, RowAction, SectionTitle } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -91,6 +91,7 @@ import {
   fontSize,
   fontFamily,
   shadow,
+  layout,
 } from "@/src/theme/tokens";
 import type {
   ApiModel,
@@ -107,13 +108,13 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 凭据状态三态（已配置 / 未配置 / 已撤销），语义独立于任务四态，页面内定义。 */
 const credentialTheme = {
-  configured: { label: "已配置", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  configured: { label: "已配置", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   missing: { label: "未配置", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-  revoked: { label: "已撤销", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  revoked: { label: "已撤销", color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
 } as const;
 
 /** Provider 列表主色（与导航高亮蓝同族） */
-const activeBlue = "#0D9488";
+const activeBlue = "var(--color-brand-fill)";
 
 /** 行 hover / 过渡（scoped：pv 前缀避免污染） */
 const rowCss = `
@@ -271,31 +272,11 @@ export function ActionButton({
   disabled?: boolean;
   primary?: boolean;
 }) {
+  // 统一到 RowAction（视觉优化清单 AES-01）：Provider 行操作不再用胶囊
   return (
-    <button
-      type="button"
-      data-testid={testid}
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: space.xs,
-        padding: `${space.xs + 2}px ${space.md + 2}px`,
-        borderRadius: radius.pill,
-        border: primary ? "none" : `1px solid ${neutral[200]}`,
-        backgroundColor: primary ? activeBlue : "var(--color-surface)",
-        color: primary ? "#FFFFFF" : neutral[600],
-        fontSize: fontSize.sm,
-        fontWeight: 500,
-        cursor: disabled ? "default" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-        whiteSpace: "nowrap",
-        fontFamily: fontFamily.body,
-      }}
-    >
+    <RowAction testid={testid} onClick={onClick} disabled={disabled} tone={primary ? "accent" : "default"}>
       {label}
-    </button>
+    </RowAction>
   );
 }
 
@@ -356,7 +337,7 @@ function ProviderModels({
           alignItems: "center",
           gap: space.sm,
           fontSize: fontSize.sm,
-          color: "#DC2626",
+          color: "var(--color-danger-text)",
           padding: `${space.sm}px 0`,
         }}
       >
@@ -461,7 +442,7 @@ function ProviderModels({
                 flexShrink: 0,
                 fontSize: fontSize.xs,
                 color: m.enabled ? activeBlue : neutral[400],
-                backgroundColor: m.enabled ? "rgba(13,148,136,0.10)" : neutral[100],
+                backgroundColor: m.enabled ? "var(--color-accent-soft)" : neutral[100],
                 border: `1px solid ${m.enabled ? "rgba(13,148,136,0.22)" : neutral[200]}`,
                 padding: "1px 8px",
                 borderRadius: radius.pill,
@@ -784,7 +765,7 @@ export function ConfigureModal({
           {showOptionFilter && filterNoMatch && (
             <span
               data-testid="provider-modal-provider-filter-empty"
-              style={{ fontSize: fontSize.xs, color: "#D97706" }}
+              style={{ fontSize: fontSize.xs, color: "var(--color-warn-text)" }}
             >
               无匹配的 Provider（保留当前选中：{selectedProviderId}）
             </span>
@@ -794,7 +775,7 @@ export function ConfigureModal({
         {/* API key 输入（password；本地 provider 无鉴权可留空） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
-            API Key {!isLocal && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}
+            API Key {!isLocal && <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>}
           </span>
           <input
             data-testid="provider-modal-key-input" autoComplete="new-password" name="api-token"
@@ -870,7 +851,7 @@ export function ConfigureModal({
                     gap: space.sm,
                     padding: `${space.xs + 2}px ${space.md}px`,
                     borderRadius: radius.pill,
-                    backgroundColor: checked ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+                    backgroundColor: checked ? "var(--color-accent-soft)" : "var(--color-surface)",
                     border: `1px solid ${checked ? "rgba(13,148,136,0.22)" : neutral[200]}`,
                     cursor: "pointer",
                     fontSize: fontSize.md,
@@ -890,12 +871,12 @@ export function ConfigureModal({
                       width: 7,
                       height: 7,
                       borderRadius: "50%",
-                      backgroundColor: online ? "#059669" : "var(--color-neutral-400)",
+                      backgroundColor: online ? "var(--color-success-text)" : "var(--color-neutral-400)",
                       flexShrink: 0,
                     }}
                   />
                   {w.name ?? w.id}
-                  <span style={{ fontSize: fontSize.xs, color: online ? "#059669" : neutral[400] }}>
+                  <span style={{ fontSize: fontSize.xs, color: online ? "var(--color-success-text)" : neutral[400] }}>
                     {online ? "在线" : "离线"}
                   </span>
                 </label>
@@ -913,7 +894,7 @@ export function ConfigureModal({
             role="alert"
             style={{
               fontSize: fontSize.sm,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               display: "flex",
               alignItems: "center",
               gap: space.xs,
@@ -1297,7 +1278,7 @@ export function AddProviderModal({
           {showOptionFilter && filterNoMatch && (
             <span
               data-testid="provider-add-provider-filter-empty"
-              style={{ ...hintStyle, color: "#D97706" }}
+              style={{ ...hintStyle, color: "var(--color-warn-text)" }}
             >
               无匹配项（当前选中项保留可见）
             </span>
@@ -1317,7 +1298,7 @@ export function AddProviderModal({
         {/* Provider ID */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={labelStyle}>
-            Provider ID <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+            Provider ID <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>
           </span>
           <input
             data-testid="provider-add-provider-input"
@@ -1330,12 +1311,12 @@ export function AddProviderModal({
             style={{ ...inputBase, fontFamily: fontFamily.mono }}
           />
           {existingMatch ? (
-            <span style={{ ...hintStyle, color: "#D97706" }}>
+            <span style={{ ...hintStyle, color: "var(--color-warn-text)" }}>
               该 Provider 已存在（{existingMatch.modelCount} 个模型）——已预填其类型 / Base URL，
               保存将为其新增模型
             </span>
           ) : providerID.length > 0 && !idValid ? (
-            <span style={{ ...hintStyle, color: "#DC2626" }}>
+            <span style={{ ...hintStyle, color: "var(--color-danger-text)" }}>
               需为小写字母/数字开头，仅含小写字母/数字/连字符/下划线/点
             </span>
           ) : (
@@ -1362,7 +1343,7 @@ export function AddProviderModal({
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
                     border: `1px solid ${active ? activeBlue : neutral[200]}`,
-                    backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+                    backgroundColor: active ? "var(--color-accent-soft)" : "var(--color-surface)",
                     color: active ? activeBlue : neutral[600],
                     fontSize: fontSize.sm,
                     fontWeight: 500,
@@ -1383,7 +1364,7 @@ export function AddProviderModal({
         {/* Base URL（local/custom 必填；cloud 可选） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={labelStyle}>
-            Base URL {isLocal && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}
+            Base URL {isLocal && <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>}
           </span>
           <input
             data-testid="provider-add-baseurl-input"
@@ -1400,14 +1381,14 @@ export function AddProviderModal({
             style={{ ...inputBase, fontFamily: fontFamily.mono }}
           />
           {baseUrl.length > 0 && !urlValid && (
-            <span style={{ ...hintStyle, color: "#DC2626" }}>需为 http(s) URL</span>
+            <span style={{ ...hintStyle, color: "var(--color-danger-text)" }}>需为 http(s) URL</span>
           )}
         </div>
 
         {/* 模型 ID（锚点模型，必填） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={labelStyle}>
-            模型 ID <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+            模型 ID <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>
           </span>
           <input
             data-testid="provider-add-model-id-input"
@@ -1420,7 +1401,7 @@ export function AddProviderModal({
             style={{ ...inputBase, fontFamily: fontFamily.mono }}
           />
           {modelID.length > 0 && !modelValid && (
-            <span style={{ ...hintStyle, color: "#DC2626" }}>
+            <span style={{ ...hintStyle, color: "var(--color-danger-text)" }}>
               需为小写字母/数字开头，可含连字符/下划线/点/冒号
             </span>
           )}
@@ -1446,7 +1427,7 @@ export function AddProviderModal({
         {/* API Key（远端/cloud 必填；local/custom 可空=占位 key） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={labelStyle}>
-            API Key {!keyPlain && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}
+            API Key {!keyPlain && <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>}
           </span>
           <input
             data-testid="provider-add-key-input"
@@ -1526,7 +1507,7 @@ export function AddProviderModal({
                     gap: space.sm,
                     padding: `${space.xs + 2}px ${space.md}px`,
                     borderRadius: radius.pill,
-                    backgroundColor: checked ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+                    backgroundColor: checked ? "var(--color-accent-soft)" : "var(--color-surface)",
                     border: `1px solid ${checked ? "rgba(13,148,136,0.22)" : neutral[200]}`,
                     cursor: "pointer",
                     fontSize: fontSize.md,
@@ -1546,12 +1527,12 @@ export function AddProviderModal({
                       width: 7,
                       height: 7,
                       borderRadius: "50%",
-                      backgroundColor: online ? "#059669" : "var(--color-neutral-400)",
+                      backgroundColor: online ? "var(--color-success-text)" : "var(--color-neutral-400)",
                       flexShrink: 0,
                     }}
                   />
                   {w.name ?? w.id}
-                  <span style={{ fontSize: fontSize.xs, color: online ? "#059669" : neutral[400] }}>
+                  <span style={{ fontSize: fontSize.xs, color: online ? "var(--color-success-text)" : neutral[400] }}>
                     {online ? "在线" : "离线"}
                   </span>
                 </label>
@@ -1571,7 +1552,7 @@ export function AddProviderModal({
             role="alert"
             style={{
               fontSize: fontSize.sm,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               display: "flex",
               alignItems: "center",
               gap: space.xs,
@@ -1837,7 +1818,7 @@ export function EditProviderModal({
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
                     border: `1px solid ${active ? activeBlue : neutral[200]}`,
-                    backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+                    backgroundColor: active ? "var(--color-accent-soft)" : "var(--color-surface)",
                     color: active ? activeBlue : neutral[600],
                     fontSize: fontSize.sm,
                     fontWeight: 500,
@@ -1859,7 +1840,7 @@ export function EditProviderModal({
 
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={labelStyle}>
-            Base URL {isLocal && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}
+            Base URL {isLocal && <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>}
           </span>
           <input
             data-testid="provider-edit-baseurl-input"
@@ -1872,7 +1853,7 @@ export function EditProviderModal({
             style={{ ...inputBase, fontFamily: fontFamily.mono }}
           />
           {baseUrl.length > 0 && !urlValid && (
-            <span style={{ ...hintStyle, color: "#DC2626" }}>需为 http(s) URL</span>
+            <span style={{ ...hintStyle, color: "var(--color-danger-text)" }}>需为 http(s) URL</span>
           )}
         </div>
 
@@ -1882,7 +1863,7 @@ export function EditProviderModal({
             role="alert"
             style={{
               fontSize: fontSize.sm,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               display: "flex",
               alignItems: "center",
               gap: space.xs,
@@ -2332,7 +2313,7 @@ export function ModelCapabilitiesModal({
     gap: space.xs,
     padding: "2px 8px",
     borderRadius: radius.pill,
-    backgroundColor: checked ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+    backgroundColor: checked ? "var(--color-accent-soft)" : "var(--color-surface)",
     border: `1px solid ${checked ? "rgba(13,148,136,0.22)" : neutral[200]}`,
     cursor: "pointer",
     fontSize: fontSize.xs,
@@ -2536,16 +2517,16 @@ export function ModelCapabilitiesModal({
             </div>
           </div>
           {limitError ? (
-            <span style={{ ...hintStyle, color: "#DC2626" }}>{limitError}</span>
+            <span style={{ ...hintStyle, color: "var(--color-danger-text)" }}>{limitError}</span>
           ) : (
-            <span style={{ ...hintStyle, color: "#D97706" }}>
+            <span style={{ ...hintStyle, color: "var(--color-warn-text)" }}>
               最关键：不配置时 opencode 视为上下文 0——该模型的自动压缩不会触发
               （上下文静默溢出），上下文 meter 也不准确
             </span>
           )}
           {probeResult && (
             <span
-              style={{ ...hintStyle, color: probeResult.ok ? activeBlue : "#D97706" }}
+              style={{ ...hintStyle, color: probeResult.ok ? activeBlue : "var(--color-warn-text)" }}
             >
               {probeResult.text}
             </span>
@@ -2571,7 +2552,7 @@ export function ModelCapabilitiesModal({
                 gap: space.sm,
                 padding: `${space.sm}px ${space.md}px`,
                 borderRadius: radius.md,
-                backgroundColor: t.checked ? "rgba(13,148,136,0.08)" : "var(--color-surface)",
+                backgroundColor: t.checked ? "var(--color-accent-soft)" : "var(--color-surface)",
                 border: `1px solid ${t.checked ? "rgba(13,148,136,0.22)" : neutral[200]}`,
                 cursor: "pointer",
                 fontSize: fontSize.sm,
@@ -2697,7 +2678,7 @@ export function ModelCapabilitiesModal({
             }}
           />
           {optionsError ? (
-            <span style={{ ...hintStyle, color: "#DC2626" }}>{optionsError}</span>
+            <span style={{ ...hintStyle, color: "var(--color-danger-text)" }}>{optionsError}</span>
           ) : (
             <span style={hintStyle}>
               思考强度只能经 options 配置（opencode 无一等字段）；留空 = 无 options
@@ -2711,7 +2692,7 @@ export function ModelCapabilitiesModal({
             role="alert"
             style={{
               fontSize: fontSize.sm,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               display: "flex",
               alignItems: "center",
               gap: space.xs,
@@ -2741,7 +2722,7 @@ export function ModelCapabilitiesModal({
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
               backgroundColor: "var(--color-surface)",
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting ? "default" : "pointer",
@@ -3224,7 +3205,7 @@ export default function ProvidersTab() {
       >
         <div
           style={{
-            maxWidth: 1080,
+            maxWidth: layout.normal,
             margin: "0 auto",
             display: "flex",
             flexDirection: "column",
@@ -3309,7 +3290,7 @@ export default function ProvidersTab() {
               style={{
                 fontSize: fontSize.sm,
                 color: neutral[600],
-                backgroundColor: "rgba(13,148,136,0.08)",
+                backgroundColor: "var(--color-accent-soft)",
                 border: "1px solid rgba(13,148,136,0.15)",
                 borderRadius: radius.md,
                 padding: `${space.sm}px ${space.md}px`,
@@ -3347,9 +3328,9 @@ export default function ProvidersTab() {
                 gap: space.sm,
                 padding: `${space.sm + 2}px ${space.md}px`,
                 borderRadius: radius.md,
-                backgroundColor: "rgba(239,68,68,0.10)",
+                backgroundColor: "var(--color-danger-soft)",
                 border: "1px solid rgba(239,68,68,0.22)",
-                color: "#DC2626",
+                color: "var(--color-danger-text)",
                 fontSize: fontSize.sm,
                 fontWeight: 500,
                 fontFamily: fontFamily.body,
@@ -3368,7 +3349,7 @@ export default function ProvidersTab() {
                   border: "none",
                   background: "none",
                   cursor: "pointer",
-                  color: "#DC2626",
+                  color: "var(--color-danger-text)",
                   fontSize: fontSize.sm,
                   fontWeight: 700,
                   fontFamily: fontFamily.body,
@@ -3401,7 +3382,7 @@ export default function ProvidersTab() {
                 textAlign: "center",
               }}
             >
-              <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+              <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
                 {isApiError(providersQuery.error) ? providersQuery.error.message : "加载 Provider 列表失败"}
               </div>
               <button
@@ -3447,15 +3428,12 @@ export default function ProvidersTab() {
                   padding: `${space.sm}px ${space.md}px`,
                 }}
               >
-                <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>
+                <SectionTitle
+                  hint="凭据按 provider 粒度存储（C4）· 配置后即时下发到节点（C5）"
+                  action={<span style={{ fontSize: fontSize.xs, color: neutral[500] }}>点击 ▸ 展开查看该 Provider 下的模型</span>}
+                >
                   全部 Provider
-                </span>
-                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-                  凭据按 provider 粒度存储（C4）· 配置后即时下发到节点（C5）
-                </span>
-                <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>
-                  点击 ▸ 展开查看该 Provider 下的模型
-                </span>
+                </SectionTitle>
               </div>
 
               {/* 搜索框：provider id 大小写不敏感 contains 过滤 */}
@@ -3627,7 +3605,7 @@ export default function ProvidersTab() {
                             flexShrink: 0,
                             padding: "0 7px",
                             borderRadius: radius.pill,
-                            backgroundColor: "rgba(13,148,136,0.10)",
+                            backgroundColor: "var(--color-accent-soft)",
                             border: "1px solid rgba(13,148,136,0.22)",
                             color: activeBlue,
                             fontSize: fontSize.xs,

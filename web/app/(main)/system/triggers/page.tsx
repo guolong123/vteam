@@ -145,37 +145,44 @@ const KIND_LABEL: Record<string, string> = {
 
 /** kind → 徽章配色（对齐 tokens 语义色系；字面量与 memories 页 LEVEL_META 同式）。 */
 const KIND_META: Record<string, { color: string; bg: string; border: string }> = {
-  receipt_nudge: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  receipt_nudge: { color: "#0D9488", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   review_round_timeout: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
   progression_patrol: { color: "#0284C7", bg: "rgba(2,132,199,0.10)", border: "rgba(2,132,199,0.22)" },
   session_idle_scan: { color: "#D97706", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.32)" },
-  hook_fire: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  hook_fire: { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   hook_poll: { color: "#6D28D9", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
-  memory_maintenance: { color: "#B45309", bg: "rgba(217,119,6,0.10)", border: "rgba(217,119,6,0.22)" },
+  memory_maintenance: { color: "var(--color-warn-text)", bg: "rgba(217,119,6,0.10)", border: "rgba(217,119,6,0.22)" },
 };
 
 const KIND_META_FALLBACK = { color: neutral[500], bg: neutral[100], border: neutral[200] };
 
 /** 行标题：display.description（人话，单行省略）；description 缺失回退「范围 — 类型标签」。永不以 id 为标题。 */
+/**
+ * 行标题：`<归属/范围> · <类型>` 的一行摘要。
+ *
+ * 修复（视觉优化清单 AES-15）：此前直接返回 `display.description`，而卡片下方
+ * 「描述」位又渲染同一个字段 —— 同一段话在同一张卡里出现两次，每卡多占 20px，
+ * 看起来像渲染 bug。现在标题只用结构化摘要（范围 + 类型 + 归属），长描述只留在描述位。
+ */
 function rowTitleOf(item: TriggerItem): string {
-  const desc = item.display?.description;
-  if (desc) return desc;
-  return `${scopeTextOf(item)} — ${KIND_LABEL[item.kind] ?? item.kind}`;
+  const kind = KIND_LABEL[item.kind] ?? item.kind;
+  const owner = ownerTextOf(item);
+  return owner ? `${kind} · ${owner}` : `${kind} · ${scopeTextOf(item)}`;
 }
 
 /** status → 中文 + 配色（共享 StatusBadge 只支持任务四态，故本页用同式本地徽章）。 */
 const STATUS_META: Record<TriggerItem["status"], { label: string; color: string; bg: string; border: string }> = {
-  pending: { label: "待触发", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  pending: { label: "待触发", color: "#0D9488", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   firing: { label: "触发中", color: "#0284C7", bg: "rgba(2,132,199,0.10)", border: "rgba(2,132,199,0.22)" },
-  fired: { label: "已触发", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  fired: { label: "已触发", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   cancelled: { label: "已取消", color: neutral[500], bg: neutral[100], border: neutral[200] },
-  failed: { label: "失败", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  failed: { label: "失败", color: "var(--color-danger-text)", bg: "var(--color-danger-soft)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** source → 中文 + 配色（服务端派生值，本页只读展示）。 */
 const SOURCE_META: Record<TriggerItem["source"], { label: string; color: string; bg: string; border: string }> = {
   system: { label: "系统", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
-  agent: { label: "Agent", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  agent: { label: "Agent", color: "#0D9488", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
 };
 
 /* ------------------------------ 时间展示 ------------------------------ */
@@ -632,7 +639,7 @@ export default function TriggersPage() {
             textAlign: "center",
           }}
         >
-          <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+          <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
             {isScopeError
               ? "当前账号需要按团队范围查看，请在上方选择团队后再试。"
               : isApiError(triggersQuery.error)
@@ -802,8 +809,8 @@ export default function TriggersPage() {
                       <span data-testid="trigger-owner">归属 {ownerText}</span>
                       <span data-testid="trigger-fire-count">触发 {item.fireCount} 次</span>
                     </div>
-                    {/* 描述：服务端 display.description（WHAT 一行摘要） */}
-                    {item.display?.description && (
+                    {/* 描述：服务端 display.description（WHAT 一行摘要）；与标题同文案时不重复渲染（AES-15） */}
+                    {item.display?.description && item.display.description !== rowTitleOf(item) && (
                       <div
                         data-testid="trigger-desc"
                         style={{
@@ -827,7 +834,7 @@ export default function TriggersPage() {
                         style={{
                           marginTop: space.xs,
                           fontSize: fontSize.sm,
-                          color: "#B45309",
+                          color: "var(--color-warn-text)",
                           backgroundColor: "#FFFBEB",
                           border: "1px solid #FDE68A",
                           padding: `${space.xs}px ${space.sm + 2}px`,
@@ -874,7 +881,7 @@ export default function TriggersPage() {
                           borderRadius: radius.md,
                           border: "1px solid rgba(239,68,68,0.22)",
                           backgroundColor: "var(--color-surface)",
-                          color: "#DC2626",
+                          color: "var(--color-danger-text)",
                           fontSize: fontSize.sm,
                           cursor: "pointer",
                           fontFamily: fontFamily.body,
@@ -908,13 +915,13 @@ export default function TriggersPage() {
           role="alert"
           style={{
             fontSize: fontSize.sm,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             display: "flex",
             alignItems: "center",
             gap: space.xs,
             padding: `${space.sm}px ${space.md}px`,
             borderRadius: radius.md,
-            backgroundColor: "rgba(239,68,68,0.10)",
+            backgroundColor: "var(--color-danger-soft)",
             border: "1px solid rgba(239,68,68,0.22)",
           }}
         >

@@ -611,7 +611,7 @@ function MessageInputImpl({
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                color: "#DC2626",
+                color: "var(--color-danger-text)",
                 fontSize: fontSize.xs,
                 ...baseFont,
               }}

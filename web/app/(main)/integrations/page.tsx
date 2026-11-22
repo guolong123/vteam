@@ -7,26 +7,27 @@ import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { ConfirmDialog, PageWindow, SegmentedTabs } from "@/src/components/ui";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
+import { EmptyState, PrimaryButton, SectionTitle } from "@/src/components/ui";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 const messageTypeTheme: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  generic_webhook: { label: "通用 Webhook", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  generic_webhook: { label: "通用 Webhook", color: "#0D9488", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   wecom_aibot: { label: "企微机器人", color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
   github_webhook: { label: "GitHub", color: "#1F2937", bg: "#F3F4F6", border: "#D1D5DB" },
   gitee_webhook: { label: "Gitee", color: "#C71E1E", bg: "rgba(199,30,30,0.08)", border: "rgba(199,30,30,0.22)" },
 };
 
 const notifTypeTheme: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  webhook: { label: "Webhook", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  webhook: { label: "Webhook", color: "#0D9488", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   wecom_group_robot: { label: "企微群机器人", color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
 };
 
 const messageStatusTheme: Record<string, { label: string; color: string; bg: string; border: string }> = {
   connecting: { label: "连接中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.24)" },
-  connected: { label: "已连接", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  connected: { label: "已连接", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   reconnecting: { label: "重连中", color: "#D97706", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.32)" },
-  error: { label: "连接失败", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  error: { label: "连接失败", color: "var(--color-danger-text)", bg: "var(--color-danger-soft)", border: "rgba(239,68,68,0.22)" },
   disconnected: { label: "未连接", color: neutral[500], bg: neutral[100], border: neutral[200] },
 };
 
@@ -103,13 +104,13 @@ function DeliveryDrawer({ channelId, basePath, channelName, onClose }: { channel
             <div key={d.id} data-testid="integration-delivery-item" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.xs, fontSize: fontSize.sm }}>
               <div style={{ display: "flex", gap: space.sm, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ color: neutral[500], fontSize: fontSize.xs }}>{new Date(d.createdAt).toLocaleString()}</span>
-                <span style={{ padding: "1px 6px", borderRadius: radius.pill, backgroundColor: d.direction === "inbound" ? "rgba(124,58,237,0.10)" : "rgba(13,148,136,0.10)", color: d.direction === "inbound" ? "#7C3AED" : "#0D9488", fontSize: fontSize.xs, border: "1px solid rgba(13,148,136,0.22)" }}>{d.direction ?? d.status}</span>
-                <span style={{ padding: "1px 6px", borderRadius: radius.pill, backgroundColor: d.status === "ok" ? "rgba(16,185,129,0.10)" : d.status === "failed" ? "rgba(239,68,68,0.10)" : neutral[100], color: d.status === "ok" ? "#059669" : d.status === "failed" ? "#DC2626" : neutral[500], fontSize: fontSize.xs, border: "1px solid rgba(16,185,129,0.28)" }}>{d.status}</span>
+                <span style={{ padding: "1px 6px", borderRadius: radius.pill, backgroundColor: d.direction === "inbound" ? "rgba(124,58,237,0.10)" : "var(--color-accent-soft)", color: d.direction === "inbound" ? "#7C3AED" : "#0D9488", fontSize: fontSize.xs, border: "1px solid rgba(13,148,136,0.22)" }}>{d.direction ?? d.status}</span>
+                <span style={{ padding: "1px 6px", borderRadius: radius.pill, backgroundColor: d.status === "ok" ? "rgba(16,185,129,0.10)" : d.status === "failed" ? "var(--color-danger-soft)" : neutral[100], color: d.status === "ok" ? "var(--color-success-text)" : d.status === "failed" ? "var(--color-danger-text)" : neutral[500], fontSize: fontSize.xs, border: "1px solid rgba(16,185,129,0.28)" }}>{d.status}</span>
               </div>
-              {d.error && <div style={{ color: "#DC2626", fontSize: fontSize.xs, wordBreak: "break-all" }}>{String(d.error)}</div>}
+              {d.error && <div style={{ color: "var(--color-danger-text)", fontSize: fontSize.xs, wordBreak: "break-all" }}>{String(d.error)}</div>}
             </div>
           ))}
-          {q.isError && <div role="alert" style={{ color: "#DC2626", textAlign: "center", fontSize: fontSize.sm }}>{isApiError(q.error) ? q.error.message : "加载失败"}</div>}
+          {q.isError && <div role="alert" style={{ color: "var(--color-danger-text)", textAlign: "center", fontSize: fontSize.sm }}>{isApiError(q.error) ? q.error.message : "加载失败"}</div>}
         </div>
         {nextCursor && (
           <div style={{ padding: `${space.md}px ${space.xl}px`, borderTop: `1px solid ${neutral[200]}`, display: "flex", justifyContent: "center" }}>
@@ -174,11 +175,17 @@ function MessageChannelsTab() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
       <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
-        <div style={{ flex: 1 }}><div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>消息渠道（入站）</div><div style={{ fontSize: fontSize.sm, color: neutral[500] }}>入站 Webhook，按任务绑定分发，支持 fieldMapping</div></div>
-        {isAdmin && <button type="button" data-testid="create-message-channel-button" onClick={() => setModal({ mode: "create" })} style={{ padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", cursor: "pointer", fontFamily: fontFamily.body }}>＋ 新建消息渠道</button>}
+        <div style={{ flex: 1 }}><SectionTitle subtitle="入站 Webhook，按任务绑定分发，支持 fieldMapping">消息渠道（入站）</SectionTitle></div>
+        {isAdmin && <PrimaryButton testid="create-message-channel-button" onClick={() => setModal({ mode: "create" })}>＋ 新建消息渠道</PrimaryButton>}
       </div>
-      {notice && <div role="status" data-testid="integration-notice" data-kind={notice.kind} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "#DC2626", fontSize: fontSize.sm }}>{notice.text}</div>}
-      {channelsQuery.isPending ? <div style={{ color: neutral[400], textAlign: "center", padding: space.xl }}>加载中…</div> : channels.length === 0 ? <div data-testid="integration-empty" style={{ color: neutral[400], textAlign: "center", padding: space.xl, border: `1px dashed ${neutral[200]}`, borderRadius: radius.lg }}>暂无消息渠道</div> : (
+      {notice && <div role="status" data-testid="integration-notice" data-kind={notice.kind} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "var(--color-danger-soft)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "var(--color-danger-text)", fontSize: fontSize.sm }}>{notice.text}</div>}
+      {channelsQuery.isPending ? <div style={{ color: neutral[400], textAlign: "center", padding: space.xl }}>加载中…</div> : channels.length === 0 ? <EmptyState
+        testid="integration-empty"
+        icon="✉"
+        title="还没有消息渠道"
+        description={isAdmin ? "新建消息渠道后，任务可绑定渠道做双向同步（企微机器人 / 通用 Webhook）" : "请管理员配置消息渠道"}
+        action={isAdmin ? <PrimaryButton testid="integration-empty-add" onClick={() => setModal({ mode: "create" })}>＋ 新建消息渠道</PrimaryButton> : undefined}
+      /> : (
         <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
           {channels.map((ch) => {
             const theme = messageTypeTheme[ch.type] ?? messageTypeTheme.generic_webhook;
@@ -197,12 +204,12 @@ function MessageChannelsTab() {
                 <Pill theme={theme} label={theme.label} testid="integration-type-badge" status={ch.type} />
                 <button type="button" data-testid="integration-copy-inboundUrl" onClick={() => navigator.clipboard.writeText(inboundUrl)} style={{ padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer", fontSize: fontSize.xs }}>复制</button>
                 {isAdmin ? (
-                  <button type="button" data-testid="integration-enabled-toggle" data-enabled={ch.enabled ? "true" : "false"} onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })} style={{ padding: `${space.xs}px ${space.sm + 2}px`, borderRadius: radius.pill, border: `1px solid ${ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200]}`, backgroundColor: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], color: ch.enabled ? "#059669" : neutral[500], cursor: "pointer", fontSize: fontSize.sm }}>{ch.enabled ? "已启用" : "已停用"}</button>
-                ) : <Pill theme={{ color: ch.enabled ? "#059669" : neutral[500], bg: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], border: ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200] }} label={ch.enabled ? "已启用" : "已停用"} testid="integration-enabled-badge" status={ch.enabled ? "enabled" : "disabled"} />}
+                  <button type="button" data-testid="integration-enabled-toggle" data-enabled={ch.enabled ? "true" : "false"} onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })} style={{ padding: `${space.xs}px ${space.sm + 2}px`, borderRadius: radius.pill, border: `1px solid ${ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200]}`, backgroundColor: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], color: ch.enabled ? "var(--color-success-text)" : neutral[500], cursor: "pointer", fontSize: fontSize.sm }}>{ch.enabled ? "已启用" : "已停用"}</button>
+                ) : <Pill theme={{ color: ch.enabled ? "var(--color-success-text)" : neutral[500], bg: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], border: ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200] }} label={ch.enabled ? "已启用" : "已停用"} testid="integration-enabled-badge" status={ch.enabled ? "enabled" : "disabled"} />}
                 {ch.type === 'wecom_aibot' && (
                   <>
                     <Pill theme={statusTheme} label={statusTheme.label} testid="message-channel-status-badge" status={normalizedStatus} />
-                    {ch.lastError ? <span data-testid="message-channel-error-text" title={String(ch.lastError)} style={{ fontSize: fontSize.xs, color: "#DC2626", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>{String(ch.lastError)}</span> : null}
+                    {ch.lastError ? <span data-testid="message-channel-error-text" title={String(ch.lastError)} style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>{String(ch.lastError)}</span> : null}
                     {!isConnected ? (
                       <button type="button" data-testid="message-channel-connect-button" onClick={() => connectMut.mutate(ch.id)} disabled={connectMut.isPending} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: "1px solid #0D9488", backgroundColor: "#0D9488", color: "#FFF", cursor: "pointer", fontSize: fontSize.sm, opacity: connectMut.isPending ? 0.6 : 1 }}>连接</button>
                     ) : (
@@ -215,7 +222,7 @@ function MessageChannelsTab() {
                   {isAdmin && (
                     <>
                       <button type="button" data-testid="integration-edit-button" onClick={() => setModal({ mode: "edit", ch })} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer", fontSize: fontSize.sm }}>编辑</button>
-                      <button type="button" data-testid="integration-delete-button" onClick={() => setDeleting(ch)} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "rgba(239,68,68,0.10)", color: "#DC2626", cursor: "pointer", fontSize: fontSize.sm }}>删除</button>
+                      <button type="button" data-testid="integration-delete-button" onClick={() => setDeleting(ch)} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-danger-soft)", color: "var(--color-danger-text)", cursor: "pointer", fontSize: fontSize.sm }}>删除</button>
                     </>
                   )}
                 </div>
@@ -503,7 +510,7 @@ function MessageChannelModal({ mode, channel, submitting, error, onClose, onSave
         <FieldRow label="类型">
           <div style={{ display: "flex", gap: space.sm, flexWrap: "wrap" }}>
             {(["generic_webhook", "wecom_aibot", "github_webhook", "gitee_webhook"] as const).map((t) => (
-              <button key={t} type="button" data-testid={`integration-type-${t}`} data-active={type === t ? "true" : "false"} onClick={() => handleTypeChange(t)} style={{ flex: 1, minWidth: 110, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: type === t ? "1px solid #0D9488" : `1px solid ${neutral[200]}`, backgroundColor: type === t ? "rgba(13,148,136,0.10)" : "var(--color-surface)", color: type === t ? "#1E40AF" : neutral[600], cursor: "pointer", fontSize: fontSize.sm, fontWeight: type === t ? 600 : 500 }}>{messageTypeTheme[t].label}</button>
+              <button key={t} type="button" data-testid={`integration-type-${t}`} data-active={type === t ? "true" : "false"} onClick={() => handleTypeChange(t)} style={{ flex: 1, minWidth: 110, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: type === t ? "1px solid #0D9488" : `1px solid ${neutral[200]}`, backgroundColor: type === t ? "var(--color-accent-soft)" : "var(--color-surface)", color: type === t ? "#1E40AF" : neutral[600], cursor: "pointer", fontSize: fontSize.sm, fontWeight: type === t ? 600 : 500 }}>{messageTypeTheme[t].label}</button>
             ))}
           </div>
         </FieldRow>
@@ -566,7 +573,7 @@ function MessageChannelModal({ mode, channel, submitting, error, onClose, onSave
             <div data-testid="integration-inboundUrl" style={{ ...modalInputStyle, fontFamily: fontFamily.mono }}>创建后生成：/api/v1/message-channels/{"{id}"}/inbound</div>
           </FieldRow>
         )}
-        {(error || formError) && <div role="alert" data-testid="integration-modal-error" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", color: "#DC2626", fontSize: fontSize.sm }}>{error ?? formError}</div>}
+        {(error || formError) && <div role="alert" data-testid="integration-modal-error" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-danger-soft)", border: "1px solid rgba(239,68,68,0.22)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>{error ?? formError}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
           <button type="button" data-testid="integration-modal-cancel" onClick={onClose} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer" }}>取消</button>
           <button type="button" data-testid="integration-modal-confirm" disabled={submitting} onClick={handleSubmit} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", cursor: "pointer", opacity: submitting ? 0.6 : 1 }}>{submitting ? "保存中…" : mode === "create" ? "创建" : "保存"}</button>
@@ -618,8 +625,13 @@ function NotificationChannelsTab() {
         <div style={{ flex: 1 }}><div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>通知渠道（出站）</div><div style={{ fontSize: fontSize.sm, color: neutral[500] }}>出站通知，按任务绑定与事件分发</div></div>
         {isAdmin && <button type="button" data-testid="create-notification-channel-button" onClick={() => setModal({ mode: "create" })} style={{ padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", cursor: "pointer", fontFamily: fontFamily.body }}>＋ 新建通知渠道</button>}
       </div>
-      {notice && <div role="status" data-testid="notification-notice" data-kind={notice.kind} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "#DC2626", fontSize: fontSize.sm }}>{notice.text}</div>}
-      {q.isPending ? <div style={{ color: neutral[400], textAlign: "center", padding: space.xl }}>加载中…</div> : channels.length === 0 ? <div data-testid="notification-empty" style={{ color: neutral[400], textAlign: "center", padding: space.xl, border: `1px dashed ${neutral[200]}`, borderRadius: radius.lg }}>暂无通知渠道</div> : (
+      {notice && <div role="status" data-testid="notification-notice" data-kind={notice.kind} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "var(--color-danger-soft)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "var(--color-danger-text)", fontSize: fontSize.sm }}>{notice.text}</div>}
+      {q.isPending ? <div style={{ color: neutral[400], textAlign: "center", padding: space.xl }}>加载中…</div> : channels.length === 0 ? <EmptyState
+        testid="notification-empty"
+        icon="◈"
+        title="还没有通知渠道"
+        description="通知渠道用于把 Agent 的完成/阻塞事件推送到外部群"
+      /> : (
         <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
           {channels.map((ch) => {
             const theme = notifTypeTheme[ch.type] ?? notifTypeTheme.webhook;
@@ -633,13 +645,13 @@ function NotificationChannelsTab() {
                   <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{targetUrl || (events as string[]).join(", ") || "—"}</span>
                 </div>
                 <Pill theme={theme} label={theme.label} testid="notification-type-badge" status={ch.type} />
-                {isAdmin ? <button type="button" data-testid="notification-enabled-toggle" data-enabled={ch.enabled ? "true" : "false"} onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })} style={{ padding: `${space.xs}px ${space.sm + 2}px`, borderRadius: radius.pill, border: `1px solid ${ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200]}`, backgroundColor: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], color: ch.enabled ? "#059669" : neutral[500], cursor: "pointer", fontSize: fontSize.sm }}>{ch.enabled ? "已启用" : "已停用"}</button> : <Pill theme={{ color: ch.enabled ? "#059669" : neutral[500], bg: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], border: ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200] }} label={ch.enabled ? "已启用" : "已停用"} testid="notification-enabled-badge" status={ch.enabled ? "enabled" : "disabled"} />}
+                {isAdmin ? <button type="button" data-testid="notification-enabled-toggle" data-enabled={ch.enabled ? "true" : "false"} onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })} style={{ padding: `${space.xs}px ${space.sm + 2}px`, borderRadius: radius.pill, border: `1px solid ${ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200]}`, backgroundColor: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], color: ch.enabled ? "var(--color-success-text)" : neutral[500], cursor: "pointer", fontSize: fontSize.sm }}>{ch.enabled ? "已启用" : "已停用"}</button> : <Pill theme={{ color: ch.enabled ? "var(--color-success-text)" : neutral[500], bg: ch.enabled ? "rgba(16,185,129,0.10)" : neutral[100], border: ch.enabled ? "rgba(16,185,129,0.28)" : neutral[200] }} label={ch.enabled ? "已启用" : "已停用"} testid="notification-enabled-badge" status={ch.enabled ? "enabled" : "disabled"} />}
                 <div style={{ display: "flex", gap: space.xs }}>
                   <button type="button" data-testid="notification-delivery-button" onClick={() => setDeliveryCh(ch)} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer", fontSize: fontSize.sm }}>投递</button>
                   {isAdmin && <>
                     <button type="button" data-testid="notification-edit-button" onClick={() => setModal({ mode: "edit", ch })} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer", fontSize: fontSize.sm }}>编辑</button>
                     <button type="button" data-testid="notification-test-send-button" onClick={() => testMut.mutate(ch.id)} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#0D9488", cursor: "pointer", fontSize: fontSize.sm }}>测试推送</button>
-                    <button type="button" data-testid="notification-delete-button" onClick={() => setDeleting(ch)} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "rgba(239,68,68,0.10)", color: "#DC2626", cursor: "pointer", fontSize: fontSize.sm }}>删除</button>
+                    <button type="button" data-testid="notification-delete-button" onClick={() => setDeleting(ch)} style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-danger-soft)", color: "var(--color-danger-text)", cursor: "pointer", fontSize: fontSize.sm }}>删除</button>
                   </>}
                 </div>
               </div>
@@ -703,7 +715,7 @@ function NotificationChannelModal({ mode, channel, submitting, error, onClose, o
         <FieldRow label="类型">
           <div style={{ display: "flex", gap: space.sm }}>
             {(["webhook", "wecom_group_robot"] as const).map((t) => (
-              <button key={t} type="button" data-testid={`notification-type-${t}`} data-active={type === t ? "true" : "false"} onClick={() => setType(t)} style={{ flex: 1, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: type === t ? "1px solid #0D9488" : `1px solid ${neutral[200]}`, backgroundColor: type === t ? "rgba(13,148,136,0.10)" : "var(--color-surface)", color: type === t ? "#1E40AF" : neutral[600], cursor: "pointer", fontSize: fontSize.sm, fontWeight: type === t ? 600 : 500 }}>{notifTypeTheme[t].label}</button>
+              <button key={t} type="button" data-testid={`notification-type-${t}`} data-active={type === t ? "true" : "false"} onClick={() => setType(t)} style={{ flex: 1, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: type === t ? "1px solid #0D9488" : `1px solid ${neutral[200]}`, backgroundColor: type === t ? "var(--color-accent-soft)" : "var(--color-surface)", color: type === t ? "#1E40AF" : neutral[600], cursor: "pointer", fontSize: fontSize.sm, fontWeight: type === t ? 600 : 500 }}>{notifTypeTheme[t].label}</button>
             ))}
           </div>
         </FieldRow>
@@ -721,7 +733,7 @@ function NotificationChannelModal({ mode, channel, submitting, error, onClose, o
           </div>
         </FieldRow>
         <FieldRow label="密钥 (secret)"><input data-testid="notification-secret-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={mode === "edit" ? "•••••••• (保持不变)" : "可选"} style={{ ...modalInputStyle, fontFamily: fontFamily.mono }} /></FieldRow>
-        {(error || formError) && <div role="alert" data-testid="notification-modal-error" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", color: "#DC2626", fontSize: fontSize.sm }}>{error ?? formError}</div>}
+        {(error || formError) && <div role="alert" data-testid="notification-modal-error" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-danger-soft)", border: "1px solid rgba(239,68,68,0.22)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>{error ?? formError}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
           <button type="button" data-testid="notification-modal-cancel" onClick={onClose} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer" }}>取消</button>
           <button type="button" data-testid="notification-modal-confirm" disabled={submitting} onClick={handleSubmit} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", cursor: "pointer", opacity: submitting ? 0.6 : 1 }}>{submitting ? "保存中…" : mode === "create" ? "创建" : "保存"}</button>

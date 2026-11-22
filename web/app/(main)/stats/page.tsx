@@ -322,7 +322,11 @@ export default function StatsDashboardPage() {
               */}
               <MetricCard
                 label="总成本"
-                value={totals.cost === 0 ? "免费" : fmtMoney(totals.cost)}
+                // 「免费」保留业务语义（cost=0 是「统计到了、金额为 0」，不可与 null 混淆），
+                // 但改成与其它卡同构的「¥0 + 免费」双段（视觉优化清单 AES-19）：
+                // 此前这一格是 26px 的两个汉字，没有数字量级，与旁边「3 个 / 0 个 / 5 个」不对齐。
+                value={totals.cost === 0 ? "¥0" : fmtMoney(totals.cost)}
+                unit={totals.cost === 0 ? "免费模型" : undefined}
                 {...(activeTeamIds.length === 1
                   ? { onClick: () => router.push(`/teams/${activeTeamIds[0]}/stats`) }
                   : {})}

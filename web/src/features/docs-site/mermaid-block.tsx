@@ -60,7 +60,7 @@ export function MermaidBlock({ code }: { code: string }) {
   if (failed) {
     return (
       <div data-testid="docs-mermaid-fallback" style={{ margin: `${space.md}px 0` }}>
-        <p style={{ margin: `0 0 ${space.xs}px`, fontSize: fontSize.xs, color: "#B45309" }}>图渲染失败，显示源码</p>
+        <p style={{ margin: `0 0 ${space.xs}px`, fontSize: fontSize.xs, color: "var(--color-warn-text)" }}>图渲染失败，显示源码</p>
         <pre style={{ overflowX: "auto", borderRadius: radius.md, backgroundColor: "#0F172A", color: "var(--color-neutral-200)", padding: space.md, fontSize: fontSize.sm, lineHeight: 1.6 }}>
           <code style={{ fontFamily: "ui-monospace, monospace" }}>{code}</code>
         </pre>

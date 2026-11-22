@@ -49,8 +49,8 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层（对齐原型 :38-42）。
  */
 const permCellTheme = {
-  allow: { mark: "✓", color: "#059669", bg: "rgba(16,185,129,0.14)", border: "rgba(16,185,129,0.28)" },
-  partial: { mark: "◐", color: "#D97706", bg: "rgba(245,158,11,0.14)", border: "rgba(245,158,11,0.28)" },
+  allow: { mark: "✓", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.14)", border: "rgba(16,185,129,0.28)" },
+  partial: { mark: "◐", color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.14)", border: "rgba(245,158,11,0.28)" },
   deny: { mark: "✗", color: "var(--color-neutral-400)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-200)" },
 } as const;
 
@@ -58,8 +58,8 @@ type Perm = keyof typeof permCellTheme;
 
 /** 角色主题色（管理员蓝 / 成员绿 / 自定义紫），深色下用半透明以跟随 surface */
 const roleThemes = {
-  admin: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)", icon: "◈" },
-  member: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.22)", icon: "●" },
+  admin: { color: "var(--color-accent-text)", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)", icon: "◈" },
+  member: { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.22)", icon: "●" },
   custom: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)", icon: "✦" },
 } as const;
 
@@ -645,7 +645,7 @@ function CreateRoleModal({
         {/* 角色名称 */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <label htmlFor="create-role-name" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
-            角色名称 <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+            角色名称 <span aria-hidden style={{ color: "var(--color-danger-text)" }}>*</span>
           </label>
           <input
             id="create-role-name"
@@ -688,7 +688,7 @@ function CreateRoleModal({
           <div
             data-testid="create-role-error"
             role="alert"
-            style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}
+            style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", display: "flex", alignItems: "center", gap: space.xs }}
           >
             <span aria-hidden style={{ fontWeight: 700 }}>!</span>
             {error}
@@ -724,7 +724,7 @@ function CreateRoleModal({
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: "none",
-              backgroundColor: "#0D9488",
+              backgroundColor: "var(--color-brand-fill)",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -901,7 +901,7 @@ export default function RolePermissionPage() {
             textAlign: "center",
           }}
         >
-          <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+          <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
             {isApiError(error) ? error.message : "加载角色列表失败"}
           </div>
           <button
@@ -940,7 +940,7 @@ export default function RolePermissionPage() {
                 padding: `${space.sm + 2}px ${space.lg}px`,
                 borderRadius: radius.pill,
                 border: "none",
-                backgroundColor: "#0D9488",
+                backgroundColor: "var(--color-brand-fill)",
                 color: "#FFFFFF",
                 fontSize: fontSize.md,
                 fontWeight: 500,
@@ -1144,7 +1144,7 @@ export default function RolePermissionPage() {
                       style={{
                         marginRight: "auto",
                         fontSize: fontSize.sm,
-                        color: "#059669",
+                        color: "var(--color-success-text)",
                         display: "inline-flex",
                         alignItems: "center",
                         gap: space.xs,
@@ -1164,7 +1164,7 @@ export default function RolePermissionPage() {
                       borderRadius: radius.md,
                       border: `1px solid rgba(239,68,68,0.32)`,
                       backgroundColor: "rgba(239,68,68,0.10)",
-                      color: "#DC2626",
+                      color: "var(--color-danger-text)",
                       fontSize: fontSize.md,
                       fontWeight: 500,
                       cursor: deleteMutation.isPending ? "default" : "pointer",
@@ -1183,7 +1183,7 @@ export default function RolePermissionPage() {
                       padding: `${space.sm + 2}px ${space.lg}px`,
                       borderRadius: radius.md,
                       border: "none",
-                      backgroundColor: "#0D9488",
+                      backgroundColor: "var(--color-brand-fill)",
                       color: "#FFFFFF",
                       fontSize: fontSize.md,
                       fontWeight: 500,
@@ -1212,7 +1212,7 @@ export default function RolePermissionPage() {
                     backgroundColor: "rgba(239,68,68,0.10)",
                     border: `1px solid rgba(239,68,68,0.32)`,
                     fontSize: fontSize.sm,
-                    color: "#DC2626",
+                    color: "var(--color-danger-text)",
                     fontFamily: fontFamily.body,
                   }}
                 >
