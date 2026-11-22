@@ -32,6 +32,25 @@ async function seedAdminHeaders(request: APIRequestContext): Promise<{ Authoriza
   return { Authorization: `Bearer ${accessToken}` };
 }
 
+/**
+ * 种子团队成员 → 建团请求的 members 载荷。
+ * - 按 agentId 去重（同 agent 双席位会被后端判重复成员：400）；
+ * - 同一 agent 多个席位时优先保留 roleId 非空的那个（MEMBER_ROLE_REQUIRED：缺 roleId 也 400）。
+ */
+function dedupeMembersByAgent<T extends { agentId: string; roleId?: string | null }>(
+  members: T[],
+): { agentId: string; roleId?: string }[] {
+  const byAgent = new Map<string, T>();
+  for (const m of members) {
+    const prev = byAgent.get(m.agentId);
+    // 已有席位没 roleId、当前有 → 用当前的替换
+    if (!prev || (!prev.roleId && m.roleId)) byAgent.set(m.agentId, m);
+  }
+  return [...byAgent.values()]
+    .filter((m) => m.roleId)
+    .map((m) => ({ agentId: m.agentId, roleId: m.roleId as string }));
+}
+
 async function createPagesFixture(request: APIRequestContext): Promise<void> {
   const headers = await seedAdminHeaders(request);
   const teamsResponse = await request.get("/api/v1/teams?page=1&pageSize=100", { headers });
@@ -40,16 +59,17 @@ async function createPagesFixture(request: APIRequestContext): Promise<void> {
   const seedTeam = teams.items?.find((team) => team.name === SEED_TEAM_NAME);
   expect(seedTeam).toBeDefined();
   const members = seedTeam?.members ?? [];
-  expect(members).toHaveLength(7);
+  expect(members.length).toBeGreaterThanOrEqual(7);
 
   const teamResponse = await request.post("/api/v1/teams", {
     headers,
     data: {
       name: `e2e-Pages-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      members: members.map((member) => ({
-        agentId: member.agentId,
-        ...(member.roleId ? { roleId: member.roleId } : {}),
-      })),
+      // 按 agentId 去重 + 优先保留有 roleId 的席位：
+      // 种子团队可能有同一 agent 的两个席位（「复现成员B」与「演示成员」都挂 a_project_manager），
+      // 原样复制会被后端判重复成员 → 400；若去重时保留了 roleId=null 的那个，
+      // 则触发 MEMBER_ROLE_REQUIRED（成员必须绑定岗位）→ 也是 400。
+      members: dedupeMembersByAgent(members),
     },
   });
   expect(teamResponse.status()).toBe(201);
@@ -484,7 +504,10 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("install-config")).toBeVisible();
     await expect(page.getByTestId("server-url-input")).toBeVisible();
     await expect(page.getByTestId("worker-id-input")).toBeVisible();
-    await expect(page.getByTestId("regenerate-worker-id-button")).toBeVisible();
+    // fixme(2026-11-22 视觉改造回归)：regenerate-worker-id-button 已在 b67241e2
+    // 「不能自更新的节点改为复制升级命令」中移除（workerId 改为随机生成、不再手动重生成），
+    // 用例未同步。保留注释避免误导，断言暂时跳过。
+    // await expect(page.getByTestId("regenerate-worker-id-button")).toBeVisible();
     // ② 安装方式 Tab：curl 初始激活 → docker 切换后命令区联动
     await expect(page.getByTestId("install-method-tabs")).toBeVisible();
     await expect(page.getByTestId("install-method-tab").first()).toBeVisible();
@@ -952,13 +975,14 @@ async function createHistoryFixture(request: APIRequestContext): Promise<void> {
   );
   expect(seedTeam).toBeDefined();
   const members = seedTeam?.members ?? [];
-  expect(members).toHaveLength(7);
+  expect(members.length).toBeGreaterThanOrEqual(7);
 
   const teamResponse = await request.post("/api/v1/teams", {
     headers,
     data: {
       name: `e2e-History-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      members: members.map((m) => ({ agentId: m.agentId, ...(m.roleId ? { roleId: m.roleId } : {}) })),
+      // 同 createPagesFixture：按 agentId 去重并优先保留有 roleId 的席位
+      members: dedupeMembersByAgent(members),
     },
   });
   expect(teamResponse.status()).toBe(201);
@@ -1013,7 +1037,11 @@ test.describe("任务历史摘要与会话任务参数（自建团队）", () =>
     await deleteHistoryFixture(request);
   });
 
-  test("team history count summary and pending_review row actions", async ({ page }) => {
+  // fixme(2026-11-22 视觉改造回归)：本用例依赖的 /teams/:id/tasks（任务历史页）
+  // 已在 49a0d04e「移除两个无入口页面」中删除，task-list-item / team-task-count-summary
+  // 两个 testid 在实现里均不存在。任务历史已并入 /chat 右栏任务面板与 /docs。
+  // 保留用例体作为「该能力曾存在」的记录，改为 fixme 跳过。
+  test.fixme("team history count summary and pending_review row actions", async ({ page }) => {
     await page.goto(`/teams/${HIST_TEAM_ID}/tasks`);
 
     const items = page.getByTestId("task-list-item");

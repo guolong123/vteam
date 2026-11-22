@@ -83,7 +83,7 @@ const actionButtonStyle: CSSProperties = {
 
 const dangerButtonStyle: CSSProperties = {
   ...actionButtonStyle,
-  color: "#DC2626",
+  color: "var(--color-danger-text)",
   border: "1px solid rgba(220,38,38,0.28)",
 };
 
@@ -94,7 +94,7 @@ const disabledActionStyle: CSSProperties = {
 
 const errorBannerStyle: CSSProperties = {
   fontSize: fontSize.sm,
-  color: "#DC2626",
+  color: "var(--color-danger-text)",
   display: "flex",
   alignItems: "center",
   gap: space.xs,

@@ -104,7 +104,7 @@ export function PrototypePanel({ taskId, teamId, tasks, initialProtoId }: Protot
                             flexShrink: 0, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
                             borderRadius: radius.sm, border: "none", cursor: "pointer",
                             backgroundColor: isHovered ? "rgba(220,38,38,0.10)" : "transparent",
-                            color: isHovered ? "#DC2626" : neutral[300],
+                            color: isHovered ? "var(--color-danger-text)" : neutral[300],
                             opacity: isHovered ? 1 : 0, transition: "opacity .15s, background-color .15s, color .15s",
                           }}
                           aria-label={`删除 ${proto.name}`}

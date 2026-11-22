@@ -215,7 +215,7 @@ export function MetricCard({
   style,
   onClick,
 }: MetricCardProps) {
-  const valueColor = tone === "danger" ? "#DC2626" : tone === "warn" ? "#B45309" : neutral[900];
+  const valueColor = tone === "danger" ? "var(--color-danger-text)" : tone === "warn" ? "var(--color-warn-text)" : neutral[900];
   const deltaColor =
     delta === null || delta === undefined
       ? neutral[400]
@@ -223,11 +223,11 @@ export function MetricCard({
         ? neutral[600]
         : deltaTone === "up-good"
           ? delta >= 0
-            ? "#059669"
-            : "#DC2626"
+            ? "var(--color-success-text)"
+            : "var(--color-danger-text)"
           : delta >= 0
-            ? "#DC2626"
-            : "#059669";
+            ? "var(--color-danger-text)"
+            : "var(--color-success-text)";
   // 无环比时不画箭头，避免出现「→ —」这种自相矛盾符号
   const arrow = delta === null || delta === undefined ? "" : delta >= 0 ? "↑" : "↓";
 
@@ -310,7 +310,8 @@ export function MetricCard({
         >
           {value}
         </span>
-        {unit && <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>{unit}</span>}
+        {/* 单位：11px/500 neutral[500]（原 neutral[400] 对比仅 2.45:1，见视觉走查 VIS-15） */}
+        {unit && <span style={{ fontSize: fontSize.xs, fontWeight: 500, color: neutral[500] }}>{unit}</span>}
       </div>
 
       {(delta !== undefined || deltaHint) && (
@@ -353,7 +354,7 @@ export function UnknownTag({ title = "上游未上报成本（未知 ≠ 0）" }
         borderRadius: radius.sm,
         backgroundColor: "#FFFBEB",
         border: "1px solid #FDE68A",
-        color: "#B45309",
+        color: "var(--color-warn-text)",
         fontSize: 10,
         fontWeight: 600,
         lineHeight: 1.5,

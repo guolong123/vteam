@@ -1131,7 +1131,7 @@ export function TeamMembersPanel({
               }}
             />
             {addError && (
-              <div data-testid="add-instance-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", lineHeight: 1.5 }}>
+              <div data-testid="add-instance-error" role="alert" style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)", lineHeight: 1.5 }}>
                 {addError}
               </div>
             )}

@@ -88,7 +88,7 @@ export function PanelGutter({
           border: `1px solid ${hover ? "#0D9488" : neutral[200]}`,
           borderRadius: radius.sm,
           backgroundColor: hover ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
-          color: hover ? "#0F766E" : neutral[500],
+          color: hover ? "var(--color-accent-text)" : neutral[500],
           fontSize: fontSize.md,
           lineHeight: 1,
           cursor: "pointer",

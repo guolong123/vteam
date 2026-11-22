@@ -47,7 +47,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentBadge, ConfirmDialog, Markdown, Pagination, SegmentedTabs } from "@/src/components/ui";
+import { AgentBadge, ConfirmDialog, Markdown, Pagination, PrimaryButton, RowAction, SectionTitle, SegmentedTabs } from "@/src/components/ui";
 import {
   type RoleKey,
   neutral,
@@ -57,6 +57,7 @@ import {
   fontSize,
   fontFamily,
   shadow,
+  layout,
 } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -66,12 +67,12 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 与角色色，遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层。
  */
 const sourceColors = {
-  内置: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  内置: { color: "var(--color-accent-text)", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   上传: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 } as const;
 
 const enableColors = {
-  启用: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  启用: { color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   停用: { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 } as const;
 
@@ -84,22 +85,22 @@ const groupTheme = {
     icon: "⬢",
     title: "内置工具",
     desc: "平台预置，开箱即用",
-    color: "#0D9488",
-    bg: "rgba(13,148,136,0.10)",
+    color: "var(--color-accent-text)",
+    bg: "var(--color-accent-soft)",
     border: "rgba(13,148,136,0.22)",
   },
   mcp: {
     icon: "◈",
     title: "MCP 工具",
     desc: "MCP server 暴露的工具，命名 <server>_<tool>",
-    color: "#0D9488",
+    color: "var(--color-accent-text)",
     bg: "#F0FDFA",
     border: "#99F6E4",
   },
 } as const;
 
 /** 内置工具「开箱即用」徽章（平台预置语义，蓝系同内置来源） */
-const builtinReadyTheme = { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" };
+const builtinReadyTheme = { color: "var(--color-accent-text)", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" };
 
 /* ------------------------------ MCP 语义主题（页面内扩展 token） ------------------------------
  * MCP 的「类型 / 连接状态」语义独立于任务四态与角色色，遵循"扩展 token"范式在页面内
@@ -129,7 +130,7 @@ type McpStatus =
 
 /** 类型徽章主题：Local=本地二进制（蓝系）/ Remote=远程服务（紫系，与 v2 标识同族） */
 const mcpTypeTheme: Record<McpType, { label: string; color: string; bg: string; border: string }> = {
-  local: { label: "Local 本地", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  local: { label: "Local 本地", color: "var(--color-accent-text)", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   remote: { label: "Remote 远程", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 };
 
@@ -143,13 +144,13 @@ const mcpStatusTheme: Record<
   McpStatus,
   { label: string; mark: string; color: string; bg: string; border: string }
 > = {
-  connected: { label: "已连接", mark: "✅", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  pending: { label: "连接中", mark: "◐", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  connected: { label: "已连接", mark: "●", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  pending: { label: "连接中", mark: "◐", color: "var(--color-accent-text)", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
   disabled: { label: "已停用", mark: "○", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-  failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  failed: { label: "连接失败", mark: "✗", color: "var(--color-danger-text)", bg: "var(--color-danger-soft)", border: "rgba(239,68,68,0.22)" },
+  needs_auth: { label: "待授权", mark: "🔑", color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
   disconnected: { label: "未连接", mark: "⚠️", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-  connecting: { label: "连接中", mark: "◐", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  connecting: { label: "连接中", mark: "◐", color: "var(--color-accent-text)", bg: "var(--color-accent-soft)", border: "rgba(13,148,136,0.22)" },
 };
 
 /* 连接中 ◐ 旋转动画（scoped：stmmcp 前缀避免污染其他原型） */
@@ -466,28 +467,17 @@ function ActionButton({
   disabled?: boolean;
   serverId?: string;
 }) {
+  // 统一到 RowAction（视觉优化清单 AES-01）：行内操作不再各页各写一套形状
   return (
-    <button
-      type="button"
-      data-testid={testid}
-      data-server-id={serverId}
+    <RowAction
+      testid={testid}
+      dataAttrs={{ "data-server-id": serverId }}
       onClick={onClick}
       disabled={disabled}
-      style={{
-        padding: `${space.xs}px ${space.md}px`,
-        borderRadius: radius.md,
-        border: `1px solid ${neutral[200]}`,
-        backgroundColor: "var(--color-surface)",
-        color: danger ? "#DC2626" : neutral[600],
-        fontSize: fontSize.sm,
-        cursor: disabled ? "default" : "pointer",
-        opacity: disabled ? 0.6 : 1,
-        fontFamily: fontFamily.body,
-        whiteSpace: "nowrap",
-      }}
+      tone={danger ? "danger" : "default"}
     >
       {label}
-    </button>
+    </RowAction>
   );
 }
 
@@ -525,7 +515,7 @@ function McpMenuItem({
         borderRadius: radius.sm,
         border: "none",
         backgroundColor: hover && !disabled ? neutral[100] : "transparent",
-        color: danger ? "#DC2626" : neutral[700],
+        color: danger ? "var(--color-danger-text)" : neutral[700],
         fontSize: fontSize.sm,
         fontWeight: 500,
         cursor: disabled ? "default" : "pointer",
@@ -658,13 +648,16 @@ function SkillItemRow({
         )}
       </div>
 
-      {/* 来源 */}
-      <PillBadge
-        theme={sourceColors[s.source]}
-        label={s.source}
-        testid="skill-source"
-        status={s.source}
-      />
+      {/* 来源：降为纯文字（视觉优化清单 AES-16）。
+          来源是静态属性、不随状态变化，无需徽章；此前与「启用/停用」并排两个胶囊，
+          视觉上与状态同级，用户分不清哪个会变。 */}
+      <span
+        data-testid="skill-source"
+        data-status={s.source}
+        style={{ fontSize: fontSize.xs, color: neutral[500], flexShrink: 0 }}
+      >
+        {s.source}
+      </span>
 
       {/* 启用状态 */}
       <PillBadge
@@ -1479,8 +1472,14 @@ function McpServerSection({
             textAlign: "center",
           }}
         >
-          <span aria-hidden style={{ fontSize: fontSize.lg }}>◈</span>
-          <span>暂无 MCP 服务器，{canManage ? "点击右上「新建服务器」注册" : "请管理员注册"}</span>
+          <span aria-hidden style={{ fontSize: 28, color: neutral[500] }}>◈</span>
+          <span style={{ fontSize: 16, fontWeight: 700, color: neutral[800] }}>还没有 MCP 服务器</span>
+          <span style={{ fontSize: fontSize.md, color: neutral[500], lineHeight: 1.6 }}>
+            {canManage ? "注册 MCP 服务器后，其暴露的工具会自动出现在「MCP 工具」列表" : "请管理员注册 MCP 服务器"}
+          </span>
+          {canManage && (
+            <PrimaryButton testid="mcp-empty-add" onClick={onCreate}>新建服务器</PrimaryButton>
+          )}
         </div>
       ) : (
         servers.map((s) => (
@@ -1560,8 +1559,8 @@ const mcpRowRemoveBtnStyle: CSSProperties = {
   flexShrink: 0,
   borderRadius: radius.md,
   border: `1px solid ${neutral[200]}`,
-  backgroundColor: "rgba(239,68,68,0.10)",
-  color: "#DC2626",
+  backgroundColor: "var(--color-danger-soft)",
+  color: "var(--color-danger-text)",
   fontSize: fontSize.md,
   lineHeight: 1,
   cursor: "pointer",
@@ -1815,7 +1814,7 @@ function McpServerModal({
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
                     border: type === t ? `1px solid #0D9488` : `1px solid ${neutral[200]}`,
-                    backgroundColor: type === t ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+                    backgroundColor: type === t ? "var(--color-accent-soft)" : "var(--color-surface)",
                     color: type === t ? "#1E40AF" : neutral[600],
                     fontSize: fontSize.sm,
                     fontWeight: type === t ? 600 : 500,
@@ -2065,9 +2064,9 @@ function McpServerModal({
             style={{
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
-              backgroundColor: "rgba(239,68,68,0.10)",
+              backgroundColor: "var(--color-danger-soft)",
               border: "1px solid rgba(239,68,68,0.22)",
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               fontSize: fontSize.sm,
               lineHeight: 1.6,
             }}
@@ -2105,7 +2104,7 @@ function McpServerModal({
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: "none",
-                backgroundColor: "#0D9488",
+                backgroundColor: "var(--color-brand-fill)",
                 color: "#FFFFFF",
                 fontSize: fontSize.md,
                 fontWeight: 500,
@@ -2873,7 +2872,7 @@ export default function SkillToolManagePage() {
         display: "flex",
         flexDirection: "column",
         overflowY: "auto",
-        padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
+        padding: `${layout.contentTop}px ${space.xl}px ${space.xl}px`,
         backgroundColor: neutral[50],
         fontFamily: fontFamily.body,
       }}
@@ -2882,7 +2881,7 @@ export default function SkillToolManagePage() {
 
       <div
         style={{
-          maxWidth: 1080,
+          maxWidth: layout.normal,
           margin: "0 auto",
           display: "flex",
           flexDirection: "column",
@@ -2902,11 +2901,11 @@ export default function SkillToolManagePage() {
               padding: `${space.sm + 2}px ${space.md}px`,
               borderRadius: radius.md,
               backgroundColor:
-                notice.kind === "success" ? "rgba(16,185,129,0.10)" : notice.kind === "error" ? "rgba(239,68,68,0.10)" : "rgba(13,148,136,0.10)",
+                notice.kind === "success" ? "rgba(16,185,129,0.10)" : notice.kind === "error" ? "var(--color-danger-soft)" : "var(--color-accent-soft)",
               border:
                 notice.kind === "success" ? "1px solid rgba(16,185,129,0.28)" : notice.kind === "error" ? "1px solid rgba(239,68,68,0.22)" : "1px solid rgba(13,148,136,0.22)",
               color:
-                notice.kind === "success" ? "#065F46" : notice.kind === "error" ? "#DC2626" : "#1E40AF",
+                notice.kind === "success" ? "#065F46" : notice.kind === "error" ? "var(--color-danger-text)" : "#1E40AF",
               fontSize: fontSize.sm,
               fontWeight: 500,
               fontFamily: fontFamily.body,
@@ -2980,7 +2979,7 @@ export default function SkillToolManagePage() {
                   >
                     {sk.action}
                   </code>
-                  <span style={{ color: "#B45309" }}>{sk.reason}</span>
+                  <span style={{ color: "var(--color-warn-text)" }}>{sk.reason}</span>
                 </div>
               ))}
               {syncReport.skipped.length > 8 && (
@@ -3010,50 +3009,14 @@ export default function SkillToolManagePage() {
             {tab === "skill" && isAdmin && (
               <>
                 {/* 新建技能 = 交互式创建（弹窗表单 → 前端组装 SKILL.md → FormData 复用 POST /skills） */}
-                <button
-                  type="button"
-                  data-testid="create-skill-button"
-                  onClick={handleOpenCreateSkill}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: space.xs,
-                    padding: `${space.sm + 1}px ${space.lg}px`,
-                    borderRadius: radius.pill,
-                    border: "none",
-                    backgroundColor: "#0D9488",
-                    color: "#FFFFFF",
-                    fontSize: fontSize.md,
-                    fontWeight: 500,
-                    cursor: "pointer",
-                    boxShadow: "0 6px 16px rgba(13,148,136,.3)",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
+                <PrimaryButton testid="create-skill-button" onClick={handleOpenCreateSkill}>
                   <span aria-hidden>✦</span>
                   新建技能
-                </button>
-                <button
-                  type="button"
-                  data-testid="upload-skill-button"
-                  onClick={handleUploadSkillClick}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: space.xs,
-                    padding: `${space.sm + 1}px ${space.lg}px`,
-                    borderRadius: radius.pill,
-                    border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "var(--color-surface)",
-                    color: neutral[700],
-                    fontSize: fontSize.md,
-                    cursor: "pointer",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
+                </PrimaryButton>
+                <PrimaryButton variant="outline" testid="upload-skill-button" onClick={handleUploadSkillClick}>
                   <span aria-hidden>⧉</span>
                   上传技能
-                </button>
+                </PrimaryButton>
               </>
             )}
             {/* 隐藏文件选择（上传技能触发；选中后 POST /skills multipart 真实创建） */}
@@ -3083,20 +3046,8 @@ export default function SkillToolManagePage() {
           }}
         >
           {/* 列表头 */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space.md,
-              padding: `${space.sm}px ${space.md}px`,
-            }}
-          >
-            <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>
-              {listMeta[tab].title}
-            </span>
-            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-              {listMeta[tab].hint}
-            </span>
+          <div style={{ padding: `${space.sm}px ${space.md}px` }}>
+            <SectionTitle hint={listMeta[tab].hint}>{listMeta[tab].title}</SectionTitle>
           </div>
 
           {/* 技能列表（加载/错误/空态 + 真实 API 数据行） */}
@@ -3121,7 +3072,7 @@ export default function SkillToolManagePage() {
                   textAlign: "center",
                 }}
               >
-                <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>{loadError}</div>
+                <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>{loadError}</div>
                 <button
                   type="button"
                   data-testid="skills-retry"
@@ -3160,8 +3111,11 @@ export default function SkillToolManagePage() {
                   textAlign: "center",
                 }}
               >
-                <span aria-hidden style={{ fontSize: fontSize.xl }}>✦</span>
-                <span>暂无技能，点击右上「上传技能」创建</span>
+                <span aria-hidden style={{ fontSize: 28, color: neutral[500] }}>✦</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: neutral[800] }}>还没有技能</span>
+                <span style={{ fontSize: fontSize.md, color: neutral[500], lineHeight: 1.6 }}>
+                  上传 SKILL.md 或交互式新建，技能会按角色分发到 worker 节点
+                </span>
               </div>
             ) : (
               skillsData.map((s) => (
@@ -3217,7 +3171,7 @@ export default function SkillToolManagePage() {
                     textAlign: "center",
                   }}
                 >
-                  <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>{loadError}</div>
+                  <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>{loadError}</div>
                   <button
                     type="button"
                     data-testid="tools-retry"
@@ -3257,8 +3211,9 @@ export default function SkillToolManagePage() {
                       textAlign: "center",
                     }}
                   >
-                    <span aria-hidden style={{ fontSize: fontSize.xl }}>⬢</span>
-                    <span>暂无内置工具（平台预置）</span>
+                    <span aria-hidden style={{ fontSize: 28, color: neutral[500] }}>⬢</span>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: neutral[800] }}>暂无内置工具</span>
+                    <span style={{ fontSize: fontSize.md, color: neutral[500] }}>平台预置工具会在首次启动后自动注册</span>
                   </div>
                 ) : (
                   builtinData.map((t) => (
@@ -3357,7 +3312,7 @@ export default function SkillToolManagePage() {
                             textAlign: "center",
                           }}
                         >
-                          <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>加载服务器工具失败</div>
+                          <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>加载服务器工具失败</div>
                           <button
                             type="button"
                             data-testid="server-tools-retry"
@@ -3543,7 +3498,7 @@ export default function SkillToolManagePage() {
               {viewLoading ? (
                 <div style={{ fontSize: fontSize.sm, color: neutral[400], padding: space.lg }}>加载技能内容…</div>
               ) : viewError ? (
-                <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", padding: space.lg }}>{viewError}</div>
+                <div role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", padding: space.lg }}>{viewError}</div>
               ) : doc.body.trim() ? (
                 <Markdown>{doc.body}</Markdown>
               ) : (
@@ -3642,9 +3597,9 @@ export default function SkillToolManagePage() {
                 style={{
                   padding: `${space.sm}px ${space.md}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "rgba(239,68,68,0.10)",
+                  backgroundColor: "var(--color-danger-soft)",
                   border: "1px solid rgba(239,68,68,0.22)",
-                  color: "#DC2626",
+                  color: "var(--color-danger-text)",
                   fontSize: fontSize.sm,
                   lineHeight: 1.6,
                 }}
@@ -3682,7 +3637,7 @@ export default function SkillToolManagePage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#0D9488",
+                  backgroundColor: "var(--color-brand-fill)",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 500,
@@ -3830,9 +3785,9 @@ export default function SkillToolManagePage() {
                 style={{
                   padding: `${space.sm}px ${space.md}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "rgba(239,68,68,0.10)",
+                  backgroundColor: "var(--color-danger-soft)",
                   border: "1px solid rgba(239,68,68,0.22)",
-                  color: "#DC2626",
+                  color: "var(--color-danger-text)",
                   fontSize: fontSize.sm,
                   lineHeight: 1.6,
                 }}
@@ -3872,7 +3827,7 @@ export default function SkillToolManagePage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#0D9488",
+                  backgroundColor: "var(--color-brand-fill)",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 500,

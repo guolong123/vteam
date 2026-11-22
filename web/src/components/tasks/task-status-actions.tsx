@@ -49,10 +49,10 @@ interface TaskStatusActionsProps {
 const ACTION_META: Record<TaskAction, { label: string; color: string; pendingLabel: string }> = {
   start: { label: "开始任务", color: "#475569", pendingLabel: "启动中…" },
   "mark-pending-review": { label: "提交验收", color: "#0D9488", pendingLabel: "提交中…" },
-  accept: { label: "验收通过", color: "#059669", pendingLabel: "处理中…" },
+  accept: { label: "验收通过", color: "var(--color-success-text)", pendingLabel: "处理中…" },
   reject: { label: "驳回", color: "#D97706", pendingLabel: "驳回中…" },
   archive: { label: "归档", color: "#64748B", pendingLabel: "归档中…" },
-  block: { label: "置阻塞", color: "#B91C1C", pendingLabel: "置阻塞中…" },
+  block: { label: "置阻塞", color: "var(--color-danger-text)", pendingLabel: "置阻塞中…" },
   resume: { label: "恢复执行", color: "#0D9488", pendingLabel: "恢复中…" },
 };
 
@@ -293,8 +293,8 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
           {(() => {
             const teamOk = teamSize > 0;
             const mainOk = teamSize <= 1 ? hasMainAgent || teamSize === 0 : hasMainAgent;
-            const teamColor = isEmptyTeamErr ? "#DC2626" : teamOk ? "#059669" : neutral[600];
-            const mainColor = isMainAgentErr ? "#DC2626" : mainOk ? "#059669" : neutral[600];
+            const teamColor = isEmptyTeamErr ? "var(--color-danger-text)" : teamOk ? "var(--color-success-text)" : neutral[600];
+            const mainColor = isMainAgentErr ? "var(--color-danger-text)" : mainOk ? "var(--color-success-text)" : neutral[600];
             const teamIcon = teamOk ? "✓" : "✗";
             const mainIcon = mainOk ? "✓" : "✗";
             return (
@@ -311,7 +311,7 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
             );
           })()}
           {actionError && (
-            <div role="alert" style={{ color: "#DC2626", fontWeight: 500, borderTop: `1px dashed ${neutral[200]}`, paddingTop: space.xs, marginTop: space.xs }}>
+            <div role="alert" style={{ color: "var(--color-danger-text)", fontWeight: 500, borderTop: `1px dashed ${neutral[200]}`, paddingTop: space.xs, marginTop: space.xs }}>
               {actionError}
             </div>
           )}
@@ -323,7 +323,7 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
         <div
           data-testid="task-action-error"
           role="alert"
-          style={{ fontSize: fontSize.sm, lineHeight: 1.6, color: "#DC2626", fontWeight: 500 }}
+          style={{ fontSize: fontSize.sm, lineHeight: 1.6, color: "var(--color-danger-text)", fontWeight: 500 }}
         >
           {actionError}
         </div>
@@ -384,7 +384,7 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
             <div
               data-testid="force-blockers"
               role="alert"
-              style={{ fontSize: fontSize.sm, lineHeight: 1.6, color: "#DC2626", fontWeight: 500 }}
+              style={{ fontSize: fontSize.sm, lineHeight: 1.6, color: "var(--color-danger-text)", fontWeight: 500 }}
             >
               {actionError}
             </div>
@@ -415,7 +415,7 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#DC2626",
+                  backgroundColor: "var(--color-danger-text)",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 600,
@@ -643,7 +643,7 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#B91C1C",
+                  backgroundColor: "var(--color-danger-text)",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 600,

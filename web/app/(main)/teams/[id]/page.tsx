@@ -22,7 +22,7 @@ import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import { membersApi, type MemberDto } from "@/src/api/members";
 import { UserMembersSection } from "./user-members";
-import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog, SectionTitle } from "@/src/components/ui";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -97,7 +97,7 @@ function MemberRow({
             {member.member ? (
               <span style={{ fontSize: 10, color: neutral[500], backgroundColor: neutral[100], border: `1px solid ${neutral[200]}`, padding: "0 6px", borderRadius: radius.pill }}>平台成员</span>
             ) : (
-              <span style={{ fontSize: 10, color: "#B45309", backgroundColor: "#FEF3C7", border: "1px solid #FCD34D", padding: "0 6px", borderRadius: radius.pill }}>旧席位</span>
+              <span style={{ fontSize: 10, color: "var(--color-warn-text)", backgroundColor: "var(--color-warn-bg)", border: "1px solid #FCD34D", padding: "0 6px", borderRadius: radius.pill }}>旧席位</span>
             )}
             {isMain ? (
               <span data-testid="main-badge" style={{ fontSize: 10, color: "#FFF", backgroundColor: "#F59E0B", padding: "0 6px", borderRadius: radius.pill, fontWeight: 700 }}>★ 主 Agent</span>
@@ -115,7 +115,7 @@ function MemberRow({
           data-testid="member-save"
           disabled={!dirty}
           onClick={() => onSave({ alias: alias.trim() || undefined, workDir: workDir.trim() || undefined })}
-          style={{ padding: `5px 12px`, borderRadius: radius.md, border: "none", backgroundColor: dirty ? "#0D9488" : neutral[100], color: dirty ? "#FFF" : neutral[400], fontSize: fontSize.xs, fontWeight: 600, cursor: dirty ? "pointer" : "default", fontFamily: fontFamily.body }}
+          style={{ padding: `5px 12px`, borderRadius: radius.md, border: "none", backgroundColor: dirty ? "var(--color-accent-text)" : neutral[100], color: dirty ? "#FFF" : neutral[400], fontSize: fontSize.xs, fontWeight: 600, cursor: dirty ? "pointer" : "default", fontFamily: fontFamily.body }}
         >
           {dirty ? "保存修改" : "已保存"}
         </button>
@@ -364,7 +364,7 @@ export default function TeamDetailPage() {
   if (teamQuery.isPending) return <div data-testid="team-detail-loading" style={{ padding: space.xl, color: neutral[400], ...baseFont }}>加载中…</div>;
   if (teamQuery.isError) return (
     <div data-testid="team-detail-error" role="alert" style={{ padding: space.xl, ...baseFont, display: "flex", flexDirection: "column", gap: space.md }}>
-      <span style={{ color: "#DC2626" }}>{isApiError(teamQuery.error) ? teamQuery.error.message : "加载失败"}</span>
+      <span style={{ color: "var(--color-danger-text)" }}>{isApiError(teamQuery.error) ? teamQuery.error.message : "加载失败"}</span>
       <button type="button" onClick={() => teamQuery.refetch()} style={{ alignSelf: "flex-start", padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>重试</button>
     </div>
   );
@@ -391,7 +391,7 @@ export default function TeamDetailPage() {
               padding: `6px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#0D9488",
+              backgroundColor: "var(--color-brand-fill)",
               color: "#FFF",
               fontSize: fontSize.sm,
               fontWeight: 600,
@@ -411,7 +411,7 @@ export default function TeamDetailPage() {
             title={hasRunningTask ? "删除团队（有执行中任务，将二次确认强制删除）" : "删除团队（含关联任务）"}
             style={{
               padding: `6px ${space.md}px`, borderRadius: radius.sm, border: "none",
-              backgroundColor: "transparent", color: !deletable ? neutral[300] : "#DC2626",
+              backgroundColor: "transparent", color: !deletable ? neutral[300] : "var(--color-danger-text)",
               fontSize: fontSize.sm, cursor: !deletable ? "not-allowed" : "pointer", fontFamily: fontFamily.body, flexShrink: 0,
             }}
           >
@@ -423,21 +423,21 @@ export default function TeamDetailPage() {
           <span style={{ fontFamily: fontFamily.mono, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, padding: "1px 6px" }}>{team.id}</span>
           <span>v{team.version}</span>
           <span>{new Date(team.updatedAt).toLocaleString()}</span>
-          <span style={{ color: "#0D9488", fontWeight: 600 }}>{team.members.length} 成员</span>
-          <span style={{ color: (team.activeTaskCount ?? 0) > 0 ? "#D97706" : neutral[400], fontWeight: 600 }}>{team.activeTaskCount ?? 0} 进行中</span>
+          <span style={{ color: "var(--color-accent-text)", fontWeight: 600 }}>{team.members.length} 成员</span>
+          <span style={{ color: (team.activeTaskCount ?? 0) > 0 ? "var(--color-warn-text)" : neutral[400], fontWeight: 600 }}>{team.activeTaskCount ?? 0} 进行中</span>
           {hasRunningTask && (
-            <span data-testid="delete-force-hint" style={{ color: "#D97706" }}>
+            <span data-testid="delete-force-hint" style={{ color: "var(--color-warn-text)" }}>
               · 有执行中的任务，删除需二次确认强制删除
             </span>
           )}
-          {!hasRunningTask && hasTasks && <span data-testid="delete-cascade-hint" style={{ color: "#D97706" }}>· 删除将一并删除关联任务</span>}
+          {!hasRunningTask && hasTasks && <span data-testid="delete-cascade-hint" style={{ color: "var(--color-warn-text)" }}>· 删除将一并删除关联任务</span>}
         </div>
         <div data-testid="reuse-section" style={{ display: "flex", alignItems: "center", gap: space.md, paddingTop: space.md, borderTop: `1px dashed ${neutral[200]}` }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], whiteSpace: "nowrap" }}>记忆开关</span>
           <span data-testid="reuse-desc" style={{ fontSize: fontSize.xs, color: neutral[500], flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {team.reuseSession ? "默认保留：会话跨任务延续，适合连续迭代" : "每任务新会话：历史隔离，适合强隔离场景"}
           </span>
-          <span role="switch" aria-checked={team.reuseSession} data-testid="reuse-toggle" onClick={handleToggleReuse} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: team.reuseSession ? "#0D9488" : neutral[300], position: "relative", cursor: "pointer", flexShrink: 0 }}>
+          <span role="switch" aria-checked={team.reuseSession} data-testid="reuse-toggle" onClick={handleToggleReuse} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: team.reuseSession ? "var(--color-accent-text)" : neutral[300], position: "relative", cursor: "pointer", flexShrink: 0 }}>
             <span style={{ position: "absolute", top: 2, left: team.reuseSession ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
           </span>
         </div>
@@ -475,7 +475,7 @@ export default function TeamDetailPage() {
         </div>
       </section>
 
-      {actionError && <div data-testid="team-action-error" role="alert" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", color: "#B91C1C", fontSize: fontSize.sm }}>{actionError}</div>}
+      {actionError && <div data-testid="team-action-error" role="alert" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-danger-soft)", border: "1px solid rgba(239,68,68,0.22)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>{actionError}</div>}
 
       {/* 当前任务卡（并行化后无队列预览，聚焦指针 + 状态徽章） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
@@ -483,25 +483,25 @@ export default function TeamDetailPage() {
         {(() => {
           const effectiveStatus: string | null = (team as unknown as { currentTaskStatus?: string | null }).currentTaskStatus ?? null;
           let badgeLabel = "执行中";
-          let badgeStyle: CSSProperties = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
+          let badgeStyle: CSSProperties = { color: "var(--color-accent-text)", backgroundColor: "var(--color-accent-soft)", border: "1px solid rgba(13,148,136,0.22)" };
           if (effectiveStatus === "pending") {
             badgeLabel = "待开始";
-            badgeStyle = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
+            badgeStyle = { color: "var(--color-accent-text)", backgroundColor: "var(--color-accent-soft)", border: "1px solid rgba(13,148,136,0.22)" };
           } else if (effectiveStatus === "in_progress") {
             badgeLabel = "待开始";
-            badgeStyle = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
+            badgeStyle = { color: "var(--color-accent-text)", backgroundColor: "var(--color-accent-soft)", border: "1px solid rgba(13,148,136,0.22)" };
           } else if (effectiveStatus === "in_progress") {
             badgeLabel = "进行中";
-            badgeStyle = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
+            badgeStyle = { color: "var(--color-accent-text)", backgroundColor: "var(--color-accent-soft)", border: "1px solid rgba(13,148,136,0.22)" };
           } else if (effectiveStatus === "blocked") {
             badgeLabel = "阻塞中";
-            badgeStyle = { color: "#B91C1C", backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)" };
+            badgeStyle = { color: "var(--color-danger-text)", backgroundColor: "var(--color-danger-soft)", border: "1px solid rgba(239,68,68,0.22)" };
           } else if (effectiveStatus === "pending_review") {
             badgeLabel = "待验收";
-            badgeStyle = { color: "#D97706", backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.22)" };
+            badgeStyle = { color: "var(--color-warn-text)", backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.22)" };
           } else if (team.currentTaskId) {
             badgeLabel = "执行中";
-            badgeStyle = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
+            badgeStyle = { color: "var(--color-accent-text)", backgroundColor: "var(--color-accent-soft)", border: "1px solid rgba(13,148,136,0.22)" };
           }
           return (
             <section data-testid="current-task-card" style={{ padding: space.lg, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.sm }}>
@@ -542,7 +542,7 @@ export default function TeamDetailPage() {
                 )}
                 <span style={{ flex: 1 }} />
                 {team.currentTaskId && (
-                  <button type="button" data-testid="goto-current-task" onClick={() => router.push(`/teams/${id}/session`)} style={{ padding: `2px ${space.md}px`, borderRadius: radius.pill, border: "none", background: "none", color: "#0D9488", fontSize: fontSize.xs, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>
+                  <button type="button" data-testid="goto-current-task" onClick={() => router.push(`/teams/${id}/session`)} style={{ padding: `2px ${space.md}px`, borderRadius: radius.pill, border: "none", background: "none", color: "var(--color-accent-text)", fontSize: fontSize.xs, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>
                     进入团队会话 →
                   </button>
                 )}
@@ -565,10 +565,10 @@ export default function TeamDetailPage() {
       {/* 成员管理 */}
       <section style={{ display: "flex", flexDirection: "column", gap: space.md }}>
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-          <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900] }}>团队成员</div>
+          <SectionTitle>团队成员</SectionTitle>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{team.members.length} 位</span>
           {team.mainAgentMemberId && (
-            <span data-testid="main-agent-indicator" style={{ fontSize: 10, color: "#B45309", backgroundColor: "#FEF3C7", border: "1px solid #FCD34D", padding: "0 8px", borderRadius: radius.pill, fontWeight: 600 }}>
+            <span data-testid="main-agent-indicator" style={{ fontSize: 10, color: "var(--color-warn-text)", backgroundColor: "var(--color-warn-bg)", border: "1px solid #FCD34D", padding: "0 8px", borderRadius: radius.pill, fontWeight: 600 }}>
               ★ 主 Agent：{team.members.find((m) => m.id === team.mainAgentMemberId)?.member?.name ?? team.members.find((m) => m.id === team.mainAgentMemberId)?.alias ?? team.mainAgentMemberId}
             </span>
           )}
@@ -577,7 +577,7 @@ export default function TeamDetailPage() {
             type="button"
             data-testid="add-member-toggle"
             onClick={() => { setShowAddMember((v) => !v); setActionError(null); }}
-            style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: showAddMember ? neutral[100] : "#0D9488", color: showAddMember ? neutral[600] : "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}
+            style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: showAddMember ? neutral[100] : "var(--color-accent-text)", color: showAddMember ? neutral[600] : "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}
           >
             {showAddMember ? "取消添加" : "＋ 添加成员"}
           </button>
@@ -593,7 +593,7 @@ export default function TeamDetailPage() {
               <span style={{ flex: 1 }} />
               <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
                 {(["members", "roles"] as const).map((m) => (
-                  <button key={m} type="button" data-testid={`add-member-mode-${m}`} onClick={() => { setAddMode(m); setActionError(null); }} style={{ padding: `${space.xs + 1}px ${space.md}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.xs, fontWeight: 600, backgroundColor: addMode === m ? "var(--color-surface)" : "transparent", color: addMode === m ? "#0F766E" : neutral[500], boxShadow: addMode === m ? shadow.sm : undefined }}>
+                  <button key={m} type="button" data-testid={`add-member-mode-${m}`} onClick={() => { setAddMode(m); setActionError(null); }} style={{ padding: `${space.xs + 1}px ${space.md}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.xs, fontWeight: 600, backgroundColor: addMode === m ? "var(--color-surface)" : "transparent", color: addMode === m ? "var(--color-accent-text)" : neutral[500], boxShadow: addMode === m ? shadow.sm : undefined }}>
                     {m === "members" ? "从成员库选择" : "按岗位新建"}
                   </button>
                 ))}
@@ -611,7 +611,7 @@ export default function TeamDetailPage() {
                     ))}
                   </select>
                   <span style={{ fontSize: 10, color: neutral[400] }}>
-                    成员已在群内的会自动过滤；<a href="/members?new=1" target="_blank" rel="noreferrer" style={{ color: "#0F766E", textDecoration: "none" }}>去成员库新建 →</a>
+                    成员已在群内的会自动过滤；<a href="/members?new=1" target="_blank" rel="noreferrer" style={{ color: "var(--color-accent-text)", textDecoration: "none" }}>去成员库新建 →</a>
                   </span>
                 </label>
               ) : (
@@ -641,13 +641,17 @@ export default function TeamDetailPage() {
               </span>
               <span style={{ flex: 1 }} />
               <button type="button" onClick={() => { setShowAddMember(false); setActionError(null); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>取消</button>
-              <button type="button" data-testid="add-member-confirm" disabled={addMutation.isPending} onClick={handleAddMember} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: addMutation.isPending ? "default" : "pointer", opacity: addMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}>{addMutation.isPending ? "添加中…" : "确认添加"}</button>
+              <button type="button" data-testid="add-member-confirm" disabled={addMutation.isPending} onClick={handleAddMember} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "var(--color-brand-fill)", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: addMutation.isPending ? "default" : "pointer", opacity: addMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}>{addMutation.isPending ? "添加中…" : "确认添加"}</button>
             </div>
           </div>
         )}
 
         {team.members.length === 0 ? (
-          <div data-testid="members-empty" style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px dashed ${neutral[300]}`, textAlign: "center", fontSize: fontSize.sm, color: neutral[400] }}>暂无成员，点击右上角「＋ 添加成员」开始</div>
+          <div data-testid="members-empty" style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px dashed ${neutral[200]}`, display: "flex", flexDirection: "column", alignItems: "center", gap: space.xs, textAlign: "center" }}>
+            <span aria-hidden style={{ fontSize: 28, color: neutral[500] }}>◉</span>
+            <span style={{ fontSize: 16, fontWeight: 700, color: neutral[800] }}>还没有团队成员</span>
+            <span style={{ fontSize: fontSize.md, color: neutral[500], lineHeight: 1.6 }}>点击右上角「＋ 添加成员」，从成员库勾选或按岗位新建</span>
+          </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
             {team.members.map((m) => (

@@ -26,7 +26,7 @@ export function PrototypeEmbed({ spec, prototypes, taskId }: PrototypeEmbedProps
           border: "1px solid #FDE68A",
           backgroundColor: "#FFFBEB",
           fontSize: fontSize.md,
-          color: "#B45309",
+          color: "var(--color-warn-text)",
           fontFamily: fontFamily.body,
         }}
       >

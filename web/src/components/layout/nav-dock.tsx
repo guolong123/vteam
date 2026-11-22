@@ -21,7 +21,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** 导航高亮青蓝（与 styles.roles.product.color 一致） */
 const NAV_ACTIVE = "#0D9488";
 /** 高亮深一档（用于文字 / 选中态底色） */
-const NAV_ACTIVE_DEEP = "#0F766E";
+const NAV_ACTIVE_DEEP = "var(--color-accent-text)";
 
 /** Dock 收起 / 展开宽度（56→248px） */
 const RAIL_W = 56;

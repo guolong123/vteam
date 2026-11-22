@@ -125,7 +125,7 @@ const cardStyle: CSSProperties = {
 
 const errorBannerStyle: CSSProperties = {
   fontSize: fontSize.sm,
-  color: "#DC2626",
+  color: "var(--color-danger-text)",
   display: "flex",
   alignItems: "center",
   gap: space.xs,

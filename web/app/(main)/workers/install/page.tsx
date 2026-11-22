@@ -167,7 +167,7 @@ function StepBadge({ index }: { index: number }) {
         alignItems: "center",
         justifyContent: "center",
         backgroundColor: "rgba(13,148,136,0.10)",
-        color: "#0D9488",
+        color: "var(--color-accent-text)",
         fontSize: fontSize.md,
         fontWeight: 700,
       }}
@@ -237,7 +237,7 @@ function CommandBlock({ command }: { command: string }) {
           borderRadius: radius.md,
           border: `1px solid ${neutral[200]}`,
           backgroundColor: copied ? "rgba(16,185,129,0.10)" : neutral[50],
-          color: copied ? "#059669" : neutral[600],
+          color: copied ? "var(--color-success-text)" : neutral[600],
           fontSize: fontSize.sm,
           cursor: "pointer",
           fontFamily: fontFamily.body,
@@ -268,7 +268,7 @@ function InstallSteps({ steps }: { steps: string[] }) {
               justifyContent: "center",
               backgroundColor: "rgba(13,148,136,0.10)",
               border: "1px solid rgba(13,148,136,0.22)",
-              color: "#0D9488",
+              color: "var(--color-accent-text)",
               fontSize: fontSize.sm,
               fontWeight: 600,
               marginTop: 1,
@@ -572,9 +572,9 @@ export default function WorkerInstallPage() {
                           gap: 2,
                           padding: `${space.sm}px ${space.md}px`,
                           borderRadius: radius.md,
-                          border: `1px solid ${active ? "#0D9488" : neutral[200]}`,
+                          border: `1px solid ${active ? "var(--color-accent-text)" : neutral[200]}`,
                           backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
-                          color: active ? "#0D9488" : neutral[700],
+                          color: active ? "var(--color-accent-text)" : neutral[700],
                           fontSize: fontSize.md,
                           cursor: disabled ? "not-allowed" : "pointer",
                           opacity: disabled ? 0.5 : 1,
@@ -583,7 +583,7 @@ export default function WorkerInstallPage() {
                         }}
                       >
                         <span style={{ fontWeight: 600 }}>{item.label}</span>
-                        <span style={{ fontSize: fontSize.xs, color: active ? "#0D9488" : neutral[400] }}>{item.desc}</span>
+                        <span style={{ fontSize: fontSize.xs, color: active ? "var(--color-accent-text)" : neutral[400] }}>{item.desc}</span>
                       </button>
                     );
                   })}
@@ -689,7 +689,7 @@ export default function WorkerInstallPage() {
                     }
                   />
                   {method === "docker" && !advertiseHost && (
-                    <span style={{ fontSize: fontSize.xs, color: "#B45309", lineHeight: 1.6 }}>
+                    <span style={{ fontSize: fontSize.xs, color: "var(--color-warn-text)", lineHeight: 1.6 }}>
                       容器内网卡是 eth0，自动探测上报的是容器 IP ⇒ 控制面拨不到，
                       表现为「注册成功但派发报 worker 不可用: fetch failed」。请填宿主机 IP。
                     </span>
@@ -772,7 +772,7 @@ export default function WorkerInstallPage() {
                           alignItems: "center",
                           justifyContent: "center",
                           backgroundColor: active ? "rgba(13,148,136,0.10)" : neutral[100],
-                          color: active ? "#0D9488" : neutral[400],
+                          color: active ? "var(--color-accent-text)" : neutral[400],
                           fontSize: fontSize.lg,
                         }}
                       >
@@ -846,7 +846,7 @@ export default function WorkerInstallPage() {
                     backgroundColor: "rgba(180,83,9,0.06)",
                     border: "1px solid rgba(180,83,9,0.35)",
                     fontSize: fontSize.xs,
-                    color: "#B45309",
+                    color: "var(--color-warn-text)",
                     lineHeight: 1.7,
                   }}
                 >
@@ -889,7 +889,7 @@ export default function WorkerInstallPage() {
                 padding: `${space.sm + 2}px ${space.xl}px`,
                 borderRadius: radius.pill,
                 border: "none",
-                backgroundColor: "#0D9488",
+                backgroundColor: "var(--color-brand-fill)",
                 color: "#FFFFFF",
                 fontSize: fontSize.md,
                 fontWeight: 500,

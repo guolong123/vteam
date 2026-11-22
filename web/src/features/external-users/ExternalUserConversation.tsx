@@ -173,7 +173,7 @@ export function ExternalUserConversation({ userId }: { userId: string }) {
               style={{
                 flexShrink: 0,
                 fontSize: 10,
-                color: "#0F766E",
+                color: "var(--color-accent-text)",
                 backgroundColor: "rgba(13,148,136,0.10)",
                 border: "1px solid rgba(13,148,136,0.22)",
                 borderRadius: radius.pill,
@@ -208,7 +208,7 @@ export function ExternalUserConversation({ userId }: { userId: string }) {
           style={{
             padding: `${space.sm}px ${space.lg}px`,
             fontSize: fontSize.xs,
-            color: "#B91C1C",
+            color: "var(--color-danger-text)",
             backgroundColor: "#FEF2F2",
             borderBottom: `1px solid ${neutral[200]}`,
           }}

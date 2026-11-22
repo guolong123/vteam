@@ -36,8 +36,8 @@ type Busy = "pdf" | "md" | null;
 type Status = { kind: "success" | "error"; text: string } | null;
 
 /** 成功/失败状态色（与查看器错误红一致）。 */
-const SUCCESS_COLOR = "#059669";
-const ERROR_COLOR = "#DC2626";
+const SUCCESS_COLOR = "var(--color-success-text)";
+const ERROR_COLOR = "var(--color-danger-text)";
 
 /** 从版本/标题派生安全文件基名：优先人类可读标题（fileName 常为 UUID），去扩展名 + 非法字符替换 + `-vN` 后缀。 */
 function exportBaseName(version: DocExportVersion, title: string): string {

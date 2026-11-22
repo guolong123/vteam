@@ -471,7 +471,7 @@ export function ChatBubble({
               fontSize: messageFontSize.meta,
               lineHeight: 1.4,
               // tokens.ts 无 danger/error 语义色：沿用仓库既有错误红 #DC2626（发送失败/加载失败同色）
-              color: statusMarker.key === "failed" ? "#DC2626" : neutral[400],
+              color: statusMarker.key === "failed" ? "var(--color-danger-text)" : neutral[400],
               ...baseFont,
             }}
           >

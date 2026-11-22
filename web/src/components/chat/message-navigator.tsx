@@ -53,7 +53,7 @@ interface Mark {
 }
 
 const ROLE_COLOR: Record<MessageNavAnchor["role"], string> = {
-  user: "#0F766E",
+  user: "var(--color-accent-text)",
   agent: "#94A3B8",
   system: "#CBD5E1",
   external: "#A78BFA",

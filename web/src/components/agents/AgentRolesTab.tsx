@@ -337,7 +337,7 @@ export function AgentRolesTab({
           </div>
         ) : rolesQuery.isError ? (
           <div data-testid="agent-roles-error" role="alert" style={{ display: "flex", flexDirection: "column", gap: space.md }}>
-            <span style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+            <span style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
               {isApiError(rolesQuery.error) ? rolesQuery.error.message : "加载角色列表失败"}
             </span>
             <button
@@ -524,7 +524,7 @@ export function AgentRolesTab({
                       borderRadius: radius.md,
                       border: "1px solid rgba(239,68,68,0.28)",
                       backgroundColor: "rgba(239,68,68,0.08)",
-                      color: "#DC2626",
+                      color: "var(--color-danger-text)",
                       fontSize: fontSize.sm,
                       cursor: "pointer",
                       fontFamily: fontFamily.body,
@@ -738,7 +738,7 @@ export function AgentRolesTab({
             </div>
 
             {actionError && (
-              <div data-testid="role-action-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626" }}>
+              <div data-testid="role-action-error" role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>
                 {actionError}
               </div>
             )}

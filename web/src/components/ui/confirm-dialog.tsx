@@ -159,7 +159,7 @@ export function ConfirmDialog({
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: danger ? "#DC2626" : "#0D9488",
+              backgroundColor: danger ? "var(--color-danger-text)" : "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,

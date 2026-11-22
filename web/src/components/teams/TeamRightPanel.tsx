@@ -80,10 +80,10 @@ function sortTeamTaskItems(items: TeamTaskListItem[]): TeamTaskListItem[] {
 /** 状态徽标主题（teal 描边=活跃执行，对齐会话页顶栏「进行中」胶囊）。 */
 const TEAM_TASK_STATUS_THEME: Record<TaskApiStatus, { color: string; bg: string; border: string }> = {
   in_progress: { color: "#0D9488", bg: "rgba(13,148,136,0.08)", border: "rgba(13,148,136,0.28)" },
-  blocked: { color: "#B91C1C", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.22)" },
+  blocked: { color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.22)" },
   pending_review: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.22)" },
   pending: { color: neutral[600], bg: neutral[100], border: neutral[300] },
-  completed: { color: "#059669", bg: "rgba(5,150,105,0.08)", border: "rgba(5,150,105,0.22)" },
+  completed: { color: "var(--color-success-text)", bg: "rgba(5,150,105,0.08)", border: "rgba(5,150,105,0.22)" },
   queued: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.22)" },
   archived: { color: neutral[400], bg: neutral[100], border: neutral[200] },
 };
@@ -210,7 +210,7 @@ export function TeamTaskListCard({
         <div
           data-testid="team-task-list-error"
           role="alert"
-          style={{ fontSize: fontSize.xs, color: "#DC2626", padding: `${space.sm}px`, textAlign: "center" }}
+          style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)", padding: `${space.sm}px`, textAlign: "center" }}
         >
           {isApiError(tasksQuery.error) ? tasksQuery.error.message : "任务列表加载失败"}
         </div>
@@ -303,7 +303,7 @@ export function TeamTaskListCard({
                         height: 6,
                         borderRadius: "50%",
                         flexShrink: 0,
-                        backgroundColor: row.status === "blocked" ? "#B91C1C" : "#10B981",
+                        backgroundColor: row.status === "blocked" ? "var(--color-danger-text)" : "#10B981",
                         animation: "team-task-breathe 1.6s ease-in-out infinite",
                       }}
                     />
@@ -405,7 +405,7 @@ export function TeamTaskListCard({
                           borderRadius: radius.pill,
                           border: "1px solid rgba(5,150,105,0.28)",
                           backgroundColor: "rgba(5,150,105,0.08)",
-                          color: "#059669",
+                          color: "var(--color-success-text)",
                           fontSize: 10,
                           fontWeight: 600,
                           cursor: quickActionMutation.isPending ? "default" : "pointer",
@@ -451,7 +451,7 @@ export function TeamTaskListCard({
           role="alert"
           style={{
             fontSize: fontSize.xs,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             backgroundColor: "rgba(239,68,68,0.08)",
             border: "1px solid rgba(239,68,68,0.14)",
             borderRadius: radius.sm,
@@ -708,7 +708,7 @@ export function TeamMemoryCard({
         </div>
       )}
       {error && (
-        <span role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>
+        <span role="alert" style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}>
           {error}
         </span>
       )}
@@ -871,7 +871,7 @@ function ChannelBindingCard({
           role="alert"
           style={{
             fontSize: fontSize.xs,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             backgroundColor: "rgba(239,68,68,0.08)",
             border: "1px solid rgba(239,68,68,0.14)",
             borderRadius: radius.md,
@@ -1006,7 +1006,7 @@ function ChannelBindingCard({
         {saveMutation.isError && (
           <span
             role="alert"
-            style={{ fontSize: fontSize.xs, color: "#DC2626" }}
+            style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}
           >
             保存失败
           </span>
@@ -1140,7 +1140,7 @@ function TeamSubTabs({
               borderRadius: radius.sm,
               backgroundColor: "rgba(13,148,136,0.08)",
               border: "1px solid rgba(13,148,136,0.22)",
-              color: "#0F766E",
+              color: "var(--color-accent-text)",
               fontSize: fontSize.xs,
               lineHeight: 1.5,
             }}
@@ -1426,7 +1426,7 @@ function TeamSubTabs({
               {settingError && (
                 <div
                   role="alert"
-                  style={{ fontSize: fontSize.xs, color: "#DC2626" }}
+                  style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}
                 >
                   {settingError}
                 </div>
@@ -1595,7 +1595,7 @@ const PLAN_STATUS_BADGE: Record<
   },
   completed: {
     label: "完成",
-    color: "#059669",
+    color: "var(--color-success-text)",
     bg: "rgba(16,185,129,0.10)",
     border: "rgba(16,185,129,0.28)",
     flash: false,
@@ -2160,7 +2160,7 @@ function PlanStatusBlock({
             role="alert"
             style={{
               fontSize: fontSize.xs,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               backgroundColor: "rgba(239,68,68,0.08)",
               border: "1px solid rgba(239,68,68,0.14)",
               borderRadius: radius.sm,
@@ -2175,7 +2175,7 @@ function PlanStatusBlock({
             role="alert"
             style={{
               fontSize: fontSize.xs,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               backgroundColor: "rgba(239,68,68,0.08)",
               border: "1px solid rgba(239,68,68,0.14)",
               borderRadius: radius.sm,
@@ -2190,7 +2190,7 @@ function PlanStatusBlock({
             role="alert"
             style={{
               fontSize: fontSize.xs,
-              color: "#DC2626",
+              color: "var(--color-danger-text)",
               backgroundColor: "rgba(239,68,68,0.08)",
               border: "1px solid rgba(239,68,68,0.14)",
               borderRadius: radius.sm,
@@ -2344,7 +2344,7 @@ const TRIGGER_STATUS_THEME: Record<string, { label: string; color: string }> = {
   firing: { label: "触发中", color: "#0D9488" },
   fired: { label: "已触发", color: "#10B981" },
   cancelled: { label: "已取消", color: neutral[400] },
-  failed: { label: "失败", color: "#DC2626" },
+  failed: { label: "失败", color: "var(--color-danger-text)" },
 };
 
 /**
@@ -2485,7 +2485,7 @@ function TaskTriggersBlock({
           role="alert"
           style={{
             fontSize: fontSize.xs,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             backgroundColor: "rgba(239,68,68,0.08)",
             border: "1px solid rgba(239,68,68,0.14)",
             borderRadius: radius.md,
@@ -2632,7 +2632,7 @@ function TaskTriggersBlock({
                         borderRadius: radius.pill,
                         border: "1px solid rgba(239,68,68,0.22)",
                         backgroundColor: "rgba(239,68,68,0.06)",
-                        color: "#DC2626",
+                        color: "var(--color-danger-text)",
                         fontSize: 10,
                         fontWeight: 500,
                         cursor: cancelMutation.isPending
@@ -2673,7 +2673,7 @@ function TaskTriggersBlock({
           role="alert"
           style={{
             fontSize: fontSize.xs,
-            color: "#DC2626",
+            color: "var(--color-danger-text)",
             backgroundColor: "rgba(239,68,68,0.08)",
             border: "1px solid rgba(239,68,68,0.14)",
             borderRadius: radius.sm,
@@ -3193,7 +3193,7 @@ function TaskSubTabs({
                   role="alert"
                   style={{
                     fontSize: fontSize.xs,
-                    color: "#DC2626",
+                    color: "var(--color-danger-text)",
                     backgroundColor: "rgba(239,68,68,0.08)",
                     border: "1px solid rgba(239,68,68,0.14)",
                     borderRadius: radius.md,
@@ -3489,7 +3489,7 @@ function TaskSubTabs({
                   role="alert"
                   style={{
                     fontSize: fontSize.xs,
-                    color: "#DC2626",
+                    color: "var(--color-danger-text)",
                     backgroundColor: "rgba(239,68,68,0.08)",
                     border: "1px solid rgba(239,68,68,0.14)",
                     borderRadius: radius.md,
@@ -3625,7 +3625,7 @@ function TaskSubTabs({
                   role="alert"
                   style={{
                     fontSize: fontSize.xs,
-                    color: "#DC2626",
+                    color: "var(--color-danger-text)",
                     backgroundColor: "rgba(239,68,68,0.08)",
                     border: "1px solid rgba(239,68,68,0.14)",
                     borderRadius: radius.md,
@@ -3789,7 +3789,7 @@ function TaskSubTabs({
                   role="alert"
                   style={{
                     fontSize: fontSize.xs,
-                    color: "#DC2626",
+                    color: "var(--color-danger-text)",
                     backgroundColor: "rgba(239,68,68,0.08)",
                     border: "1px solid rgba(239,68,68,0.14)",
                     borderRadius: radius.md,
@@ -3936,7 +3936,7 @@ const PLAN_STEP_THEME: Record<string, { icon: string; color: string }> = {
   // plan_tasks.status 词表（schema 契约）：done=完成、blocked=阻塞、skipped=跳过。
   // 不识别会被兜底成 pending（画 ○ 未完成），导致「已完成步骤仍显示未完成」。
   done: { icon: "✓", color: "#10B981" },
-  blocked: { icon: "⊘", color: "#DC2626" },
+  blocked: { icon: "⊘", color: "var(--color-danger-text)" },
   skipped: { icon: "−", color: neutral[300] },
   in_progress: { icon: "◐", color: "#0D9488" },
   cancelled: { icon: "✕", color: neutral[300] },
@@ -4189,7 +4189,7 @@ function TeamRuntimeConfig({ team }: { team: any }) {
           ]}
         />
       </label>
-      {save.isError && <span style={{ fontSize: 10, color: "#B91C1C" }}>{isApiError(save.error) ? save.error.message : "保存失败"}</span>}
+      {save.isError && <span style={{ fontSize: 10, color: "var(--color-danger-text)" }}>{isApiError(save.error) ? save.error.message : "保存失败"}</span>}
       <span style={{ fontSize: 9, color: neutral[400] }}>{save.isPending ? "保存中…" : "修改自动保存"}</span>
     </div>
   );

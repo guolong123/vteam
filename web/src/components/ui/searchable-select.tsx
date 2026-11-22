@@ -157,7 +157,7 @@ export function SearchableSelect({
                       border: "none",
                       borderRadius: radius.sm,
                       backgroundColor: active ? "rgba(13,148,136,0.10)" : "transparent",
-                      color: active ? "#0F766E" : neutral[700],
+                      color: active ? "var(--color-accent-text)" : neutral[700],
                       padding: "6px 8px",
                       fontSize: fontSize.xs,
                       fontFamily: fontFamily.body,

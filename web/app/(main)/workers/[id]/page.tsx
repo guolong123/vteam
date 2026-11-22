@@ -22,7 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
+import { neutral, space, radius, fontSize, fontFamily, shadow, layout } from "@/src/theme/tokens";
 import {
   WORKER_STATUS_LABEL,
   workerStatusTheme,
@@ -125,7 +125,7 @@ function ToolBadge({ name }: { name: string }) {
         borderRadius: radius.pill,
         backgroundColor: builtin ? "rgba(13,148,136,0.10)" : "rgba(124,58,237,0.10)",
         border: `1px solid ${builtin ? "rgba(13,148,136,0.22)" : "rgba(124,58,237,0.22)"}`,
-        color: builtin ? "#0D9488" : "#7C3AED",
+        color: builtin ? "var(--color-accent-text)" : "#7C3AED",
         fontSize: fontSize.sm,
         fontWeight: 500,
         fontFamily: fontFamily.mono,
@@ -273,7 +273,7 @@ function MaxInstancesControl({
         <span
           data-testid="worker-max-instances-error"
           role="alert"
-          style={{ fontSize: fontSize.xs, color: "#DC2626" }}
+          style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}
         >
           {error}
         </span>
@@ -429,7 +429,7 @@ export default function WorkerDetailPage() {
           alignItems: "center",
           gap: space.md,
           width: "100%",
-          maxWidth: 960,
+          maxWidth: layout.narrow,
           margin: `${space.lg}px auto`,
         }}
       >
@@ -468,7 +468,7 @@ export default function WorkerDetailPage() {
       {isPending ? (
         <div
           data-testid="worker-detail-loading"
-          style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xl}px 0`, width: "100%", maxWidth: 960, margin: "0 auto", ...baseFont }}
+          style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xl}px 0`, width: "100%", maxWidth: layout.narrow, margin: "0 auto", ...baseFont }}
         >
           加载中…
         </div>
@@ -484,7 +484,7 @@ export default function WorkerDetailPage() {
             padding: `${space.xxl}px`,
             textAlign: "center",
             width: "100%",
-            maxWidth: 960,
+            maxWidth: layout.narrow,
             margin: "0 auto",
             borderRadius: radius.lg,
             backgroundColor: "var(--color-surface)",
@@ -492,7 +492,7 @@ export default function WorkerDetailPage() {
             ...baseFont,
           }}
         >
-          <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+          <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
             {isApiError(error) ? error.message : "加载 Worker 详情失败"}
           </div>
           {/* 路由主键是节点 ID（w_xxx），主机名（name，如容器短哈希）不是路由主键：
@@ -531,7 +531,7 @@ export default function WorkerDetailPage() {
             flexDirection: "column",
             gap: space.lg,
             width: "100%",
-            maxWidth: 960,
+            maxWidth: layout.narrow,
             margin: "0 auto",
           }}
         >
@@ -579,7 +579,7 @@ export default function WorkerDetailPage() {
                     borderRadius: radius.pill,
                     backgroundColor: isDsh ? "rgba(124,58,237,0.10)" : "rgba(13,148,136,0.10)",
                     border: `1px solid ${isDsh ? "rgba(124,58,237,0.25)" : "rgba(13,148,136,0.22)"}`,
-                    color: isDsh ? "#7C3AED" : "#0D9488",
+                    color: isDsh ? "#7C3AED" : "var(--color-accent-text)",
                     fontSize: fontSize.sm,
                     fontWeight: 500,
                     ...baseFont,
@@ -791,7 +791,7 @@ export default function WorkerDetailPage() {
               const instances = worker.load?.instances ?? 0;
               const loadPct = maxInstances > 0 ? Math.round((instances / maxInstances) * 100) : 0;
               // 满载是正常水位（并发上限），用橙色提示而非红色告警
-              const barColor = loadPct >= 100 ? "#D97706" : loadColor(loadPct);
+              const barColor = loadPct >= 100 ? "var(--color-warn-text)" : loadColor(loadPct);
               return (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -951,7 +951,7 @@ export default function WorkerDetailPage() {
                       <span
                         style={{
                           fontSize: fontSize.sm,
-                          color: isDefault ? "#059669" : neutral[500],
+                          color: isDefault ? "var(--color-success-text)" : neutral[500],
                           fontWeight: 500,
                         }}
                       >
@@ -981,7 +981,7 @@ export default function WorkerDetailPage() {
                             alignItems: "center",
                             padding: "0 6px",
                             borderRadius: radius.pill,
-                            backgroundColor: "#059669",
+                            backgroundColor: "var(--color-success-text)",
                             color: "#FFFFFF",
                             fontSize: fontSize.xs,
                             fontWeight: 600,
@@ -1027,7 +1027,7 @@ export default function WorkerDetailPage() {
         <div
           role="alert"
           data-testid="worker-detail-update-error"
-          style={{ fontSize: fontSize.sm, color: "#DC2626", maxWidth: 960, margin: "0 auto" }}
+          style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", maxWidth: layout.narrow, margin: "0 auto" }}
         >
           {isApiError(updateMutation.error) ? updateMutation.error.message : "下发更新失败，请稍后重试"}
         </div>

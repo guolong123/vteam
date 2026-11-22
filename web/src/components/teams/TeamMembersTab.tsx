@@ -256,7 +256,7 @@ export function TeamMembersTab({
             borderRadius: radius.sm,
             backgroundColor: "rgba(220,38,38,0.08)",
             border: "1px solid rgba(220,38,38,0.20)",
-            color: "#B91C1C",
+            color: "var(--color-danger-text)",
             fontSize: fontSize.xs,
           }}
         >
@@ -612,7 +612,7 @@ function SeatCard({
           title="移出团队（不删除成员）"
           aria-label="移出团队"
           onClick={onKick}
-          style={{ ...iconBtn, color: "#B91C1C", borderColor: "rgba(185,28,28,0.28)" }}
+          style={{ ...iconBtn, color: "var(--color-danger-text)", borderColor: "rgba(185,28,28,0.28)" }}
         >
           ⨯
         </button>
@@ -652,7 +652,7 @@ function SeatCard({
       {seat.currentWorkerId &&
         seat.preferredWorkerId &&
         seat.currentWorkerId !== seat.preferredWorkerId && (
-          <div style={{ fontSize: 10, color: "#B45309", lineHeight: 1.4 }}>
+          <div style={{ fontSize: 10, color: "var(--color-warn-text)", lineHeight: 1.4 }}>
             当前运行在 {workerLabelOf(workers, seat.currentWorkerId)}，下次派发时切到{" "}
             {workerLabelOf(workers, seat.preferredWorkerId)}
           </div>

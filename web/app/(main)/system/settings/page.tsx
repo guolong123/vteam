@@ -79,7 +79,7 @@ export default function GlobalSettingsPage() {
                   alignItems: "flex-start",
                   padding: `${space.md}px ${space.lg}px`,
                   borderRadius: radius.md,
-                  border: `1px solid ${active ? "#0D9488" : neutral[200]}`,
+                  border: `1px solid ${active ? "var(--color-accent-text)" : neutral[200]}`,
                   backgroundColor: active ? "rgba(13,148,136,0.06)" : "transparent",
                   cursor: "pointer",
                 }}

@@ -23,7 +23,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** 导航高亮青蓝（与 nav-dock.tsx NAV_ACTIVE 一致） */
 const NAV_ACTIVE = "#0D9488";
 /** 高亮深一档，用于选中文字（与 nav-dock.tsx NAV_ACTIVE_DEEP 一致） */
-const NAV_ACTIVE_DEEP = "#0F766E";
+const NAV_ACTIVE_DEEP = "var(--color-accent-text)";
 
 /** /system 左侧栏宽度（精确 208px） */
 export const SYSTEM_SIDEBAR_WIDTH = 208;

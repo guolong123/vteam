@@ -228,7 +228,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
         </div>
 
         {taskQuery.isError ? (
-          <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626" }}>
+          <div role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>
             {isApiError(taskQuery.error) ? taskQuery.error.message : "加载任务详情失败"}
           </div>
         ) : null}

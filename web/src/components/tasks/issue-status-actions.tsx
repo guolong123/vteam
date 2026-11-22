@@ -47,10 +47,10 @@ const ACTION_SETS: Record<IssueStatus, IssueAction[]> = {
 /** 动作元信息：按钮文案 / 强调色。颜色对齐 issue 状态语义（开始蓝/解决绿/关闭灰/重开琥珀/拒绝红）。 */
 const ACTION_META: Record<IssueAction, { label: string; color: string; pendingLabel: string }> = {
   start: { label: "开始处理", color: "#0D9488", pendingLabel: "处理中…" },
-  resolve: { label: "标记解决", color: "#059669", pendingLabel: "解决中…" },
+  resolve: { label: "标记解决", color: "var(--color-success-text)", pendingLabel: "解决中…" },
   close: { label: "关闭", color: "var(--color-neutral-500)", pendingLabel: "关闭中…" },
   reopen: { label: "重新打开", color: "#D97706", pendingLabel: "重开中…" },
-  reject: { label: "拒绝处理", color: "#DC2626", pendingLabel: "提交中…" },
+  reject: { label: "拒绝处理", color: "var(--color-danger-text)", pendingLabel: "提交中…" },
 };
 
 /**
@@ -153,7 +153,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
         <span
           data-testid="issue-transition-error"
           role="alert"
-          style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}
+          style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)", fontWeight: 500 }}
         >
           {error}
         </span>
@@ -177,7 +177,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
             border: `1px solid rgba(239,68,68,0.22)`,
           }}
         >
-          <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "#B91C1C" }}>
+          <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "var(--color-danger-text)" }}>
             拒绝处理
           </div>
           <textarea
@@ -193,7 +193,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
               boxSizing: "border-box",
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.sm,
-              border: `1px solid ${reasonError ? "#DC2626" : "rgba(239,68,68,0.22)"}`,
+              border: `1px solid ${reasonError ? "var(--color-danger-text)" : "rgba(239,68,68,0.22)"}`,
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
@@ -203,7 +203,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
             }}
           />
           {reasonError && (
-            <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", fontWeight: 500 }}>
+            <div role="alert" style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)", fontWeight: 500 }}>
               {reasonError}
             </div>
           )}
@@ -236,7 +236,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
                 padding: `${space.xs}px ${space.md}px`,
                 borderRadius: radius.pill,
                 border: "none",
-                backgroundColor: "#DC2626",
+                backgroundColor: "var(--color-danger-text)",
                 color: "#FFFFFF",
                 fontSize: fontSize.sm,
                 fontWeight: 500,

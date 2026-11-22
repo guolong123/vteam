@@ -175,6 +175,35 @@ a {
   --color-role-general-border: #E7E5E4;
   /* 分段选择器选中项：浅色=白，深色=提亮一档（surface #1e293b 上可见） */
   --color-segment-active: #ffffff;
+  /* 语义文字色（视觉优化清单 AES-05）
+   * 此前这些值以 hex 直写在 300+ 处内联样式里，暗色下落到 #1e293b 上对比不足：
+   * #0F766E→2.67:1、#B91C1C→2.26:1、#B45309→2.91:1（AA 需 4.5:1）。
+   * 收进变量后浅色保持原值（白底对比 5.47/5.91/4.51 均达标），暗色换成提亮值。 */
+  --color-accent-text: #0F766E;
+  --color-accent-soft: rgba(13, 148, 136, 0.10);
+  /* 品牌实心填充（主按钮底）。暗色下不提亮：白字压在 #0D9488 上对比 3.74:1，
+   * 提亮底色反而会掉到 2:1；这里保持品牌识别度，对比问题由「加大字号/字重」缓解。 */
+  --color-brand-fill: #0D9488;
+  --color-brand-fill-hover: #0F766E;
+  /* 任务状态五色（浅色=原硬编码值；暗色见下方 .dark 段） */
+  --color-status-progress-text: #0D9488;
+  --color-status-progress-bg: #F0FDFA;
+  --color-status-progress-border: #99F6E4;
+  --color-status-blocked-text: #B91C1C;
+  --color-status-blocked-bg: rgba(239, 68, 68, 0.10);
+  --color-status-blocked-border: rgba(239, 68, 68, 0.22);
+  --color-status-review-text: #D97706;
+  --color-status-review-bg: #FFFBEB;
+  --color-status-review-border: #FDE68A;
+  --color-status-done-text: #047857;
+  --color-status-done-bg: #ECFDF5;
+  --color-status-done-border: #A7F3D0;
+  --color-danger-text: #B91C1C;
+  --color-danger-soft: rgba(239, 68, 68, 0.10);
+  --color-success-text: #047857;
+  --color-warn-text: #B45309;
+  --color-warn-bg: #FEF3C7;
+  --color-warn-border: #FCD34D;
 }
 
 .dark {
@@ -225,6 +254,29 @@ a {
   --color-role-general-bg: rgba(120, 113, 108, 0.20);
   --color-role-general-border: rgba(231, 229, 228, 0.30);
   --color-segment-active: #334155;
+  /* 暗色提亮：保证落在 --color-surface(#1e293b) / --color-bg(#020617) 上均 ≥4.5:1 */
+  --color-accent-text: #5EEAD4;
+  --color-accent-soft: rgba(94, 234, 212, 0.12);
+  --color-brand-fill: #0D9488;
+  --color-brand-fill-hover: #14B8A6;
+  --color-status-progress-text: #5EEAD4;
+  --color-status-progress-bg: rgba(94, 234, 212, 0.12);
+  --color-status-progress-border: rgba(94, 234, 212, 0.30);
+  --color-status-blocked-text: #FCA5A5;
+  --color-status-blocked-bg: rgba(252, 165, 165, 0.12);
+  --color-status-blocked-border: rgba(252, 165, 165, 0.28);
+  --color-status-review-text: #FCD34D;
+  --color-status-review-bg: rgba(245, 158, 11, 0.14);
+  --color-status-review-border: rgba(253, 230, 138, 0.32);
+  --color-status-done-text: #6EE7B7;
+  --color-status-done-bg: rgba(110, 231, 183, 0.12);
+  --color-status-done-border: rgba(110, 231, 183, 0.28);
+  --color-danger-text: #FCA5A5;
+  --color-danger-soft: rgba(252, 165, 165, 0.12);
+  --color-success-text: #6EE7B7;
+  --color-warn-text: #FCD34D;
+  --color-warn-bg: rgba(245, 158, 11, 0.14);
+  --color-warn-border: rgba(253, 230, 138, 0.35);
 }
 
 /* ============================================================

@@ -1698,7 +1698,7 @@ export function TeamSessionView({
     const is404 = teamQuery.isError && isApiError(teamQuery.error) && teamQuery.error.status === 404;
     return (
       <div data-testid="team-session-error" role="alert" style={{ padding: space.xl, ...baseFont }}>
-        <div style={{ color: "#DC2626", fontSize: fontSize.md }}>{is404 ? "团队不存在" : msg}</div>
+        <div style={{ color: "var(--color-danger-text)", fontSize: fontSize.md }}>{is404 ? "团队不存在" : msg}</div>
         <button type="button" onClick={() => router.push("/teams")} style={{ marginTop: space.md, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", cursor: "pointer" }}>返回团队列表</button>
       </div>
     );
@@ -1898,7 +1898,7 @@ export function TeamSessionView({
                             height: 7,
                             borderRadius: "50%",
                             flexShrink: 0,
-                            backgroundColor: t.status === "blocked" ? "#B91C1C" : "#10B981",
+                            backgroundColor: t.status === "blocked" ? "var(--color-danger-text)" : "#10B981",
                             animation: t.status === "in_progress" ? "team-task-breathe 1.6s ease-in-out infinite" : undefined,
                           }}
                         />
@@ -1952,7 +1952,7 @@ export function TeamSessionView({
                                 }}
                                 style={{ display: "flex", alignItems: "center", gap: space.xs, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${selected ? "rgba(13,148,136,0.28)" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.08)" : "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body, minWidth: 0 }}
                               >
-                                <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, backgroundColor: t.status === "blocked" ? "#B91C1C" : "#10B981", animation: t.status === "in_progress" ? "team-task-breathe 1.6s ease-in-out infinite" : undefined }} />
+                                <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, backgroundColor: t.status === "blocked" ? "var(--color-danger-text)" : "#10B981", animation: t.status === "in_progress" ? "team-task-breathe 1.6s ease-in-out infinite" : undefined }} />
                                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{selected ? "✓ " : ""}{t.title}</span>
                               </button>
                             );
@@ -1977,7 +1977,7 @@ export function TeamSessionView({
       </header>
       )}
       {taskParamError && (
-        <div data-testid="session-task-param-error" role="alert" style={{ flexShrink: 0, padding: `${space.sm}px ${space.xl}px`, backgroundColor: "rgba(220,38,38,0.08)", borderBottom: "1px solid rgba(220,38,38,0.20)", color: "#B91C1C", fontSize: fontSize.sm }}>
+        <div data-testid="session-task-param-error" role="alert" style={{ flexShrink: 0, padding: `${space.sm}px ${space.xl}px`, backgroundColor: "rgba(220,38,38,0.08)", borderBottom: "1px solid rgba(220,38,38,0.20)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>
           {taskParamError}
         </div>
       )}
@@ -1987,7 +1987,7 @@ export function TeamSessionView({
           role="status"
           data-testid="session-notice"
           data-kind={notice.kind}
-          style={{ flexShrink: 0, margin: `${space.sm}px ${space.xl}px 0`, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "#DC2626", fontSize: fontSize.sm }}
+          style={{ flexShrink: 0, margin: `${space.sm}px ${space.xl}px 0`, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "var(--color-danger-text)", fontSize: fontSize.sm }}
         >
           {notice.text}
         </div>
@@ -2091,7 +2091,7 @@ export function TeamSessionView({
                     <span
                       data-testid={`dm-tab-unread-${instKey}`}
                       aria-label={`${m.name} 有新回复`}
-                      style={{ width: space.sm, height: space.sm, borderRadius: "50%", backgroundColor: "#DC2626", flexShrink: 0 }}
+                      style={{ width: space.sm, height: space.sm, borderRadius: "50%", backgroundColor: "var(--color-danger-text)", flexShrink: 0 }}
                       // tokens.ts 无 danger/error 语义 token：沿用本文件既有错误红 #DC2626（发送失败/加载失败同色）。
                     />
                   ) : null}
@@ -2353,7 +2353,7 @@ export function TeamSessionView({
                     borderRadius: radius.pill,
                     border: "1px solid rgba(220,38,38,0.35)",
                     backgroundColor: "rgba(220,38,38,0.06)",
-                    color: "#DC2626",
+                    color: "var(--color-danger-text)",
                     fontSize: fontSize.sm,
                     cursor: abortMutation.isPending ? "default" : "pointer",
                     opacity: abortMutation.isPending ? 0.6 : 1,
@@ -2372,7 +2372,7 @@ export function TeamSessionView({
 
           <div style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "var(--color-surface)", borderTop: `1px solid ${neutral[200]}` }}>
             {sendError && (
-              <div data-testid="team-session-send-error" role="alert" style={{ marginBottom: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "#DC2626", fontSize: fontSize.sm }}>
+              <div data-testid="team-session-send-error" role="alert" style={{ marginBottom: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>
                 发送失败：{sendError}
               </div>
             )}
@@ -2384,14 +2384,14 @@ export function TeamSessionView({
                     key={`${m.id}-${m.instanceId ?? ""}`}
                     type="button"
                     onClick={() => setInput((prev) => `${prev}${prev ? " " : ""}@${m.name} `)}
-                    style={{ border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#0F766E", borderRadius: radius.pill, padding: "1px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}
+                    style={{ border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "var(--color-accent-text)", borderRadius: radius.pill, padding: "1px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}
                   >
                     @{m.name}
                   </button>
                 ))}
-                <button type="button" onClick={() => setInput((prev) => `${prev}${prev ? " " : ""}@all `)} style={{ border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "#B45309", borderRadius: radius.pill, padding: "1px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>@all 通知</button>
+                <button type="button" onClick={() => setInput((prev) => `${prev}${prev ? " " : ""}@all `)} style={{ border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: "var(--color-warn-text)", borderRadius: radius.pill, padding: "1px 8px", fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}>@all 通知</button>
                 {delivered && (
-                  <span data-testid="chat-delivered-toast" style={{ marginLeft: "auto", fontSize: fontSize.xs, color: "#0F766E" }}>✓ 已送达</span>
+                  <span data-testid="chat-delivered-toast" style={{ marginLeft: "auto", fontSize: fontSize.xs, color: "var(--color-accent-text)" }}>✓ 已送达</span>
                 )}
               </div>
             )}
@@ -2447,7 +2447,7 @@ export function TeamSessionView({
             }}
           />
           {planUploadError && (
-            <div data-testid="plan-doc-upload-error" style={{ flexShrink: 0, padding: `${space.xs}px ${space.md}px`, fontSize: fontSize.xs, color: "#B91C1C", backgroundColor: "rgba(220,38,38,0.08)", borderBottom: `1px solid rgba(220,38,38,0.20)` }}>
+            <div data-testid="plan-doc-upload-error" style={{ flexShrink: 0, padding: `${space.xs}px ${space.md}px`, fontSize: fontSize.xs, color: "var(--color-danger-text)", backgroundColor: "rgba(220,38,38,0.08)", borderBottom: `1px solid rgba(220,38,38,0.20)` }}>
               {planUploadError}
             </div>
           )}

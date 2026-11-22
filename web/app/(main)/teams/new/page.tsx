@@ -281,16 +281,16 @@ export default function TeamNewPage() {
             <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>团队全局复用，成员实例支持 alias/workDir 独立配置</div>
           </div>
           <div style={{ display: "flex", flexDirection: "column" }}>
-            <label htmlFor="team-name" style={labelStyle}>团队名称 <span style={{ color: "#DC2626" }}>*</span></label>
+            <label htmlFor="team-name" style={labelStyle}>团队名称 <span style={{ color: "var(--color-danger-text)" }}>*</span></label>
             <input id="team-name" data-testid="team-name-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：vteam开发团队" style={inputBase} />
-            {nameError && <div data-testid="team-name-error" role="alert" style={{ marginTop: space.xs, fontSize: fontSize.sm, color: "#DC2626" }}>{nameError}</div>}
+            {nameError && <div data-testid="team-name-error" role="alert" style={{ marginTop: space.xs, fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>{nameError}</div>}
           </div>
           <div style={{ display: "flex", flexDirection: "column" }}>
             <label htmlFor="team-desc" style={labelStyle}>团队描述</label>
             <textarea id="team-desc" data-testid="team-desc-input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="团队职责与协作范围（可选）" style={{ ...inputBase, resize: "none", lineHeight: 1.6 }} />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
-            <span role="switch" aria-checked={reuseSession} data-testid="reuse-session-toggle" onClick={() => setReuseSession(!reuseSession)} style={{ width: 40, height: 22, borderRadius: 11, border: "none", backgroundColor: reuseSession ? "#0D9488" : neutral[300], position: "relative", flexShrink: 0, cursor: "pointer", transition: "background-color .2s" }}>
+            <span role="switch" aria-checked={reuseSession} data-testid="reuse-session-toggle" onClick={() => setReuseSession(!reuseSession)} style={{ width: 40, height: 22, borderRadius: 11, border: "none", backgroundColor: reuseSession ? "var(--color-accent-text)" : neutral[300], position: "relative", flexShrink: 0, cursor: "pointer", transition: "background-color .2s" }}>
               <span style={{ position: "absolute", top: 2, left: reuseSession ? 20 : 2, width: 18, height: 18, borderRadius: "50%", backgroundColor: "var(--color-surface)", transition: "left .2s", boxShadow: shadow.sm }} />
             </span>
             <div style={{ display: "flex", flexDirection: "column" }}>
@@ -299,10 +299,10 @@ export default function TeamNewPage() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
-            <span aria-hidden style={{ color: "#0D9488", fontWeight: 700 }}>i</span>
+            <span aria-hidden style={{ color: "var(--color-accent-text)", fontWeight: 700 }}>i</span>
             团队成员支持多实例（同一 Agent 可添加多个实例，alias/workDir 独立）。
           </div>
-          {createError && <div data-testid="team-create-error" role="alert" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "#B91C1C" }}>{createError}</div>}
+          {createError && <div data-testid="team-create-error" role="alert" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>{createError}</div>}
         </section>
 
         {/* 右栏成员选择 */}
@@ -310,7 +310,7 @@ export default function TeamNewPage() {
           <div style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.md }}>
             <div style={{ display: "flex", gap: space.xs, padding: 3, borderRadius: radius.md, backgroundColor: neutral[100], border: `1px solid ${neutral[200]}` }}>
               {(["members", "roles"] as const).map((m) => (
-                <button key={m} type="button" data-testid={`team-member-mode-${m}`} onClick={() => setMode(m)} style={{ flex: 1, padding: `${space.xs + 2}px ${space.sm}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.sm, fontWeight: 600, backgroundColor: mode === m ? "var(--color-surface)" : "transparent", color: mode === m ? "#0F766E" : neutral[500], boxShadow: mode === m ? shadow.sm : undefined }}>{m === "members" ? "从成员库选择" : "按岗位新建"}</button>
+                <button key={m} type="button" data-testid={`team-member-mode-${m}`} onClick={() => setMode(m)} style={{ flex: 1, padding: `${space.xs + 2}px ${space.sm}px`, border: "none", borderRadius: radius.sm, cursor: "pointer", fontFamily: fontFamily.body, fontSize: fontSize.sm, fontWeight: 600, backgroundColor: mode === m ? "var(--color-surface)" : "transparent", color: mode === m ? "var(--color-accent-text)" : neutral[500], boxShadow: mode === m ? shadow.sm : undefined }}>{m === "members" ? "从成员库选择" : "按岗位新建"}</button>
               ))}
             </div>
             <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>{mode === "members" ? "选择团队成员" : "按岗位新建成员"}</div>
@@ -321,7 +321,7 @@ export default function TeamNewPage() {
                   <div data-testid="members-loading" style={{ fontSize: fontSize.sm, color: neutral[400] }}>成员加载中…</div>
                 ) : membersQuery.isError ? (
                   <div data-testid="members-error" role="alert" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-                    <span style={{ fontSize: fontSize.sm, color: "#DC2626" }}>成员库加载失败</span>
+                    <span style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>成员库加载失败</span>
                     <button type="button" onClick={() => membersQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], cursor: "pointer", fontFamily: fontFamily.body }}>重试</button>
                   </div>
                 ) : memberOptions.length === 0 ? (
@@ -331,24 +331,24 @@ export default function TeamNewPage() {
                     const selected = selectedMemberIds.includes(member.id);
                     const roleKey = member.role?.key && (ROLE_KEYS as readonly string[]).includes(member.role.key) ? (member.role.key as RoleKey) : "developer";
                     return (
-                      <button key={member.id} type="button" data-testid="member-option" data-member-id={member.id} aria-pressed={selected} onClick={() => toggleMember(member)} style={{ textAlign: "left", display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${selected ? "#0D9488" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.08)" : "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>
+                      <button key={member.id} type="button" data-testid="member-option" data-member-id={member.id} aria-pressed={selected} onClick={() => toggleMember(member)} style={{ textAlign: "left", display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${selected ? "var(--color-accent-text)" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.08)" : "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>
                         <AgentAvatar role={roleKey} size="sm" />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</div>
                           <div style={{ fontSize: 10, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.role?.name ?? "成员"} · {member.agent?.name ?? "未绑 Agent"} · 已在 {member.groupCount} 个群</div>
                         </div>
-                        <span aria-hidden style={{ width: 18, height: 18, borderRadius: radius.sm, border: `1.5px solid ${selected ? "#0D9488" : neutral[300]}`, backgroundColor: selected ? "#0D9488" : "var(--color-surface)", color: "#FFF", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, flexShrink: 0 }}>{selected ? "✓" : ""}</span>
+                        <span aria-hidden style={{ width: 18, height: 18, borderRadius: radius.sm, border: `1.5px solid ${selected ? "var(--color-accent-text)" : neutral[300]}`, backgroundColor: selected ? "var(--color-accent-text)" : "var(--color-surface)", color: "#FFF", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, flexShrink: 0 }}>{selected ? "✓" : ""}</span>
                       </button>
                     );
                   })
                 )}
-                <a href="/members?new=1" target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1.5px dashed ${neutral[300]}`, color: "#0F766E", fontSize: fontSize.sm, fontWeight: 600, textDecoration: "none", fontFamily: fontFamily.body }}>＋ 新建成员（成员库）</a>
+                <a href="/members?new=1" target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1.5px dashed ${neutral[300]}`, color: "var(--color-accent-text)", fontSize: fontSize.sm, fontWeight: 600, textDecoration: "none", fontFamily: fontFamily.body }}>＋ 新建成员（成员库）</a>
               </>
             ) : rolesQuery.isPending ? (
               <div data-testid="roles-loading" style={{ fontSize: fontSize.sm, color: neutral[400] }}>岗位加载中…</div>
             ) : rolesQuery.isError ? (
               <div data-testid="roles-error" role="alert" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-                <span style={{ fontSize: fontSize.sm, color: "#DC2626" }}>岗位加载失败</span>
+                <span style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>岗位加载失败</span>
                 <button type="button" data-testid="roles-retry" onClick={() => rolesQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], cursor: "pointer", fontFamily: fontFamily.body }}>重试</button>
               </div>
             ) : (
@@ -371,11 +371,11 @@ export default function TeamNewPage() {
                     if (!member) return null;
                     const isMain = mainMemberId === id;
                     return (
-                      <span key={id} data-testid="selected-member" data-main={isMain ? "true" : "false"} onClick={() => setMainMemberId(isMain ? null : id)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs - 1}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: isMain ? "#FFF7ED" : "rgba(13,148,136,0.10)", border: `1px solid ${isMain ? "#F59E0B" : "rgba(13,148,136,0.35)"}`, color: isMain ? "#D97706" : "#0F766E", fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer" }}>
+                      <span key={id} data-testid="selected-member" data-main={isMain ? "true" : "false"} onClick={() => setMainMemberId(isMain ? null : id)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs - 1}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: isMain ? "var(--color-warn-bg)" : "rgba(13,148,136,0.10)", border: `1px solid ${isMain ? "#F59E0B" : "rgba(13,148,136,0.35)"}`, color: isMain ? "var(--color-warn-text)" : "var(--color-accent-text)", fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer" }}>
                         <span aria-hidden style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", border: `1.5px solid ${isMain ? "#F59E0B" : neutral[300]}`, backgroundColor: isMain ? "#F59E0B" : "transparent", color: "#FFF", fontSize: 10 }}>{isMain ? "★" : ""}</span>
                         {member.name}
-                        <span style={{ fontSize: 10, color: isMain ? "#D97706" : neutral[400] }}>{member.role?.name ?? "成员"}</span>
-                        {isMain && <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706" }}>主 Agent</span>}
+                        <span style={{ fontSize: 10, color: isMain ? "var(--color-warn-text)" : neutral[400] }}>{member.role?.name ?? "成员"}</span>
+                        {isMain && <span style={{ fontSize: 10, fontWeight: 700, color: "var(--color-warn-text)" }}>主 Agent</span>}
                       </span>
                     );
                   })
@@ -383,11 +383,11 @@ export default function TeamNewPage() {
                     const palette = rolePaletteOf(inst.roleKey);
                     const isMain = mainAgentKey === inst.key;
                     return (
-                      <span key={inst.key} data-testid="selected-member" data-main={isMain ? "true" : "false"} onClick={() => setMainAgentKey(isMain ? null : inst.key)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs - 1}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: isMain ? "#FFF7ED" : palette.bg, border: `1px solid ${isMain ? "#F59E0B" : palette.border}`, color: isMain ? "#D97706" : palette.color, fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer" }}>
+                      <span key={inst.key} data-testid="selected-member" data-main={isMain ? "true" : "false"} onClick={() => setMainAgentKey(isMain ? null : inst.key)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs - 1}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: isMain ? "var(--color-warn-bg)" : palette.bg, border: `1px solid ${isMain ? "#F59E0B" : palette.border}`, color: isMain ? "var(--color-warn-text)" : palette.color, fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer" }}>
                         <span aria-hidden style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", border: `1.5px solid ${isMain ? "#F59E0B" : neutral[300]}`, backgroundColor: isMain ? "#F59E0B" : "transparent", color: "#FFF", fontSize: 10 }}>{isMain ? "★" : ""}</span>
                         <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: palette.color }} />
                         {inst.alias}
-                        {isMain && <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706" }}>主 Agent</span>}
+                        {isMain && <span style={{ fontSize: 10, fontWeight: 700, color: "var(--color-warn-text)" }}>主 Agent</span>}
                       </span>
                     );
                   })}
@@ -395,18 +395,18 @@ export default function TeamNewPage() {
             </div>
             {mode === "members"
               ? mainMemberId && (
-                  <div style={{ fontSize: fontSize.xs, color: "#D97706" }}>
+                  <div style={{ fontSize: fontSize.xs, color: "var(--color-warn-text)" }}>
                     ★ 已选主 Agent：{memberOptions.find((m) => m.id === mainMemberId)?.name}
                   </div>
                 )
               : mainAgentKey && (
-                  <div style={{ fontSize: fontSize.xs, color: "#D97706" }}>
+                  <div style={{ fontSize: fontSize.xs, color: "var(--color-warn-text)" }}>
                     ★ 已选主 Agent：{allInstances.find((i) => i.key === mainAgentKey)?.alias}
                   </div>
                 )}
           </div>
 
-          <button type="button" data-testid="create-team-submit" disabled={createMutation.isPending} onClick={handleCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.lg, fontWeight: 600, cursor: createMutation.isPending ? "default" : "pointer", opacity: createMutation.isPending ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
+          <button type="button" data-testid="create-team-submit" disabled={createMutation.isPending} onClick={handleCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "var(--color-brand-fill)", color: "#FFF", fontSize: fontSize.lg, fontWeight: 600, cursor: createMutation.isPending ? "default" : "pointer", opacity: createMutation.isPending ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
             {createMutation.isPending ? "创建中…" : "创建团队"}
           </button>
         </section>

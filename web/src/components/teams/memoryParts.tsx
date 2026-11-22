@@ -45,7 +45,7 @@ const TYPE_META: Record<
   },
   pitfall: {
     label: "坑",
-    color: "#B45309",
+    color: "var(--color-warn-text)",
     bg: "rgba(217,119,6,0.12)",
     border: "rgba(217,119,6,0.26)",
   },

@@ -279,7 +279,7 @@ export function DocsMarkdown({ markdown, prototypes = [], taskId, urlTransform }
             if (!hit) {
               return (
                 <span
-                  style={{ margin: `0 ${space.xs}px`, display: "inline-flex", alignItems: "center", borderRadius: radius.sm, border: "1px solid #FDE68A", backgroundColor: "#FFFBEB", padding: "2px 6px", fontSize: fontSize.xs, color: "#B45309", fontFamily: fontFamily.body }}
+                  style={{ margin: `0 ${space.xs}px`, display: "inline-flex", alignItems: "center", borderRadius: radius.sm, border: "1px solid #FDE68A", backgroundColor: "#FFFBEB", padding: "2px 6px", fontSize: fontSize.xs, color: "var(--color-warn-text)", fontFamily: fontFamily.body }}
                 >
                   原型 {id} 未找到
                 </span>

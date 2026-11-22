@@ -40,7 +40,7 @@ function getInitialTeamId(): string | null {
 }
 
 /* ------------------------------ 背景文档（同原型） ------------------------------ */
-const docTypeColors = { pdf: "#EF4444", csv: "#10B981", docx: "#0D9488" } as const;
+const docTypeColors = { pdf: "#EF4444", csv: "#10B981", docx: "var(--color-brand-fill)" } as const;
 const DEFAULT_DOC_COLOR = "var(--color-neutral-500)";
 interface UploadedFileMeta { url: string; name: string; size: number; ext: string; }
 interface BackgroundDoc { name: string; size: string; ext: string; color: string; url: string; }
@@ -53,7 +53,7 @@ function colorOf(ext: string): string {
   return docTypeColors[ext as keyof typeof docTypeColors] ?? DEFAULT_DOC_COLOR;
 }
 
-const pendingColor = "#D97706";
+const pendingColor = "var(--color-warn-text)";
 const pendingBg = "rgba(245,158,11,0.10)";
 const pendingBorder = "rgba(245,158,11,0.28)";
 
@@ -84,9 +84,9 @@ function TaskForm({
         <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>描述任务目标，平台将按需指派团队完成。</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
-        <label htmlFor="task-title-input" style={fieldLabel}>任务标题 <span style={{ color: "#DC2626" }}>*</span></label>
+        <label htmlFor="task-title-input" style={fieldLabel}>任务标题 <span style={{ color: "var(--color-danger-text)" }}>*</span></label>
         <input id="task-title-input" data-testid="task-title" type="text" placeholder="例如：智能报表模块开发" aria-label="任务标题" value={title} onChange={(e) => onTitleChange(e.target.value)} style={inputBase} />
-        {titleError && <div data-testid="title-error" role="alert" style={{ display: "flex", alignItems: "center", gap: space.xs, marginTop: space.xs, fontSize: fontSize.sm, color: "#DC2626" }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{titleError}</div>}
+        {titleError && <div data-testid="title-error" role="alert" style={{ display: "flex", alignItems: "center", gap: space.xs, marginTop: space.xs, fontSize: fontSize.sm, color: "var(--color-danger-text)" }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{titleError}</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
         <label htmlFor="task-desc-input" style={fieldLabel}>任务描述</label>
@@ -95,12 +95,12 @@ function TaskForm({
       <div data-testid="doc-upload" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <label style={fieldLabel}>背景文档</label>
         <button type="button" data-testid="doc-upload-btn" aria-label="上传背景文档" disabled={uploading} onClick={() => fileInputRef.current?.click()} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: space.xs, padding: `${space.xl}px ${space.lg}px`, borderRadius: radius.md, border: `1.5px dashed ${neutral[300]}`, backgroundColor: neutral[50], color: neutral[500], cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.7 : 1, fontFamily: fontFamily.body }}>
-          <span aria-hidden style={{ fontSize: fontSize.xl, lineHeight: 1, color: "#0D9488" }}>↑</span>
+          <span aria-hidden style={{ fontSize: fontSize.xl, lineHeight: 1, color: "var(--color-accent-text)" }}>↑</span>
           <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[600] }}>{uploading ? "上传中…" : "点击或拖拽上传背景文档"}</span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>支持 PDF / Word / CSV，文件将沉淀到任务文档库供团队查看</span>
         </button>
         <input ref={fileInputRef} type="file" data-testid="doc-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.md,.txt" onChange={(e) => { const file = e.target.files?.[0]; if (file) onUploadFile(file); e.target.value = ""; }} style={{ display: "none" }} />
-        {uploadError && <div data-testid="doc-upload-error" role="alert" style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "#B91C1C", lineHeight: 1.6 }}><span aria-hidden style={{ flexShrink: 0 }}>!</span><span style={{ flex: 1, minWidth: 0 }}>{uploadError}</span><button type="button" data-testid="doc-upload-error-dismiss" aria-label="关闭上传错误提示" onClick={onDismissUploadError} style={{ border: "none", background: "none", fontSize: fontSize.sm, color: neutral[400], cursor: "pointer", padding: space.xs, flexShrink: 0, fontFamily: fontFamily.body }}>✕</button></div>}
+        {uploadError && <div data-testid="doc-upload-error" role="alert" style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "var(--color-danger-text)", lineHeight: 1.6 }}><span aria-hidden style={{ flexShrink: 0 }}>!</span><span style={{ flex: 1, minWidth: 0 }}>{uploadError}</span><button type="button" data-testid="doc-upload-error-dismiss" aria-label="关闭上传错误提示" onClick={onDismissUploadError} style={{ border: "none", background: "none", fontSize: fontSize.sm, color: neutral[400], cursor: "pointer", padding: space.xs, flexShrink: 0, fontFamily: fontFamily.body }}>✕</button></div>}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           {docs.map((doc) => (
             <div key={doc.url} data-testid="doc-file-item" style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
@@ -119,7 +119,7 @@ function TaskForm({
         </select>
       </div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
-        <span aria-hidden style={{ color: "#0D9488", fontWeight: 700, lineHeight: 1.6 }}>i</span>
+        <span aria-hidden style={{ color: "var(--color-accent-text)", fontWeight: 700, lineHeight: 1.6 }}>i</span>
         任务创建后进入「待开始」状态；同一团队支持多任务并行执行（可由团队并发上限约束）。
       </div>
     </section>
@@ -152,30 +152,30 @@ function TeamSelectPanel({
           <div data-testid="teams-loading" style={{ fontSize: fontSize.sm, color: neutral[400] }}>加载团队中…</div>
         ) : teamsError ? (
           <div data-testid="teams-error" role="alert" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-            <span style={{ fontSize: fontSize.sm, color: "#DC2626" }}>团队列表加载失败</span>
+            <span style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>团队列表加载失败</span>
             <button type="button" data-testid="teams-retry" onClick={onRetry} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.md, cursor: "pointer", fontFamily: fontFamily.body }}>重试</button>
           </div>
         ) : teams.length === 0 ? (
           <div data-testid="teams-empty" style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
             暂无团队，请先在「团队」页创建
-            <Link data-testid="goto-teams" href="/teams" style={{ display: "inline-block", marginTop: space.sm, fontSize: fontSize.sm, color: "#0D9488", textDecoration: "none" }}>去创建团队 →</Link>
+            <Link data-testid="goto-teams" href="/teams" style={{ display: "inline-block", marginTop: space.sm, fontSize: fontSize.sm, color: "var(--color-accent-text)", textDecoration: "none" }}>去创建团队 →</Link>
           </div>
         ) : (
           <>
-            <label htmlFor="team-select" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>团队 <span style={{ color: "#DC2626" }}>*</span></label>
+            <label htmlFor="team-select" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>团队 <span style={{ color: "var(--color-danger-text)" }}>*</span></label>
             <select
               id="team-select"
               data-testid="team-select"
               value={selectedTeamId ?? ""}
               onChange={(e) => onSelectTeam(e.target.value)}
-              style={{ width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${teamError ? "#DC2626" : neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[800], fontSize: fontSize.md, fontWeight: 500,cursor: "pointer", fontFamily: fontFamily.body }}
+              style={{ width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${teamError ? "var(--color-danger-text)" : neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[800], fontSize: fontSize.md, fontWeight: 500,cursor: "pointer", fontFamily: fontFamily.body }}
             >
               <option value="">请选择团队</option>
               {teams.map((t) => (
                 <option key={t.id} value={t.id} data-testid="team-option" data-team-id={t.id}>{t.name}（{t.members.length}人{(t.activeTaskCount ?? 0) > 0 ? " · 忙碌中" : " · 空闲"}）</option>
               ))}
             </select>
-            {teamError && <div data-testid="team-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626" }}>{teamError}</div>}
+            {teamError && <div data-testid="team-error" role="alert" style={{ fontSize: fontSize.sm, color: "var(--color-danger-text)" }}>{teamError}</div>}
           </>
         )}
 
@@ -210,7 +210,7 @@ function TeamSelectPanel({
 
         {/* resetAfterComplete 勾选 */}
         <label style={{ display: "flex", alignItems: "center", gap: space.md, cursor: "pointer", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
-          <input type="checkbox" data-testid="reset-after-complete-toggle" checked={resetAfterComplete} onChange={(e) => onResetChange(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#0D9488" }} />
+          <input type="checkbox" data-testid="reset-after-complete-toggle" checked={resetAfterComplete} onChange={(e) => onResetChange(e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--color-accent-text)" }} />
           <span style={{ display: "flex", flexDirection: "column" }}>
             <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>完成后重置会话</span>
             <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>覆盖团队 reuseSession，为下一任务开新会话</span>
@@ -219,7 +219,7 @@ function TeamSelectPanel({
 
         {/* longRunning 勾选 */}
         <label style={{ display: "flex", alignItems: "center", gap: space.md, cursor: "pointer", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
-          <input type="checkbox" data-testid="long-running-toggle" checked={longRunning} onChange={(e) => onLongRunningChange(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#0D9488" }} />
+          <input type="checkbox" data-testid="long-running-toggle" checked={longRunning} onChange={(e) => onLongRunningChange(e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--color-accent-text)" }} />
           <span style={{ display: "flex", flexDirection: "column" }}>
             <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>长期值班任务（常驻进行中、豁免巡检）</span>
             <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>常驻进行中、无终态；不被进度巡检判停</span>
@@ -227,11 +227,11 @@ function TeamSelectPanel({
         </label>
       </div>
 
-      <button type="button" data-testid="create-task-button" disabled={submitting} onClick={onCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFFFFF", fontSize: fontSize.lg, fontWeight: 600, cursor: submitting ? "default" : "pointer", opacity: submitting ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
+      <button type="button" data-testid="create-task-button" disabled={submitting} onClick={onCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "var(--color-brand-fill)", color: "#FFFFFF", fontSize: fontSize.lg, fontWeight: 600, cursor: submitting ? "default" : "pointer", opacity: submitting ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
         {submitting ? "创建中…" : "创建任务"}
       </button>
       {created && <div data-testid="create-success" role="status" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(16,185,129,0.10)", border: "1px solid rgba(16,185,129,0.28)", fontSize: fontSize.sm, color: "#065F46", fontWeight: 600 }}>✓ 任务已创建</div>}
-      {createError && <div data-testid="create-error" role="alert" style={{ display: "flex", alignItems: "flex-start", gap: space.xs, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "#B91C1C", lineHeight: 1.6 }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{createError}</div>}
+      {createError && <div data-testid="create-error" role="alert" style={{ display: "flex", alignItems: "flex-start", gap: space.xs, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "var(--color-danger-text)", lineHeight: 1.6 }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{createError}</div>}
       <div data-testid="create-hint" role="note" style={{ display: "flex", alignItems: "flex-start", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: pendingBg, border: `1px solid ${pendingBorder}`, fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.6 }}>
         <span aria-hidden style={{ color: pendingColor, fontWeight: 700, lineHeight: 1.6 }}>⏱</span>
         <span>同一团队支持多任务<span style={{ fontWeight: 600, color: pendingColor }}>并行执行</span>；群聊按团队复用，历史跨任务可见。</span>

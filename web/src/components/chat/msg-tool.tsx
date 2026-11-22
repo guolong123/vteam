@@ -36,9 +36,9 @@ const toolStatus: Record<
   { label: string; color: string; bg: string; border: string }
 > = {
   running: { label: "运行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
-  success: { label: "成功", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  failed: { label: "失败", color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  "awaiting-input": { label: "等待填写敏感信息", color: "#B45309", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.32)" },
+  success: { label: "成功", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  failed: { label: "失败", color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  "awaiting-input": { label: "等待填写敏感信息", color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.32)" },
 };
 
 export interface MsgToolProps {
@@ -234,7 +234,7 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
                       flex: 1,
                       minWidth: 0,
                       ...detailFont,
-                      color: failed ? "#B91C1C" : neutral[600],
+                      color: failed ? "var(--color-danger-text)" : neutral[600],
                     }}
                   >
                     {detailOutput.length > 0 ? detailOutput : "（无输出）"}

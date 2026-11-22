@@ -142,12 +142,12 @@ const LEVEL_META: Record<
   role: {
     label: "角色",
     color: "#0D9488",
-    bg: "rgba(13,148,136,0.10)",
+    bg: "var(--color-accent-soft)",
     border: "rgba(13,148,136,0.26)",
   },
   global: {
     label: "全局",
-    color: "#059669",
+    color: "var(--color-success-text)",
     bg: "rgba(16,185,129,0.10)",
     border: "rgba(16,185,129,0.28)",
   },
@@ -193,7 +193,7 @@ const TYPE_META: Record<
   },
   pitfall: {
     label: "坑",
-    color: "#B45309",
+    color: "var(--color-warn-text)",
     bg: "rgba(217,119,6,0.12)",
     border: "rgba(217,119,6,0.26)",
   },
@@ -237,7 +237,7 @@ const ACTION_BTN: CSSProperties = {
 /** 危险操作按钮（永久删除）：与 agents 页删除按钮同红系。 */
 const DANGER_BTN: CSSProperties = {
   ...ACTION_BTN,
-  color: "#DC2626",
+  color: "var(--color-danger-text)",
   border: "1px solid rgba(220,38,38,0.28)",
 };
 /** 在途（mutation pending）时的按钮禁用态。 */
@@ -481,7 +481,7 @@ function RefCountBadge({ memory }: { memory: MemoryItem }) {
         gap: space.xs,
         padding: `${space.xs}px ${space.sm}px`,
         borderRadius: radius.pill,
-        backgroundColor: hot ? "rgba(13,148,136,0.08)" : neutral[100],
+        backgroundColor: hot ? "var(--color-accent-soft)" : neutral[100],
         border: `1px solid ${hot ? "rgba(13,148,136,0.22)" : neutral[200]}`,
         color: hot ? INJECT_ON : neutral[400],
         fontSize: fontSize.xs,
@@ -1326,7 +1326,7 @@ function MemoryDetailDrawer({
                   "color .15s ease, border-color .15s ease, background-color .15s ease",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.color = "#B45309";
+                e.currentTarget.style.color = "var(--color-warn-text)";
                 e.currentTarget.style.borderColor = "rgba(180,83,9,0.22)";
                 e.currentTarget.style.backgroundColor = "rgba(180,83,9,0.08)";
               }}
@@ -1421,13 +1421,13 @@ function ScopeEditDialog({
   const fieldLabel: CSSProperties = { fontSize: fontSize.xs, color: neutral[400] };
   const dialogError: CSSProperties = {
     fontSize: fontSize.sm,
-    color: "#DC2626",
+    color: "var(--color-danger-text)",
     display: "flex",
     alignItems: "center",
     gap: space.xs,
     padding: `${space.sm}px ${space.md}px`,
     borderRadius: radius.md,
-    backgroundColor: "rgba(239,68,68,0.10)",
+    backgroundColor: "var(--color-danger-soft)",
     border: `1px solid rgba(239,68,68,0.22)`,
   };
 
@@ -1836,13 +1836,13 @@ export default function MemoriesPage() {
 
   const errorBanner: CSSProperties = {
     fontSize: fontSize.sm,
-    color: "#DC2626",
+    color: "var(--color-danger-text)",
     display: "flex",
     alignItems: "center",
     gap: space.xs,
     padding: `${space.sm}px ${space.md}px`,
     borderRadius: radius.md,
-    backgroundColor: "rgba(239,68,68,0.10)",
+    backgroundColor: "var(--color-danger-soft)",
     border: `1px solid rgba(239,68,68,0.22)`,
   };
 
@@ -1855,7 +1855,7 @@ export default function MemoriesPage() {
     gap: space.xs,
     padding: `${space.sm}px ${space.md}px`,
     borderRadius: radius.md,
-    backgroundColor: "rgba(13,148,136,0.10)",
+    backgroundColor: "var(--color-accent-soft)",
     border: `1px solid rgba(13,148,136,0.22)`,
   };
 
@@ -1996,7 +1996,7 @@ export default function MemoriesPage() {
                 textAlign: "center",
               }}
             >
-              <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
+              <div style={{ fontSize: fontSize.md, color: "var(--color-danger-text)" }}>
                 {isApiError(memoriesQuery.error)
                   ? memoriesQuery.error.message
                   : "加载记忆列表失败"}

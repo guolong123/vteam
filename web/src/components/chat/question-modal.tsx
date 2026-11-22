@@ -548,7 +548,7 @@ export function QuestionModal({
                     borderRadius: radius.pill,
                     border: "none",
                     backgroundColor:
-                      action.value === "reject" ? "#DC2626" : action.value === "always" ? "#059669" : "#0D9488",
+                      action.value === "reject" ? "var(--color-danger-text)" : action.value === "always" ? "var(--color-success-text)" : "#0D9488",
                     color: "#FFFFFF",
                     fontSize: fontSize.md,
                     fontWeight: 500,
@@ -573,7 +573,7 @@ export function QuestionModal({
                   borderRadius: radius.pill,
                   border: `1px solid ${neutral[200]}`,
                   backgroundColor: "var(--color-surface)",
-                  color: "#B91C1C",
+                  color: "var(--color-danger-text)",
                   fontSize: fontSize.md,
                   cursor: submitting ? "default" : "pointer",
                   fontFamily: fontFamily.body,
