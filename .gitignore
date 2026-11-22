@@ -39,6 +39,20 @@ coverage/
 .omo/evidence/**/*.png
 .gstack/
 
+# 视觉/QA 一次性产物：截图、组件裁图、表格报告、走查与对比的临时文档。
+# 这类文件是「某一轮测试的产物」，随代码演进必然过期，入库只会成为负担
+# （历史上 e2e-evidence/ 只跟踪过 2 张 png，且已被后续跑测覆盖成脏改动）。
+# 规则按「证据目录 + 报告命名模式」双重收敛，避免误伤：
+#   - e2e-evidence/ 下的二进制一律不入库；同名 .md/.json 收据仍可跟踪
+#   - docs/test-reports/ 下带日期后缀的临时报告（视觉走查/优化清单/原型对比等）不入库；
+#     正式的模块测试报告（01-认证…/02-项目… 等固定命名）仍然跟踪
+e2e-evidence/**/*.png
+e2e-evidence/**/*.jpg
+e2e-evidence/**/*.jpeg
+e2e-evidence/**/*.webp
+docs/test-reports/*-2026????.md
+docs/test-reports/*-2026????.xlsx
+
 # DB backups (deploy-time mysqldump, hundreds of MB — never versioned).
 # NOTE: scoped to .omo/evidence on purpose — prisma migrations (*.sql) MUST stay committable,
 # and several legacy evidence .sql backups are already tracked. Do NOT add a blanket *.sql here.
