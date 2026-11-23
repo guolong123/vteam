@@ -139,7 +139,7 @@ async function installMocks(page: Page, options: MockOptions = {}): Promise<void
         ],
         total: 3,
         page: 1,
-        pageSize: 200,
+        pageSize: 100,
       },
     }),
   );

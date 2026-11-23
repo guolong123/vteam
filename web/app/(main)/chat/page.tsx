@@ -28,6 +28,7 @@ import { membersApi, type MemberDetailDto, type MemberDto } from "@/src/api/memb
 import { externalUsersApi } from "@/src/api/external-users";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
+import { fetchAllAvailableModels } from "@/src/api/models";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
 import { stripExternalChannelPrefix } from "@/lib/strip-external-channel";
 import {
@@ -1697,7 +1698,7 @@ function MemberContextPanel({
   });
   const modelsQuery = useQuery({
     queryKey: ["models", "chat-member-panel"],
-    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 200, available: 1 } }),
+    queryFn: () => fetchAllAvailableModels(),
     enabled: !!member,
   });
   const workersQuery = useQuery({
@@ -1769,7 +1770,7 @@ function MemberContextPanel({
             searchPlaceholder="搜索模型 / provider"
             options={[
               { value: "", label: "跟随 Agent / Worker" },
-              ...(modelsQuery.data?.items ?? []).map((m) => ({
+              ...(modelsQuery.data ?? []).map((m) => ({
                 value: m.id,
                 label: `${m.providerID} · ${m.name}`,
                 keywords: `${m.providerID} ${m.name}`,
