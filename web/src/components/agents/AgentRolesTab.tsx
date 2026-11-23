@@ -77,6 +77,10 @@ interface RoleDraft {
   /** true = 服务端 `capabilities === null`（从未保存）→ 当前 map 为出厂默认。 */
   capabilitiesFromFactory: boolean;
   rolePrompt: string;
+  /** 纪律固定提示：前置到 user 消息周期性重复注入的正文；空串 = 关闭。 */
+  disciplinePrompt: string;
+  /** 注入频率：0=关闭；1=每条；N≥2=每 N 条用户消息一次。 */
+  disciplineEvery: number;
 }
 
 const EMPTY_DRAFT: RoleDraft = {
@@ -87,6 +91,8 @@ const EMPTY_DRAFT: RoleDraft = {
   capabilities: factoryCapabilityMap(),
   capabilitiesFromFactory: true,
   rolePrompt: "",
+  disciplinePrompt: "",
+  disciplineEvery: 3,
 };
 
 function draftOf(role: AgentRoleDto): RoleDraft {
@@ -99,6 +105,8 @@ function draftOf(role: AgentRoleDto): RoleDraft {
     capabilities: caps.map,
     capabilitiesFromFactory: caps.fromFactory,
     rolePrompt: role.rolePrompt ?? "",
+    disciplinePrompt: role.disciplinePrompt ?? "",
+    disciplineEvery: role.disciplineEvery ?? 3,
   };
 }
 
@@ -195,12 +203,19 @@ export function AgentRolesTab({
           defaultAgentId: internal,
           capabilities,
           rolePrompt: draft.rolePrompt,
+          disciplinePrompt: draft.disciplinePrompt.trim() || null,
+          disciplineEvery: draft.disciplineEvery,
         });
         return created.id;
       }
       if (isBuiltin) {
-        // 内置岗位：仅能力点字段可写（服务端仅放宽该字段）；身份字段保持只读。
-        await agentRolesApi.update(selected!.id, { capabilities });
+        // 内置岗位：身份字段（key/name/…）只读；能力点与纪律固定提示可写
+        // （服务端 PATCH 已放宽 rolePrompt / discipline*，仅 key 禁止改）。
+        await agentRolesApi.update(selected!.id, {
+          capabilities,
+          disciplinePrompt: draft.disciplinePrompt.trim() || null,
+          disciplineEvery: draft.disciplineEvery,
+        });
         return selected!.id;
       }
       await agentRolesApi.update(selected!.id, {
@@ -209,6 +224,8 @@ export function AgentRolesTab({
         defaultAgentId: internal,
         capabilities,
         rolePrompt: draft.rolePrompt,
+        disciplinePrompt: draft.disciplinePrompt.trim() || null,
+        disciplineEvery: draft.disciplineEvery,
       });
       return selected!.id;
     },
@@ -653,6 +670,41 @@ export function AgentRolesTab({
               />
             </div>
 
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <label htmlFor="role-discipline-prompt" style={labelStyle}>纪律固定提示（周期性强调，对抗遗忘）</label>
+              <textarea
+                id="role-discipline-prompt"
+                data-testid="role-discipline-prompt"
+                rows={4}
+                value={draft.disciplinePrompt}
+                disabled={saveMutation.isPending || !(creating || canSaveCapabilities)}
+                onChange={(e) => setDraft((d) => ({ ...d, disciplinePrompt: e.target.value }))}
+                placeholder={"例：任何请求先判定产出归属；归其他岗位就立刻派发，不自己下场产出内容。"}
+                style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.xs }}>
+                <label htmlFor="role-discipline-every" style={{ fontSize: fontSize.xs, color: neutral[500] }}>注入频率</label>
+                <select
+                  id="role-discipline-every"
+                  data-testid="role-discipline-every"
+                  value={draft.disciplineEvery}
+                  disabled={saveMutation.isPending || !(creating || canSaveCapabilities)}
+                  onChange={(e) => setDraft((d) => ({ ...d, disciplineEvery: Number(e.target.value) }))}
+                  style={{ ...inputStyle, width: "auto", padding: `${space.xs}px ${space.sm}px` }}
+                >
+                  <option value={0}>关闭</option>
+                  <option value={1}>每条用户消息</option>
+                  <option value={2}>每 2 条</option>
+                  <option value={3}>每 3 条</option>
+                  <option value={5}>每 5 条</option>
+                  <option value={10}>每 10 条</option>
+                </select>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>
+                  只算真实用户消息，Agent 互派不计数；提示只前置到模型看到的消息，群里不可见。
+                </span>
+              </div>
+            </div>
+
             <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
               <span
                 style={{
@@ -709,7 +761,7 @@ export function AgentRolesTab({
                     fontFamily: fontFamily.body,
                   }}
                 >
-                  {saveMutation.isPending ? "保存中…" : "保存能力点"}
+                  {saveMutation.isPending ? "保存中…" : "保存配置"}
                 </button>
               )}
               {creating && (

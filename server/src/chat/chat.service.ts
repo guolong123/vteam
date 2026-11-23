@@ -1747,6 +1747,8 @@ export class ChatService {
         ...(channel.teamId ? { teamId: channel.teamId } : {}),
         ...(dispatchTaskId ? { taskContext: { taskId: dispatchTaskId } } : {}),
         text: dto.text,
+        // 纪律固定提示的周期计数只认真·用户/外部渠道消息，Agent 互派/唤醒不计不注入。
+        isUserMessage: true,
         targets: targets.map((t) => ({
           agentId: t.agentId,
           instanceId: t.instanceId,

@@ -295,6 +295,8 @@ describe('ChatService', () => {
         taskId,
         // vteam 平台私聊标记（群聊频道 → false）
         isDirectMessage: false,
+        // 纪律固定提示：真·用户消息标记（周期计数/注入仅认此标记）
+        isUserMessage: true,
         teamId: 'tm_0000000001',
         taskContext: { taskId },
         text: '你好',

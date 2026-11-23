@@ -36,6 +36,7 @@ import {
   DEFAULT_DOCLIB_MAX_BYTES,
   DEFAULT_SILENT_SESSION_WAKE_MS,
   DISPATCH_TIMEOUT_MS,
+  shouldInjectDiscipline,
   IDLE_SCAN_INTERVAL_MS,
   MAX_SILENT_WAKE_ATTEMPTS,
   escapeXml,
@@ -614,6 +615,100 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.getMessages).not.toHaveBeenCalled();
     });
 
+    it('纪律固定提示：every=3 的第 3 条用户消息前置【纪律提醒】到 user prompt（只在 execute 载荷，不写回消息行）', async () => {
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_project_manager',
+            key: 'project_manager',
+            capabilities: null,
+            rolePrompt: '# 角色：项目经理',
+            disciplinePrompt: '只协调不执行，先派发给对应岗位。',
+            disciplineEvery: 3,
+          },
+        }),
+      ]);
+      const userDispatch = {
+        ...request,
+        isUserMessage: true,
+        targets: [
+          {
+            agentId: 'a_product',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      };
+      const d = createDispatcher();
+
+      await d.dispatch(userDispatch);
+      await d.dispatch({ ...userDispatch, messageId: 'm_0000000002' });
+      const firstTwo = workerClient.execute.mock.calls
+        .slice(0, 2)
+        .map((c: any) => c[1].prompt[0].text as string);
+      expect(firstTwo[0]).not.toContain('【纪律提醒】');
+      expect(firstTwo[1]).not.toContain('【纪律提醒】');
+
+      await d.dispatch({ ...userDispatch, messageId: 'm_0000000003' });
+      const third = workerClient.execute.mock.calls[2][1].prompt[0]
+        .text as string;
+      expect(third.startsWith('【纪律提醒】只协调不执行')).toBe(true);
+      expect(third).toContain('【纪律提醒】只协调不执行，先派发给对应岗位。');
+
+      // 展示回写不含提醒（群聊不可见）：所有 message.update 的 content.text 都不得含提醒
+      const writes = (prisma.message.update as jest.Mock).mock.calls.map(
+        (c: any) => c[1]?.data?.content?.text as string | undefined,
+      );
+      expect(
+        writes.every((t: string | undefined) => !t?.includes('【纪律提醒】')),
+      ).toBe(true);
+    });
+
+    it('纪律固定提示：Agent 内部派发（isUserMessage 缺省）不计数、不注入', async () => {
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_project_manager',
+            key: 'project_manager',
+            capabilities: null,
+            rolePrompt: '# 角色：项目经理',
+            disciplinePrompt: '只协调不执行。',
+            disciplineEvery: 1,
+          },
+        }),
+      ]);
+      const d = createDispatcher();
+      for (let i = 0; i < 3; i++) {
+        await d.dispatch({ ...request, messageId: `m_int_${i}` });
+      }
+      const prompts = workerClient.execute.mock.calls.map(
+        (c: any) => c[1].prompt[0].text as string,
+      );
+      expect(prompts.every((p: string) => !p.includes('【纪律提醒】'))).toBe(
+        true,
+      );
+    });
+
+    it('纪律固定提示：disciplineEvery=0（关闭）→ 用户消息也不注入', async () => {
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_project_manager',
+            key: 'project_manager',
+            capabilities: null,
+            rolePrompt: '# 角色：项目经理',
+            disciplinePrompt: '只协调不执行。',
+            disciplineEvery: 0,
+          },
+        }),
+      ]);
+      const d = createDispatcher();
+      await d.dispatch({ ...request, isUserMessage: true });
+      expect(
+        workerClient.execute.mock.calls[0][1].prompt[0].text as string,
+      ).not.toContain('【纪律提醒】');
+    });
+
     it('群聊触发（team_group）：单触发器走任务段 + 任务版群聊指令，任务经 taskContext 进 execute', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
@@ -845,6 +940,8 @@ describe('WorkerDispatcher', () => {
                 key: true,
                 capabilities: true,
                 rolePrompt: true,
+                disciplinePrompt: true,
+                disciplineEvery: true,
               },
             },
           }),
@@ -11435,5 +11532,39 @@ describe('WorkerDispatcher', () => {
       expect(prisma.message.create).not.toHaveBeenCalled();
       expect(errors).toHaveLength(1);
     });
+  });
+});
+
+describe('岗位纪律固定提示：周期注入判定（shouldInjectDiscipline）', () => {
+  it('every=0 / 负数 / 非数字 → 关闭，任何计数都不注入', () => {
+    expect(shouldInjectDiscipline('纪律', 0, 1)).toBe(false);
+    expect(shouldInjectDiscipline('纪律', -1, 1)).toBe(false);
+    expect(shouldInjectDiscipline('纪律', undefined, 1)).toBe(false);
+    expect(shouldInjectDiscipline('纪律', NaN, 1)).toBe(false);
+  });
+
+  it('空/空白提示 → 不注入（避免空标题刷屏）', () => {
+    expect(shouldInjectDiscipline(null, 3, 3)).toBe(false);
+    expect(shouldInjectDiscipline(undefined, 3, 3)).toBe(false);
+    expect(shouldInjectDiscipline('   \n  ', 3, 3)).toBe(false);
+  });
+
+  it('every=1 → 每条用户消息都注入', () => {
+    for (const n of [1, 2, 3, 10]) {
+      expect(shouldInjectDiscipline('纪律', 1, n)).toBe(true);
+    }
+  });
+
+  it('every=N≥2 → 仅第 N、2N、… 条注入（计数从 1 起）', () => {
+    for (const n of [1, 2, 3, 4, 5]) {
+      expect(shouldInjectDiscipline('纪律', 3, n)).toBe(n % 3 === 0);
+    }
+    expect(shouldInjectDiscipline('纪律', 5, 10)).toBe(true);
+    expect(shouldInjectDiscipline('纪律', 5, 11)).toBe(false);
+  });
+
+  it('小数频率向下取整（与 service 落库归一化同口径）', () => {
+    expect(shouldInjectDiscipline('纪律', 2.9, 2)).toBe(true);
+    expect(shouldInjectDiscipline('纪律', 2.9, 3)).toBe(false);
   });
 });

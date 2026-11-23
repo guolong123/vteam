@@ -76,6 +76,25 @@ export class CreateAgentRoleDto {
   rolePrompt?: string;
 
   @ApiPropertyOptional({
+    description:
+      '纪律固定提示：前置到 user 消息周期性重复注入的提示词（如「只协调不执行」）。空/不传 = 不启用',
+  })
+  @IsOptional()
+  @IsString()
+  disciplinePrompt?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '纪律提示注入频率：0=关闭；1=每条用户消息；N≥2=每 N 条一次。默认 3',
+    default: 3,
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  disciplineEvery?: number;
+
+  @ApiPropertyOptional({
     description: '展示排序（越小越前）',
     default: 0,
     minimum: 0,
