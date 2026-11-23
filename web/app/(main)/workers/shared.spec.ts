@@ -41,7 +41,18 @@ test("pending / disabled 各自独立，且都不与 failed 混同", () => {
 });
 
 test("failed 保持警示外观（红），pending / disabled 不共用它", () => {
-  expect(MCP_STATUS_THEME.failed.color).toBe("#DC2626");
-  expect(MCP_STATUS_THEME.pending.color).not.toBe("#DC2626");
-  expect(MCP_STATUS_THEME.disabled.color).not.toBe("#DC2626");
+  /**
+   * 断言口径随「全站视觉统一」（f3298151）调整：
+   * 颜色此前是硬编码 `#DC2626`，现改为 CSS 变量 `var(--color-danger-text)`
+   * （亮色 #B91C1C / 暗色 #FCA5A5），以支持暗色模式。
+   *
+   * 这里不再钉死具体色值（否则每调一次主题变量就红一次），而是钉住**语义**：
+   * failed 必须走 danger 语义色，且 pending / disabled 绝不共用它。
+   */
+  expect(MCP_STATUS_THEME.failed.color).toBe("var(--color-danger-text)");
+  expect(MCP_STATUS_THEME.pending.color).not.toBe(MCP_STATUS_THEME.failed.color);
+  expect(MCP_STATUS_THEME.disabled.color).not.toBe(MCP_STATUS_THEME.failed.color);
+  // 其余四态也各自独立（联合加态时漏配会被这条挡住）
+  const colors = Object.values(MCP_STATUS_THEME).map((t) => t.color);
+  expect(new Set(colors).size).toBe(colors.length);
 });
