@@ -70,6 +70,25 @@ export class UpdateAgentRoleDto {
   @IsString()
   rolePrompt?: string;
 
+  @ApiPropertyOptional({
+    description:
+      '纪律固定提示：前置到 user 消息周期性重复注入的提示词。空串/null = 关闭',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.disciplinePrompt !== null)
+  @IsString()
+  disciplinePrompt?: string | null;
+
+  @ApiPropertyOptional({
+    description: '纪律提示注入频率：0=关闭；1=每条用户消息；N≥2=每 N 条一次',
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  disciplineEvery?: number;
+
   @ApiPropertyOptional({ description: '展示排序（越小越前）', minimum: 0 })
   @IsOptional()
   @IsInt()

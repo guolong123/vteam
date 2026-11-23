@@ -29,6 +29,10 @@ export interface AgentRoleDto {
    */
   capabilities: Record<string, boolean> | null;
   rolePrompt: string | null;
+  /** 纪律固定提示：周期性前置到 user 消息的提醒正文；空 = 不启用。 */
+  disciplinePrompt: string | null;
+  /** 注入频率：0=关闭；1=每条；N≥2=每 N 条用户消息一次。默认 3。 */
+  disciplineEvery: number;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -51,6 +55,8 @@ export interface CreateAgentRolePayload {
   /** 完整能力点 map（目录内每个键都在；缺省不传 = 服务端保持/使用出厂默认）。 */
   capabilities?: Record<string, boolean> | null;
   rolePrompt?: string;
+  disciplinePrompt?: string | null;
+  disciplineEvery?: number;
   sortOrder?: number;
 }
 
@@ -62,6 +68,8 @@ export interface UpdateAgentRolePayload {
   /** 完整能力点 map；内置岗位的 PATCH **只允许**携带本字段（身份字段仍只读）。 */
   capabilities?: Record<string, boolean> | null;
   rolePrompt?: string | null;
+  disciplinePrompt?: string | null;
+  disciplineEvery?: number;
   sortOrder?: number;
 }
 

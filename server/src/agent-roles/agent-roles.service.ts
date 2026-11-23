@@ -36,6 +36,8 @@ type AgentRoleRow = {
   defaultAgentId: string | null;
   capabilities: Prisma.JsonValue | null;
   rolePrompt: string | null;
+  disciplinePrompt: string | null;
+  disciplineEvery: number;
   sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
@@ -141,6 +143,10 @@ export class AgentRolesService implements OnModuleInit {
           defaultAgentId: internalAgentId,
           capabilities: capabilities as Prisma.InputJsonValue,
           rolePrompt: dto.rolePrompt ?? null,
+          disciplinePrompt: this.normalizeDisciplinePrompt(
+            dto.disciplinePrompt,
+          ),
+          disciplineEvery: this.normalizeDisciplineEvery(dto.disciplineEvery),
           sortOrder: dto.sortOrder ?? 0,
         },
       });
@@ -206,6 +212,20 @@ export class AgentRolesService implements OnModuleInit {
           ...(dto.rolePrompt !== undefined
             ? { rolePrompt: dto.rolePrompt }
             : {}),
+          ...(dto.disciplinePrompt !== undefined
+            ? {
+                disciplinePrompt: this.normalizeDisciplinePrompt(
+                  dto.disciplinePrompt,
+                ),
+              }
+            : {}),
+          ...(dto.disciplineEvery !== undefined
+            ? {
+                disciplineEvery: this.normalizeDisciplineEvery(
+                  dto.disciplineEvery,
+                ),
+              }
+            : {}),
           ...(dto.sortOrder !== undefined ? { sortOrder: dto.sortOrder } : {}),
         },
       });
@@ -260,6 +280,8 @@ export class AgentRolesService implements OnModuleInit {
       defaultAgentId: role.defaultAgentId,
       capabilities: role.capabilities,
       rolePrompt: role.rolePrompt,
+      disciplinePrompt: role.disciplinePrompt ?? null,
+      disciplineEvery: role.disciplineEvery ?? 3,
       sortOrder: role.sortOrder,
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,
@@ -283,6 +305,25 @@ export class AgentRolesService implements OnModuleInit {
     }
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+  }
+
+  /** 纪律提示正文归一化：trim 后空串视为未配置（null），避免空白提示刷屏。 */
+  private normalizeDisciplinePrompt(
+    value: string | null | undefined,
+  ): string | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  /** 注入频率归一化：非负整数，缺省/NaN → 3（每 3 条一次）。 */
+  private normalizeDisciplineEvery(value: number | undefined): number {
+    if (value === undefined || !Number.isFinite(value) || value < 0) {
+      return 3;
+    }
+    return Math.floor(value);
   }
 
   /** defaultAgentId 存在性校验：指向不存在的 Agent → 400。 */

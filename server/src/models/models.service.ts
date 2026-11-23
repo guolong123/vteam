@@ -157,8 +157,9 @@ export class ModelsService implements OnModuleInit {
       name: query.name ? { contains: query.name } : undefined,
       providerType: query.providerType ? query.providerType : undefined,
       // 下拉选择只列真正可用的模型：在线 worker 上报过 availability，
-      // 且 provider 已配置凭据（或本身就是 local/custom 免密钥），
-      // 避免把 worker 目录里「有但没 key」的模型展示成可选。
+      // 且 provider 已配置凭据，或本身就是免密钥来源（local/custom 与
+      // opencode 免费内置）。口径与 listCatalogModels 对齐——后者早已有
+      // opencode 例外，此处曾漏抄导致团队下拉看不到 hy4-flash-free 等新模型。
       workerAvailabilities:
         query.available === true
           ? { some: { worker: { status: 'online' } } }
@@ -180,6 +181,11 @@ export class ModelsService implements OnModuleInit {
         ...new Set([
           ...creds.map((c) => c.providerID),
           ...localProviders.map((m) => m.providerID),
+          // opencode 免费内置 provider（hy4-flash-free 等）走免密通道，凭据配在
+          // opencode-go 集成上而非模型行的 providerID，故没有独立凭据行。与
+          // listCatalogModels 的免费例外对齐：只要有在线 worker 的 availability
+          // 就算可用（上面的 workerAvailabilities 条件已保证），不再因「无凭据」被隐藏。
+          'opencode',
         ]),
       ];
       where.AND = [{ providerID: { in: allowed } }];

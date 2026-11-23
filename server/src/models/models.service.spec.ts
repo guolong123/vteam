@@ -234,6 +234,47 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       });
     });
 
+    it('available=1：opencode 免费内置免凭据也进 allowed（团队下拉能看到 hy4-flash-free 等新模型）', async () => {
+      // 只有 qwen 配了凭据；opencode 无独立凭据行（凭据在 opencode-go 集成上）。
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'qwen' },
+      ]);
+      prisma.model.findMany.mockResolvedValue([]); // local/custom provider 查询
+      prisma.$transaction.mockResolvedValue([0, []]);
+
+      await service.findAll({ available: true });
+
+      const where = (prisma.model.count as jest.Mock).mock.calls[0][0].where;
+      // 在线 worker availability 条件仍在（不因为免凭据就放宽可用运行条件）
+      expect(where.workerAvailabilities).toEqual({
+        some: { worker: { status: 'online' } },
+      });
+      // 关键：allowed 白名单必须含 opencode（此前漏抄 listCatalogModels 的免费例外）
+      expect(where.AND).toEqual([{ providerID: { in: ['qwen', 'opencode'] } }]);
+    });
+
+    it('available=1：local/custom provider 与已配凭据 provider 同样进 allowed', async () => {
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'deepseek-official' },
+      ]);
+      prisma.model.findMany.mockResolvedValue([
+        { providerID: 'qwen' },
+        { providerID: 'ollama' },
+      ]);
+      prisma.$transaction.mockResolvedValue([0, []]);
+
+      await service.findAll({ available: true });
+
+      const where = (prisma.model.count as jest.Mock).mock.calls[0][0].where;
+      expect(where.AND).toEqual([
+        {
+          providerID: {
+            in: ['deepseek-official', 'qwen', 'ollama', 'opencode'],
+          },
+        },
+      ]);
+    });
+
     it('无过滤条件 → where 仅含 enabled undefined（全量）', async () => {
       prisma.$transaction.mockResolvedValue([0, []]);
 

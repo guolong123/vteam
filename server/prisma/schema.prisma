@@ -164,6 +164,13 @@ model AgentRole {
   /// 角色指令（"这个岗位是什么"）。列级可空（todo 4 前 builtin 行暂空），
   /// 但每个 builtin 行最终必须非空（todo 4 填充 role_prompt）。
   rolePrompt  String?  @db.Text @map("role_prompt")
+  /// 【纪律固定提示】每次/隔 N 条用户消息，**前置到 user 消息**（非 system）重复注入的提示词。
+  /// 用途：岗位纪律（如 PM「只协调不执行」）写进 system 的 rolePrompt 仍会被长会话稀释遗忘，
+  /// 用用户消息级重复提醒对抗遗忘。空/null = 不启用。
+  disciplinePrompt String? @db.Text @map("discipline_prompt")
+  /// 注入频率：0=关闭；1=每条用户消息；N≥2=每 N 条用户消息注入一次。默认 3。
+  /// 计数按 (团队席位 × 岗位) 的用户消息轮次，纯记账，不阻塞派发。
+  disciplineEvery Int     @default(3) @map("discipline_every")
   /// 稳定排序（列表展示；内置按 role 序 1..7，回填派生的自定义行沿用 100+）。
   sortOrder   Int      @default(0) @map("sort_order")
   createdAt   DateTime @default(now()) @map("created_at")

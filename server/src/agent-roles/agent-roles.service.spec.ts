@@ -198,6 +198,8 @@ describe('AgentRolesService', () => {
           'defaultAgentId',
           'capabilities',
           'rolePrompt',
+          'disciplinePrompt',
+          'disciplineEvery',
           'sortOrder',
           'createdAt',
           'updatedAt',
@@ -276,6 +278,38 @@ describe('AgentRolesService', () => {
         type: 'custom',
         defaultAgentId: 'a_developer',
         rolePrompt: '你是数据分析师。',
+      });
+    });
+
+    it('纪律固定提示落库：trim、空白→null、频率缺省=3 / 显式 0 保留', async () => {
+      prisma.agentRole.create.mockResolvedValue(customRow);
+
+      await service.create({
+        name: '纪律岗',
+        key: 'disciplined',
+        type: 'custom',
+        disciplinePrompt: '  只协调不执行  ',
+      });
+      expect(prisma.agentRole.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          disciplinePrompt: '只协调不执行',
+          disciplineEvery: 3,
+        }),
+      });
+
+      (prisma.agentRole.create as jest.Mock).mockClear();
+      await service.create({
+        name: '关闭岗',
+        key: 'disabled',
+        type: 'custom',
+        disciplinePrompt: '   ',
+        disciplineEvery: 0,
+      });
+      expect(prisma.agentRole.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          disciplinePrompt: null,
+          disciplineEvery: 0,
+        }),
       });
     });
 
@@ -406,6 +440,28 @@ describe('AgentRolesService', () => {
         name: '高级分析师',
         rolePrompt: '新指令',
         defaultAgentId: 'a_developer',
+      });
+    });
+
+    it('内置角色可编辑纪律固定提示：显式 null 清空正文、频率保留 0=关闭', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue(builtinRow);
+      prisma.agentRole.update.mockResolvedValue({
+        ...builtinRow,
+        disciplinePrompt: null,
+        disciplineEvery: 0,
+      });
+
+      await service.update('ar_project_manager', {
+        disciplinePrompt: null,
+        disciplineEvery: 0,
+      } as UpdateAgentRoleDto);
+
+      expect(prisma.agentRole.update).toHaveBeenCalledWith({
+        where: { id: 'ar_project_manager' },
+        data: expect.objectContaining({
+          disciplinePrompt: null,
+          disciplineEvery: 0,
+        }),
       });
     });
 

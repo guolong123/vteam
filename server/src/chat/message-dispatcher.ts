@@ -41,6 +41,12 @@ export interface DispatchRequest {
   /** 用户消息正文。 */
   text: string;
   /**
+   * 真·用户/外部渠道消息触发（区别于 Agent 互派/唤醒/催办等内部派发）。
+   * 仅 ChatService.createMessage 置 true；用于「纪律固定提示」的周期计数与注入——
+   * 内部派发既不计数也不注入，避免 agent 之间互 @ 把提醒刷屏。
+   */
+  isUserMessage?: boolean;
+  /**
    * 是否 vteam 平台**私聊**入口（点成员头像进入的 DM）。
    *
    * 用途：私聊场景**不注入**「结论要发群聊」的引导（2026-11-16 用户要求：

@@ -1062,6 +1062,34 @@ export const IN_FLIGHT_INJECT_NOTICE =
   '【追加消息】用户在任务执行中发来新消息并已直接送达本会话：处理完当前动作后请接着处理本条内容。';
 
 /**
+ * 岗位纪律固定提示（user 消息级周期注入）的标题。
+ * 与 system 里的【岗位职责】区分：这是**每次/隔 N 条**前置到用户消息、对抗长会话遗忘的纪律强调。
+ * 注入说明只随 execute 载荷下发，不写回消息行（群聊不可见），口径同 IN_FLIGHT_INJECT_NOTICE。
+ */
+export const DISCIPLINE_REMINDER_HEADER = '【纪律提醒】';
+
+/** 纪律注入频率默认（role 行 disciplineEvery 缺省时；0=关闭，1=每条，N=每 N 条）。 */
+export const DEFAULT_DISCIPLINE_EVERY = 3;
+
+/**
+ * 纯函数：按计数与频率决定是否注入纪律提醒。
+ * - every≤0 → 关闭（false）；prompt 空白 → false；
+ * - every=1 → 每条注入；every=N≥2 → 第 N、2N、… 条注入（count 从 1 起）。
+ */
+export function shouldInjectDiscipline(
+  prompt: string | null | undefined,
+  every: number | null | undefined,
+  count: number,
+): boolean {
+  const text = prompt?.trim();
+  if (!text || !Number.isFinite(every ?? 0) || (every ?? 0) <= 0) {
+    return false;
+  }
+  const n = Math.floor(every as number);
+  return n === 1 || count % n === 0;
+}
+
+/**
  * 团队直聊群聊触发指令（仅 dispatchForTeamTarget 的 team_group 频道注入）：
  * 团队维度传参（group_post、notify_agent、chat_history 均传 teamId；selfInstanceId
  * 为 system 身份段中的团队成员 id，tmm_ 前缀）；团队直聊无 taskId，禁传 taskId；
@@ -1751,6 +1779,14 @@ export class WorkerDispatcher
    * MAX_SILENT_WAKE_ATTEMPTS 后仍静默 → 走失败路径。teardown 清空。
    */
   private readonly silentWakeAttempts = new Map<string, number>();
+
+  /**
+   * 岗位纪律固定提示：席位 × 岗位 的用户消息计数器（key = `${teamMemberId}|${roleId}`）。
+   * 仅真·用户消息（DispatchRequest.isUserMessage）递增；每 N 条注入一次 reminder。
+   * 进程内计数（与 silentWakeAttempts 同级）——重启归零，最坏情况是重启后第一条就注入
+   * 或少注入一次，不影响正确性。空提示/关闭（disciplineEvery=0）不计数、不注入。
+   */
+  private readonly disciplineCounters = new Map<string, number>();
 
   /**
    * 原始分派快照（is_7）：快照键 → 快照（dispatch 202 受理后暂存，恢复重放用）。
@@ -3251,6 +3287,9 @@ export class WorkerDispatcher
                 key: true,
                 capabilities: true,
                 rolePrompt: true,
+                // 纪律固定提示（user 消息级周期注入）：与 rolePrompt 同一次查询带出。
+                disciplinePrompt: true,
+                disciplineEvery: true,
               },
             },
             // 成员级性格/专属提示词（成员是平台级实例，persona/prompt 已从 Agent 迁到
@@ -3298,6 +3337,8 @@ export class WorkerDispatcher
       key?: string | null;
       capabilities?: Record<string, boolean> | null;
       rolePrompt?: string | null;
+      disciplinePrompt?: string | null;
+      disciplineEvery?: number | null;
     } | null = selfSeat?.role ?? null;
     const selfRoleAuthority: MemberRoleAuthority | null = selfRoleRow
       ? {
@@ -3365,11 +3406,35 @@ export class WorkerDispatcher
     const attachmentRef = await this.resolveMessageAttachments(
       request.messageId,
     );
+    // 纪律固定提示（user 消息级周期注入）：只认真·用户消息（isUserMessage），
+    // Agent 互派/唤醒/催办既不计数也不注入。岗位未绑/未配置/关闭（every=0）时全不动作。
+    // 计数键 = 席位 × 岗位，避免同席位换岗后沿用旧计数；进程内计数，重启归零可接受。
+    const disciplinePrompt = selfRoleRow?.disciplinePrompt?.trim() || null;
+    const disciplineEvery =
+      selfRoleRow?.disciplineEvery ?? DEFAULT_DISCIPLINE_EVERY;
+    const disciplineKey = `${teamMemberId}|${selfRoleRow?.id ?? agentIdentity.id}`;
+    let promptForExec = prompt;
+    if (
+      request.isUserMessage === true &&
+      disciplinePrompt &&
+      Number.isFinite(disciplineEvery) &&
+      disciplineEvery > 0
+    ) {
+      const nextCount = (this.disciplineCounters.get(disciplineKey) ?? 0) + 1;
+      this.disciplineCounters.set(disciplineKey, nextCount);
+      if (
+        shouldInjectDiscipline(disciplinePrompt, disciplineEvery, nextCount)
+      ) {
+        // 注入说明只随 execute 载荷下发并前置到用户消息（对抗长会话遗忘）；
+        // 消息回写仍用不带说明的 prompt ⇒ 群聊不可见，口径同 IN_FLIGHT_INJECT_NOTICE。
+        promptForExec = `${DISCIPLINE_REMINDER_HEADER}${disciplinePrompt}\n\n${promptForExec}`;
+      }
+    }
     // 注入模式在执行提示词首行前置机内说明；消息回写仍用不带说明的 prompt
     //（注入说明只随 execute 载荷下发，见 IN_FLIGHT_INJECT_NOTICE 注释）。
-    const promptForExec = injectFlight
-      ? `${IN_FLIGHT_INJECT_NOTICE}\n\n${prompt}`
-      : prompt;
+    promptForExec = injectFlight
+      ? `${IN_FLIGHT_INJECT_NOTICE}\n\n${promptForExec}`
+      : promptForExec;
     const finalPrompt = attachmentRef
       ? `${promptForExec}\n\n${attachmentRef.pointer}`
       : promptForExec;
