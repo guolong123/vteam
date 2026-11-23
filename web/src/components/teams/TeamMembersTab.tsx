@@ -28,6 +28,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { agentRolesApi } from "@/src/api/agent-roles";
+import { fetchAllAvailableModels } from "@/src/api/models";
 import { membersApi, type MemberDto } from "@/src/api/members";
 import { AgentAvatar, ConfirmDialog, SearchableSelect } from "@/src/components/ui";
 import {
@@ -97,10 +98,7 @@ export function TeamMembersTab({
   // 模型目录：仅可用模型（与 TeamRuntimeConfig 的团队默认模型选择器同源同参）
   const modelsQuery = useQuery({
     queryKey: ["models", "team-members-tab"],
-    queryFn: () =>
-      api.get<{ items: ModelRow[] }>("/models", {
-        query: { page: 1, pageSize: 200, available: 1 },
-      }),
+    queryFn: () => fetchAllAvailableModels(),
   });
   const roleQuery = useQuery({
     queryKey: ["agent-roles", "team-members-tab"],
@@ -141,9 +139,9 @@ export function TeamMembersTab({
       {
         value: "",
         label: "跟随团队默认",
-        keywords: `跟随团队 默认 ${team.defaultModelId ? modelLabelOf(modelsQuery.data?.items ?? [], team.defaultModelId) : ""}`,
+        keywords: `跟随团队 默认 ${team.defaultModelId ? modelLabelOf(modelsQuery.data ?? [], team.defaultModelId) : ""}`,
       },
-      ...(modelsQuery.data?.items ?? []).map((m) => ({
+      ...(modelsQuery.data ?? []).map((m) => ({
         value: m.id,
         label: `${m.providerID} · ${m.name}`,
         keywords: `${m.providerID} ${m.name}`,
@@ -294,7 +292,7 @@ export function TeamMembersTab({
               teamDefaultModelId={team.defaultModelId ?? null}
               workerOptions={workerOptions}
               modelOptions={modelOptions}
-              models={modelsQuery.data?.items ?? []}
+              models={modelsQuery.data ?? []}
               workers={workers}
               busy={patchSeat.isPending}
               mainPending={setMainMutation.isPending}

@@ -19,6 +19,7 @@ import { useAuthStore } from "@/lib/stores/authStore";
 import { AgentAvatar, ConfirmDialog, EmptyState, MetricCard, PageWindow, PrimaryButton, RowAction, RowActions, SearchableSelect } from "@/src/components/ui";
 import { NAV_TOPBAR_HEIGHT } from "@/src/components/layout";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
+import { fetchAllAvailableModels } from "@/src/api/models";
 import {
   membersApi,
   type CreateMemberPayload,
@@ -215,11 +216,7 @@ export default function MembersPage() {
   const agents: AgentOption[] = agentsQuery.data?.items ?? [];
   const modelsQuery = useQuery({
     queryKey: ["models", "members-page"],
-    queryFn: () =>
-      api.get<{ items: Array<{ id: string; name: string; providerID: string; modelID?: string }> }>(
-        "/models",
-        { query: { page: 1, pageSize: 200, available: 1 } },
-      ),
+    queryFn: () => fetchAllAvailableModels(),
     enabled: !!user?.id,
   });
   const workersQuery = useQuery({
@@ -230,7 +227,7 @@ export default function MembersPage() {
       ),
     enabled: !!user?.id,
   });
-  const modelOptions = modelsQuery.data?.items ?? [];
+  const modelOptions = modelsQuery.data ?? [];
   const workerOptions = workersQuery.data ?? [];
 
   useEffect(() => {

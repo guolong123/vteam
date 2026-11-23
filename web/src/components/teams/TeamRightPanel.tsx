@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
+import { fetchAllAvailableModels } from "@/src/api/models";
 import { useSSE } from "@/hooks/use-sse";
 import { STATUS_LABEL } from "@/src/types/task-status";
 import { AgentAvatar, ConfirmDialog, SearchableSelect } from "@/src/components/ui";
@@ -4141,7 +4142,7 @@ function TeamRuntimeConfig({ team }: { team: any }) {
   const qc = useQueryClient();
   const modelsQuery = useQuery({
     queryKey: ["models", "team-runtime-config"],
-    queryFn: () => api.get<{ items: Array<{ id: string; name: string; providerID: string }> }>("/models", { query: { page: 1, pageSize: 200, available: 1 } }),
+    queryFn: () => fetchAllAvailableModels(),
     enabled: !!team?.id,
   });
   const workersQuery = useQuery({
@@ -4171,7 +4172,7 @@ function TeamRuntimeConfig({ team }: { team: any }) {
           searchPlaceholder="搜索模型 / provider"
           options={[
             { value: "", label: "跟随 Agent / Worker" },
-            ...((modelsQuery.data?.items ?? []).map((m) => ({ value: m.id, label: `${m.providerID} · ${m.name}`, keywords: `${m.providerID} ${m.name}` }))),
+            ...((modelsQuery.data ?? []).map((m) => ({ value: m.id, label: `${m.providerID} · ${m.name}`, keywords: `${m.providerID} ${m.name}` }))),
           ]}
         />
       </label>
