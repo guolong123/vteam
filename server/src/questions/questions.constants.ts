@@ -58,6 +58,11 @@ export const QUESTIONS_ERRORS = {
   QUESTION_EXPIRED: 'QUESTION_EXPIRED',
   /** 托管读团队行时团队归属存在但团队行缺失（session-unification Todo 9）→ 404。 */
   QUESTION_TEAM_NOT_FOUND: 'QUESTION_TEAM_NOT_FOUND',
+  /**
+   * M0 止血：GET /questions 既无 taskId 也无 teamId（缺过滤条件）→ 400。
+   * 原实现双空直接全量返回，等于任何登录用户可读全平台提问/权限确认。
+   */
+  QUESTION_FILTER_REQUIRED: 'QUESTION_FILTER_REQUIRED',
 } as const;
 
 /**

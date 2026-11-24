@@ -4,6 +4,7 @@ import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { SwaggerDocsProvider } from './swagger-docs.provider';
 import { generateSwaggerTools, SwaggerMcpTool } from './swagger-tools';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /**
  * tools 表同步服务（Swagger-MCP / vteam-api，阶段 2 任务 15）。
@@ -94,7 +95,7 @@ export class SwaggerToolSyncService {
     } as const;
 
     await this.prisma.tool.upsert({
-      where: { action: tool.name },
+      where: tenantUniqueWhere('Tool', { action: tool.name }),
       update: base,
       create: {
         id: await this.idGen.nextId(this.TOOL_ID_PREFIX),

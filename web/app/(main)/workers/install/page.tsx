@@ -40,6 +40,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
+import { isPlatformAdmin } from "@/lib/permissions";
 import {
   neutral,
   roleText,
@@ -300,9 +301,18 @@ export default function WorkerInstallPage() {
   }, []);
 
   /* 参数配置（受控，动态拼接到命令展示） */
+  /* 工作空间归属：worker 必须注册到指定空间；非默认空间额外需要「空间加入码」 */
+  type InstallWorkspace = { id: string; name: string; isSystem: boolean };
+  const [workspaces, setWorkspaces] = useState<InstallWorkspace[]>([]);
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [joinToken, setJoinToken] = useState("");
+  const [joinTokenBusy, setJoinTokenBusy] = useState(false);
+  const [joinTokenError, setJoinTokenError] = useState<string | null>(null);
+
   const [serverUrl, setServerUrl] = useState("");
   const [workerId, setWorkerId] = useState("");
-  const [workerToken, setWorkerToken] = useState("");
+  /** 空间注册令牌（单令牌模式）：一个 token 即代表一个空间，注册/运行期都用它。 */
+
   const [concurrency, setConcurrency] = useState(8);
   /* opencode 版本（curl 脚本路径）：缺省 **latest** = npm 包 @opencode/cli 的 latest 标签
      （最新已发布的 v2）——跟随上游发布，避免把裸机安装钉死在两个硬编码版本上；
@@ -361,19 +371,61 @@ export default function WorkerInstallPage() {
   /* workerId **缺省留空**（空 = 由 worker 用主机名，见 workerIdArgs 注释）。
      不再随机生成：随机 id 会覆盖主机名缺省值，导致重装/升级后同机器变成"新节点"。 */
 
-  /* 注册 token 自动拉取（GET /workers/register-token，workers.view）：
-     保证复制命令即带 --token，无需手工填写；拉取失败（权限不足/网络）保留空值走手动引导 */
+  /* 工作空间列表：平台管理员可看全部空间；空间管理员/成员只看自己加入的空间。
+     默认选中当前空间；非默认空间需要 worker 加入码（register 时服务端强制校验）。 */
+  const platformAdmin = isPlatformAdmin(user?.permissions ?? {});
   useEffect(() => {
     if (!user?.id) return;
-    api
-      .get<{ token: string }>("/workers/register-token")
-      .then((r) => {
-        if (r.token) setWorkerToken(r.token);
-      })
-      .catch(() => {
-        /* 静默：无权限或异常时由脚本端引导手动填写 */
-      });
-  }, [user?.id]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = platformAdmin
+          ? await api.get<InstallWorkspace[]>("/workspaces/all")
+          : await api.get<InstallWorkspace[]>("/workspaces");
+        if (cancelled) return;
+        const active = (Array.isArray(rows) ? rows : []).filter(
+          (w) => !("status" in w) || (w as { status?: string }).status === "active",
+        );
+        setWorkspaces(active);
+        setWorkspaceId((cur) => cur || user.currentWorkspaceId || active[0]?.id || "");
+      } catch {
+        /* 列表拉取失败：保留手填/默认空间语义 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, user?.currentWorkspaceId, platformAdmin]);
+
+  /** 签发/重新签发空间加入码（POST /workspaces/:id/worker-token；owner/admin 或平台管理员）。 */
+  const issueJoinToken = async (wsId: string) => {
+    setJoinTokenBusy(true);
+    setJoinTokenError(null);
+    try {
+      const r = await api.post<{ joinToken: string }>(
+        `/workspaces/${wsId}/worker-token`,
+      );
+      setJoinToken(r.joinToken);
+    } catch (err) {
+      setJoinToken("");
+      setJoinTokenError(
+        err instanceof Error ? err.message : "加入码签发失败（需空间管理员权限）",
+      );
+    } finally {
+      setJoinTokenBusy(false);
+    }
+  };
+
+  /* 选择空间后自动签发「空间注册令牌」：token 即代表空间（默认空间同样适用），
+     安装命令只需一个 X_WORKER_TOKEN，不再需要 WORKSPACE_ID / WORKER_JOIN_TOKEN。 */
+  useEffect(() => {
+    if (!workspaceId) {
+      setJoinToken("");
+      setJoinTokenError(null);
+      return;
+    }
+    void issueJoinToken(workspaceId);
+  }, [workspaceId]);
 
   /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh。
      token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN）；
@@ -405,15 +457,17 @@ export default function WorkerInstallPage() {
   const dshCurlArgs = "";
   const dshDockerEnv = "-e WORKER_ENGINE=dsh";
 
+  /* 单令牌模式：空间由 X_WORKER_TOKEN 反查，安装命令不再出现 WORKSPACE_ID / WORKER_JOIN_TOKEN */
+
   const curlCommand = isDsh
-    ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh ${workerIdArgs(workerId, "--worker-id")} --concurrency ${concurrency}${dshCurlArgs}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`
-    : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} ${workerIdArgs(workerId, "--worker-id")} --concurrency ${concurrency}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
+    ? `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --engine dsh ${workerIdArgs(workerId, "--worker-id")} --concurrency ${concurrency}${dshCurlArgs}${joinToken ? ` --token ${joinToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`
+    : `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} ${workerIdArgs(workerId, "--worker-id")} --concurrency ${concurrency}${joinToken ? ` --token ${joinToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
   // `--init`：容器 PID1 必须当 reaper。node 直接当 PID1 时不回收 reparent 到 PID1 的
   // 孤儿孙进程 ⇒ agent-browser/Chrome 每次浏览器操作留下 ~20 个 Z 僵尸（PPID=1）。
   // 镜像内已有 tini ENTRYPOINT 双保险；这里显式加 --init，旧镜像/自定义 entrypoint 也不复发。
   const dockerCommand = isDsh
-    ? `docker run -d --init --name ${workerId !== "" ? `dsh-worker-${workerId}` : "vteam-worker-dsh-1"} -e SERVER_URL=${serverUrl} ${workerId !== "" ? `-e WORKER_ID=${workerId} ` : ""}-e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
-    : `docker run -d --init --name ${workerId !== "" ? `opencode-worker-${workerId}` : "vteam-worker-1"} -e SERVER_URL=${serverUrl} ${workerId !== "" ? `-e WORKER_ID=${workerId} ` : ""}-e WORKER_MAX_INSTANCES=${concurrency}${workerToken ? ` -e X_WORKER_TOKEN=${workerToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
+    ? `docker run -d --init --name ${workerId !== "" ? `dsh-worker-${workerId}` : "vteam-worker-dsh-1"} -e SERVER_URL=${serverUrl} ${workerId !== "" ? `-e WORKER_ID=${workerId} ` : ""}-e WORKER_MAX_INSTANCES=${concurrency}${joinToken ? ` -e X_WORKER_TOKEN=${joinToken}` : ""} ${dshDockerEnv} -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerDshImage}`
+    : `docker run -d --init --name ${workerId !== "" ? `opencode-worker-${workerId}` : "vteam-worker-1"} -e SERVER_URL=${serverUrl} ${workerId !== "" ? `-e WORKER_ID=${workerId} ` : ""}-e WORKER_MAX_INSTANCES=${concurrency}${joinToken ? ` -e X_WORKER_TOKEN=${joinToken}` : ""} -e OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 32) -e WORKER_EXEC_PORT=4198 -p 4198:4198${advertiseHost ? ` -e WORKER_ADVERTISE_HOST=http://${sanitizeIp(advertiseHost)}` : ""} ${workerImage}`;
 
   /**
    * Windows 原生安装命令（M1）。
@@ -431,14 +485,14 @@ export default function WorkerInstallPage() {
   const windowsSrcUrl = `${pageOrigin}/worker-src.tar.gz`;
   const windowsCommand = [
     `Invoke-WebRequest -UseBasicParsing ${psQuote(`${pageOrigin}/install-worker.ps1`)} -OutFile "$env:TEMP\\install-worker.ps1"`,
-    `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\\install-worker.ps1" -Server ${psQuote(serverUrl)} -SrcUrl ${psQuote(windowsSrcUrl)} ${workerId.trim() === "" ? "" : `-WorkerId ${psQuote(workerId)}`} -Concurrency ${concurrency}${workerToken ? ` -Token ${psQuote(workerToken)}` : ""}${advertiseHost ? ` -AdvertiseHost ${psQuote(sanitizeIp(advertiseHost))}` : ""}${mcpUrl ? ` -McpUrl ${psQuote(mcpUrl)}` : ""}`,
+    `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\\install-worker.ps1" -Server ${psQuote(serverUrl)} -SrcUrl ${psQuote(windowsSrcUrl)} ${workerId.trim() === "" ? "" : `-WorkerId ${psQuote(workerId)}`} -Concurrency ${concurrency}${joinToken ? ` -Token ${psQuote(joinToken)}` : ""}${advertiseHost ? ` -AdvertiseHost ${psQuote(sanitizeIp(advertiseHost))}` : ""}${mcpUrl ? ` -McpUrl ${psQuote(mcpUrl)}` : ""}`,
   ].join("; ");
 
   const command =
     method === "curl" ? curlCommand : method === "docker" ? dockerCommand : windowsCommand;
 
   const curlSteps = [
-    "在目标机器执行右侧 curl 命令（无需控制面反向可达）",
+    "在目标机器执行右侧 curl 命令（脚本写入空间注册令牌；无需控制面反向可达）",
     "脚本自动装 Node / opencode CLI v2，下载 worker 发布包并写 .env（含随机 serve 密码），随后注册入池",
     "控制面只拨 worker 的执行端点 <上报主机>:4198；外部机器请填写「上报 IP」",
   ];
@@ -452,7 +506,7 @@ export default function WorkerInstallPage() {
   const dockerSteps = [
     "先填「上报 IP」（宿主机 IP）+ SERVER_URL 不要留 127.0.0.1：否则注册成功但控制面拨不到执行端点",
     "在目标机器执行 docker run 命令（镜像需含 opencode v2 适配，≥ v1.1.0；-p 4198:4198 已含在命令里）",
-    "容器读取 SERVER_URL / WORKER_ID / WORKER_MAX_INSTANCES 后注册入池",
+    "容器读取 SERVER_URL / WORKER_ID / X_WORKER_TOKEN（空间注册令牌）后注册入池：空间由令牌反查",
   ];
 
   const dockerDshSteps = [
@@ -616,19 +670,76 @@ export default function WorkerInstallPage() {
                 </div>
               </FieldRow>
 
-              <FieldRow label="注册 token" hint="已自动填 server WORKER_TOKEN">
-                <input
-                  type="password"
-                  data-testid="worker-token-input"
-                  value={workerToken}
-                  onChange={(e) => setWorkerToken(e.target.value)}
-                  spellCheck={false}
-                  placeholder="自动填充中…"
+              {/* 能力声明：并发上限 + opencode 版本 */}
+              <FieldRow
+                label="工作空间"
+                hint="worker 只能服务所属空间；空间由下方注册令牌决定"
+              >
+                <select
+                  data-testid="install-workspace-select"
+                  value={workspaceId}
+                  onChange={(e) => setWorkspaceId(e.target.value)}
                   style={inputStyle}
-                />
+                >
+                  <option value="">（使用服务端默认空间）</option>
+                  {workspaces.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                      {w.isSystem ? "（平台共享空间）" : ""} · {w.id}
+                    </option>
+                  ))}
+                </select>
               </FieldRow>
 
-              {/* 能力声明：并发上限 + opencode 版本 */}
+              <FieldRow
+                label="空间注册令牌"
+                hint="一个令牌即代表一个空间；注册与运行期鉴权都用它"
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+                  <input
+                    data-testid="install-space-token-input"
+                    value={joinTokenBusy ? "签发中…" : joinToken}
+                    readOnly
+                    spellCheck={false}
+                    style={{ ...inputStyle, flex: 1, fontFamily: fontFamily.mono }}
+                  />
+                  <button
+                    type="button"
+                    data-testid="install-regenerate-space-token"
+                    disabled={joinTokenBusy || !workspaceId}
+                    onClick={() => workspaceId && void issueJoinToken(workspaceId)}
+                    style={{
+                      flexShrink: 0,
+                      padding: `${space.sm}px ${space.md}px`,
+                      borderRadius: radius.md,
+                      border: `1px solid ${neutral[200]}`,
+                      backgroundColor: "var(--color-surface)",
+                      color: neutral[700],
+                      fontSize: fontSize.sm,
+                      fontWeight: 600,
+                      cursor: joinTokenBusy ? "wait" : "pointer",
+                      fontFamily: fontFamily.body,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ↻ 重新生成
+                  </button>
+                </div>
+                {joinTokenError ? (
+                  <span
+                    data-testid="install-space-token-error"
+                    role="alert"
+                    style={{ fontSize: fontSize.xs, color: "#B91C1C" }}
+                  >
+                    {joinTokenError}
+                  </span>
+                ) : (
+                  <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                    已自动签发并写入安装命令（X_WORKER_TOKEN / --token）；重新生成会立即作废旧令牌
+                  </span>
+                )}
+              </FieldRow>
+
               <FieldRow label="并发上限" hint="写入 WORKER_MAX_INSTANCES · 控制面按此调度">
                 <select
                   data-testid="concurrency-select"

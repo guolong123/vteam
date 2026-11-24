@@ -1,6 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { WorkersModule } from '../workers/workers.module';
 import { McpServersController } from './mcp-servers.controller';
@@ -18,7 +19,12 @@ import { McpServersService } from './mcp-servers.service';
 @Module({
   imports: [RealtimeModule, forwardRef(() => WorkersModule)],
   controllers: [McpServersController],
-  providers: [McpServersService, AdminGuard, WorkerOrJwtGuard],
+  providers: [
+    McpServersService,
+    AdminGuard,
+    WorkspaceAdminGuard,
+    WorkerOrJwtGuard,
+  ],
   // T8c：导出 McpServersService——WorkersService 心跳处理 mcpStatus 时注入调用
   // （applyHeartbeatStatus 写入内存状态，前端 GET /mcp-servers 合并展示）
   exports: [McpServersService],

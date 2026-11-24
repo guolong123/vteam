@@ -525,5 +525,14 @@ describe('PlanDocsService', () => {
     const svc = module.get<PlanDocsService>(PlanDocsService);
 
     expect(svc.taskDirectory('t_1')).toBe('/data/vteam-worker/tasks/t_1');
+    // M2：按任务归属空间解析（默认空间保持旧布局；非默认空间加 workspaces 段）
+    prisma.task.findUnique.mockResolvedValue({ workspaceId: 'ws_a' });
+    await expect(svc.resolveTaskDirectory('t_1')).resolves.toBe(
+      '/data/vteam-worker/workspaces/ws_a/tasks/t_1',
+    );
+    prisma.task.findUnique.mockResolvedValue({ workspaceId: 'ws_default' });
+    await expect(svc.resolveTaskDirectory('t_1')).resolves.toBe(
+      '/data/vteam-worker/tasks/t_1',
+    );
   });
 });

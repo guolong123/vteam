@@ -14,7 +14,11 @@ import { ModuleRef } from '@nestjs/core';
 import { Prisma } from '@prisma/client';
 import { validateArtifactDeclaration } from '../artifacts/artifacts.service';
 import { ArtifactsService } from '../artifacts/artifacts.service';
-import { DEFAULT_TASK_WORK_DIR, taskDirOf } from '../tasks/work-dir.util';
+import {
+  DEFAULT_TASK_WORK_DIR,
+  taskDirOf,
+  teamDirOf,
+} from '../tasks/work-dir.util';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { FileStorageService } from '../uploads/uploads.service';
 import {
@@ -6499,9 +6503,12 @@ export class WorkerDispatcher
     );
   }
 
-  /** F3 MINOR-3：任务级工作目录（<根>/tasks/<taskId>），mkdir -p 保证存在后返回。 */
-  private async ensureTaskWorkDir(taskId: string): Promise<string> {
-    const dir = taskDirOf(this.taskWorkDirRoot, taskId);
+  /** F3 MINOR-3：任务级工作目录（默认空间 `<根>/tasks/<taskId>`；其它空间加 spaces 段），mkdir -p。 */
+  private async ensureTaskWorkDir(
+    taskId: string,
+    workspaceId?: string,
+  ): Promise<string> {
+    const dir = taskDirOf(this.taskWorkDirRoot, taskId, workspaceId);
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
@@ -6513,9 +6520,12 @@ export class WorkerDispatcher
     return dir;
   }
 
-  /** team-mode 团队工作目录（<根>/teams/<teamId>），mkdir -p 保证存在后返回（同 ensureTaskWorkDir 风格）。 */
-  private async ensureTeamWorkDir(teamId: string): Promise<string> {
-    const dir = path.join(this.taskWorkDirRoot, 'teams', teamId);
+  /** team-mode 团队工作目录（默认空间 `<根>/teams/<teamId>`；其它空间加 spaces 段），mkdir -p。 */
+  private async ensureTeamWorkDir(
+    teamId: string,
+    workspaceId?: string,
+  ): Promise<string> {
+    const dir = teamDirOf(this.taskWorkDirRoot, teamId, workspaceId);
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
@@ -6536,10 +6546,25 @@ export class WorkerDispatcher
     taskId: string,
     teamId?: string | null,
   ): Promise<string> {
-    if (!taskId) {
-      return this.ensureTeamWorkDir(teamId ?? '');
+    // M2：按任务/团队归属空间解析目录（默认空间保持历史布局；非默认空间加 spaces 段）。
+    // task/team 行的 workspaceId 是权威归属（findUnique 不走租户自动过滤）。
+    let workspaceId: string | undefined;
+    if (taskId) {
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { workspaceId: true },
+      });
+      workspaceId = task?.workspaceId ?? undefined;
+      return this.ensureTaskWorkDir(taskId, workspaceId);
     }
-    return this.ensureTaskWorkDir(taskId);
+    if (teamId) {
+      const team = await this.prisma.team.findUnique({
+        where: { id: teamId },
+        select: { workspaceId: true },
+      });
+      workspaceId = team?.workspaceId ?? undefined;
+    }
+    return this.ensureTeamWorkDir(teamId ?? '', workspaceId);
   }
 
   /**

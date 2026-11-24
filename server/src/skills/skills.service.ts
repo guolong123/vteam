@@ -25,6 +25,7 @@ import {
   SkillFrontmatter,
   UploadedSkillFile,
 } from './skill-frontmatter.util';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /** Skill 域主键前缀（对齐 15 篇 §2.2：`sk_<零填充序号>`，本域首个 `sk_` 前缀域）。 */
 const ID_PREFIX = 'sk' as const;
@@ -418,7 +419,9 @@ export class SkillsService implements OnModuleInit {
     name: string,
     excludeId?: string,
   ): Promise<void> {
-    const existing = await this.prisma.skill.findUnique({ where: { name } });
+    const existing = await this.prisma.skill.findUnique({
+      where: tenantUniqueWhere('Skill', { name }),
+    });
     if (existing && (excludeId === undefined || existing.id !== excludeId)) {
       this.throwNameExists(name);
     }

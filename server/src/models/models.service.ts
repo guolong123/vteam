@@ -36,6 +36,7 @@ import { CreateModelDto } from './dto/create-model.dto';
 import { QueryModelsDto } from './dto/query-models.dto';
 import { UpdateModelDto } from './dto/update-model.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /** 模型目录域主键前缀（C1：`md_<零填充序号>`，如 md_0000000001）。 */
 const MODEL_ID_PREFIX = 'md';
@@ -70,6 +71,8 @@ export interface ProviderSummary {
   revokedAt: Date | null;
   providerType?: string | null;
   baseUrl?: string | null;
+  /** 所属工作空间（平台共享=ws_system） */
+  workspaceId?: string;
 }
 
 /**
@@ -291,24 +294,31 @@ export class ModelsService implements OnModuleInit {
     // 回显 providerType/baseUrl（Edit 弹窗不能空 URL）——modelCount 的 enabled 语义只由
     // 上面的 groupBy 承担，两者互不影响。
     const providerMetaRowsRaw = (await this.prisma.model.findMany({
-      select: { providerID: true, providerType: true, baseUrl: true },
+      select: {
+        providerID: true,
+        providerType: true,
+        baseUrl: true,
+        workspaceId: true,
+      },
     } as never)) as unknown;
     const providerMetaRows = Array.isArray(providerMetaRowsRaw)
       ? (providerMetaRowsRaw as {
           providerID: string;
           providerType?: string;
           baseUrl?: string | null;
+          workspaceId?: string;
         }[])
       : [];
     const metaByProvider = new Map<
       string,
-      { providerType: string; baseUrl: string | null }
+      { providerType: string; baseUrl: string | null; workspaceId?: string }
     >();
     for (const r of providerMetaRows) {
       if (!metaByProvider.has(r.providerID)) {
         metaByProvider.set(r.providerID, {
           providerType: r.providerType ?? 'cloud',
           baseUrl: r.baseUrl ?? null,
+          workspaceId: r.workspaceId,
         });
       }
     }
@@ -340,6 +350,8 @@ export class ModelsService implements OnModuleInit {
             revokedAt: cred?.revokedAt ?? null,
             providerType: meta?.providerType ?? 'cloud',
             baseUrl: meta?.baseUrl ?? null,
+            workspaceId:
+              meta?.workspaceId ?? (cred as any)?.workspaceId ?? undefined,
           };
         })
         .sort((a, b) => a.providerID.localeCompare(b.providerID))
@@ -400,7 +412,7 @@ export class ModelsService implements OnModuleInit {
     providerID: string,
   ): Promise<void> {
     const credential = await this.prisma.modelCredential.findUnique({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
       select: { revokedAt: true },
     });
     if (credential && credential.revokedAt === null) {
@@ -668,7 +680,7 @@ export class ModelsService implements OnModuleInit {
       select: { id: true, baseUrl: true },
     })) as { id: string; baseUrl?: string | null }[];
     const credential = await this.prisma.modelCredential.findUnique({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
       select: { id: true },
     });
     if (rows.length === 0 && !credential) {
@@ -694,7 +706,7 @@ export class ModelsService implements OnModuleInit {
     // 的模型 → 下一次 sync 就把行复活）。sync / worker 快照上报 / listProviders
     // 据此忽略其 live 上报，直到显式重新添加（保存凭据、新建模型）清除。
     await this.prisma.providerTombstone.upsert({
-      where: { providerID },
+      where: tenantUniqueWhere('ProviderTombstone', { providerID }),
       create: { providerID },
       update: { deletedAt: new Date() },
     });
@@ -1081,7 +1093,7 @@ export class ModelsService implements OnModuleInit {
     modelID: string,
   ): Promise<string> {
     const existing = await this.prisma.model.findUnique({
-      where: { providerID_modelID: { providerID, modelID } },
+      where: tenantUniqueWhere('Model', { providerID, modelID }),
       select: { id: true, enabled: true },
     });
     if (existing) {
@@ -1123,7 +1135,7 @@ export class ModelsService implements OnModuleInit {
     }
     const { providerID, modelID } = this.splitModelId(ref);
     return this.prisma.model.findUnique({
-      where: { providerID_modelID: { providerID, modelID } },
+      where: tenantUniqueWhere('Model', { providerID, modelID }),
       select: {
         id: true,
         providerID: true,
@@ -1288,7 +1300,7 @@ export class ModelsService implements OnModuleInit {
     modelID: string,
   ): Promise<string> {
     const existing = await this.prisma.model.findUnique({
-      where: { providerID_modelID: { providerID, modelID } },
+      where: tenantUniqueWhere('Model', { providerID, modelID }),
       select: { id: true },
     });
     if (existing) {
@@ -1364,7 +1376,7 @@ export class ModelsService implements OnModuleInit {
     excludeId?: string,
   ): Promise<void> {
     const hit = await this.prisma.model.findUnique({
-      where: { providerID_modelID: { providerID, modelID } },
+      where: tenantUniqueWhere('Model', { providerID, modelID }),
       select: { id: true },
     });
     if (hit && hit.id !== excludeId) {
@@ -1552,7 +1564,7 @@ export class ModelsService implements OnModuleInit {
       return true;
     }
     const existing = await this.prisma.modelCredential.findUnique({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
     });
     if (existing) {
       return true;
@@ -1603,12 +1615,12 @@ export class ModelsService implements OnModuleInit {
         const credentialRef = this.crypto.encrypt(placeholder);
         const fingerprint = this.crypto.fingerprint(placeholder);
         const existingLocal = await this.prisma.modelCredential.findUnique({
-          where: { providerID },
+          where: tenantUniqueWhere('ModelCredential', { providerID }),
         });
         let row: ModelCredential;
         if (existingLocal) {
           row = await this.prisma.modelCredential.update({
-            where: { providerID },
+            where: tenantUniqueWhere('ModelCredential', { providerID }),
             data: { credentialRef, fingerprint, revokedAt: null },
           });
         } else {
@@ -1642,13 +1654,13 @@ export class ModelsService implements OnModuleInit {
     const fingerprint = this.crypto.fingerprint(trimmedToken);
 
     const existing = await this.prisma.modelCredential.findUnique({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
     });
 
     let row: ModelCredential;
     if (existing) {
       row = await this.prisma.modelCredential.update({
-        where: { providerID },
+        where: tenantUniqueWhere('ModelCredential', { providerID }),
         data: { credentialRef, fingerprint, revokedAt: null },
       });
       this.logger.log(
@@ -1943,7 +1955,7 @@ export class ModelsService implements OnModuleInit {
   async getCredential(modelId: string): Promise<ModelCredentialView> {
     const providerID = await this.resolveProviderID(modelId);
     const row = await this.prisma.modelCredential.findUnique({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
     });
     if (!row) {
       return {
@@ -1965,7 +1977,7 @@ export class ModelsService implements OnModuleInit {
   async revokeCredential(modelId: string): Promise<ModelCredentialView> {
     const providerID = await this.resolveProviderID(modelId);
     const existing = await this.prisma.modelCredential.findUnique({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
     });
     if (!existing) {
       throw new NotFoundException({
@@ -1974,7 +1986,7 @@ export class ModelsService implements OnModuleInit {
       });
     }
     const row = await this.prisma.modelCredential.update({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
       data: { revokedAt: new Date() },
     });
     this.logger.log(
@@ -1996,7 +2008,7 @@ export class ModelsService implements OnModuleInit {
     providerID: string,
   ): Promise<ModelCredentialView> {
     const existing = await this.prisma.modelCredential.findUnique({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
     });
     if (!existing) {
       throw new NotFoundException({
@@ -2005,7 +2017,7 @@ export class ModelsService implements OnModuleInit {
       });
     }
     const row = await this.prisma.modelCredential.update({
-      where: { providerID },
+      where: tenantUniqueWhere('ModelCredential', { providerID }),
       data: { revokedAt: new Date() },
     });
     this.logger.log(

@@ -36,6 +36,9 @@ import { assertTeamAccess } from '../common/team-access';
  * 叠加 PermissionGuard（CONF-02 方案②补齐矩阵守卫）：读端点 artifacts.view，
  * 旁路补充提交 artifacts.create——任务成员可见性由 TasksService 路由反查 + 09 §3.6
  * service 层校验，矩阵权限点在成员之上生效。
+ * M0 止血：`:id` 是产出物 id（团队守卫无法解析），归属校验下沉 service 层——
+ * artifact → task → team → team_user_members，非成员统一 403 PERMISSION_TEAM_NOT_MEMBER
+ * （findOne / versions / restore / remove / tasks/:id/artifacts / 旁路 append 全覆盖）。
  */
 @ApiTags('artifacts')
 @ApiBearerAuth()
@@ -76,8 +79,12 @@ export class ArtifactsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('artifacts.view')
   @ApiOperation({ summary: '任务产出物列表（分页 + type/accepted 筛选）' })
-  findByTask(@Param('id') id: string, @Query() query: QueryArtifactsDto) {
-    return this.artifactsService.findByTask(id, query);
+  findByTask(
+    @Param('id') id: string,
+    @Query() query: QueryArtifactsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.artifactsService.findByTask(id, query, user.id);
   }
 
   /**
@@ -88,8 +95,8 @@ export class ArtifactsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('artifacts.view')
   @ApiOperation({ summary: '产出物详情 + 版本列表' })
-  findOne(@Param('id') id: string) {
-    return this.artifactsService.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.artifactsService.findOne(id, user.id);
   }
 
   /**
@@ -104,8 +111,9 @@ export class ArtifactsController {
   findVersion(
     @Param('id') id: string,
     @Param('version', ParseIntPipe) version: number,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.artifactsService.findVersion(id, version);
+    return this.artifactsService.findVersion(id, version, user.id);
   }
 
   /**
@@ -118,7 +126,13 @@ export class ArtifactsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('artifacts.create')
   @ApiOperation({ summary: '手动补充提交产出物（旁路，append 新版本）' })
-  append(@Param('id') id: string, @Body() dto: CreateArtifactDto) {
+  async append(
+    @Param('id') id: string,
+    @Body() dto: CreateArtifactDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    // :id 是任务 id：先做任务 → 团队 → 成员归属校验（非成员 403），再走归档
+    await this.artifactsService.assertTaskMember(id, user.id);
     return this.artifactsService.append(id, {
       taskId: id,
       type: dto.type,
@@ -140,8 +154,12 @@ export class ArtifactsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('artifacts.edit')
   @ApiOperation({ summary: '恢复历史版本为新版本（append-as-new）' })
-  restore(@Param('id') id: string, @Body() dto: RestoreArtifactDto) {
-    return this.artifactsService.restore(id, dto.version);
+  restore(
+    @Param('id') id: string,
+    @Body() dto: RestoreArtifactDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.artifactsService.restore(id, dto.version, user.id);
   }
 
   /**
@@ -152,8 +170,11 @@ export class ArtifactsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('artifacts.create')
   @ApiOperation({ summary: '删除产出物（含全部版本）' })
-  async remove(@Param('id') id: string) {
-    await this.artifactsService.remove(id);
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    await this.artifactsService.remove(id, user.id);
     return { deleted: true };
   }
 

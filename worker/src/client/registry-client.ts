@@ -40,6 +40,10 @@ export interface RegisterResponse {
 }
 
 export interface RegistryClientOptions {
+  /** 所属工作空间 id（env WORKSPACE_ID）；缺省由服务端按既有归属/默认空间处理 */
+  workspaceId?: string;
+  /** 非默认空间的 worker 加入码（服务端校验） */
+  joinToken?: string;
   /** server 基址（如 http://localhost:3000），尾斜杠容忍 */
   serverUrl: string;
   /** X-Worker-Token 鉴权 token（config.workerToken） */
@@ -121,6 +125,8 @@ export async function registerWorker(opts: RegistryClientOptions): Promise<Regis
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const body: RegisterWorkerPayload = {
     workerId: opts.workerId,
+    ...(opts.workspaceId ? { workspaceId: opts.workspaceId } : {}),
+    ...(opts.joinToken ? { joinToken: opts.joinToken } : {}),
     name: opts.workerName,
     opencodeVersion: opts.opencodeVersion,
     capabilities: opts.capabilities,

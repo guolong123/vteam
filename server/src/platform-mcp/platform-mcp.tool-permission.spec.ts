@@ -326,7 +326,7 @@ describe('platform tool permission gate (capability model)', () => {
       ).resolves.toBe('tmm_dev');
     });
 
-    it('无身份入参（channel_send）→ 最近会话解析出成员 id', async () => {
+    it('无身份入参 + 显式 selfInstanceId → 按该成员自己的会话解析出成员 id', async () => {
       prisma.session.findFirst
         .mockResolvedValueOnce({
           taskId,
@@ -348,19 +348,12 @@ describe('platform tool permission gate (capability model)', () => {
       prisma.teamMember.findUnique.mockResolvedValue({ memberId: 'mbr_dev' });
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_dev' });
 
-      await expect(service.resolveToolCallerId(ctx, {})).resolves.toBe(
-        'tmm_dev',
-      );
+      await expect(
+        service.resolveToolCallerId(ctx, { selfInstanceId: 'tmm_dev' }),
+      ).resolves.toBe('tmm_dev');
     });
 
-    it('无身份入参且最近会话无 task/team/成员 → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED（fail-closed）', async () => {
-      prisma.session.findFirst.mockResolvedValue({
-        taskId: null,
-        teamId: null,
-        teamMemberId: null,
-        agentId: null,
-      });
-
+    it('无身份入参且无 selfInstanceId → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED（M0：停用最近会话回填）', async () => {
       await service.resolveToolCallerId(ctx, {}).then(
         () => {
           throw new Error('应当抛出异常');
@@ -372,21 +365,26 @@ describe('platform tool permission gate (capability model)', () => {
           });
         },
       );
+      // fail-closed 在查询前短路：不再按 worker 最近会话猜测归属
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
     });
 
-    it('无身份入参且该 worker 完全没有会话 → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED', async () => {
+    it('无身份入参 + selfInstanceId 但无该成员会话 → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED', async () => {
       prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([]);
 
-      await service.resolveToolCallerId(ctx, {}).then(
-        () => {
-          throw new Error('应当抛出异常');
-        },
-        (err: ForbiddenException) => {
-          expect((err.getResponse() as { code: string }).code).toBe(
-            PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
-          );
-        },
-      );
+      await service
+        .resolveToolCallerId(ctx, { selfInstanceId: 'tmm_dev' })
+        .then(
+          () => {
+            throw new Error('应当抛出异常');
+          },
+          (err: ForbiddenException) => {
+            expect((err.getResponse() as { code: string }).code).toBe(
+              PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
+            );
+          },
+        );
     });
   });
 
@@ -446,6 +444,14 @@ describe('platform tool permission gate (capability model)', () => {
         controllers: [PlatformMcpController],
         providers: [
           { provide: PlatformMcpService, useValue: service },
+          {
+            // M2：controller 依赖 PrismaService 解析 worker 所属空间（本 spec 只验权限门，
+            // worker 查不到 → 回落默认空间即可）。
+            provide: PrismaService,
+            useValue: {
+              worker: { findUnique: jest.fn().mockResolvedValue(null) },
+            },
+          },
           { provide: PlatformToolPermissionService, useValue: gate },
           {
             provide: ConfigService,

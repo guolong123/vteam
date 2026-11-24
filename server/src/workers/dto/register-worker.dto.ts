@@ -9,6 +9,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -181,6 +182,25 @@ export class RegisterWorkerDto {
   @IsString()
   @IsNotEmpty()
   workerId: string;
+
+  @ApiPropertyOptional({
+    description:
+      'worker 所属工作空间 id（worker 侧 env WORKSPACE_ID 上报）。缺省保持已有归属，首次注册缺省为默认空间。' +
+      '归属不可通过注册变更（跨空间迁移走管理员迁移端点）。',
+    example: 'ws_default',
+  })
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '空间 worker 加入码（WORKER_JOIN_TOKEN）：非默认空间注册必填，由 POST /workspaces/:id/worker-token 签发',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  joinToken?: string;
 
   @ApiPropertyOptional({ description: 'worker 显示名（可选）' })
   @IsOptional()

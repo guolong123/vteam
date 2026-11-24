@@ -10,14 +10,17 @@
  * - 命令面板「导航」组选择 → 路由跳转；Esc / 遮罩 / ✕ 关闭
  * - 登录守卫：未登录（authStore.token 为空）跳转 /login
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { neutral, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 import { NavDock, NavTopBar, CmdKPanel, NAV_ITEMS, DEFAULT_CMDK_ITEMS } from "./index";
 import type { CmdKItem } from "./index";
 import { hasPermission, isPlatformAdmin, type RolePermissions } from "@/lib/permissions";
 import { ThemeToggle } from "@/src/theme/theme-toggle";
+import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const baseFont = { fontFamily: fontFamily.body } as const;
 
@@ -39,6 +42,7 @@ const KEY_TO_PATH: Record<string, string> = {
   skills: "/skills",
   integrations: "/integrations",
   stats: "/stats",
+  workspaces: "/workspaces",
   system: "/system",
 };
 
@@ -83,6 +87,7 @@ const CMDK_NAV_PATH: Record<string, string> = {
   技能与工具: "/skills",
   集成渠道: "/integrations",
   统计看板: "/stats",
+  工作空间: "/workspaces",
   系统管理: "/system",
 };
 
@@ -103,6 +108,9 @@ const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
   // 统计看板 = 跨团队经营数据，仅平台管理员（与后端 AdminGuard 同一口径，
   // 前端闸门只是提前收敛体验；真正的门在服务端 controller）。
   stats: isPlatformAdmin,
+  // 工作空间（我的空间 + 成员管理）：所有登录用户可见；
+  // 创建/邀请/迁移等能力由后端按空间角色与平台管理员判定。
+  workspaces: () => true,
   system: isPlatformAdmin,
 };
 
@@ -115,7 +123,10 @@ const ROUTE_GUARD: Record<string, (perms: RolePermissions) => boolean> = {
 };
 
 /** 角色显示名（对齐 users 页 ROLE_LABEL：admin→管理员 / member→成员 / 其余原名） */
-const ROLE_LABEL: Record<string, string> = { admin: "管理员", member: "成员" };
+const ROLE_LABEL: Record<string, string> = {
+  admin: "平台管理员",
+  member: "平台成员",
+};
 
 function roleLabel(name?: string): string {
   return name ? (ROLE_LABEL[name] ?? name) : "";
@@ -134,6 +145,10 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   skills: { title: "技能与工具", subtitle: "管理技能库与工具注册" },
   integrations: { title: "集成渠道", subtitle: "外部渠道双向集成（企微智能机器人 + 通用 Webhook）" },
   stats: { title: "统计看板", subtitle: "跨团队 · 日/周/月粒度 · 任务/产出物/Token/成本与效率质量" },
+  workspaces: {
+    title: "工作空间",
+    subtitle: "空间=租户 · 数据/模型/Worker/成员按空间隔离 · 平台资源只读共享",
+  },
   system: { title: "系统管理", subtitle: "平台管理 · 用户账号 · 角色权限 · Agent 记忆" },
 };
 
@@ -167,7 +182,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const token = useAuthStore((s) => s.token);
   const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
+  const switchWorkspace = useAuthStore((s) => s.switchWorkspace);
+  const viewWorkspace = useAuthStore((s) => s.viewWorkspace);
+  const setViewWorkspace = useAuthStore((s) => s.setViewWorkspace);
+  const queryClient = useQueryClient();
+  const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [cmdkOpen, setCmdkOpen] = useState(false);
 
   const activeKey = pathToKey(pathname);
@@ -179,11 +201,14 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   // 登录守卫：确认水合完成且未登录时跳转 /login
   useEffect(() => {
+    // 竞态修复：zustand persist 的 rehydrate 可能在「渲染后、effect 前」就已完成，
+    // 此时先注册 onFinishHydration 会永远收不到回调（部分路由因此不执行路由守卫，
+    // 非平台管理员直接输 URL 可停留在 /system/* 页面）。先订阅、再补一次状态检查。
+    const unsub = useAuthStore.persist.onFinishHydration(() => setHydrated(true));
+    // 先订阅再检查：兼容「水合在渲染后、effect 前已完成」的时序。
     if (useAuthStore.persist.hasHydrated()) {
       setHydrated(true);
-      return;
     }
-    const unsub = useAuthStore.persist.onFinishHydration(() => setHydrated(true));
     return unsub;
   }, []);
 
@@ -192,6 +217,28 @@ export function AppShell({ children }: { children: ReactNode }) {
       router.replace("/login");
     }
   }, [hydrated, token, router]);
+
+  // 旧登录态自愈（M3）：升级前持久化的 user 没有 currentWorkspaceId/workspaces，
+  // 水合后拉一次 /auth/profile 补全（工作空间切换器/当前空间依赖这两个字段）。
+  const profileSyncedRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || !token || !user) return;
+    if (user.currentWorkspaceId && Array.isArray(user.workspaces)) return;
+    if (profileSyncedRef.current) return;
+    profileSyncedRef.current = true;
+    let cancelled = false;
+    api
+      .get<typeof user>("/auth/profile")
+      .then((profile) => {
+        if (!cancelled) setUser(profile);
+      })
+      .catch(() => {
+        // 补全失败不阻塞：页面照常可用，切换器可能缺失（下次登录即恢复）
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, token, user, setUser]);
 
   // 权限守卫（ISSUE-005）：无权限路由 → 重定向到首个有权限的导航目标，
   // 不再渲染被禁模块骨架（后端 403 兜底之外的前端第一道闸）。
@@ -241,6 +288,25 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
+  const handleSwitchWorkspace = async (workspaceId: string) => {
+    if (switchingWorkspace) return;
+    setSwitchingWorkspace(true);
+    setWorkspaceError(null);
+    try {
+      // 切换成功后 token 已重签 → 清空所有查询缓存，让当前页面按新空间重新取数；
+      // SSE 连接池以 token+空间 为 key，useSSE 会因 token 变化自动重连。
+      await switchWorkspace(workspaceId);
+      queryClient.clear();
+      router.refresh();
+    } catch (err) {
+      setWorkspaceError(
+        err instanceof Error ? err.message : "切换工作空间失败",
+      );
+    } finally {
+      setSwitchingWorkspace(false);
+    }
+  };
+
   const goto = (key: string) => {
     const path = KEY_TO_PATH[key];
     if (path && path !== pathname) router.push(path);
@@ -274,6 +340,22 @@ export function AppShell({ children }: { children: ReactNode }) {
         userRole={user ? roleLabel(user.roleName) : undefined}
         onCmdKClick={() => setCmdkOpen(true)}
       >
+        {/* 工作空间切换器（M3：空间=租户，数据/模型/Worker/成员按空间隔离） */}
+        <WorkspaceSwitcher
+          workspaces={user?.workspaces ?? []}
+          currentWorkspaceId={user?.currentWorkspaceId ?? null}
+          switching={switchingWorkspace}
+          onSwitch={handleSwitchWorkspace}
+        />
+        {workspaceError ? (
+          <span
+            data-testid="workspace-switch-error"
+            style={{ fontSize: fontSize.xs, color: neutral[500], maxWidth: 200 }}
+            title={workspaceError}
+          >
+            切换失败
+          </span>
+        ) : null}
         {/* 主题切换（常驻） */}
         <ThemeToggle />
         {/* 登出按钮（头像右侧插槽）：清空认证态并回到登录页 */}
@@ -305,6 +387,48 @@ export function AppShell({ children }: { children: ReactNode }) {
           退出登录
         </button>
       </NavTopBar>
+
+      {/* 管理员跨空间只读横幅（M3）：明确提示当前查看的是其它空间且不可写 */}
+      {viewWorkspace ? (
+        <div
+          data-testid="workspace-view-banner"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "8px 24px",
+            backgroundColor: "#FEF3C7",
+            borderBottom: `1px solid ${neutral[200]}`,
+            fontSize: fontSize.sm,
+            fontFamily: fontFamily.body,
+            color: "#92400E",
+          }}
+        >
+          <span>
+            正在以管理员身份查看「{viewWorkspace.name}」（只读）· 写操作会被拒绝
+          </span>
+          <button
+            type="button"
+            data-testid="workspace-view-exit"
+            onClick={() => {
+              setViewWorkspace(null);
+              queryClient.clear();
+              router.refresh();
+            }}
+            style={{
+              padding: "4px 10px",
+              borderRadius: radius.md,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "var(--color-surface)",
+              cursor: "pointer",
+              fontSize: fontSize.xs,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            退出只读视图
+          </button>
+        </div>
+      ) : null}
 
       {/* 内容区：左缘留白避开 Dock */}
       <div

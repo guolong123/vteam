@@ -24,6 +24,23 @@ export function getAuthToken(): string | null {
 }
 
 /**
+ * 管理员跨空间只读视图：临时覆盖请求头 `X-Workspace-Id`（服务端仅对平台管理员
+ * 生效，且写操作一律 403）。null = 不覆盖（使用 JWT 当前空间）。
+ * 只影响 HTTP 请求；SSE 连接仍绑定 token 里的当前空间（EventSource 无法带 header）。
+ */
+let workspaceOverride: string | null = null;
+
+/** 设置/清除跨空间只读视图（authStore 在切换登录态时清空）。 */
+export function setWorkspaceOverride(workspaceId: string | null): void {
+  workspaceOverride = workspaceId;
+}
+
+/** 读取当前空间覆盖值（调试/测试用）。 */
+export function getWorkspaceOverride(): string | null {
+  return workspaceOverride;
+}
+
+/**
  * 401 全局处理（token 失效 → 清 auth + 跳登录）。
  * 用 handler 注册解耦，避免循环依赖：api 不 import authStore，
  * 由 authStore 在模块加载时通过本函数挂载回调。
@@ -106,6 +123,9 @@ export async function request<T>(
     };
     if (accessToken) {
       h.Authorization = `Bearer ${accessToken}`;
+    }
+    if (workspaceOverride) {
+      h["X-Workspace-Id"] = workspaceOverride;
     }
     if (isFormData) {
       delete h["Content-Type"];

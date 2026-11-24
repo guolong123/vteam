@@ -1,4 +1,8 @@
-import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
+import {
+  GUARDS_METADATA,
+  METHOD_METADATA,
+  PATH_METADATA,
+} from '@nestjs/common/constants';
 import { ServiceUnavailableException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
@@ -656,6 +660,58 @@ describe('TasksController', () => {
       expect(permOf(controller.confirmPlan)).toBe('tasks.edit');
       expect(permOf(controller.completePlan)).toBe('tasks.review');
       expect(permOf(controller.getPlan)).toBe('tasks.view');
+    });
+  });
+
+  // ── M0 止血：任务按 :id 的端点补团队用户成员门 ─────────────────────────
+  describe('团队归属门（TeamMembershipGuard，:id 经任务反查 team）', () => {
+    it('类级挂 TeamMembershipGuard：findOne/update/updateInstance 等按 :id 的端点均受保护', () => {
+      const guards = (Reflect.getMetadata(GUARDS_METADATA, TasksController) ??
+        []) as unknown[];
+      expect(guards).toContain(TeamMembershipGuard);
+    });
+
+    it('非团队成员访问 findOne/update/updateInstance 的 :id（任务归属团队）→ 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
+      const guard = new TeamMembershipGuard({
+        team: { findUnique: jest.fn().mockResolvedValue(null) },
+        task: { findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_1' }) },
+        teamUserMember: { findUnique: jest.fn().mockResolvedValue(null) },
+      } as never);
+      const ctx = {
+        switchToHttp: () => ({
+          getRequest: () => ({
+            user: { id: 'u_out' },
+            params: { id: 't_0000000001' },
+          }),
+        }),
+      } as never;
+
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        status: 403,
+        response: expect.objectContaining({
+          code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        }),
+      });
+    });
+
+    it('团队成员访问 :id（任务归属团队）→ 放行', async () => {
+      const guard = new TeamMembershipGuard({
+        team: { findUnique: jest.fn().mockResolvedValue(null) },
+        task: { findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_1' }) },
+        teamUserMember: {
+          findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_1' }),
+        },
+      } as never);
+      const ctx = {
+        switchToHttp: () => ({
+          getRequest: () => ({
+            user: { id: 'u_1' },
+            params: { id: 't_0000000001' },
+          }),
+        }),
+      } as never;
+
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
     });
   });
 

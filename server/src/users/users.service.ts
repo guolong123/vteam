@@ -29,9 +29,32 @@ const SAFE_USER_SELECT = {
   email: true,
   roleId: true,
   enabled: true,
+  lastWorkspaceId: true,
   createdAt: true,
   updatedAt: true,
 } as const;
+
+/** 用户列表/详情选择：安全字段 + 空间成员关系（管理页展示/编辑空间用）。 */
+const USER_DETAIL_SELECT = {
+  ...SAFE_USER_SELECT,
+  workspaceMembers: {
+    select: {
+      workspaceId: true,
+      role: true,
+      workspace: { select: { id: true, name: true, isSystem: true } },
+    },
+  },
+} as const;
+
+export interface UserListResult {
+  items: unknown[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
 
 @Injectable()
 export class UsersService {
@@ -61,6 +84,7 @@ export class UsersService {
         where,
         select: {
           ...SAFE_USER_SELECT,
+          workspaceMembers: USER_DETAIL_SELECT.workspaceMembers,
           _count: { select: { teamUserMembers: true } },
         },
         skip: (safePage - 1) * safePageSize,
@@ -112,7 +136,15 @@ export class UsersService {
    * 额外校验 roleId 指向的角色存在后完成角色关联。
    */
   async create(dto: CreateUserDto) {
-    const { username, password, displayName, email, roleId } = dto;
+    const {
+      username,
+      password,
+      displayName,
+      email,
+      roleId,
+      workspaceId,
+      workspaceRole = 'member',
+    } = dto;
 
     const existingByUsername = await this.prisma.user.findUnique({
       where: { username },
@@ -140,18 +172,67 @@ export class UsersService {
       throw new BadRequestException(`角色 ${roleId} 不存在`);
     }
 
+    // 可选：创建后直接加入指定工作空间（管理员在「新增用户」里选空间）
+    if (workspaceId) {
+      const workspace = await this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { id: true, status: true, isSystem: true },
+      });
+      if (!workspace || workspace.status !== 'active') {
+        throw new BadRequestException({
+          code: 'USER_WORKSPACE_NOT_FOUND',
+          message: `工作空间 ${workspaceId} 不存在或已归档`,
+        });
+      }
+      if (workspace.isSystem) {
+        throw new BadRequestException({
+          code: 'USER_WORKSPACE_SYSTEM_NOT_JOINABLE',
+          message: '平台空间默认对所有用户只读可见，无需加入',
+        });
+      }
+    }
+
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    return this.prisma.user.create({
-      data: {
-        id: `u_${Date.now()}`,
-        username,
-        passwordHash,
-        displayName,
-        email,
-        roleId: role.id,
-        enabled: true,
-      },
-      select: SAFE_USER_SELECT,
+    const userId = `u_${Date.now()}`;
+    // 未指定空间：保持原有行为（首次登录由 WorkspacesService 自愈创建个人空间）
+    if (!workspaceId) {
+      return this.prisma.user.create({
+        data: {
+          id: userId,
+          username,
+          passwordHash,
+          displayName,
+          email,
+          roleId: role.id,
+          enabled: true,
+        },
+        select: SAFE_USER_SELECT,
+      });
+    }
+    // 指定空间：用户 + 空间成员 + lastWorkspaceId 同一事务落库，
+    // 保证「创建成功即可直接进入所选空间」。
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          id: userId,
+          username,
+          passwordHash,
+          displayName,
+          email,
+          roleId: role.id,
+          enabled: true,
+          lastWorkspaceId: workspaceId,
+        },
+        select: SAFE_USER_SELECT,
+      });
+      await tx.workspaceMember.create({
+        data: {
+          workspaceId,
+          userId,
+          role: workspaceRole,
+        },
+      });
+      return user;
     });
   }
 
@@ -197,6 +278,76 @@ export class UsersService {
       if (!role) {
         throw new BadRequestException(`角色 ${dto.roleId} 不存在`);
       }
+    }
+
+    // 工作空间成员关系同步（管理页「所属空间」编辑）
+    if (dto.workspaceIds !== undefined) {
+      const ids = [
+        ...new Set(dto.workspaceIds.map((v) => v.trim()).filter(Boolean)),
+      ];
+      const spaces = await this.prisma.workspace.findMany({
+        where: { id: { in: ids }, status: 'active' },
+        select: { id: true },
+      });
+      const found = new Set(spaces.map((w) => w.id));
+      const missing = ids.filter((id) => !found.has(id));
+      if (missing.length > 0) {
+        throw new BadRequestException({
+          code: 'USER_WORKSPACE_NOT_FOUND',
+          message: `工作空间不存在或已归档：${missing.join(', ')}`,
+        });
+      }
+      const current =
+        dto.currentWorkspaceId ??
+        (existing.lastWorkspaceId && ids.includes(existing.lastWorkspaceId)
+          ? existing.lastWorkspaceId
+          : (ids[0] ?? null));
+      if (current && !ids.includes(current)) {
+        throw new BadRequestException({
+          code: 'USER_WORKSPACE_CURRENT_INVALID',
+          message: '当前空间必须包含在 workspaceIds 中',
+        });
+      }
+      return this.prisma.$transaction(async (tx) => {
+        const members = await tx.workspaceMember.findMany({
+          where: { userId: id },
+          select: { workspaceId: true, role: true },
+        });
+        for (const m of members) {
+          if (ids.includes(m.workspaceId)) continue;
+          if (m.role === 'owner') {
+            throw new BadRequestException({
+              code: 'USER_WORKSPACE_OWNER_REMOVE',
+              message: `用户是空间 ${m.workspaceId} 的 owner，不能直接移出（请先转移空间归属）`,
+            });
+          }
+          await tx.workspaceMember.delete({
+            where: {
+              workspaceId_userId: { workspaceId: m.workspaceId, userId: id },
+            },
+          });
+        }
+        const existingIds = new Set(members.map((m) => m.workspaceId));
+        for (const wsId of ids) {
+          if (existingIds.has(wsId)) continue;
+          await tx.workspaceMember.create({
+            data: { workspaceId: wsId, userId: id, role: 'member' },
+          });
+        }
+        return tx.user.update({
+          where: { id },
+          data: {
+            ...(dto.username !== undefined ? { username: dto.username } : {}),
+            ...(dto.displayName !== undefined
+              ? { displayName: dto.displayName }
+              : {}),
+            ...(dto.email !== undefined ? { email: dto.email } : {}),
+            ...(dto.roleId !== undefined ? { roleId: dto.roleId } : {}),
+            lastWorkspaceId: current,
+          },
+          select: USER_DETAIL_SELECT,
+        });
+      });
     }
 
     const data = {

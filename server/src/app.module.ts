@@ -35,6 +35,7 @@ import { TimersModule } from './timers/timers.module';
 import { UsageModule } from './usage/usage.module';
 import { StatsModule } from './stats/stats.module';
 import { PlatformConfigModule } from './platform-config/platform-config.module';
+import { WorkspacesModule } from './workspaces/workspaces.module';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { PlatformConfigModule } from './platform-config/platform-config.module';
     UsageModule,
     StatsModule,
     PlatformConfigModule,
+    WorkspacesModule,
   ],
   controllers: [],
   providers: [],

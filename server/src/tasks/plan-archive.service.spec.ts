@@ -8,7 +8,7 @@ import { PlanDocsService } from './plan-docs.service';
 describe('PlanArchiveService', () => {
   let service: PlanArchiveService;
   let planDocs: {
-    taskDirectory: jest.Mock;
+    resolveTaskDirectory: jest.Mock;
     locateWorkerForTask: jest.Mock;
   };
   let workerClient: { listPlanFiles: jest.Mock; fetchFile: jest.Mock };
@@ -29,7 +29,7 @@ describe('PlanArchiveService', () => {
 
   beforeEach(async () => {
     planDocs = {
-      taskDirectory: jest.fn().mockReturnValue(directory),
+      resolveTaskDirectory: jest.fn().mockResolvedValue(directory),
       locateWorkerForTask: jest.fn().mockResolvedValue({ worker }),
     };
     workerClient = {
@@ -88,7 +88,7 @@ describe('PlanArchiveService', () => {
       expect(call[1].sha256).toBeTruthy();
     }
     // 定位/列表与读路径共用同一套入口
-    expect(planDocs.taskDirectory).toHaveBeenCalledWith(taskId);
+    expect(planDocs.resolveTaskDirectory).toHaveBeenCalledWith(taskId);
     expect(planDocs.locateWorkerForTask).toHaveBeenCalledWith(taskId);
     expect(workerClient.listPlanFiles).toHaveBeenCalledWith(worker, directory);
   });

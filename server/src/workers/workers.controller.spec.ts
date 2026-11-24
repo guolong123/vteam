@@ -4,6 +4,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { AdminGuard } from '../users/admin.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
@@ -16,6 +17,7 @@ import { WorkersService } from './workers.service';
 describe('WorkersController', () => {
   let controller: WorkersController;
   let workerClientMock: { fetchFile: jest.Mock };
+  let configMock: { get: jest.Mock };
   let service: {
     register: jest.Mock;
     heartbeat: jest.Mock;
@@ -30,6 +32,7 @@ describe('WorkersController', () => {
 
   beforeEach(async () => {
     workerClientMock = { fetchFile: jest.fn() };
+    configMock = { get: jest.fn() };
     service = {
       register: jest.fn(),
       heartbeat: jest.fn(),
@@ -47,7 +50,9 @@ describe('WorkersController', () => {
       providers: [
         { provide: WorkersService, useValue: service },
         // 控制器方法级 @UseGuards(WorkerTokenGuard) 会在 compile 时实例化 guard
-        { provide: ConfigService, useValue: { get: jest.fn() } },
+        { provide: ConfigService, useValue: configMock },
+        // GET /workers/register-token 的 @UseGuards(AdminGuard)（M0）
+        AdminGuard,
         // 方法级 @UseGuards(PermissionGuard) 依赖 PrismaService + Reflector（compile 时实例化 guard）
         {
           provide: PrismaService,
@@ -193,6 +198,34 @@ describe('WorkersController', () => {
 
     expect(service.remove).toHaveBeenCalledWith('w_0000000001');
     expect(result).toEqual({ id: 'w_0000000001', deleted: true });
+  });
+
+  // ── M0 止血：register-token 仅管理员可读 ─────────────────────────────────
+  describe('GET /workers/register-token（平台级共享 token 收口到管理员）', () => {
+    it('返回配置的 WORKER_TOKEN（安装向导拼 curl 用）', () => {
+      configMock.get.mockReturnValue('shared-worker-token');
+
+      expect(controller.getRegisterToken()).toEqual({
+        token: 'shared-worker-token',
+      });
+      expect(configMock.get).toHaveBeenCalledWith(
+        'WORKER_TOKEN',
+        expect.anything(),
+      );
+    });
+
+    it('挂 AdminGuard（不是 workers.view / PermissionGuard），且不是 @Public', () => {
+      const handler = controller.getRegisterToken;
+      const guards =
+        (Reflect.getMetadata('__guards__', handler) as unknown[]) ?? [];
+      expect(guards).toContain(AdminGuard);
+      expect(guards).not.toContain(PermissionGuard);
+      expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBeUndefined();
+      // 不再残留 workers.view 权限点（普通 member 也有该点，等于没拦）
+      expect(
+        Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler),
+      ).toBeUndefined();
+    });
   });
 
   describe('POST /workers/:id/update（worker-self-update Todo 3）', () => {

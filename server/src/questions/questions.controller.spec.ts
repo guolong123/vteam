@@ -1,3 +1,4 @@
+import { UnauthorizedException } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../common/guards/permission.guard';
@@ -48,12 +49,38 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
     controller = module.get<QuestionsController>(QuestionsController);
   });
 
-  it('GET /questions 转发 findAll（taskId/teamId/status 透传，无 user 时跳过成员校验）', async () => {
+  it('GET /questions 既无 taskId 也无 teamId → 400 QUESTION_FILTER_REQUIRED（不再全量返回）', async () => {
+    const err = (await controller
+      .findAll(undefined, undefined, 'pending', { id: 'u_1' })
+      .catch((e: unknown) => e)) as { response?: { code?: string } };
+    expect(err.response?.code).toBe('QUESTION_FILTER_REQUIRED');
+    expect(service.findAll).not.toHaveBeenCalled();
+  });
+
+  it('GET /questions 只带 status（无 taskId/teamId）→ 同样 400，不能借 status 拉全量', async () => {
+    const err = (await controller
+      .findAll(undefined, undefined, 'resolved', { id: 'u_1' })
+      .catch((e: unknown) => e)) as { response?: { code?: string } };
+    expect(err.response?.code).toBe('QUESTION_FILTER_REQUIRED');
+    expect(service.findAll).not.toHaveBeenCalled();
+  });
+
+  it('GET /questions 带过滤条件但无调用方身份 → 401 fail-closed（不做无归属校验的读取）', async () => {
+    const err = await controller
+      .findAll('t_1', undefined, 'pending')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnauthorizedException);
+    expect(service.findAll).not.toHaveBeenCalled();
+  });
+
+  it('GET /questions 带 teamId + 成员 → 透传 taskId/teamId/status 到 findAll', async () => {
     service.findAll.mockResolvedValue([{ id: 'aq_1' }]);
-    const result = await controller.findAll('t_1', undefined, 'pending');
+    const result = await controller.findAll(undefined, 'tm_1', 'pending', {
+      id: 'u_1',
+    });
     expect(service.findAll).toHaveBeenCalledWith({
-      taskId: 't_1',
-      teamId: undefined,
+      taskId: undefined,
+      teamId: 'tm_1',
       status: 'pending',
     });
     expect(result).toEqual([{ id: 'aq_1' }]);

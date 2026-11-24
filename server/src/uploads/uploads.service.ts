@@ -8,8 +8,15 @@ import { repairMultipartText } from './filename-encoding';
 import {
   FILE_SIZE_LIMIT,
   resolveUploadDir,
+  signUploadUrl,
+  uploadRelativePathOf,
+  uploadUrlPath,
   UPLOAD_ERRORS,
+  UPLOAD_WORKSPACES_SEGMENT,
+  uploadWorkspaceSegment,
 } from './uploads.constants';
+import { getTenantContext } from '../common/tenant/tenant-context';
+import { ForbiddenException } from '@nestjs/common';
 
 /** multer diskStorage 写入后挂到 file 上的元数据（对齐 multer 磁盘存储字段子集）。 */
 export interface StoredFile {
@@ -65,8 +72,11 @@ export class FileStorageService {
   static buildMulterOptions() {
     return {
       storage: diskStorage({
-        destination: (_req, _file, cb) => {
-          const dir = resolveUploadDir();
+        destination: (req, _file, cb) => {
+          // M2：按请求空间分区（`<根>/workspaces/<ws>/`），空间来自 WorkspaceGuard 写入的 req.tenant。
+          const workspaceId = (req as { tenant?: { workspaceId?: string } })
+            ?.tenant?.workspaceId;
+          const dir = resolveUploadDir(workspaceId);
           if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
           }
@@ -199,10 +209,10 @@ export class FileStorageService {
   /** 上传成功响应元数据：`{url: '/uploads/<filename>', name, size, ext}`。
    *  `name` 经 repairMultipartText 修复 latin1/UTF-8 错位（中文文件名乱码根因），
    *  保证落库/展示/下载文件名与用户选择时一致。 */
-  describe(file: StoredFile): UploadedFileMeta {
+  describe(file: StoredFile, workspaceId?: string): UploadedFileMeta {
     const name = repairMultipartText(file.originalname);
     return {
-      url: `/uploads/${file.filename}`,
+      url: signUploadUrl(uploadUrlPath(file.filename, workspaceId)),
       name,
       size: file.size,
       ext: FileStorageService.extractExtension(name) ?? '',
@@ -221,12 +231,13 @@ export class FileStorageService {
   ): Promise<UploadedFileMeta> {
     // 产出物标题可能来自中文内容/worker 路径：与上传链路同口径修复 latin1 错位
     const safeName = repairMultipartText(originalName);
-    const dir = resolveUploadDir();
+    const workspaceId = getTenantContext()?.workspaceId;
+    const dir = resolveUploadDir(workspaceId);
     await fsp.mkdir(dir, { recursive: true });
     const filename = FileStorageService.generateFilename(safeName);
     await fsp.writeFile(join(dir, filename), content, 'utf8');
     return {
-      url: `/uploads/${filename}`,
+      url: signUploadUrl(uploadUrlPath(filename, workspaceId)),
       name: safeName,
       size: Buffer.byteLength(content, 'utf8'),
       ext: FileStorageService.extractExtension(safeName) ?? '',
@@ -244,12 +255,13 @@ export class FileStorageService {
   ): Promise<UploadedFileMeta> {
     // 与 saveTextFile 同口径：产出物原始名同样可能是 latin1 错位的中文
     const safeName = repairMultipartText(originalName);
-    const dir = resolveUploadDir();
+    const workspaceId = getTenantContext()?.workspaceId;
+    const dir = resolveUploadDir(workspaceId);
     await fsp.mkdir(dir, { recursive: true });
     const filename = FileStorageService.generateFilename(safeName);
     await fsp.writeFile(join(dir, filename), content);
     return {
-      url: `/uploads/${filename}`,
+      url: signUploadUrl(uploadUrlPath(filename, workspaceId)),
       name: safeName,
       size: content.length,
       ext: FileStorageService.extractExtension(safeName) ?? '',
@@ -272,7 +284,8 @@ export class FileStorageService {
     }
     const base = ref.split(/[\\/]/).pop() ?? '';
     if (base && FileStorageService.extractExtension(base)) {
-      return `/uploads/${base}`;
+      const workspaceId = getTenantContext()?.workspaceId;
+      return signUploadUrl(uploadUrlPath(base, workspaceId));
     }
     return ref;
   }
@@ -299,9 +312,30 @@ export class FileStorageService {
       return Buffer.from(fileUrl, 'utf8');
     }
     const url = FileStorageService.normalizeFileRef(fileUrl);
-    if (url.startsWith('/uploads/')) {
-      const base = url.split(/[\\/]/).pop() ?? '';
-      return fsp.readFile(join(resolveUploadDir(), base));
+    const relative = uploadRelativePathOf(url);
+    if (relative !== null) {
+      // M2：`/uploads/workspaces/<ws>/...` 只允许当前空间读取；
+      // 存量 `/uploads/<file>`（无空间段）保持可读（迁移期兼容）。
+      const ctxWorkspaceId = getTenantContext()?.workspaceId;
+      const prefix = `${UPLOAD_WORKSPACES_SEGMENT}/`;
+      if (relative.startsWith(prefix) && ctxWorkspaceId) {
+        const seg = relative.slice(prefix.length).split('/')[0];
+        if (seg !== uploadWorkspaceSegment(ctxWorkspaceId)) {
+          throw new ForbiddenException({
+            code: 'UPLOAD_WORKSPACE_MISMATCH',
+            message: '无权读取其它工作空间的文件',
+          });
+        }
+      }
+      const baseDir = resolveUploadDir();
+      const resolved = join(baseDir, relative);
+      if (!resolved.startsWith(baseDir)) {
+        throw new BadRequestException({
+          code: UPLOAD_ERRORS.FILE_NOT_READABLE,
+          message: '文件路径非法',
+        });
+      }
+      return fsp.readFile(resolved);
     }
     throw new BadRequestException({
       code: UPLOAD_ERRORS.FILE_NOT_READABLE,
@@ -353,9 +387,12 @@ export class FileStorageService {
   } {
     const base = fileUrl.split(/[\\/]/).pop() ?? fileUrl;
     let size: number | null = null;
-    if (fileUrl.startsWith('/uploads/')) {
+    const relative = uploadRelativePathOf(fileUrl);
+    if (relative !== null) {
       try {
-        size = statSync(join(resolveUploadDir(), base)).size;
+        const baseDir = resolveUploadDir();
+        const resolved = join(baseDir, relative);
+        size = resolved.startsWith(baseDir) ? statSync(resolved).size : null;
       } catch {
         // 磁盘不存在（worker 原始路径未落盘 uploads）→ size 缺省，前端不显示大小徽章
         size = null;

@@ -268,6 +268,9 @@ export interface UseSSEOptions<T = unknown> {
 export function useSSE<T = unknown>(options: UseSSEOptions<T>): void {
   const { onEvent, enabled = true, skipHistory = true } = options;
   const token = useAuthStore((s) => s.token);
+  const workspaceId = useAuthStore(
+    (s) => s.user?.currentWorkspaceId ?? undefined,
+  );
 
   // 回调与过滤规则存 ref：父组件 re-render 不重建连接、不重注册 listener
   const onEventRef = useRef(onEvent);
@@ -278,7 +281,9 @@ export function useSSE<T = unknown>(options: UseSSEOptions<T>): void {
   useEffect(() => {
     if (!enabled || !token) return;
 
-    const key = `${token}|all`;
+    // 连接池 key 含当前工作空间：切换空间（token 重签 + wid 变化）必须重建连接，
+    // 避免复用旧空间的 SSE 连接导致事件按旧空间过滤。
+    const key = `${token}|${workspaceId ?? '-'}|all`;
     let conn = pool.get(key);
     if (!conn) {
       conn = {
@@ -330,5 +335,5 @@ export function useSSE<T = unknown>(options: UseSSEOptions<T>): void {
         }, CLOSE_DELAY_MS);
       }
     };
-  }, [token, enabled]);
+  }, [token, enabled, workspaceId, skipHistory]);
 }

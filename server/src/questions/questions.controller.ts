@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -6,6 +7,7 @@ import {
   Param,
   Post,
   Query,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -15,6 +17,8 @@ import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { AUTH_ERRORS } from '../auth/auth.constants';
+import { QUESTIONS_ERRORS } from './questions.constants';
 import { ReplyQuestionDto } from './dto/reply-question.dto';
 import { QuestionsService } from './questions.service';
 import { assertTeamMember } from '../common/team-access';
@@ -26,6 +30,8 @@ import { assertTeamMember } from '../common/team-access';
  * 全局 JwtAuthGuard（APP_GUARD）已鉴权，方法级挂 PermissionGuard + RequirePermission。
  * 任务归属校验与群聊同链：question/task → taskId → teamId → teamUserMember，
  * 非团队成员读/回任务提问 403 PERMISSION_TEAM_NOT_MEMBER。
+ * M0 止血：GET /questions 必须有 taskId 或 teamId 过滤条件（双空 → 400
+ * QUESTION_FILTER_REQUIRED），不再全量返回；过滤后仍按成员资格校验（fail-closed）。
  * 全局前缀 /api/v1（main.ts 已设置），实际路由 /api/v1/questions。
  */
 @ApiTags('questions')
@@ -51,10 +57,24 @@ export class QuestionsController {
     @Query('status') status?: string,
     @CurrentUser() user?: { id: string },
   ) {
-    if (taskId && user?.id) {
+    // M0：缺过滤条件不得全量返回（原实现双空直接 findAll 全表）
+    if (!taskId && !teamId) {
+      throw new BadRequestException({
+        code: QUESTIONS_ERRORS.QUESTION_FILTER_REQUIRED,
+        message: '必须指定 taskId 或 teamId 过滤条件',
+      });
+    }
+    // 有过滤条件时归属校验必然依赖调用方身份，缺失即 fail-closed
+    if (!user?.id) {
+      throw new UnauthorizedException({
+        code: AUTH_ERRORS.UNAUTHORIZED,
+        message: '未认证或 token 无效/已过期',
+      });
+    }
+    if (taskId) {
       await this.assertTaskMember(taskId, user.id);
     }
-    if (teamId && user?.id) {
+    if (teamId) {
       await this.assertTeamMember(teamId, user.id);
     }
     return this.questionsService.findAll({ taskId, teamId, status });

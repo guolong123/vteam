@@ -23,6 +23,8 @@
  * 经 Session.instanceRef 反查映射平台 Session 主键（F2 MINOR 防御）。
  */
 
+import * as os from 'node:os';
+import { sep as pathSep } from 'node:path';
 import { toLocalWorkspacePath } from '../runtime/workspace-path-shim';
 import { promises as fsp } from 'fs';
 import * as http from 'http';
@@ -1145,9 +1147,35 @@ export class ExecServer {
       sendJson(res, 400, { error: '缺少必填 query 参数 path' });
       return;
     }
+    // M2 文件路径加固：只允许读取 worker 工作目录（workDir）或临时目录内的文件。
+    // 目的：阻断控制面/恶意调用方用绝对路径读取 worker 上的任意文件（跨空间数据在共享
+    // 节点上主要表现为 /tmp 与 workDir 里的其它空间产物）。符号链接经 realpath 解析后再判。
+    const allowedRoots: string[] = [];
+    if (this.workDir) {
+      allowedRoots.push(
+        await fsp.realpath(this.workDir).catch(() => this.workDir),
+      );
+    }
+    allowedRoots.push(await fsp.realpath(os.tmpdir()).catch(() => os.tmpdir()));
+    const realPath = await fsp.realpath(filePath).catch(() => null);
+    if (!realPath) {
+      this.logger.warn(`[exec] file fetch -> ${filePath} (HTTP 404)`);
+      sendJson(res, 404, { error: `文件不存在: ${filePath}` });
+      return;
+    }
+    const inAllowedRoot = allowedRoots.some(
+      (root) => realPath === root || realPath.startsWith(root + pathSep),
+    );
+    if (!inAllowedRoot) {
+      this.logger.warn(
+        `[exec] file fetch -> 拒绝越界路径 ${filePath}（允许根：${allowedRoots.join(', ')}） (HTTP 403)`,
+      );
+      sendJson(res, 403, { error: '文件路径不在允许的工作目录内' });
+      return;
+    }
     let stat: { size: number; isFile(): boolean };
     try {
-      stat = await fsp.stat(filePath);
+      stat = await fsp.stat(realPath);
     } catch {
       this.logger.warn(`[exec] file fetch -> ${filePath} (HTTP 404)`);
       sendJson(res, 404, { error: `文件不存在: ${filePath}` });
@@ -1165,7 +1193,7 @@ export class ExecServer {
     }
     let content: Buffer;
     try {
-      content = await fsp.readFile(filePath);
+      content = await fsp.readFile(realPath);
     } catch {
       this.logger.warn(`[exec] file fetch -> ${filePath} (HTTP 404)`);
       sendJson(res, 404, { error: `文件读取失败: ${filePath}` });

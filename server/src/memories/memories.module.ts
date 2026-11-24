@@ -3,6 +3,7 @@ import { ChatModule } from '../chat/chat.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { TimersModule } from '../timers/timers.module';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { MemoriesController } from './memories.controller';
 import { MemoryMaintenanceService } from './memory-maintenance.service';
 import { MemoriesService } from './memories.service';
@@ -28,6 +29,11 @@ import { MemoriesService } from './memories.service';
 @Module({
   imports: [RealtimeModule, TimersModule, ChatModule],
   controllers: [MemoriesController],
-  providers: [MemoriesService, MemoryMaintenanceService, AdminGuard],
+  providers: [
+    MemoriesService,
+    MemoryMaintenanceService,
+    AdminGuard,
+    WorkspaceAdminGuard,
+  ],
 })
 export class MemoriesModule {}

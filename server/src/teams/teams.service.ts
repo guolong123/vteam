@@ -18,6 +18,7 @@ import { TASK_STATUS } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
+import { getTenantContext } from '../common/tenant/tenant-context';
 import { RealtimeService } from '../realtime/realtime.service';
 import { sanitizeWorkDirName } from '../tasks/work-dir.util';
 import { WorkerClient } from '../workers/worker.client';
@@ -27,6 +28,7 @@ import { QueryTeamsDto } from './dto/query-teams.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto, UpdateMemberDto } from './dto/add-member.dto';
 import { isMemberSessionScope } from '../workers/session-scope';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 const ID_PREFIX = {
   team: 'tm',
@@ -161,9 +163,12 @@ export class TeamsService implements OnModuleInit {
   ): Promise<string | null> {
     // 单测/裁剪事务客户端没有 member/agentRole 模型时保持旧行为（返回 null 不绑定）。
     if (
-      typeof tx?.member?.findUnique !== 'function' ||
-      typeof tx?.agentRole?.findFirst !== 'function'
+      typeof tx?.member?.findFirst !== 'function' &&
+      typeof tx?.member?.findUnique !== 'function'
     ) {
+      return null;
+    }
+    if (typeof tx?.agentRole?.findFirst !== 'function') {
       return null;
     }
     let roleId = opts.roleId;
@@ -178,8 +183,17 @@ export class TeamsService implements OnModuleInit {
     const base = opts.baseName.trim().slice(0, 50) || '成员';
     let name = base;
     let n = 2;
+    // 多工作空间后 Member 唯一键是 (workspaceId, name)，不能再 findUnique({name})；
+    // 这里按当前空间查重（无租户上下文时（单测/seed）退化为全局查重）。
+    const ctx = getTenantContext();
+    const workspaceId = ctx?.workspaceId;
     while (
-      await tx.member.findUnique({ where: { name }, select: { id: true } })
+      await (typeof tx.member.findFirst === 'function'
+        ? tx.member.findFirst({
+            where: { name, ...(workspaceId ? { workspaceId } : {}) },
+            select: { id: true },
+          })
+        : tx.member.findUnique({ where: { name }, select: { id: true } }))
     ) {
       name = `${base}-${n++}`.slice(0, 64);
     }
@@ -206,7 +220,9 @@ export class TeamsService implements OnModuleInit {
     if (!name) {
       throw new BadRequestException('团队名称不能为空');
     }
-    const existing = await this.prisma.team.findUnique({ where: { name } });
+    const existing = await this.prisma.team.findUnique({
+      where: tenantUniqueWhere('Team', { name }),
+    });
     if (existing) {
       throw new ConflictException({
         code: TEAM_ERRORS.TEAM_NAME_CONFLICT,
@@ -582,7 +598,9 @@ export class TeamsService implements OnModuleInit {
       const name = dto.name.trim();
       if (!name) throw new BadRequestException('团队名称不能为空');
       if (name !== team.name) {
-        const dup = await this.prisma.team.findUnique({ where: { name } });
+        const dup = await this.prisma.team.findUnique({
+          where: tenantUniqueWhere('Team', { name }),
+        });
         if (dup) {
           throw new ConflictException({
             code: TEAM_ERRORS.TEAM_NAME_CONFLICT,

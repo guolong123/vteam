@@ -1,10 +1,13 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma/prisma.service';
+import { resolveWorkspaceByWorkerToken } from '../common/tenant/worker-space-token';
 import { createHash, timingSafeEqual } from 'crypto';
 import { Request } from 'express';
 import {
@@ -16,6 +19,8 @@ import {
 /** 携带 worker token 的请求（guard 校验通过后挂载，供 register 计算 tokenHash）。 */
 export interface WorkerTokenRequest extends Request {
   workerToken?: string;
+  /** 空间注册令牌解析出的空间 id（全局共享 token 旧模式为 undefined） */
+  workerSpaceId?: string;
 }
 
 /**
@@ -32,23 +37,79 @@ export interface WorkerTokenRequest extends Request {
  */
 @Injectable()
 export class WorkerTokenGuard implements CanActivate {
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<WorkerTokenRequest>();
-    const token = request.headers[WORKER_TOKEN_HEADER];
-    const expected =
-      this.config.get<string>('WORKER_TOKEN') ?? DEFAULT_WORKER_TOKEN;
-
-    if (typeof token !== 'string' || !this.safeEqual(token, expected)) {
+    const header = request.headers[WORKER_TOKEN_HEADER];
+    if (typeof header !== 'string' || header.trim().length === 0) {
       throw new UnauthorizedException({
         code: WORKER_ERRORS.TOKEN_INVALID,
         message: 'X-Worker-Token 无效',
       });
     }
+    const token = header.trim();
+    const expected =
+      this.config.get<string>('WORKER_TOKEN') ?? DEFAULT_WORKER_TOKEN;
 
+    // 旧模式：全局共享 token（向后兼容既有部署）
+    if (this.safeEqual(token, expected)) {
+      request.workerToken = token;
+      return true;
+    }
+
+    // 新模式：空间注册令牌——token 本身反查空间；同一 token 也用于运行期鉴权，
+    // 因此不再需要 WORKSPACE_ID / WORKER_JOIN_TOKEN 两个额外参数。
+    const workspaceId = await resolveWorkspaceByWorkerToken(
+      // 只用到 workspace.findFirst，避免把 PrismaService 泛型带入共享工具
+      this.prisma as unknown as {
+        workspace: { findFirst: (args: unknown) => Promise<unknown> };
+      },
+      token,
+    );
+    if (!workspaceId) {
+      throw new UnauthorizedException({
+        code: WORKER_ERRORS.TOKEN_INVALID,
+        message: 'X-Worker-Token 无效',
+      });
+    }
     request.workerToken = token;
+    request.workerSpaceId = workspaceId;
+
+    // 空间令牌只能操作本空间的 worker：请求若携带 workerId，校验其归属。
+    const workerId = this.extractWorkerId(request);
+    if (workerId) {
+      const worker = (await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { workspaceId: true },
+      })) as { workspaceId?: string } | null;
+      // 首次注册时 worker 尚不存在 → 放行（由 register 创建并绑定令牌空间）；
+      // 已存在的 worker 才校验空间归属，防止空间令牌越权操作其它空间节点。
+      if (worker && worker.workspaceId !== workspaceId) {
+        throw new ForbiddenException({
+          code: WORKER_ERRORS.WORKER_SPACE_MISMATCH,
+          message: '空间注册令牌与目标 worker 所属空间不一致',
+        });
+      }
+    }
     return true;
+  }
+
+  /** 从常见位置提取 workerId（不同端点分别用 header / path param / body）。 */
+  private extractWorkerId(request: WorkerTokenRequest): string | undefined {
+    const header = request.headers['x-worker-id'];
+    if (typeof header === 'string' && header.trim()) return header.trim();
+    const params = (request.params ?? {}) as Record<string, string | undefined>;
+    const fromParams = params.workerId ?? params.id;
+    if (fromParams) return fromParams.trim();
+    const body = request.body as
+      { workerId?: unknown; id?: unknown } | undefined;
+    const fromBody = body?.workerId ?? body?.id;
+    if (typeof fromBody === 'string' && fromBody.trim()) return fromBody.trim();
+    return undefined;
   }
 
   private safeEqual(a: string, b: string): boolean {

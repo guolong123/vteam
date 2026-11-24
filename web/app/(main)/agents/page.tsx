@@ -38,6 +38,8 @@
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；新建弹窗 absolute 相对页面 root（flex:1 铺满）。
  */
+import { CreateSpaceHint, SpaceBadge } from "@/src/components/ui/space-badge";
+import { useReadOnlyView } from "@/hooks/use-read-only-view";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -86,6 +88,8 @@ interface EffectivePermission {
 /** GET /agents 条目（对齐 AgentsService.toAgentDto 扩展字段）。 */
 interface AgentItem {
   id: string;
+  /** 所属工作空间（平台共享=ws_system，自定义=当前空间） */
+  workspaceId?: string;
   name: string;
   /** product | architect | developer | tester | null（自定义可为任意角色 key） */
   role: string | null;
@@ -401,6 +405,7 @@ function AgentListItem({ agent, active, modelNameOf, onClick }: AgentListItemPro
           }}
         >
           {agent.name}
+          <SpaceBadge workspaceId={agent.workspaceId} />
           <span
             style={{
               fontSize: fontSize.xs,
@@ -2577,6 +2582,7 @@ function CloneAgentModal({ source, submitting, error, onClose, onSubmit }: Clone
 /* ================================ 页面主组件 ================================ */
 
 export default function AgentConfigPage() {
+  const readOnlyView = useReadOnlyView();
   const user = useAuthStore((s) => s.user);
   const userId = user?.id;
   // 写操作权限（对齐后端 PermissionGuard agents.create，REG-01）：all:true / 矩阵 true 放行
@@ -2909,13 +2915,19 @@ export default function AgentConfigPage() {
         )}
 
         {canCreateAgent && (
+          <CreateSpaceHint style={{ marginBottom: space.xs }} />
+        )}
+        {canCreateAgent && (
           <button
             type="button"
             data-testid="create-agent-button"
+            disabled={!!readOnlyView}
+            title={readOnlyView ? `只读视图（${readOnlyView.name}）下不可新建 Agent` : undefined}
             onClick={() => setCreateOpen(true)}
             style={{
               width: "100%",
-              cursor: "pointer",
+              cursor: readOnlyView ? "not-allowed" : "pointer",
+              opacity: readOnlyView ? 0.5 : 1,
               border: `1px dashed ${neutral[300]}`,
               borderRadius: radius.md,
               backgroundColor: "transparent",

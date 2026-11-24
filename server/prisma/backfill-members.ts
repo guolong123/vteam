@@ -17,6 +17,7 @@
  * 注意：本脚本不合并"同一人存在于多群"的重复成员（S1 1:1 策略），后续用成员合并工具整理。
  */
 import { PrismaClient } from '@prisma/client';
+import { SEED_WORKSPACE, seedUniqueWhere } from './tenant-unique';
 
 const prisma = new PrismaClient();
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -47,7 +48,7 @@ async function uniqueName(wanted: string): Promise<string> {
   let index = 1;
   while (index <= 1000) {
     const exists = await prisma.member.findUnique({
-      where: { name: candidate },
+      where: seedUniqueWhere({ name: candidate }, SEED_WORKSPACE.DEFAULT),
       select: { id: true },
     });
     if (!exists) return candidate;

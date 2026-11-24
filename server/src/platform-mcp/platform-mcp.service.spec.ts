@@ -10167,30 +10167,35 @@ describe('PlatformMcpService', () => {
       expect(resolved.teamId).toBe('tm_own');
     });
 
-    it('双空上下文回退：selfInstanceId 与回退命中的会话成员不一致 → 403 要求显式传参（不再静默误归属）', async () => {
+    it('双空且未传 selfInstanceId → 403 fail-closed（M0：不再按 worker 最近会话回填）', async () => {
+      await expect(
+        service.resolveToolCallerWithContext({ workerId }, {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',
+        }),
+      });
+      // 无身份线索时不再查询任何会话行（避免猜测归属）
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('双空 + selfInstanceId 但解析不到自己的唯一会话 → 403 fail-closed（不采纳他人会话）', async () => {
       prisma.session.findFirst.mockReset();
-      prisma.session.findFirst.mockImplementation(
-        async (q: { where?: Record<string, unknown> }) => {
-          const w = q.where ?? {};
-          if (w.teamMemberId === senderInstanceId && w.teamId === undefined) {
-            return null; // 自有会话未命中
-          }
-          // worker 最近会话属于**别的成员/团队**
-          return {
-            taskId: null,
-            teamId: 'tm_other',
-            teamMemberId: 'tmm_other',
-            agentId: 'a_other',
-          };
-        },
-      );
+      prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([]);
 
       await expect(
         service.resolveToolCallerWithContext(
           { workerId },
           { selfInstanceId: senderInstanceId },
         ),
-      ).rejects.toThrow(/无法可靠解析调用上下文/);
+      ).rejects.toThrow(/无法从显式 selfInstanceId/);
+      // 不再回退「worker 最近会话」：findFirst 只用于 selfInstanceId 精确解析
+      const calls = prisma.session.findFirst.mock.calls.map(
+        (c) => c[0] as { where: Record<string, unknown> },
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0].where.teamMemberId).toBe(senderInstanceId);
     });
   });
 

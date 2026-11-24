@@ -17,6 +17,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { AdminGuard } from '../users/admin.guard';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
@@ -121,16 +122,18 @@ export class WorkersController {
   }
 
   /**
-   * GET /api/v1/workers/register-token：worker 注册 token（workers.view）。
+   * GET /api/v1/workers/register-token：worker 注册 token（**仅平台管理员**）。
    * 安装向导页生成「复制即成功」的 curl 命令用——脚本需 X_WORKER_TOKEN 与
    * server 的 WORKER_TOKEN 一致，向导页拉取后拼进 --token 参数。
+   * M0 止血：原挂 workers.view（member 矩阵也有）⇒ 任何普通成员都能拿到共享
+   * WORKER_TOKEN 明文，进而冒充 worker 拉取全平台资源。该 token 是平台级共享
+   * 凭据，读取属管理动作，改挂 AdminGuard（users.manage / all:true 才放行）。
    * 注意：路由须在 @Get(':id') 之前（否则 register-token 被 :id 捕获）。
    */
   @Get('register-token')
-  @UseGuards(PermissionGuard)
-  @RequirePermission('workers.view')
+  @UseGuards(AdminGuard)
   @ApiOperation({
-    summary: 'worker 注册 token（workers.view；安装向导生成命令用）',
+    summary: 'worker 注册 token（仅管理员；安装向导生成命令用）',
   })
   getRegisterToken() {
     return {

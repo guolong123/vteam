@@ -16,7 +16,7 @@ import { validate } from 'class-validator';
 // ⚠️ server 的 tsconfig **没开** esModuleInterop ⇒ 默认导入会变成 `supertest_1.default`（不存在）
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
-import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { CoordinationMetricsController } from './coordination-metrics.controller';
 import { CoordinationMetricsService } from './coordination-metrics.service';
 import { QueryCoordinationMetricsDto } from './dto/query-coordination-metrics.dto';
@@ -26,8 +26,8 @@ import { QueryCoordinationMetricsDto } from './dto/query-coordination-metrics.dt
  *
  * 覆盖：
  * - 路由形态（裸挂载 + `teams/:teamId/coordination-metrics`）与方法；
- * - **admin 门**：端点挂 AdminGuard；非管理员 403 / 未认证 401 / 管理员放行
- *   （直接驱动真实 AdminGuard，验证端点确实被它护住）；
+ * - **admin 门**：端点挂 WorkspaceAdminGuard；非管理员 403 / 未认证 401 / 管理员放行
+ *   （直接驱动真实 WorkspaceAdminGuard，验证端点确实被它护住）；
  * - 转发：teamId + 查询参数原样透传给 service；
  * - DTO 校验：windowHours 上限 720（超限 400，不静默截断）、to 必须是 ISO-8601。
  */
@@ -66,7 +66,7 @@ describe('CoordinationMetricsController', () => {
       providers: [
         { provide: CoordinationMetricsService, useValue: service },
         { provide: PrismaService, useValue: prisma },
-        AdminGuard,
+        WorkspaceAdminGuard,
       ],
     }).compile();
 
@@ -98,31 +98,31 @@ describe('CoordinationMetricsController', () => {
       expect(handlers).toEqual(['getCoordinationMetrics']);
     });
 
-    it('端点挂 AdminGuard（不挂 PermissionGuard：teams.view 不含「看全团队经营数据」）', () => {
-      expect(guardsOf('getCoordinationMetrics')).toContain(AdminGuard);
+    it('端点挂 WorkspaceAdminGuard（空间级：平台管理员或团队所属空间管理员可见）', () => {
+      expect(guardsOf('getCoordinationMetrics')).toContain(WorkspaceAdminGuard);
     });
   });
 
-  describe('admin 门（真实 AdminGuard 驱动）', () => {
+  describe('admin 门（真实 WorkspaceAdminGuard 驱动）', () => {
     const ctx = (user?: { id?: string }) =>
       ({
         switchToHttp: () => ({ getRequest: () => ({ user }) }),
       }) as never;
 
     it('未认证 ⇒ 401', async () => {
-      const guard = new AdminGuard(prisma as never);
+      const guard = new WorkspaceAdminGuard(prisma as never);
       await expect(guard.canActivate(ctx(undefined))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
     });
 
-    it('非管理员（无 users:manage）⇒ 403 FORBIDDEN_ADMIN', async () => {
+    it('非管理员（无 users:manage）⇒ 403 FORBIDDEN_WORKSPACE_ADMIN', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 'u_normal',
         enabled: true,
         role: { permissions: { teams: { view: true } } },
       });
-      const guard = new AdminGuard(prisma as never);
+      const guard = new WorkspaceAdminGuard(prisma as never);
       await expect(
         guard.canActivate(ctx({ id: 'u_normal' })),
       ).rejects.toBeInstanceOf(ForbiddenException);
@@ -134,7 +134,7 @@ describe('CoordinationMetricsController', () => {
         enabled: true,
         role: { permissions: { all: true } },
       });
-      const guard = new AdminGuard(prisma as never);
+      const guard = new WorkspaceAdminGuard(prisma as never);
       await expect(guard.canActivate(ctx({ id: 'u_admin' }))).resolves.toBe(
         true,
       );
@@ -204,7 +204,7 @@ describe('QueryCoordinationMetricsDto 校验（class-validator）', () => {
 });
 
 /**
- * HTTP 层端到端（supertest）：真实路由 + 真实 AdminGuard + 全局前缀 + 全局校验管道。
+ * HTTP 层端到端（supertest）：真实路由 + 真实 WorkspaceAdminGuard + 全局前缀 + 全局校验管道。
  *
  * 覆盖「admin 门在 HTTP 上真的生效」与「窗口参数在 HTTP 上真的被挡」：
  * 未带身份 ⇒ 401；非管理员 ⇒ 403；管理员 ⇒ 200 且响应体就是指标契约；
@@ -239,7 +239,7 @@ describe('CoordinationMetricsController（HTTP 层）', () => {
       providers: [
         { provide: CoordinationMetricsService, useValue: service },
         { provide: PrismaService, useValue: prisma },
-        AdminGuard,
+        WorkspaceAdminGuard,
       ],
     }).compile();
 
@@ -268,7 +268,7 @@ describe('CoordinationMetricsController（HTTP 层）', () => {
     await app.close();
   });
 
-  it('未带身份 ⇒ 401（AdminGuard 兜底认证）', async () => {
+  it('未带身份 ⇒ 401（WorkspaceAdminGuard 兜底认证）', async () => {
     const res = await request(app.getHttpServer()).get(
       '/api/v1/teams/tm_0000000001/coordination-metrics',
     );
@@ -277,7 +277,7 @@ describe('CoordinationMetricsController（HTTP 层）', () => {
     expect(service.getCoordinationMetrics).not.toHaveBeenCalled();
   });
 
-  it('非管理员 ⇒ 403 FORBIDDEN_ADMIN（service 不被调用）', async () => {
+  it('非管理员 ⇒ 403 FORBIDDEN_WORKSPACE_ADMIN（service 不被调用）', async () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 'u_normal',
       enabled: true,
@@ -289,7 +289,7 @@ describe('CoordinationMetricsController（HTTP 层）', () => {
       .set('x-test-user', 'u_normal');
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe('FORBIDDEN_ADMIN');
+    expect(res.body.code).toBe('FORBIDDEN_WORKSPACE_ADMIN');
     expect(service.getCoordinationMetrics).not.toHaveBeenCalled();
   });
 

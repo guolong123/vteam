@@ -72,9 +72,33 @@ export class PlanDocsService {
         : DEFAULT_TASK_WORK_DIR;
   }
 
-  /** 任务工作目录（与 worker-dispatcher resolveAgentWorkDir 同款拼接，确保同落点）。 */
+  /**
+   * 任务工作目录（**旧布局**，默认空间路径）：保留给存量兼容断言/调用；
+   * 新代码请用 `resolveTaskDirectory`（按任务归属空间解析）。
+   */
   taskDirectory(taskId: string): string {
     return taskDirOf(this.taskWorkDirRoot, taskId);
+  }
+
+  /**
+   * 任务工作目录（M2 空间化）：查任务归属空间后拼接，与 worker-dispatcher
+   * 的 resolveAgentWorkDir 同款规则（默认空间=旧路径，其它空间 `<根>/workspaces/<ws>/tasks/<id>`）。
+   */
+  async resolveTaskDirectory(taskId: string): Promise<string> {
+    try {
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { workspaceId: true },
+      });
+      return taskDirOf(
+        this.taskWorkDirRoot,
+        taskId,
+        task?.workspaceId ?? undefined,
+      );
+    } catch {
+      // 目录解析失败按旧布局降级（列表接口本来就有 degraded 语义，不因多一次查询冒泡 500）。
+      return this.taskDirectory(taskId);
+    }
   }
 
   /**
@@ -83,7 +107,7 @@ export class PlanDocsService {
    * 或 offline。目录不存在不算降级（worker 侧返回空列表）——"还没写过计划"是常态。
    */
   async listPlanDocs(taskId: string): Promise<PlanDocsResult> {
-    const directory = this.taskDirectory(taskId);
+    const directory = await this.resolveTaskDirectory(taskId);
     try {
       const located = await this.locateWorker(taskId);
       if (!located) {
@@ -113,7 +137,7 @@ export class PlanDocsService {
     taskId: string,
     input: { name: string; content: string },
   ): Promise<{ name: string; updatedAt: string; directory: string }> {
-    const directory = this.taskDirectory(taskId);
+    const directory = await this.resolveTaskDirectory(taskId);
     const located = await this.locateWorker(taskId);
     if (!located) {
       throw new Error(

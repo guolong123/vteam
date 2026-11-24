@@ -23,6 +23,12 @@ export const WORKER_STATUS = {
 } as const;
 
 export const WORKER_ERRORS = {
+  /** 注册请求的空间与 worker 既有归属不一致（归属不可通过注册变更）。 */
+  WORKER_WORKSPACE_MISMATCH: 'WORKER_WORKSPACE_MISMATCH',
+  /** 非默认空间注册缺少/携带错误的 worker 加入码 */
+  WORKER_JOIN_TOKEN_INVALID: 'WORKER_JOIN_TOKEN_INVALID',
+  /** 空间令牌与请求的 worker/资源所属空间不一致 */
+  WORKER_SPACE_MISMATCH: 'WORKER_SPACE_MISMATCH',
   WORKER_NOT_FOUND: 'WORKER_NOT_FOUND',
   TOKEN_INVALID: 'WORKER_TOKEN_INVALID',
   NOT_IMPLEMENTED: 'WORKER_LIFECYCLE_NOT_IMPLEMENTED',

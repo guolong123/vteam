@@ -5,6 +5,8 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma/prisma.service';
+import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { DEFAULT_WORKER_TOKEN } from './workers.constants';
 import type {
   CreateSessionRequestPayload,
@@ -387,12 +389,49 @@ export class WorkerClient {
    */
   public workerToken: string;
 
-  constructor(config: ConfigService) {
+  /** workerId → 注册令牌（解密后）短期缓存，避免每次调用都查库解密。 */
+  private readonly dispatchTokenCache = new Map<
+    string,
+    { token: string; expiresAt: number }
+  >();
+
+  constructor(
+    config: ConfigService,
+    private readonly prisma: PrismaService,
+    private readonly credentialCrypto: CredentialCryptoService,
+  ) {
     this.baseUrlFallback = config.get(
       'WORKER_BASE_URL',
       DEFAULT_WORKER_BASE_URL,
     );
     this.workerToken = config.get('WORKER_TOKEN', DEFAULT_WORKER_TOKEN);
+  }
+
+  /**
+   * 控制面 → worker 的鉴权令牌：优先使用该 worker 注册时落库的令牌密文
+   * （单令牌/空间令牌模式下 worker 只认自己的注册令牌）；旧数据无密文时回退
+   * 全局 WORKER_TOKEN（向后兼容）。
+   */
+  private async authToken(workerId: string): Promise<string> {
+    const cached = this.dispatchTokenCache.get(workerId);
+    if (cached && cached.expiresAt > Date.now()) return cached.token;
+    try {
+      const row = await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { dispatchTokenRef: true },
+      });
+      if (row?.dispatchTokenRef) {
+        const token = this.credentialCrypto.decrypt(row.dispatchTokenRef);
+        this.dispatchTokenCache.set(workerId, {
+          token,
+          expiresAt: Date.now() + 60_000,
+        });
+        return token;
+      }
+    } catch {
+      // 查询/解密失败按旧模式处理（回退全局 token），不阻断调用。
+    }
+    return this.workerToken;
   }
 
   /**
@@ -1157,6 +1196,9 @@ export class WorkerClient {
     timeoutMs: number,
   ): Promise<Response> {
     const headers = new Headers(init.headers);
+    // 统一在此覆盖 X-Worker-Token：按 worker 记录的实际注册令牌鉴权
+    // （单令牌模式下各 worker 令牌不同，调用方传入的全局 token 会被覆盖）。
+    headers.set('X-Worker-Token', await this.authToken(workerId));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {

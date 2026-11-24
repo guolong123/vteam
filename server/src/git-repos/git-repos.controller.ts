@@ -14,6 +14,7 @@ import {
   AuthenticatedUser,
 } from '../common/decorators/current-user.decorator';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { CreateGitRepoDto } from './dto/create-git-repo.dto';
 import { UpdateGitRepoDto } from './dto/update-git-repo.dto';
 import { GitReposService } from './git-repos.service';
@@ -49,7 +50,7 @@ export class GitReposController {
    *   授权 agent 不存在 → 400 GRANT_INVALID；保存后按 worker 活跃 agent 过滤下发。
    */
   @Post()
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '创建仓库凭证（AES-256-GCM 加密存储 + 授权，AdminGuard）',
   })
@@ -66,7 +67,7 @@ export class GitReposController {
    *   key → 重加密覆盖；grantedAgents → 全量覆盖授权；不存在/已吊销 → 404。
    */
   @Patch(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '更新仓库凭证/授权（部分更新，AdminGuard）' })
   update(
     @Param('id') id: string,
@@ -81,7 +82,7 @@ export class GitReposController {
    * DELETE /api/v1/git-repos/:id → 200 + {id, revokedAt}；不存在/已吊销 → 404。
    */
   @Delete(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '软撤销仓库凭证（+ 该仓库全部授权，AdminGuard）' })
   remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.gitReposService.remove(id, user.id);

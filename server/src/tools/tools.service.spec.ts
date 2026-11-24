@@ -11,6 +11,7 @@ import { WorkersService } from '../workers/workers.service';
 import { CreateToolDto } from './dto/create-tool.dto';
 import { UpdateToolDto } from './dto/update-tool.dto';
 import { ToolsService } from './tools.service';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 describe('ToolsService', () => {
   let service: ToolsService;
@@ -420,7 +421,7 @@ describe('ToolsService', () => {
       const result = await service.create(dto);
 
       expect(prisma.tool.findUnique).toHaveBeenCalledWith({
-        where: { action: 'git-commit' },
+        where: tenantUniqueWhere('Tool', { action: 'git-commit' }),
         select: { id: true },
       });
       expect(prisma.tool.create).toHaveBeenCalledWith({

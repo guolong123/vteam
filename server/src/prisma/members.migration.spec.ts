@@ -27,8 +27,9 @@ describe('20261106170000_members migration contract', () => {
     const s = schema();
     expect(s).toMatch(/model Member \{/);
     expect(s).toMatch(/model MemberNotificationChannel \{/);
-    expect(s).toContain('memberId       String?  @map("member_id")');
-    expect(s).toContain('uk_member_notif_channel');
+    expect(s).toMatch(/memberId\s+String\?\s+@map\("member_id"\)/);
+    // M1 租户化后 schema 唯一键改为带 workspace 前缀（历史迁移 DDL 仍是旧名）。
+    expect(s).toContain('uk_member_notif_workspace_channel');
   });
 
   it('迁移建 members 表，列与 schema 对齐', () => {

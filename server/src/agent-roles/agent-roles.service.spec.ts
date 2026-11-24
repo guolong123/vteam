@@ -191,6 +191,7 @@ describe('AgentRolesService', () => {
       expect(Object.keys(result.items[0]).sort()).toEqual(
         [
           'id',
+          'workspaceId',
           'key',
           'name',
           'description',

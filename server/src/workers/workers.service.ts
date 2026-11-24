@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -13,6 +14,8 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
+import { resolveWorkspaceByWorkerToken } from '../common/tenant/worker-space-token';
 import {
   MODEL_ERRORS,
   ModelProviderConfigEntry,
@@ -20,6 +23,11 @@ import {
 import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
+import {
+  getTenantContext,
+  runWithTenant,
+} from '../common/tenant/tenant-context';
+import { TENANT_WORKSPACE_ID } from '../common/tenant/tenant.constants';
 import { McpServersService } from '../mcp-servers/mcp-servers.service';
 import { McpStatusEntryDto } from '../mcp-servers/dto/mcp-status.dto';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
@@ -447,6 +455,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       ...(dto.rolledBack !== undefined ? { rolledBack: dto.rolledBack } : {}),
       status: WORKER_STATUS.ONLINE,
       tokenHash,
+      // 控制面派发到本 worker 时用该令牌鉴权（注册令牌明文只存密文，不落明文）。
+      dispatchTokenRef: this.credentialCrypto.encrypt(workerToken),
       lastHeartbeatAt: now,
     };
     // C5b（容器重启凭据恢复）：worker 每次 register 都无条件回放全部未吊销凭据。
@@ -454,83 +464,156 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     // 但 DB worker 行 status 可能仍是 ONLINE（心跳 30s 才判 offline，重启注册远早于
     // 该窗口）→ 依赖 `existing.status === OFFLINE` 判断会漏回放 → opencode-go 等
     // 付费模型凭据永不恢复。故此处不再按状态区分，每次启动都回放。
-    const worker = await this.prisma.worker.upsert({
+    // 空间归属（M2）：worker 首次注册缺省落默认空间；已有归属不可通过注册变更
+    // （跨空间迁移属于管理员受控操作，走后续迁移端点）。
+    const existingWorker = await this.prisma.worker.findUnique({
       where: { id: dto.workerId },
-      create: { id: dto.workerId, ...data },
-      update: data,
+      select: { workspaceId: true },
     });
-    // C3（P2-1 集成验收）：worker 上报 capabilities.models 合并入库——拆解
-    // providerID/modelID upsert 目录 + upsert availability。降级（未上报
-    // undefined）→ sync 返回 0 不触碰；失败不阻断注册（warn 可观测）。
-    try {
-      await this.modelsService.syncFromWorkerCapabilities(
-        worker.id,
-        dto.capabilities?.models,
-      );
-    } catch (e) {
-      this.logger.warn(
-        `worker ${worker.id} 模型能力合并入库失败（不阻断注册）: ${e}`,
-      );
+    // 单令牌模式（M4）：X-Worker-Token 若是空间注册令牌，空间由令牌反查得到；
+    // 若同时传了 WORKSPACE_ID 必须与令牌空间一致，否则拒绝（防令牌跨空间使用）。
+    const tokenWorkspaceId = await resolveWorkspaceByWorkerToken(
+      this.prisma as unknown as {
+        workspace: { findFirst: (args: unknown) => Promise<unknown> };
+      },
+      workerToken,
+    );
+    const requestedWorkspaceId = dto.workspaceId?.trim() || undefined;
+    if (
+      tokenWorkspaceId &&
+      requestedWorkspaceId &&
+      tokenWorkspaceId !== requestedWorkspaceId
+    ) {
+      throw new ConflictException({
+        code: WORKER_ERRORS.WORKER_SPACE_MISMATCH,
+        message: `空间注册令牌属于空间 ${tokenWorkspaceId}，不能注册到 ${requestedWorkspaceId}`,
+      });
     }
-    // models-credential：重注册（含凭据注入后 serve 重启）意味着 offering 可能已变——
-    // 快照只恢复 availability 从不授可见性，此处 best-effort 跑一次 sync 做可见性重收敛
-    // （凭据刚下发、worker 刚重报可执行集时，未配前被禁用的行在此回 enable；失败不阻断注册）。
-    try {
-      await this.modelsService.syncLiveModels();
-    } catch (e) {
-      this.logger.warn(
-        `worker ${worker.id} 注册后可见性重收敛失败（不阻断注册）: ${e}`,
-      );
+    if (
+      requestedWorkspaceId &&
+      existingWorker &&
+      existingWorker.workspaceId !== requestedWorkspaceId
+    ) {
+      throw new ConflictException({
+        code: WORKER_ERRORS.WORKER_WORKSPACE_MISMATCH,
+        message: `Worker ${dto.workerId} 已归属空间 ${existingWorker.workspaceId}，不能通过注册变更到 ${requestedWorkspaceId}`,
+      });
     }
-    /**
-     * 逐模型能力回填（2026-11-18）：刚入库的新模型 `capabilities` 为空
-     * （worker 只上报 id 字符串，上游 `/models` 不返回能力）⇒ 不补的话
-     * worker 写 opencode 配置时 `input: ["text"]`，agent 读不了图片。
-     *
-     * 数据源 models.dev（opencode 生态的权威模型目录，opencode 文档明说能力取自它）。
-     * **逐模型**取，绝不做 provider 级拉平（同 provider 内差异很大：
-     * commandcode 93 个模型里 73 个支持 image、20 个不支持）。
-     *
-     * 失败不阻断注册（能力同步是增强）；已自定义能力的行默认不覆盖。
-     */
-    try {
-      /**
-       * 只同步**该 worker 上报的 provider**（2026-11-18 修订）。
-       *
-       * 初版无条件同步全库：dev 日志实测「provider 227 个、命中 8285 个模型」——
-       * 一次注册做了 8285 次 UPDATE，且每个 worker 注册都重复做一遍，纯属浪费。
-       * 而本次注册刚 upsert 的模型只属于它上报的那几个 provider ⇒ 按 provider 收窄即可，
-       * 语义不变（其它 provider 的能力在它们各自的 worker 注册/手动触发时同步）。
-       */
-      const reportedProviders = [
-        ...new Set(
-          (dto.capabilities?.models ?? [])
-            .map((raw) => (typeof raw === 'string' ? raw.split('/')[0] : ''))
-            .filter((p) => p.length > 0),
-        ),
-      ];
-      if (reportedProviders.length > 0) {
-        await this.modelsService.syncCapabilitiesFromModelsDev({
-          providerIDs: reportedProviders,
+    const workspaceId =
+      tokenWorkspaceId ??
+      requestedWorkspaceId ??
+      existingWorker?.workspaceId ??
+      TENANT_WORKSPACE_ID.DEFAULT;
+    // 单令牌模式已由空间令牌完成鉴权与空间判定，不再要求加入码；
+    // 只有「全局共享 token + 显式 WORKSPACE_ID」的旧模式才强制 WORKER_JOIN_TOKEN。
+    const usesSpaceToken = Boolean(tokenWorkspaceId);
+    // M2 加固：非默认空间的 worker 注册必须携带该空间的加入码（防共享 WORKER_TOKEN
+    // 持有者自报任意 spaceId 混入他人空间）。默认空间保持单租户向后兼容。
+    if (
+      !usesSpaceToken &&
+      workspaceId !== TENANT_WORKSPACE_ID.DEFAULT &&
+      process.env.WORKER_JOIN_TOKEN_ENFORCE !== 'false'
+    ) {
+      const workspace = await this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { workerJoinTokenHash: true },
+      });
+      const provided = dto.joinToken?.trim() ?? '';
+      const providedHash = provided
+        ? createHash('sha256').update(provided).digest('hex')
+        : '';
+      if (
+        !workspace?.workerJoinTokenHash ||
+        !providedHash ||
+        providedHash !== workspace.workerJoinTokenHash
+      ) {
+        throw new ForbiddenException({
+          code: WORKER_ERRORS.WORKER_JOIN_TOKEN_INVALID,
+          message: `Worker 注册加入码无效或未配置（空间 ${workspaceId}）；请管理员重新签发并配置 WORKER_JOIN_TOKEN`,
         });
       }
-    } catch (e) {
-      this.logger.warn(
-        `worker ${worker.id} 注册后模型能力同步失败（不阻断注册）: ${e}`,
-      );
     }
-    // C5（R5）：注册后回放全部未吊销凭据。无条件调用（见上方 C5b 说明：容器重启
-    // 后 auth.json 已被删除且 DB status 仍 ONLINE，必须每次启动回放）。回放失败
-    // （解密错/DB 错）不阻断注册，只打 warn 日志。
-    await this.replayModelCredentials(worker.id);
-    // 仓库凭证同理由：容器重启后 ~/.keta-git-creds.json 已随 homedir 消失（若容器
-    // 重建）或 worker 侧退出清理，注册时一并回放当前活跃 agent 授权凭证。
-    await this.replayGitCredentials(worker.id);
-    return {
-      workerId: worker.id,
-      heartbeatIntervalMs: WORKER_HEARTBEAT_INTERVAL_MS,
-      serverTime: now.toISOString(),
-    };
+    // 注册后的模型合并 / 凭据回放 / 配置回放全部在该 worker 的空间上下文内执行，
+    // 使租户中间件只读写该空间数据（不再全表广播）。
+    return runWithTenant({ workspaceId, mode: 'request' }, async () => {
+      const worker = await this.prisma.worker.upsert({
+        where: { id: dto.workerId },
+        create: { id: dto.workerId, ...data },
+        update: data,
+      });
+      // C3（P2-1 集成验收）：worker 上报 capabilities.models 合并入库——拆解
+      // providerID/modelID upsert 目录 + upsert availability。降级（未上报
+      // undefined）→ sync 返回 0 不触碰；失败不阻断注册（warn 可观测）。
+      try {
+        await this.modelsService.syncFromWorkerCapabilities(
+          worker.id,
+          dto.capabilities?.models,
+        );
+      } catch (e) {
+        this.logger.warn(
+          `worker ${worker.id} 模型能力合并入库失败（不阻断注册）: ${e}`,
+        );
+      }
+      // models-credential：重注册（含凭据注入后 serve 重启）意味着 offering 可能已变——
+      // 快照只恢复 availability 从不授可见性，此处 best-effort 跑一次 sync 做可见性重收敛
+      // （凭据刚下发、worker 刚重报可执行集时，未配前被禁用的行在此回 enable；失败不阻断注册）。
+      try {
+        await this.modelsService.syncLiveModels();
+      } catch (e) {
+        this.logger.warn(
+          `worker ${worker.id} 注册后可见性重收敛失败（不阻断注册）: ${e}`,
+        );
+      }
+      /**
+       * 逐模型能力回填（2026-11-18）：刚入库的新模型 `capabilities` 为空
+       * （worker 只上报 id 字符串，上游 `/models` 不返回能力）⇒ 不补的话
+       * worker 写 opencode 配置时 `input: ["text"]`，agent 读不了图片。
+       *
+       * 数据源 models.dev（opencode 生态的权威模型目录，opencode 文档明说能力取自它）。
+       * **逐模型**取，绝不做 provider 级拉平（同 provider 内差异很大：
+       * commandcode 93 个模型里 73 个支持 image、20 个不支持）。
+       *
+       * 失败不阻断注册（能力同步是增强）；已自定义能力的行默认不覆盖。
+       */
+      try {
+        /**
+         * 只同步**该 worker 上报的 provider**（2026-11-18 修订）。
+         *
+         * 初版无条件同步全库：dev 日志实测「provider 227 个、命中 8285 个模型」——
+         * 一次注册做了 8285 次 UPDATE，且每个 worker 注册都重复做一遍，纯属浪费。
+         * 而本次注册刚 upsert 的模型只属于它上报的那几个 provider ⇒ 按 provider 收窄即可，
+         * 语义不变（其它 provider 的能力在它们各自的 worker 注册/手动触发时同步）。
+         */
+        const reportedProviders = [
+          ...new Set(
+            (dto.capabilities?.models ?? [])
+              .map((raw) => (typeof raw === 'string' ? raw.split('/')[0] : ''))
+              .filter((p) => p.length > 0),
+          ),
+        ];
+        if (reportedProviders.length > 0) {
+          await this.modelsService.syncCapabilitiesFromModelsDev({
+            providerIDs: reportedProviders,
+          });
+        }
+      } catch (e) {
+        this.logger.warn(
+          `worker ${worker.id} 注册后模型能力同步失败（不阻断注册）: ${e}`,
+        );
+      }
+      // C5（R5）：注册后回放全部未吊销凭据。无条件调用（见上方 C5b 说明：容器重启
+      // 后 auth.json 已被删除且 DB status 仍 ONLINE，必须每次启动回放）。回放失败
+      // （解密错/DB 错）不阻断注册，只打 warn 日志。
+      await this.replayModelCredentials(worker.id);
+      // 仓库凭证同理由：容器重启后 ~/.keta-git-creds.json 已随 homedir 消失（若容器
+      // 重建）或 worker 侧退出清理，注册时一并回放当前活跃 agent 授权凭证。
+      await this.replayGitCredentials(worker.id);
+      return {
+        workerId: worker.id,
+        heartbeatIntervalMs: WORKER_HEARTBEAT_INTERVAL_MS,
+        serverTime: now.toISOString(),
+      };
+    });
   }
 
   /**
@@ -543,7 +626,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   async heartbeat(id: string, dto: HeartbeatWorkerDto, token?: string) {
     const worker = await this.prisma.worker.findUnique({
       where: { id },
-      select: { id: true, tokenHash: true, status: true, capabilities: true },
+      select: {
+        id: true,
+        tokenHash: true,
+        status: true,
+        capabilities: true,
+        workspaceId: true,
+      },
     });
     if (!worker) {
       throw new NotFoundException({
@@ -581,70 +670,102 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
-    const status =
-      dto.health === 'degraded' ? WORKER_STATUS.DEGRADED : WORKER_STATUS.ONLINE;
-    // T8c：MCP 三态快照 → 内存状态存储（前端 GET /mcp-servers 合并展示）
-    // T9：另按 workerId 关联保存，worker 详情接口返回（前端 worker 详情页展示）
-    if (dto.mcpStatus && dto.mcpStatus.length > 0) {
-      this.mcpServers.applyHeartbeatStatus(dto.mcpStatus);
-      this.workerMcpStatus.set(id, dto.mcpStatus);
-    }
-    const lastHeartbeatAt = new Date();
-    const caps = (worker.capabilities ?? {}) as Partial<{
-      maxInstances: number;
-    }>;
-    const maxInstances = caps.maxInstances ?? 5;
-    const rawInstances =
-      (dto.load as Partial<{ instances: number }>)?.instances ?? 0;
-    let safeInstances = rawInstances;
-    if (rawInstances > maxInstances * 3) {
-      this.logger.warn(
-        `[workers] worker ${id} 上报异常负载 ${rawInstances}/${maxInstances} 已钳制为 ${maxInstances}（疑似计数泄漏）`,
-      );
-      safeInstances = maxInstances;
-    }
-    const safeLoad = {
-      instances: safeInstances,
-    } as unknown as Prisma.InputJsonValue;
-    // worker-self-update Todo 2：心跳刷新代码版本，缺席语义同 register（保留已有值）。
-    const reportedCodeVersion = normalizeReportedCodeVersion(dto.codeVersion);
-    const reportedUpdateState = normalizeReportedUpdateState(dto.updateState);
-    await this.prisma.worker.update({
-      where: { id },
-      data: {
-        load: safeLoad,
-        status,
-        lastHeartbeatAt,
-        ...(reportedCodeVersion !== undefined
-          ? { codeVersion: reportedCodeVersion }
-          : {}),
-        ...(reportedUpdateState !== undefined
-          ? { updateState: reportedUpdateState }
-          : {}),
-        ...(dto.rolledBack !== undefined ? { rolledBack: dto.rolledBack } : {}),
+    // 心跳后续写入/回放在该 worker 的空间上下文内执行（凭据回放只取本空间凭据）。
+    return runWithTenant(
+      {
+        workspaceId: worker.workspaceId ?? TENANT_WORKSPACE_ID.DEFAULT,
+        mode: 'request',
       },
+      async () => {
+        const status =
+          dto.health === 'degraded'
+            ? WORKER_STATUS.DEGRADED
+            : WORKER_STATUS.ONLINE;
+        // T8c：MCP 三态快照 → 内存状态存储（前端 GET /mcp-servers 合并展示）
+        // T9：另按 workerId 关联保存，worker 详情接口返回（前端 worker 详情页展示）
+        if (dto.mcpStatus && dto.mcpStatus.length > 0) {
+          this.mcpServers.applyHeartbeatStatus(dto.mcpStatus);
+          this.workerMcpStatus.set(id, dto.mcpStatus);
+        }
+        const lastHeartbeatAt = new Date();
+        const caps = (worker.capabilities ?? {}) as Partial<{
+          maxInstances: number;
+        }>;
+        const maxInstances = caps.maxInstances ?? 5;
+        const rawInstances =
+          (dto.load as Partial<{ instances: number }>)?.instances ?? 0;
+        let safeInstances = rawInstances;
+        if (rawInstances > maxInstances * 3) {
+          this.logger.warn(
+            `[workers] worker ${id} 上报异常负载 ${rawInstances}/${maxInstances} 已钳制为 ${maxInstances}（疑似计数泄漏）`,
+          );
+          safeInstances = maxInstances;
+        }
+        const safeLoad = {
+          instances: safeInstances,
+        } as unknown as Prisma.InputJsonValue;
+        // worker-self-update Todo 2：心跳刷新代码版本，缺席语义同 register（保留已有值）。
+        const reportedCodeVersion = normalizeReportedCodeVersion(
+          dto.codeVersion,
+        );
+        const reportedUpdateState = normalizeReportedUpdateState(
+          dto.updateState,
+        );
+        await this.prisma.worker.update({
+          where: { id },
+          data: {
+            load: safeLoad,
+            status,
+            lastHeartbeatAt,
+            ...(reportedCodeVersion !== undefined
+              ? { codeVersion: reportedCodeVersion }
+              : {}),
+            ...(reportedUpdateState !== undefined
+              ? { updateState: reportedUpdateState }
+              : {}),
+            ...(dto.rolledBack !== undefined
+              ? { rolledBack: dto.rolledBack }
+              : {}),
+          },
+        });
+        // C5（R5）：worker 从 offline 恢复上线 → 回放未吊销凭据——补离线期间保存的
+        // 凭据（broadcastCommand 只覆盖在线 worker，离线 worker 恢复心跳时此处对齐）。
+        // 一直在线的心跳不重复回放（已下发过且 worker 侧幂等覆盖，避免每 10s 重启 serve）。
+        // 新状态 status 只可能为 online/degraded（永不等于 offline），仅需判断旧状态。
+        if (worker.status === WORKER_STATUS.OFFLINE) {
+          await this.replayModelCredentials(id);
+          await this.replayGitCredentials(id);
+        }
+        const commands = this.takePendingCommands(id, dto);
+        // worker-self-update Todo 2：期望代码版本（server env CODE_VERSION = deploy TAG，
+        // 与 pack-worker tarball 同源）。纯信息字段——不下发任何更新语义，更新指令走既有
+        // T4a commands 通道（update-worker 入队见 requestUpdate），此处不动 pendingCommands。
+        // env 缺省/空串 → undefined → **整字段省略**（未设该 env 的部署不产生「版本不一致」）。
+        const expectedVersion = resolveExpectedCodeVersion();
+        return {
+          workerId: id,
+          status,
+          lastHeartbeatAt: lastHeartbeatAt.toISOString(),
+          ...(commands.length > 0 ? { commands } : {}),
+          ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        };
+      },
+    );
+  }
+
+  /**
+   * 过滤出归属于指定空间的 workerId（定向下发鉴权用：拒绝把凭据发到别的空间的节点）。
+   */
+  private async filterWorkerIdsByWorkspace(
+    ids: string[],
+    workspaceId: string,
+  ): Promise<string[]> {
+    const rows = await this.prisma.worker.findMany({
+      where: { id: { in: ids }, workspaceId },
+      select: { id: true },
     });
-    // C5（R5）：worker 从 offline 恢复上线 → 回放未吊销凭据——补离线期间保存的
-    // 凭据（broadcastCommand 只覆盖在线 worker，离线 worker 恢复心跳时此处对齐）。
-    // 一直在线的心跳不重复回放（已下发过且 worker 侧幂等覆盖，避免每 10s 重启 serve）。
-    // 新状态 status 只可能为 online/degraded（永不等于 offline），仅需判断旧状态。
-    if (worker.status === WORKER_STATUS.OFFLINE) {
-      await this.replayModelCredentials(id);
-      await this.replayGitCredentials(id);
-    }
-    const commands = this.takePendingCommands(id, dto);
-    // worker-self-update Todo 2：期望代码版本（server env CODE_VERSION = deploy TAG，
-    // 与 pack-worker tarball 同源）。纯信息字段——不下发任何更新语义，更新指令走既有
-    // T4a commands 通道（update-worker 入队见 requestUpdate），此处不动 pendingCommands。
-    // env 缺省/空串 → undefined → **整字段省略**（未设该 env 的部署不产生「版本不一致」）。
-    const expectedVersion = resolveExpectedCodeVersion();
-    return {
-      workerId: id,
-      status,
-      lastHeartbeatAt: lastHeartbeatAt.toISOString(),
-      ...(commands.length > 0 ? { commands } : {}),
-      ...(expectedVersion !== undefined ? { expectedVersion } : {}),
-    };
+    const allowed = new Set(rows.map((r) => r.id));
+    return ids.filter((id) => allowed.has(id));
   }
 
   /**
@@ -746,8 +867,14 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * 返回收到命令的 worker 数（调试/测试用；无在线 worker 时静默返回 0，不报错）。
    */
   async broadcastCommand(command: WorkerCommand): Promise<number> {
+    const ctx = getTenantContext();
     const online = await this.prisma.worker.findMany({
-      where: { status: { not: WORKER_STATUS.OFFLINE } },
+      where: {
+        status: { not: WORKER_STATUS.OFFLINE },
+        // 有租户上下文（请求链路）时只广播本空间节点；无上下文（启动期/定时任务）
+        // 保持历史全量语义，由调用方自行保证用途安全。
+        ...(ctx ? { workspaceId: ctx.workspaceId } : {}),
+      },
       select: { id: true },
     });
     for (const worker of online) {
@@ -786,10 +913,17 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       },
     };
     if (targetWorkerIds && targetWorkerIds.length > 0) {
-      for (const id of targetWorkerIds) {
+      const ctx = getTenantContext();
+      const ids = ctx
+        ? await this.filterWorkerIdsByWorkspace(
+            targetWorkerIds,
+            ctx.workspaceId,
+          )
+        : targetWorkerIds;
+      for (const id of ids) {
         this.enqueueCommand(id, command);
       }
-      return targetWorkerIds.length;
+      return ids.length;
     }
     return this.broadcastCommand(command);
   }
@@ -851,6 +985,25 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         `模型凭据回放失败（不阻断注册）: worker=${workerId} ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * 按空间回放模型凭据到该空间全部节点（迁移后/资源变更后调用）。
+   * 在目标空间租户上下文内查凭据与节点，保证不会把 A 空间的 key 下发给 B 空间。
+   */
+  async replayModelCredentialsToWorkspace(
+    workspaceId: string,
+  ): Promise<number> {
+    return runWithTenant({ workspaceId, mode: 'request' }, async () => {
+      const workers = await this.prisma.worker.findMany({
+        where: { workspaceId },
+        select: { id: true },
+      });
+      for (const w of workers) {
+        await this.replayModelCredentials(w.id);
+      }
+      return workers.length;
+    });
   }
 
   /**
@@ -1043,8 +1196,22 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    */
   async assignWorker(req: AssignmentRequirement = {}): Promise<string | null> {
     const need = Math.max(1, req.instances ?? 1);
+    // M2：候选池按空间收敛——本空间节点 + 系统空间共享节点（共享节点只跑系统凭据任务，
+    // 具体可用性仍由 matchesModelRequirement 等既有过滤决定）；无上下文（定时/内部）
+    // 保持历史全量语义。
+    const ctx = getTenantContext();
     const candidates = await this.prisma.worker.findMany({
-      where: { status: { not: WORKER_STATUS.OFFLINE } },
+      where: {
+        status: { not: WORKER_STATUS.OFFLINE },
+        ...(ctx
+          ? {
+              OR: [
+                { workspaceId: ctx.workspaceId },
+                { workspaceId: TENANT_WORKSPACE_ID.SYSTEM },
+              ],
+            }
+          : {}),
+      },
       // C7：附带模型可用性（modelAvailabilities → 每个 enabled 模型），供 modelId 过滤；
       // availability 无行（该 worker 从未上报）→ 降级不受过滤约束。
       // model 需带回 providerID/modelID：availability.modelId 是 models 主键（md_），
@@ -1193,9 +1360,17 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    */
   async findAll() {
     try {
+      // M2：原生 SQL 不走 Prisma 中间件，必须显式按空间过滤——
+      // 列表返回「本空间节点 + 系统空间共享节点」（无上下文 = 内部/启动期，保持全量）。
+      const tenant = getTenantContext();
+      const scopeFilter = tenant ? 'WHERE workspace_id IN (?, ?)' : '';
+      const scopeParams = tenant
+        ? [tenant.workspaceId, TENANT_WORKSPACE_ID.SYSTEM]
+        : [];
       const rows = await this.prisma.$queryRawUnsafe<
         Array<{
           id: string;
+          workspaceId: string;
           name: string | null;
           opencodeVersion: string;
           load: unknown;
@@ -1214,12 +1389,12 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
           capModels: unknown;
         }>
       >(
-        `SELECT t.id, t.name, t.opencodeVersion, t.\`load\`, t.status,
+        `SELECT t.id, t.workspaceId, t.name, t.opencodeVersion, t.\`load\`, t.status,
                 t.lastHeartbeatAt, t.registeredAt, t.defaultModelId,
                 t.codeVersion, t.updateState, t.rolledBack,
                 t.maxInstances, t.skills, t.tools, t.engine, t.engineCapabilities, t.capModels
            FROM (
-             SELECT id, name, opencode_version AS opencodeVersion, \`load\`, status,
+             SELECT id, workspace_id AS workspaceId, name, opencode_version AS opencodeVersion, \`load\`, status,
                     last_heartbeat_at AS lastHeartbeatAt, registered_at AS registeredAt,
                     default_model_id AS defaultModelId,
                     code_version AS codeVersion, update_state AS updateState,
@@ -1231,10 +1406,12 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
                     JSON_EXTRACT(capabilities, '$.engineCapabilities') AS engineCapabilities,
                     JSON_EXTRACT(capabilities, '$.models') AS capModels
                FROM workers
+              ${scopeFilter}
               ORDER BY id
               LIMIT 1000000
            ) AS t
           ORDER BY t.registeredAt DESC`,
+        ...scopeParams,
       );
       return rows.map((row) =>
         this.toWorkerView({
@@ -1266,6 +1443,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.prisma.worker.findMany({
         select: {
           id: true,
+          workspaceId: true,
           name: true,
           opencodeVersion: true,
           load: true,
@@ -1664,6 +1842,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    */
   private toWorkerView(worker: {
     id: string;
+    workspaceId?: string;
     name: string | null;
     opencodeVersion: string;
     capabilities?: Prisma.JsonValue;
@@ -1695,6 +1874,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     const installKind = resolveInstallKind({ name: worker.name });
     return {
       id: worker.id,
+      workspaceId: worker.workspaceId,
       name: worker.name,
       opencodeVersion: worker.opencodeVersion,
       capabilities: this.stripHeavyCapabilities(worker.capabilities),

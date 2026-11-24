@@ -14,6 +14,7 @@ import {
   AuthenticatedUser,
 } from '../common/decorators/current-user.decorator';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { CreateGitCredentialDto } from './dto/create-git-credential.dto';
 import { UpdateGitCredentialDto } from './dto/update-git-credential.dto';
 import { GitCredentialsService } from './git-credentials.service';
@@ -31,7 +32,7 @@ export class GitCredentialsController {
   }
 
   @Post()
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '创建凭证（AES-256-GCM 加密存储，AdminGuard）' })
   create(
     @Body() dto: CreateGitCredentialDto,
@@ -41,7 +42,7 @@ export class GitCredentialsController {
   }
 
   @Patch(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '更新凭证（部分更新，AdminGuard）' })
   update(
     @Param('id') id: string,
@@ -52,7 +53,7 @@ export class GitCredentialsController {
   }
 
   @Delete(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '软撤销凭证（被引用则 409，AdminGuard）' })
   remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.svc.remove(id, user.id);

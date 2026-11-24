@@ -17,6 +17,12 @@ import { Public } from '../auth/decorators/public.decorator';
 import { TASK_TRANSITIONS } from '../common/constants/task.constants';
 import { ISSUE_TRANSITIONS } from '../issues/issues.constants';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
+import { PrismaService } from '../prisma/prisma.service';
+import {
+  runWithTenant,
+  type TenantContext,
+} from '../common/tenant/tenant-context';
+import { TENANT_WORKSPACE_ID } from '../common/tenant/tenant.constants';
 import {
   PLATFORM_MCP_ERRORS,
   PLATFORM_MCP_READONLY_TOOLS,
@@ -153,6 +159,7 @@ export class PlatformMcpController {
   constructor(
     private readonly service: PlatformMcpService,
     private readonly toolPermission: PlatformToolPermissionService,
+    private readonly prisma: PrismaService,
   ) {
     this.tools = buildPlatformMcpTools(service);
   }
@@ -208,7 +215,13 @@ export class PlatformMcpController {
     let out: unknown;
     let heartbeated = false;
     try {
-      out = this.dispatch(body, workerId, disconnect.signal);
+      // M2：在 worker 所属空间上下文内分发 MCP 调用——工具 handler 内的 Prisma
+      // 读写与归属校验（assertWorkerTask/Team、chat_history/doclib 等）自动收敛到
+      // 该空间，避免「按 taskId 直查」跨空间读到别人的数据。
+      const tenant = await this.resolveWorkerTenant(workerId);
+      out = runWithTenant(tenant, () =>
+        this.dispatch(body, workerId, disconnect.signal),
+      );
       if (out instanceof Promise) {
         // 只有阻塞式 tools/call 会走到这里：handler 挂起期间按 ≤60s 在响应上写
         // SSE 注释心跳，避免 opencode 客户端把零字节长连接当作空闲超时 abort。
@@ -320,6 +333,24 @@ export class PlatformMcpController {
    * - 缺 id → notification → 202 Accepted 语义（响应体 {accepted:true}）
    * - 其余按 method 走 initialize / tools/list / tools/call / 未知 method
    */
+  /**
+   * 解析 MCP 调用方 worker 的租户上下文。
+   * 未携带/未注册 workerId → 默认空间（保持旧行为可用）；已注册 → 该 worker 归属空间。
+   */
+  private async resolveWorkerTenant(workerId: string): Promise<TenantContext> {
+    if (!workerId) {
+      return { workspaceId: TENANT_WORKSPACE_ID.DEFAULT, mode: 'request' };
+    }
+    const worker = await this.prisma.worker.findUnique({
+      where: { id: workerId },
+      select: { workspaceId: true },
+    });
+    return {
+      workspaceId: worker?.workspaceId ?? TENANT_WORKSPACE_ID.DEFAULT,
+      mode: 'request',
+    };
+  }
+
   private dispatch(
     body: unknown,
     workerId: string,

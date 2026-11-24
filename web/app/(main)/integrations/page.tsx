@@ -1,5 +1,6 @@
 "use client";
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { CreateSpaceHint, SpaceBadge } from "@/src/components/ui/space-badge";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -822,6 +823,7 @@ function MessageChannelsTab() {
     <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
       <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
         <div style={{ flex: 1 }}><SectionTitle subtitle="入站 Webhook，按任务绑定分发，支持 fieldMapping">消息渠道（入站）</SectionTitle></div>
+        {isAdmin && <CreateSpaceHint style={{ marginRight: space.sm }} />}
         {isAdmin && <PrimaryButton testid="create-message-channel-button" onClick={() => setModal({ mode: "create" })}>＋ 新建消息渠道</PrimaryButton>}
       </div>
       {notice && <div role="status" data-testid="integration-notice" data-kind={notice.kind} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "var(--color-danger-soft)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "var(--color-danger-text)", fontSize: fontSize.sm }}>{notice.text}</div>}
@@ -844,7 +846,7 @@ function MessageChannelsTab() {
               <div key={ch.id} data-testid="integration-channel-item" data-channel-id={ch.id} data-type={ch.type} style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.lg}px ${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
                 <span aria-hidden style={{ width: 40, height: 40, borderRadius: radius.md, display: "inline-flex", alignItems: "center", justifyContent: "center", backgroundColor: theme.iconBg, color: theme.color }}>◈</span>
                 <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-                  <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ch.name}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, minWidth: 0 }}><span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, minWidth: 0 }}><span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ch.name}</span><SpaceBadge workspaceId={(ch as any).workspaceId} /></span><SpaceBadge workspaceId={(ch as any).workspaceId} /></span>
                   <span data-testid="integration-inbound-url-display" style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inboundUrl}</span>
                 </div>
                 <Pill theme={theme} label={theme.label} testid="integration-type-badge" status={ch.type} />
@@ -1035,6 +1037,7 @@ function NotificationChannelsTab() {
     <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
       <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
         <div style={{ flex: 1 }}><div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>通知渠道（出站）</div><div style={{ fontSize: fontSize.sm, color: neutral[500] }}>出站通知，按任务绑定与事件分发</div></div>
+        {isAdmin && <CreateSpaceHint style={{ marginRight: space.sm }} />}
         {isAdmin && <button type="button" data-testid="create-notification-channel-button" onClick={() => setModal({ mode: "create" })} style={{ padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", cursor: "pointer", fontFamily: fontFamily.body }}>＋ 新建通知渠道</button>}
       </div>
       {notice && <div role="status" data-testid="notification-notice" data-kind={notice.kind} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "var(--color-danger-soft)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "var(--color-danger-text)", fontSize: fontSize.sm }}>{notice.text}</div>}
@@ -1053,7 +1056,7 @@ function NotificationChannelsTab() {
               <div key={ch.id} data-testid="notification-channel-item" data-channel-id={ch.id} data-type={ch.type} style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.lg}px ${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
                 <span aria-hidden style={{ width: 40, height: 40, borderRadius: radius.md, display: "inline-flex", alignItems: "center", justifyContent: "center", backgroundColor: theme.iconBg, color: theme.color }}>◈</span>
                 <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-                  <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ch.name}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, minWidth: 0 }}><span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ch.name}</span><SpaceBadge workspaceId={(ch as any).workspaceId} /></span>
                   <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{targetUrl || (events as string[]).join(", ") || "—"}</span>
                 </div>
                 <Pill theme={theme} label={theme.label} testid="notification-type-badge" status={ch.type} />

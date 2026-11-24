@@ -9,7 +9,10 @@ import {
   setSwaggerRawDocument,
   SwaggerDocsProvider,
 } from './swagger-mcp/swagger-docs.provider';
-import { resolveUploadDir } from './uploads/uploads.constants';
+import {
+  resolveUploadDir,
+  verifyUploadUrlSignature,
+} from './uploads/uploads.constants';
 import { FileStorageService } from './uploads/uploads.service';
 
 async function bootstrap() {
@@ -41,6 +44,22 @@ async function bootstrap() {
   // - Content-Security-Policy: default-src 'none'; sandbox → 万一被当文档解析也无外链/脚本。
   // 说明：Content-Disposition 只影响顶层导航，不影响 <img src="/uploads/x.png"> 等子资源
   // 加载（浏览器对子资源忽略该头），图片预览/缩略图展示保持可用。
+  // 空间分区上传 URL 签名校验（M3 安全收口）：/uploads/workspaces/* 必须带有效
+  // exp/sig，防枚举/UUID 猜测盗链；存量 /uploads/<file> 保持可读（兼容旧数据）。
+  // 迁移期可用 UPLOAD_URL_SIGNATURE_ENFORCE=false 关闭（默认开启）。
+  app.use('/uploads', (req: any, res: any, next: any) => {
+    if (process.env.UPLOAD_URL_SIGNATURE_ENFORCE === 'false') return next();
+    const ok = verifyUploadUrlSignature(
+      String(req.originalUrl ?? ''),
+      (req.query ?? {}) as { exp?: unknown; sig?: unknown },
+    );
+    if (ok) return next();
+    res.status(403).json({
+      code: 'UPLOAD_URL_SIGNATURE_INVALID',
+      message: '文件链接无效或已过期，请重新从接口获取',
+    });
+  });
+
   app.useStaticAssets(resolveUploadDir(), {
     prefix: '/uploads/',
     setHeaders: (res) => {

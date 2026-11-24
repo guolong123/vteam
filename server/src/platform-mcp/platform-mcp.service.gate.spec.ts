@@ -534,19 +534,19 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     });
   });
 
-  describe('task-11 双空上下文回填（resolveToolCallerWithContext）', () => {
-    it('(a) 回填绑定最近会话的 taskId', async () => {
+  describe('双空上下文解析（resolveToolCallerWithContext，M0 fail-closed）', () => {
+    it('(a) 显式 selfInstanceId → 按其自己的会话回填 taskId（不再取 worker 最近会话）', async () => {
       prisma.session.findFirst.mockResolvedValueOnce({
         taskId: 't_latest',
         teamId: 'tm_1',
-        teamMemberId: 'tmm_sender',
+        teamMemberId: senderInstanceId,
         agentId: 'a_sender',
       });
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
       prisma.session.findFirst.mockResolvedValue({
         id: 's_1',
         agentId: 'a_sender',
-        teamMemberId: 'tmm_sender',
+        teamMemberId: senderInstanceId,
       });
       // resolveCallerSeat：省略 selfInstanceId 时按 worker 会话推断身份
       prisma.session.findMany.mockResolvedValue([
@@ -558,11 +558,22 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_sender' });
 
       await expect(
-        service.resolveToolCallerWithContext(ctx, {}),
+        service.resolveToolCallerWithContext(ctx, {
+          selfInstanceId: senderInstanceId,
+        }),
       ).resolves.toMatchObject({
-        callerId: 'tmm_sender',
+        callerId: senderInstanceId,
         taskId: 't_latest',
       });
+      // 只按 selfInstanceId 精确解析，不查 worker 最近会话
+      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            teamMemberId: senderInstanceId,
+            workerId: ctx.workerId,
+          }),
+        }),
+      );
     });
 
     it('(a2) 任务维缺失时回填绑定最近会话的 teamId', async () => {
@@ -577,27 +588,43 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       prisma.session.findFirst.mockResolvedValueOnce({
         taskId: null,
         teamId: 'tm_latest',
-        teamMemberId: 'tmm_sender',
+        teamMemberId: senderInstanceId,
         agentId: 'a_sender',
       });
       prisma.session.findFirst.mockResolvedValue({
         id: 's_team',
-        teamMemberId: 'tmm_sender',
+        teamMemberId: senderInstanceId,
       });
 
       await expect(
-        service.resolveToolCallerWithContext(ctx, {}),
+        service.resolveToolCallerWithContext(ctx, {
+          selfInstanceId: senderInstanceId,
+        }),
       ).resolves.toMatchObject({
-        callerId: 'tmm_sender',
+        callerId: senderInstanceId,
         teamId: 'tm_latest',
       });
     });
 
-    it('(b) 无会话 → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED', async () => {
-      prisma.session.findFirst.mockResolvedValue(null);
-
+    it('(b) 双空且未传 selfInstanceId → 403 fail-closed（停用 worker 最近会话回填，不查会话）', async () => {
       await expect(
         service.resolveToolCallerWithContext(ctx, {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',
+        }),
+      });
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('(c) 传了 selfInstanceId 但解析不到唯一会话 → 403 fail-closed', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.resolveToolCallerWithContext(ctx, {
+          selfInstanceId: senderInstanceId,
+        }),
       ).rejects.toMatchObject({
         response: expect.objectContaining({
           code: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',

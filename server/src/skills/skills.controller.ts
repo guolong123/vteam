@@ -23,6 +23,7 @@ import {
 import { memoryStorage } from 'multer';
 import { Request } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
+import { WorkerOrJwtAllowed } from '../auth/decorators/worker-or-jwt.decorator';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
@@ -68,7 +69,7 @@ export class SkillsController {
    * 成员只读：service 内强制 enabled=true；admin 遵循 query.enabled（缺省全量）。
    * worker（X-Worker-Token）拉取：service viewer 为空不强制过滤，显式带 enabled=true 即只取启用技能。
    */
-  @Public()
+  @WorkerOrJwtAllowed()
   @UseGuards(WorkerOrJwtGuard, PermissionGuard)
   @RequirePermission('skills.view')
   @Get()
@@ -88,7 +89,7 @@ export class SkillsController {
    * GET /api/v1/skills/:id/content → 200 {id, name, content}；不存在 → 404 SKILL_NOT_FOUND。
    * 鉴权：X-Worker-Token 或用户 JWT 任一通过即可（skill 内容本身是下发到 worker/模型的指令文本）。
    */
-  @Public()
+  @WorkerOrJwtAllowed()
   @UseGuards(WorkerOrJwtGuard, PermissionGuard)
   @RequirePermission('skills.view')
   @Get(':id/content')

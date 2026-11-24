@@ -63,6 +63,8 @@ export const EVENT_TYPES = {
   TRIGGER_FIRED: 'trigger.fired',
   TRIGGER_EXPIRED: 'trigger.expired',
   TRIGGER_SKIPPED: 'trigger.skipped',
+  // 资源跨空间迁移（发布共享/回收）后广播，供前端按空间失效缓存/提示
+  WORKSPACE_RESOURCE_RELOCATED: 'workspace.resource.relocated',
 } as const;
 
 export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];

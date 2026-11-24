@@ -15,6 +15,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import {
   MaintainMemoriesDto,
   QueryMemoriesDto,
@@ -74,7 +75,7 @@ export class MemoriesController {
    * MEMORY_NOT_FOUND；team 级行调用者非该团队成员 → 403（AdminGuard 保留）。
    */
   @Patch(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '部分更新记忆（仅管理员 + 团队归属校验）' })
   update(
     @Param('id') id: string,
@@ -116,7 +117,7 @@ export class MemoriesController {
    * 整理会变更团队记忆，成员触发会让他人团队的记忆被动变更。
    */
   @Post('maintain')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary:
       '手动触发一轮记忆整理（仅管理员；可传 teamId 只整理该团队；Agent 侧执行合并/归档）',

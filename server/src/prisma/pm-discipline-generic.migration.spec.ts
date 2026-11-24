@@ -227,7 +227,7 @@ describe(`migration ${MIGRATION_DIR_NAME}`, () => {
   it('⑩ schema 未漂移（列名/类型不变）', () => {
     const schema = fs.readFileSync(SCHEMA, 'utf8');
     expect(schema).toMatch(
-      /rolePrompt\s+String\?\s+@db\.Text\s+@map\("role_prompt"\)/,
+      /rolePrompt\s+String\?\s+@map\("role_prompt"\)\s+@db\.Text/,
     );
     expect(schema).toMatch(
       /model ExecutionPolicy[\s\S]{0,400}description\s+String\?\s+@db\.Text/,

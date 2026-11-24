@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AUTH_ERRORS, BUILTIN_ROLES } from './auth.constants';
 import { AuthService } from './auth.service';
+import { WorkspacesService } from '../workspaces/workspaces.service';
 
 const createMockPrisma = () => {
   const users: any[] = [];
@@ -66,6 +67,7 @@ const createMockPrisma = () => {
 
 describe('AuthService', () => {
   let service: AuthService;
+  let workspaces: WorkspacesService;
   let prisma: ReturnType<typeof createMockPrisma>;
   let jwt: JwtService;
 
@@ -93,7 +95,19 @@ describe('AuthService', () => {
         type: 'refresh',
       })),
     } as unknown as JwtService;
-    service = new AuthService(prisma as unknown as PrismaService, jwt, config);
+    workspaces = {
+      resolveOrCreateDefault: jest.fn(async () => 'ws_default'),
+      canAccess: jest.fn(async () => true),
+      listForUser: jest.fn(async () => []),
+      createForUser: jest.fn(async () => ({ id: 'ws_user' })),
+      switchTo: jest.fn(async () => undefined),
+    } as unknown as WorkspacesService;
+    service = new AuthService(
+      prisma as unknown as PrismaService,
+      jwt,
+      config,
+      workspaces,
+    );
   });
 
   describe('register', () => {

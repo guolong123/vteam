@@ -1733,6 +1733,8 @@ export async function buildRegisterOptions(
     workerToken: config.workerToken,
     workerId: config.workerId,
     workerName: config.workerName,
+    ...(config.workspaceId ? { workspaceId: config.workspaceId } : {}),
+    ...(config.joinToken ? { joinToken: config.joinToken } : {}),
     // T1：上报值必须是**规范化 semver 串**（`2.0.28`）——控制面调度器按精确串相等过滤
     // worker（`workers.service.ts` 的 opencodeVersion 比较），两端格式必须一致，
     // 不能上报 `opencode v2.0.28` 全文。无法解析的值原样透传（'unknown' 等既有语义）。

@@ -303,6 +303,8 @@ describe('RealtimeController（SSE 端点）', () => {
       // 补拉按多 scope OR 查询（absent-since 仍解析最新游标 + take 硬上限）
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: {
+          // M2：SSE 连接绑定空间后，历史补拉按空间过滤
+          workspaceId: 'ws_default',
           OR: [
             { scopeType: 'channel', scopeId: 'c_1' },
             { scopeType: 'task', scopeId: 't_2' },
@@ -377,6 +379,8 @@ describe('RealtimeController（SSE 端点）', () => {
       expect(events).toHaveLength(1);
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: {
+          // M2：SSE 连接绑定空间后，历史补拉按空间过滤
+          workspaceId: 'ws_default',
           id: { gt: 'ev_0000000002' },
         },
         orderBy: { id: 'desc' },
@@ -524,7 +528,11 @@ describe('RealtimeController（SSE 端点）', () => {
       expect((events[0].data as { type: string }).type).toBe('c');
       expect((events[1].data as { type: string }).type).toBe('d');
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
-        where: { OR: [{ scopeType: 'global' }], id: { gt: 'ev_0000000002' } },
+        where: {
+          OR: [{ scopeType: 'global' }],
+          id: { gt: 'ev_0000000002' },
+          workspaceId: 'ws_default',
+        },
         orderBy: { id: 'desc' },
         take: REALTIME_REPLAY_MAX,
       });
@@ -551,7 +559,11 @@ describe('RealtimeController（SSE 端点）', () => {
       await new Promise((resolve) => setImmediate(resolve));
 
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
-        where: { OR: [{ scopeType: 'global' }], id: { gt: 'ev_0000000010' } },
+        where: {
+          OR: [{ scopeType: 'global' }],
+          id: { gt: 'ev_0000000010' },
+          workspaceId: 'ws_default',
+        },
         orderBy: { id: 'asc' },
         take: REALTIME_REPLAY_MAX,
       });

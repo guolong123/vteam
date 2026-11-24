@@ -16,6 +16,7 @@ import {
   WORKER_STATUS,
 } from './workers.constants';
 import { WorkersService } from './workers.service';
+import { runWithTenant } from '../common/tenant/tenant-context';
 import {
   WORKER_COMMAND_TYPES,
   workerAgentPoliciesStale,
@@ -33,6 +34,10 @@ const mockBcryptCompare = bcrypt.compare as jest.Mock;
 describe('WorkersService', () => {
   let service: WorkersService;
   let prisma: {
+    workspace: {
+      findUnique: jest.Mock;
+      findFirst: jest.Mock;
+    };
     worker: {
       upsert: jest.Mock;
       findUnique: jest.Mock;
@@ -78,7 +83,7 @@ describe('WorkersService', () => {
     $queryRawUnsafe: jest.Mock;
   };
   let mcpServers: { applyHeartbeatStatus: jest.Mock };
-  let credentialCrypto: { decrypt: jest.Mock };
+  let credentialCrypto: { decrypt: jest.Mock; encrypt: jest.Mock };
   let modelsService: {
     syncFromWorkerCapabilities: jest.Mock;
     syncLiveModels: jest.Mock;
@@ -115,6 +120,10 @@ describe('WorkersService', () => {
     mockBcryptHash.mockReset().mockResolvedValue('hashed-token');
     mockBcryptCompare.mockReset().mockResolvedValue(true);
     prisma = {
+      workspace: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       worker: {
         upsert: jest.fn(),
         findUnique: jest.fn(),
@@ -168,7 +177,10 @@ describe('WorkersService', () => {
     });
 
     mcpServers = { applyHeartbeatStatus: jest.fn() };
-    credentialCrypto = { decrypt: jest.fn().mockReturnValue('sk-raw-token') };
+    credentialCrypto = {
+      decrypt: jest.fn().mockReturnValue('sk-raw-token'),
+      encrypt: jest.fn().mockReturnValue('enc-token-ref'),
+    };
     modelsService = {
       syncFromWorkerCapabilities: jest.fn().mockResolvedValue(2),
       syncLiveModels: jest
@@ -197,6 +209,90 @@ describe('WorkersService', () => {
     }).compile();
 
     service = module.get<WorkersService>(WorkersService);
+  });
+
+  describe('dispatchModelCredentials 共享节点凭据隔离', () => {
+    it('定向下发时按请求空间过滤：只给本空间 worker，不把 A 空间 key 发给 B 空间节点', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_a' }]);
+      const count = await runWithTenant(
+        { workspaceId: 'ws_a', mode: 'request' },
+        () =>
+          service.dispatchModelCredentials(
+            [{ providerID: 'anthropic', key: 'sk-a' }],
+            ['w_a', 'w_b'],
+          ),
+      );
+      expect(count).toBe(1);
+      const calls = prisma.worker.findMany.mock.calls;
+      expect(calls.at(-1)?.[0]).toMatchObject({
+        where: { workspaceId: 'ws_a' },
+      });
+    });
+  });
+
+  describe('register 加入码（非默认空间强制）', () => {
+    const JOIN = 'wjt_join-token-for-test';
+    const hash = (s: string) =>
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('crypto').createHash('sha256').update(s).digest('hex');
+
+    it('非默认空间缺加入码 → 403 WORKER_JOIN_TOKEN_INVALID', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+      prisma.workspace.findUnique.mockResolvedValue({
+        workerJoinTokenHash: hash(JOIN),
+      });
+      const dto = registerDto();
+      dto.workspaceId = 'ws_b';
+
+      await expect(service.register('secret-token', dto)).rejects.toMatchObject(
+        {
+          response: { code: 'WORKER_JOIN_TOKEN_INVALID' },
+        },
+      );
+    });
+
+    it('非默认空间携带错误的加入码 → 403', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+      prisma.workspace.findUnique.mockResolvedValue({
+        workerJoinTokenHash: hash(JOIN),
+      });
+      const dto = registerDto();
+      dto.workspaceId = 'ws_b';
+      dto.joinToken = 'wjt_wrong';
+
+      await expect(service.register('secret-token', dto)).rejects.toMatchObject(
+        {
+          response: { code: 'WORKER_JOIN_TOKEN_INVALID' },
+        },
+      );
+    });
+
+    it('非默认空间携带正确加入码 → 注册成功', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+      prisma.workspace.findUnique.mockResolvedValue({
+        workerJoinTokenHash: hash(JOIN),
+      });
+      prisma.worker.upsert.mockResolvedValue(
+        workerRow({ workspaceId: 'ws_b' }),
+      );
+      const dto = registerDto();
+      dto.workspaceId = 'ws_b';
+      dto.joinToken = JOIN;
+
+      const result = await service.register('secret-token', dto);
+      expect(result.workerId).toBe('w_0000000001');
+      expect(prisma.worker.upsert).toHaveBeenCalled();
+    });
+
+    it('默认空间不需要加入码（单租户向后兼容）', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      const dto = registerDto();
+
+      const result = await service.register('secret-token', dto);
+      expect(result.workerId).toBe('w_0000000001');
+      expect(prisma.workspace.findUnique).not.toHaveBeenCalled();
+    });
   });
 
   describe('register（WorkerRegistry）', () => {
@@ -1761,6 +1857,25 @@ describe('WorkersService', () => {
       });
     });
 
+    it('M2：findAll 在有租户上下文时按空间过滤（本空间 + 系统共享节点）', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValue([]);
+      await runWithTenant({ workspaceId: 'ws_a', mode: 'request' }, () =>
+        service.findAll(),
+      );
+      const calls = prisma.$queryRawUnsafe.mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(String(calls[0][0])).toContain('WHERE workspace_id IN (?, ?)');
+      expect(calls[0].slice(1)).toEqual(['ws_a', 'ws_system']);
+    });
+
+    it('M2：findAll 无上下文（内部/启动期）保持全量语义', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValue([]);
+      await service.findAll();
+      const calls = prisma.$queryRawUnsafe.mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(String(calls[0][0])).not.toContain('WHERE workspace_id');
+    });
+
     it('findAll 在 SQL 侧只取 capabilities 摘要（不 select 整列，避免 filesort OOM）', async () => {
       prisma.$queryRawUnsafe.mockResolvedValue([summaryRow()]);
 
@@ -1849,6 +1964,7 @@ describe('WorkersService', () => {
       expect(prisma.worker.findMany).toHaveBeenCalledWith({
         select: {
           id: true,
+          workspaceId: true,
           name: true,
           opencodeVersion: true,
           load: true,
@@ -3779,6 +3895,94 @@ describe('WorkersService', () => {
           rolledBack: true,
           updateAvailable: true,
         });
+      });
+    });
+  });
+
+  describe('M2-1 worker 空间归属与凭据下发收敛', () => {
+    it('注册请求空间与既有归属不一致 → 409 WORKER_WORKSPACE_MISMATCH（不落库）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ workspaceId: 'ws_a' });
+      const dto = registerDto();
+      dto.workspaceId = 'ws_b';
+
+      await expect(service.register('token', dto)).rejects.toMatchObject({
+        response: { code: 'WORKER_WORKSPACE_MISMATCH' },
+      });
+      expect(prisma.worker.upsert).not.toHaveBeenCalled();
+    });
+
+    it('有租户上下文时 broadcastCommand 只查本空间在线节点', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
+      const cmd = { type: 'reload-config', resourceVersion: 'v' } as never;
+
+      await runWithTenant({ workspaceId: 'ws_a', mode: 'request' }, () =>
+        service.broadcastCommand(cmd),
+      );
+
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: {
+          status: { not: WORKER_STATUS.OFFLINE },
+          workspaceId: 'ws_a',
+        },
+        select: { id: true },
+      });
+    });
+
+    it('有租户上下文时定向下发按空间过滤 targetWorkerIds（拒绝发往他空间节点）', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
+      const spy = jest
+        .spyOn(service, 'enqueueCommand')
+        .mockImplementation(() => undefined);
+
+      const n = await runWithTenant(
+        { workspaceId: 'ws_a', mode: 'request' },
+        () =>
+          service.dispatchModelCredentials(
+            [{ providerID: 'p', key: 'k' }],
+            ['w_0000000001', 'w_other_space'],
+          ),
+      );
+
+      expect(n).toBe(1);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(
+        'w_0000000001',
+        expect.objectContaining({ type: 'model-credentials' }),
+      );
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: ['w_0000000001', 'w_other_space'] },
+          workspaceId: 'ws_a',
+        },
+        select: { id: true },
+      });
+    });
+
+    it('有租户上下文时 assignWorker 候选池 = 本空间 + 系统空间共享节点', async () => {
+      prisma.worker.findMany.mockResolvedValue([]);
+
+      await runWithTenant({ workspaceId: 'ws_a', mode: 'request' }, () =>
+        service.assignWorker({ instances: 1 }),
+      );
+
+      expect(prisma.worker.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            OR: [{ workspaceId: 'ws_a' }, { workspaceId: 'ws_system' }],
+          }),
+        }),
+      );
+    });
+
+    it('无租户上下文（启动期/定时任务）保持历史全量语义', async () => {
+      prisma.worker.findMany.mockResolvedValue([]);
+      const cmd = { type: 'reload-config', resourceVersion: 'v' } as never;
+
+      await service.broadcastCommand(cmd);
+
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: { status: { not: WORKER_STATUS.OFFLINE } },
+        select: { id: true },
       });
     });
   });

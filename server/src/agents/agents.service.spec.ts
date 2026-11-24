@@ -283,6 +283,7 @@ describe('AgentsService', () => {
       expect(Object.keys(result.items[0]).sort()).toEqual(
         [
           'id',
+          'workspaceId',
           'name',
           'role',
           'agentKey',

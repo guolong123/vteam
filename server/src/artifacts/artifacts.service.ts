@@ -2,12 +2,18 @@ import { createHash } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { normalizePage, normalizePageSize } from '../common/pagination';
+import {
+  normalizePage,
+  normalizePageSize as normalizePageSizeValue,
+} from '../common/pagination';
+import { TASK_ERRORS } from '../common/constants/task.constants';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -314,6 +320,7 @@ export class ArtifactsService implements OnModuleInit {
   async restore(
     artifactId: string,
     version: number,
+    viewerId?: string,
   ): Promise<{ status: string; artifact?: unknown }> {
     const artifact = await this.prisma.artifact.findUnique({
       where: { id: artifactId },
@@ -324,6 +331,7 @@ export class ArtifactsService implements OnModuleInit {
         message: `产出物 ${artifactId} 不存在`,
       });
     }
+    await this.assertTaskMember(artifact.taskId, this.requireViewer(viewerId));
     const source = await this.prisma.artifactVersion.findFirst({
       where: { artifactId, version },
     });
@@ -524,9 +532,14 @@ export class ArtifactsService implements OnModuleInit {
    * currentVersion 的 acceptedFlag 内存过滤（Prisma 无法跨行引用父行 currentVersion，
    * 故先取 task 内候选再聚合）。
    */
-  async findByTask(taskId: string, query: QueryArtifactsDto = {}) {
+  async findByTask(
+    taskId: string,
+    query: QueryArtifactsDto = {},
+    viewerId?: string,
+  ) {
+    await this.assertTaskMember(taskId, this.requireViewer(viewerId));
     const page = normalizePage(query.page);
-    const pageSize = normalizePageSize(query.pageSize);
+    const pageSize = normalizePageSizeValue(query.pageSize);
     const accepted =
       query.accepted === undefined ? undefined : query.accepted === 'true';
 
@@ -593,7 +606,7 @@ export class ArtifactsService implements OnModuleInit {
       });
     }
     const page = normalizePage(query.page);
-    const pageSize = normalizePageSize(query.pageSize);
+    const pageSize = normalizePageSizeValue(query.pageSize);
     const accepted =
       query.accepted === undefined ? undefined : query.accepted === 'true';
 
@@ -662,7 +675,7 @@ export class ArtifactsService implements OnModuleInit {
   /**
    * GET /artifacts/:id：产出物详情 + 全版本列表（12 篇 §6.2 FR-45 版本切换入口）。
    */
-  async findOne(id: string) {
+  async findOne(id: string, viewerId?: string) {
     const artifact = await this.prisma.artifact.findUnique({
       where: { id },
       include: { versions: { orderBy: { version: 'asc' } } },
@@ -673,6 +686,7 @@ export class ArtifactsService implements OnModuleInit {
         message: `产出物 ${id} 不存在`,
       });
     }
+    await this.assertTaskMember(artifact.taskId, this.requireViewer(viewerId));
     return {
       id: artifact.id,
       taskId: artifact.taskId,
@@ -686,7 +700,7 @@ export class ArtifactsService implements OnModuleInit {
   }
 
   /** GET /artifacts/:id/versions/:version：指定版本内容（12 篇 §6.2 FR-45）。 */
-  async findVersion(artifactId: string, version: number) {
+  async findVersion(artifactId: string, version: number, viewerId?: string) {
     const v = await this.prisma.artifactVersion.findFirst({
       where: { artifactId, version },
     });
@@ -696,10 +710,11 @@ export class ArtifactsService implements OnModuleInit {
         message: `产出物 ${artifactId} 版本 ${version} 不存在`,
       });
     }
+    await this.assertArtifactMember(artifactId, this.requireViewer(viewerId));
     return this.toVersionDto(v);
   }
 
-  async remove(artifactId: string): Promise<void> {
+  async remove(artifactId: string, viewerId?: string): Promise<void> {
     const artifact = await this.prisma.artifact.findUnique({
       where: { id: artifactId },
     });
@@ -709,10 +724,81 @@ export class ArtifactsService implements OnModuleInit {
         message: `产出物 ${artifactId} 不存在`,
       });
     }
+    await this.assertTaskMember(artifact.taskId, this.requireViewer(viewerId));
     await this.prisma.$transaction([
       this.prisma.artifactVersion.deleteMany({ where: { artifactId } }),
       this.prisma.artifact.delete({ where: { id: artifactId } }),
     ]);
+  }
+
+  // ── M0 止血：产出物归属校验（artifact → task → team → team_user_members） ──
+  //
+  // artifacts 路由的 `:id` 是产出物 id，团队守卫无法直接解析，因此在 service 层
+  // 显式 assert（参考 realtime.controller.ts 的 assertScopeAccess 写法）：
+  //   artifactId → Artifact.taskId → Task.teamId → TeamUserMember(teamId, userId)
+  // 任务不存在 → 404 TASK_NOT_FOUND；任务无归属团队 / 调用者非成员 → 403
+  // PERMISSION_TEAM_NOT_MEMBER（统一 fail-closed：不可判定归属即拒绝）。
+
+  /**
+   * 任务归属团队成员校验（产出物 assert 的公共尾段，uploads 归档前也复用）。
+   * 任务不存在 → 404；任务无归属团队（teamId 为空）或调用者非成员 → 403 NOT_MEMBER。
+   */
+  async assertTaskMember(taskId: string, userId: string): Promise<void> {
+    const task = await (this.prisma as any).task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: TASK_ERRORS.TASK_NOT_FOUND,
+        message: `任务 ${taskId} 不存在`,
+      });
+    }
+    const teamId =
+      typeof task.teamId === 'string' && task.teamId.length > 0
+        ? task.teamId
+        : null;
+    const member = teamId
+      ? await (this.prisma as any).teamUserMember.findUnique({
+          where: { teamId_userId: { teamId, userId } },
+          select: { id: true },
+        })
+      : null;
+    if (!member) {
+      throw new ForbiddenException({
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
+      });
+    }
+  }
+
+  /** artifactId → taskId → 团队用户成员校验（artifactId 为别人任务的产出物时 403）。 */
+  private async assertArtifactMember(
+    artifactId: string,
+    userId: string,
+  ): Promise<void> {
+    const artifact = await (this.prisma as any).artifact.findUnique({
+      where: { id: artifactId },
+      select: { taskId: true },
+    });
+    if (!artifact) {
+      throw new NotFoundException({
+        code: ARTIFACT_ERRORS.ARTIFACT_NOT_FOUND,
+        message: `产出物 ${artifactId} 不存在`,
+      });
+    }
+    await this.assertTaskMember(artifact.taskId, userId);
+  }
+
+  /** 归属校验的调用方 id 必填：缺失即 fail-closed（防止将来有调用方漏传被静默放行）。 */
+  private requireViewer(viewerId: string | undefined): string {
+    if (!viewerId) {
+      throw new ForbiddenException({
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '缺少调用方身份，无法校验资源归属',
+      });
+    }
+    return viewerId;
   }
 
   /** 文档库列表项 DTO（12 篇 §6.1 展示列 + 验收状态）。 */
@@ -807,6 +893,6 @@ export class ArtifactsService implements OnModuleInit {
   }
 
   private normalizePageSize(pageSize?: number): number {
-    return normalizePageSize(pageSize);
+    return normalizePageSizeValue(pageSize);
   }
 }

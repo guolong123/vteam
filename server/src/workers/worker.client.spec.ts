@@ -61,7 +61,13 @@ function makeClient() {
   const config = {
     get: jest.fn((key: string, def?: unknown) => def),
   } as unknown as ConfigService;
-  return new WorkerClient(config);
+  return new WorkerClient(
+    config,
+    {
+      worker: { findUnique: jest.fn().mockResolvedValue(null) },
+    } as never,
+    { decrypt: jest.fn(), encrypt: jest.fn() } as never,
+  );
 }
 
 /**
@@ -389,7 +395,13 @@ describe('WorkerClient', () => {
           return def;
         }),
       } as unknown as ConfigService;
-      const client = new WorkerClient(config);
+      const client = new WorkerClient(
+        config,
+        {
+          worker: { findUnique: jest.fn().mockResolvedValue(null) },
+        } as never,
+        { decrypt: jest.fn(), encrypt: jest.fn() } as never,
+      );
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,

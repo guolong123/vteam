@@ -16,6 +16,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SwitchWorkspaceDto } from './dto/switch-workspace.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -63,9 +64,21 @@ export class AuthController {
 
   @Get('profile')
   @ApiBearerAuth()
-  @ApiOperation({ summary: '当前登录用户资料' })
+  @ApiOperation({ summary: '当前登录用户资料（含当前空间与可访问空间列表）' })
   profile(@Req() req: Request) {
-    // JwtAuthGuard 已把 validate 结果挂到 req.user
-    return this.authService.profile((req.user as { id: string }).id);
+    // JwtAuthGuard 已把 validate 结果挂到 req.user；WorkspaceGuard 回填实际空间 id
+    const user = req.user as { id: string; workspaceId?: string };
+    return this.authService.profile(user.id, user.workspaceId);
+  }
+
+  @Post('workspace')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '切换当前工作空间（校验成员关系后重签 token）' })
+  switchWorkspace(@Req() req: Request, @Body() dto: SwitchWorkspaceDto) {
+    return this.authService.switchWorkspace(
+      (req.user as { id: string }).id,
+      dto.workspaceId,
+    );
   }
 }

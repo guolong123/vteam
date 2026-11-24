@@ -28,6 +28,7 @@
  * ⚠ `autoInject` 是**单条记忆的属性**（卡片右上角开关 + 抽屉底部开关），不是筛选维度，
  *   故不做成独立 tab；`level=role` 的卡片额外显示归属岗位名（roleId → /agent-roles）。
  */
+import { SpaceBadge } from "@/src/components/ui/space-badge";
 import {
   useCallback,
   useEffect,
@@ -772,6 +773,7 @@ function MemoryCard({
             }}
           >
             <TypeChips tags={memory.tags} />
+            <SpaceBadge workspaceId={memory.workspaceId} />
             <RefCountBadge memory={memory} />
             {memory.level === "role" && memory.roleId && (
               <RoleBadge roleId={memory.roleId} name={roleName} />

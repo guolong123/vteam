@@ -27,6 +27,7 @@
  *   worker-pool-hint；安装入口为 install-worker-link。
  * - 状态主题/数据模型/状态徽章等共享定义见 ./shared.tsx（与详情页共用，防漂移）。
  */
+import { SpaceBadge } from "@/src/components/ui/space-badge";
 import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -225,6 +226,7 @@ function WorkerCard({
           >
             {worker.id}
           </span>
+          <SpaceBadge workspaceId={worker.workspaceId} />
         </div>
         <WorkerStatusBadge status={worker.status} />
       </div>

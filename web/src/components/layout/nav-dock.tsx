@@ -47,6 +47,7 @@ export const NAV_ITEMS: NavItem[] = [
   // 统计看板：跨团队经营数据（管理员视角）。放在「系统管理」之前——它是日常运营
   // 要看的东西，不是配置项。
   { key: "stats", label: "统计看板", icon: "▦" },
+  { key: "workspaces", label: "工作空间", icon: "⧉" },
   { key: "system", label: "系统管理", icon: "⛭" },
 ];
 

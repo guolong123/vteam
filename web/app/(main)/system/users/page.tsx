@@ -25,6 +25,7 @@
  * - 编辑按钮：PATCH /users/:id（UpdateUserDto）→ 编辑弹层预填用户名/邮箱/角色，
  *   保存后列表刷新（ISSUE-002 修复：原为无 onClick 占位）。
  */
+import { SpaceBadge } from "@/src/components/ui/space-badge";
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -66,8 +67,8 @@ const ROLE_FALLBACK = {
 
 /** 内置角色英文名 → 原型中文文案（seed r_admin/admin / r_member/member） */
 const ROLE_LABEL: Record<string, string> = {
-  admin: "管理员",
-  member: "成员",
+  admin: "平台管理员",
+  member: "平台成员",
 };
 
 function roleLabel(name: string): string {
@@ -84,6 +85,14 @@ interface UserItem {
   email: string | null;
   roleId: string;
   enabled: boolean;
+  /** 当前空间（用户下次登录进入的空间） */
+  lastWorkspaceId?: string | null;
+  /** 用户加入的空间成员关系 */
+  workspaceMembers?: Array<{
+    workspaceId: string;
+    role: string;
+    workspace?: { id: string; name: string; isSystem: boolean };
+  }>;
   createdAt: string;
   updatedAt: string;
   /** 所属团队数（findAll _count 关联统计，MOCK-05）。可选：findOne 等单用户端点不带。 */
@@ -109,6 +118,13 @@ interface RoleItem {
   updatedAt: string;
 }
 
+/** GET /workspaces/all 条目（新增用户时可选择加入的空间；系统空间不可加入）。 */
+interface WorkspaceOption {
+  id: string;
+  name: string;
+  isSystem: boolean;
+}
+
 /** POST /users 请求体（CreateUserDto；displayName 后端必填，取 username 兜底）。 */
 interface CreateUserPayload {
   username: string;
@@ -116,6 +132,10 @@ interface CreateUserPayload {
   displayName: string;
   email?: string;
   roleId: string;
+  /** 可选：创建后加入的工作空间（不填 = 首次登录自动创建个人空间） */
+  workspaceId?: string;
+  /** 加入空间时的空间角色（缺省 member） */
+  workspaceRole?: "admin" | "member";
 }
 
 /* ------------------------------ 角色 / 状态解析（列表行 + 统计条） ------------------------------ */
@@ -258,6 +278,12 @@ function UserRow({
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {user.email || user.displayName}
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: space.xs, marginTop: 2 }}>
+            <SpaceBadge workspaceId={user.lastWorkspaceId ?? undefined} />
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              {user.workspaceMembers?.length ?? 0} 个空间
+            </span>
+          </div>
         </div>
       </div>
 
@@ -329,18 +355,22 @@ const formField: CSSProperties = {
 interface UserFormModalProps {
   open: boolean;
   roles: RoleItem[];
+  workspaces: WorkspaceOption[];
   submitting: boolean;
   error: string | null;
   onClose: () => void;
   onSubmit: (payload: CreateUserPayload) => void;
 }
 
-function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: UserFormModalProps) {
+function UserFormModal({ open, roles, workspaces, submitting, error, onClose, onSubmit }: UserFormModalProps) {
   /* 表单受控状态（对齐原型；角色由 GET /roles 驱动，默认选中成员角色） */
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [roleId, setRoleId] = useState("");
+  // 可选：创建后加入的空间 + 空间角色
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [workspaceRole, setWorkspaceRole] = useState<"admin" | "member">("member");
   const [formError, setFormError] = useState<string | null>(null);
 
   // Esc 关闭
@@ -360,6 +390,8 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
     setEmail("");
     setPassword("");
     setFormError(null);
+    setWorkspaceId("");
+    setWorkspaceRole("member");
     setRoleId(
       roles.find((r) => r.name === "member")?.id ?? roles[0]?.id ?? ""
     );
@@ -382,6 +414,9 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
       displayName: username.trim(),
       email: email.trim() ? email.trim() : undefined,
       roleId,
+      ...(workspaceId
+        ? { workspaceId, workspaceRole }
+        : {}),
     });
   };
 
@@ -546,7 +581,76 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
             )}
           </div>
           <span style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>
-            管理员可管理账号 / 团队 / 角色模板 / 全局策略；成员在所属团队内协作（02 篇 1.1 / 1.2）
+            平台管理员可管理账号 / 角色模板 / 全局策略与跨空间；平台成员在所属空间/团队内协作（空间管理员由空间 owner 授予，仅限本空间）
+          </span>
+        </div>
+
+        {/* 所属空间（可选）：不选 = 首次登录自动创建个人空间 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
+            所属空间（可选）
+          </span>
+          <select
+            data-testid="user-workspace-select"
+            value={workspaceId}
+            onChange={(e) => setWorkspaceId(e.target.value)}
+            disabled={submitting}
+            style={formField}
+          >
+            <option value="">不指定（首次登录自动创建个人空间）</option>
+            {workspaces
+              .filter((w) => !w.isSystem)
+              .map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name}（{w.id}）
+                </option>
+              ))}
+          </select>
+          {workspaceId ? (
+            <div
+              style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}
+            >
+              <span style={{ fontSize: fontSize.sm, color: neutral[600] }}>空间角色</span>
+              <div
+                data-testid="user-workspace-role-select"
+                style={{ display: "flex", gap: space.xs }}
+              >
+                {(
+                  [
+                    { key: "member", label: "成员" },
+                    { key: "admin", label: "空间管理员" },
+                  ] as const
+                ).map((r) => {
+                  const active = workspaceRole === r.key;
+                  return (
+                    <button
+                      key={r.key}
+                      type="button"
+                      data-role={r.key}
+                      data-active={active ? "true" : "false"}
+                      disabled={submitting}
+                      onClick={() => setWorkspaceRole(r.key)}
+                      style={{
+                        padding: `${space.xs + 2}px ${space.md}px`,
+                        borderRadius: radius.pill,
+                        border: `1px solid ${active ? "#0D9488" : neutral[200]}`,
+                        backgroundColor: active ? "rgba(13,148,136,.10)" : "var(--color-surface)",
+                        color: active ? "#0F766E" : neutral[600],
+                        fontSize: fontSize.sm,
+                        fontWeight: active ? 600 : 500,
+                        cursor: submitting ? "default" : "pointer",
+                        fontFamily: fontFamily.body,
+                      }}
+                    >
+                      {r.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+            选择空间后，该账号创建完成即可直接进入该空间（成员只能看到空间内数据；空间管理员可管理该空间成员）
           </span>
         </div>
 
@@ -809,22 +913,30 @@ interface UpdateUserPayload {
   displayName: string;
   email: string | null;
   roleId: string;
+  /** 全量空间成员集合（含则同步增删） */
+  workspaceIds?: string[];
+  /** 当前空间（须在 workspaceIds 内） */
+  currentWorkspaceId?: string | null;
 }
 
 interface EditUserModalProps {
   open: boolean;
   target: UserItem | null;
   roles: RoleItem[];
+  workspaces: WorkspaceOption[];
   submitting: boolean;
   error: string | null;
   onClose: () => void;
   onSubmit: (userId: string, payload: UpdateUserPayload) => void;
 }
 
-function EditUserModal({ open, target, roles, submitting, error, onClose, onSubmit }: EditUserModalProps) {
+function EditUserModal({ open, target, roles, workspaces, submitting, error, onClose, onSubmit }: EditUserModalProps) {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [roleId, setRoleId] = useState("");
+  /** 用户已加入的空间 + 当前空间（管理页可调整） */
+  const [spaceIds, setSpaceIds] = useState<string[]>([]);
+  const [currentSpaceId, setCurrentSpaceId] = useState<string>("");
 
   // Esc 关闭
   useEffect(() => {
@@ -842,6 +954,11 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
     setUsername(target.username);
     setEmail(target.email ?? "");
     setRoleId(target.roleId);
+    const ids = (target.workspaceMembers ?? [])
+      .filter((m) => m.workspace?.isSystem !== true)
+      .map((m) => m.workspaceId);
+    setSpaceIds(ids);
+    setCurrentSpaceId(target.lastWorkspaceId ?? ids[0] ?? "");
   }, [open, target]);
 
   if (!open || !target) return null;
@@ -854,6 +971,8 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
       displayName: username.trim(),
       email: email.trim() ? email.trim() : null,
       roleId,
+      workspaceIds: spaceIds,
+      currentWorkspaceId: currentSpaceId || null,
     });
   };
 
@@ -1000,6 +1119,68 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
           </div>
         </div>
 
+        {/* 所属空间（多选成员关系 + 当前空间） */}
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
+            所属空间
+          </span>
+          <div
+            data-testid="edit-user-workspace-options"
+            style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 160, overflowY: "auto" }}
+          >
+            {workspaces
+              .filter((w) => !w.isSystem)
+              .map((w) => {
+                const checked = spaceIds.includes(w.id);
+                return (
+                  <label
+                    key={w.id}
+                    style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.sm, cursor: "pointer" }}
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid={`edit-user-space-${w.id}`}
+                      checked={checked}
+                      disabled={submitting}
+                      onChange={(e) => {
+                        setSpaceIds((prev) =>
+                          e.target.checked
+                            ? [...prev, w.id]
+                            : prev.filter((x) => x !== w.id),
+                        );
+                        if (!e.target.checked && currentSpaceId === w.id) {
+                          setCurrentSpaceId("");
+                        }
+                      }}
+                    />
+                    <span style={{ color: neutral[700] }}>{w.name}</span>
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{w.id}</span>
+                  </label>
+                );
+              })}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: 2 }}>
+            <span style={{ fontSize: fontSize.xs, color: neutral[500] }}>当前空间</span>
+            <select
+              data-testid="edit-user-current-space"
+              value={currentSpaceId}
+              disabled={submitting || spaceIds.length === 0}
+              onChange={(e) => setCurrentSpaceId(e.target.value)}
+              style={{ ...formField, width: 220 }}
+            >
+              <option value="">（未设置）</option>
+              {spaceIds.map((id) => (
+                <option key={id} value={id}>
+                  {workspaces.find((w) => w.id === id)?.name ?? id}
+                </option>
+              ))}
+            </select>
+          </div>
+          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+            owner 空间不能直接移除；修改后用户下次登录会进入「当前空间」
+          </span>
+        </div>
+
         {/* 错误提示 */}
         {error && (
           <div
@@ -1109,6 +1290,12 @@ export default function UsersPage() {
   });
 
   /* 新增用户：POST /users */
+  const workspacesQuery = useQuery({
+    queryKey: ["workspaces", "all-for-user-create"],
+    queryFn: () => api.get<WorkspaceOption[]>("/workspaces/all"),
+    staleTime: 60_000,
+  });
+
   const createMutation = useMutation({
     mutationFn: (payload: CreateUserPayload) => api.post<UserItem>("/users", payload),
     onSuccess: () => {
@@ -1135,6 +1322,12 @@ export default function UsersPage() {
         displayName: payload.displayName,
         email: payload.email,
         roleId: payload.roleId,
+        ...(payload.workspaceIds !== undefined
+          ? { workspaceIds: payload.workspaceIds }
+          : {}),
+        ...(payload.currentWorkspaceId !== undefined
+          ? { currentWorkspaceId: payload.currentWorkspaceId }
+          : {}),
       }),
     onSuccess: () => {
       setEditTarget(null);
@@ -1408,6 +1601,7 @@ export default function UsersPage() {
       <UserFormModal
         open={formOpen}
         roles={roles}
+        workspaces={workspacesQuery.data ?? []}
         submitting={createMutation.isPending}
         error={createMutation.isError ? (isApiError(createMutation.error) ? createMutation.error.message : "创建失败，请稍后重试") : null}
         onClose={() => setFormOpen(false)}
@@ -1429,6 +1623,7 @@ export default function UsersPage() {
         open={editTarget !== null}
         target={editTarget}
         roles={roles}
+        workspaces={workspacesQuery.data ?? []}
         submitting={updateMutation.isPending}
         error={updateMutation.isError ? (isApiError(updateMutation.error) ? updateMutation.error.message : "保存失败，请稍后重试") : null}
         onClose={() => setEditTarget(null)}

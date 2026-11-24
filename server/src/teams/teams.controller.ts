@@ -12,6 +12,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { TeamMembershipGuard } from '../common/guards/team-membership.guard';
 import {
   CurrentUser,
   AuthenticatedUser,
@@ -22,9 +23,20 @@ import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto, UpdateMemberDto } from './dto/add-member.dto';
 import { TeamsService } from './teams.service';
 
+/**
+ * 团队端点（M0 止血）：类级挂 `TeamMembershipGuard`。
+ *
+ * `:id` 先按团队 id 解释（团队存在即用）→ 校验调用者是该团队的用户成员
+ * （team_user_members），非成员 403 `PERMISSION_TEAM_NOT_MEMBER`；因此
+ * GET/PATCH/DELETE `/teams/:id`、成员/用户成员增删、reset-sessions 等按 :id 的端点
+ * 全部受团队门保护。`POST /teams`、`GET /teams`（无 :id 参数）仅要求登录，
+ * 创建/列表语义保持不变（建团队时 service 校验 agent，空间维度由后续 workspace 阶段收敛）。
+ * 每个端点继续挂 PermissionGuard + 权限点：团队门在**归属**维度生效，矩阵守卫在
+ * **功能权限**维度生效，两者叠加。
+ */
 @ApiTags('teams')
 @ApiBearerAuth()
-@UseGuards(PermissionGuard)
+@UseGuards(TeamMembershipGuard)
 @Controller('teams')
 export class TeamsController {
   constructor(private readonly teamsService: TeamsService) {}
@@ -32,6 +44,7 @@ export class TeamsController {
   @Post()
   @UseGuards(PermissionGuard)
   @RequirePermission('teams.create')
+  // 注：TeamMembershipGuard 为类级守卫；无 :id 参数时仅要求登录（create 保持宽松）
   @ApiOperation({
     summary: '创建全局团队（name 全局唯一，members 校验 agent 存在）',
   })

@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { TeamMembershipGuard } from '../common/guards/team-membership.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WorkersModule } from '../workers/workers.module';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { CoordinationMetricsController } from './coordination-metrics.controller';
 import { CoordinationMetricsService } from './coordination-metrics.service';
 import { TeamsController } from './teams.controller';
@@ -32,8 +34,11 @@ import { MemberChannelBindingsController } from './member-channel-bindings.contr
   providers: [
     TeamsService,
     PermissionGuard,
+    // M0 止血：类级团队用户成员门（依赖全局 PrismaService，无状态）
+    TeamMembershipGuard,
     CoordinationMetricsService,
     AdminGuard,
+    WorkspaceAdminGuard,
   ],
   exports: [TeamsService],
 })

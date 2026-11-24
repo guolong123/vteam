@@ -9,6 +9,21 @@ import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
 import { REQUIRE_PERMISSION_KEY } from '../decorators/require-permission.decorator';
+import type { TenantContext } from '../tenant/tenant-context';
+import { WORKSPACE_ROLE } from '../../workspaces/workspaces.constants';
+
+/**
+ * 平台级资源域：即使调用者是空间管理员也不放行（账号、角色、平台统计）。
+ * 其余资源域（tasks/chats/artifacts/agents/workers/skills/teams/channels）
+ * 由空间管理员在本空间内管理。
+ */
+const PLATFORM_ONLY_PERMISSION_RESOURCES = new Set([
+  'users',
+  'roles',
+  'stats',
+  // platform.* 权限点（迁移/跨空间只读）只归平台管理员，空间管理员不享受兜底
+  'platform',
+]);
 
 /**
  * 通用权限点守卫（Phase 3 T8 权限矩阵落地，修复 ISSUE-006）。
@@ -108,6 +123,16 @@ export class PermissionGuard implements CanActivate {
       return true;
     }
 
+    // 空间管理员兜底（M4 角色分层）：当前空间的 owner/admin 可在**本空间内**
+    // 操作空间级资源（Agent/团队/技能/模型/Worker/MCP/仓库/记忆等）；
+    // 账号/角色/平台统计等平台级资源仍只归平台管理员。
+    if (
+      !PLATFORM_ONLY_PERMISSION_RESOURCES.has(resource) &&
+      (await this.isWorkspaceManager(request, authUser.id))
+    ) {
+      return true;
+    }
+
     // seed member 简写 `{ all: false }`（未配置矩阵）：
     // 对齐 09 篇「成员只读可见」语义——view 类放行，写操作（create/edit/delete/manage）拒绝。
     if (permissions.all === false && action === 'view') {
@@ -118,5 +143,25 @@ export class PermissionGuard implements CanActivate {
       code: 'FORBIDDEN_PERMISSION',
       message: `缺少 ${permission} 权限`,
     });
+  }
+
+  /**
+   * 当前空间 owner/admin 判定（WorkspaceGuard 已把解析结果写入请求级 tenant）。
+   * 无租户上下文（如 worker 通道）或系统空间 → false（系统空间只归平台管理员）。
+   */
+  private async isWorkspaceManager(
+    request: Request & { tenant?: TenantContext },
+    userId: string,
+  ): Promise<boolean> {
+    const workspaceId = request.tenant?.workspaceId;
+    if (!workspaceId || workspaceId === 'ws_system') return false;
+    const member = await this.prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+      select: { role: true },
+    });
+    return (
+      member?.role === WORKSPACE_ROLE.OWNER ||
+      member?.role === WORKSPACE_ROLE.ADMIN
+    );
   }
 }

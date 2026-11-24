@@ -14,6 +14,7 @@ import { Observable } from 'rxjs';
 import { AUTH_ERRORS } from '../auth/auth.constants';
 import { Public } from '../auth/decorators/public.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+import { TENANT_WORKSPACE_ID } from '../common/tenant/tenant.constants';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -120,7 +121,10 @@ export class RealtimeController {
     @Query('scope') scope?: string,
     @Query('token') token?: string,
   ): Promise<Observable<MessageEvent>> {
-    const userId = await this.authenticate(token);
+    const auth = await this.authenticate(token);
+    const userId = auth.userId;
+    // SSE 连接绑定空间：后续实时帧与历史补拉都只做该空间的数据（跨空间事件不下发）。
+    const workspaceId = auth.workspaceId;
     // scope=all：全量订阅但仅收调用者成员团队的事件（teamUserMember 表推导可见团队集）
     const isAll = scope === 'all';
     const parsedScopes = isAll ? [] : this.parseScope(scope);
@@ -204,6 +208,7 @@ export class RealtimeController {
         },
         parsedScopes,
         visibleTeamIds,
+        workspaceId,
       );
 
       // 1) 先补拉历史（id > since，以 DB 为准），再对齐续拉期缓冲
@@ -238,6 +243,7 @@ export class RealtimeController {
             since !== undefined && since !== '' ? since : undefined,
             parsedScopes,
             visibleTeamIds,
+            workspaceId,
           );
           replaying = false;
           if (bufferReleasedByDeadline) {
@@ -296,7 +302,9 @@ export class RealtimeController {
   }
 
   /** 校验 query token：JWT 解析失败 / 非 access 类型 → 401 AUTH_UNAUTHORIZED，返回 userId。 */
-  private async authenticate(token?: string): Promise<string> {
+  private async authenticate(
+    token?: string,
+  ): Promise<{ userId: string; workspaceId: string }> {
     if (!token) {
       throw new UnauthorizedException({
         code: AUTH_ERRORS.UNAUTHORIZED,
@@ -318,7 +326,10 @@ export class RealtimeController {
         message: '请使用 access token',
       });
     }
-    return payload.sub;
+    return {
+      userId: payload.sub,
+      workspaceId: payload.wid ?? TENANT_WORKSPACE_ID.DEFAULT,
+    };
   }
 
   /**

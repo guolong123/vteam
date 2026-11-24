@@ -11,6 +11,7 @@
  * - 成员多实例：同一 agent 可重复，alias/workDir 行内可改
  * - 校验：团队名必填
  */
+import { useReadOnlyView } from "@/hooks/use-read-only-view";
 import { useMemo, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -136,6 +137,7 @@ function RoleInstanceCard({
 }
 
 export default function TeamNewPage() {
+  const readOnlyView = useReadOnlyView();
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -406,7 +408,15 @@ export default function TeamNewPage() {
                 )}
           </div>
 
-          <button type="button" data-testid="create-team-submit" disabled={createMutation.isPending} onClick={handleCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "var(--color-brand-fill)", color: "#FFF", fontSize: fontSize.lg, fontWeight: 600, cursor: createMutation.isPending ? "default" : "pointer", opacity: createMutation.isPending ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
+          {readOnlyView ? (
+            <div
+              data-testid="team-create-read-only-hint"
+              style={{ width: "100%", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "rgba(217,119,6,.10)", border: "1px solid rgba(217,119,6,.25)", color: "#B45309", fontSize: fontSize.sm, textAlign: "center", fontFamily: fontFamily.body }}
+            >
+              当前为管理员只读视图「{readOnlyView.name}」，不可创建团队。请先退出只读视图或切换回可写空间。
+            </div>
+          ) : null}
+          <button type="button" data-testid="create-team-submit" disabled={createMutation.isPending || !!readOnlyView} onClick={handleCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "var(--color-brand-fill)", color: "#FFF", fontSize: fontSize.lg, fontWeight: 600, cursor: createMutation.isPending || readOnlyView ? "not-allowed" : "pointer", opacity: createMutation.isPending || readOnlyView ? 0.5 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
             {createMutation.isPending ? "创建中…" : "创建团队"}
           </button>
         </section>

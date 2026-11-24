@@ -29,7 +29,7 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isApiError } from "@/lib/errors";
-import { isPlatformAdmin } from "@/lib/permissions";
+import { canManageCurrentSpace } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
 import {
   memoriesApi,
@@ -549,14 +549,15 @@ export interface TeamMemoriesTabProps {
  *
  * 权限模型（服务端为准，本组件只控按钮显隐）：
  * - 团队级记忆：团队成员可归档 / 恢复 / 永久删除；
- * - 全局级记忆（平台级记忆）：仅 admin 显示操作按钮（口径 = isPlatformAdmin）。
+ * - 全局级记忆（平台级记忆）：平台管理员或当前空间管理员显示操作按钮
+ *   （口径 = canManageCurrentSpace；写权限仍由服务端按空间过滤）。
  */
 export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
   const queryClient = useQueryClient();
   // 全局记忆的写操作门：与服务端 admin-permission.hasAdminPermission / AdminGuard
   // 同口径（permissions.all===true || permissions.users.manage===true），复用
   // lib/permissions 的共享谓词，不按 roleName 字符串另立一套。
-  const isAdmin = isPlatformAdmin(useAuthStore((s) => s.user?.permissions));
+  const isAdmin = canManageCurrentSpace(useAuthStore((s) => s.user));
 
   /* ---------- 状态 ---------- */
   const [archived, setArchived] = useState(false);

@@ -314,7 +314,11 @@ describe('MCP 工具改名迁移 20261014010000', () => {
       expect(toolModel).not.toBeNull();
       // name/action 两列声明原样（迁移只改数据，不改模型）。
       expect(toolModel?.[1]).toMatch(/name\s+String/);
-      expect(toolModel?.[1]).toMatch(/action\s+String\s+@unique/);
+      expect(toolModel?.[1]).toMatch(/action\s+String/);
+      // M1 租户化：action 的唯一性改为 (workspaceId, action) 复合唯一。
+      expect(toolModel?.[1]).toMatch(
+        /@@unique\(\[workspaceId, action\][^)]*\)/,
+      );
     });
   });
 

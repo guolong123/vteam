@@ -27,6 +27,7 @@ import {
   discoverMcpTools,
   McpServerRecordLike,
 } from './mcp-discovery';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /** MCP 服务器域主键前缀（对齐 15 篇 §2.2：`ms_<零填充序号>`，如 ms_0000000001）。 */
 const MCP_SERVER_ID_PREFIX = 'ms';
@@ -383,7 +384,7 @@ export class McpServersService implements OnModuleInit {
         typeof item?.description === 'string' ? item.description : null;
       try {
         const existing = await this.prisma.tool.findUnique({
-          where: { action },
+          where: tenantUniqueWhere('Tool', { action }),
         });
         if (
           existing &&
@@ -531,7 +532,7 @@ export class McpServersService implements OnModuleInit {
     excludeId?: string,
   ): Promise<void> {
     const hit = await this.prisma.mcpServer.findUnique({
-      where: { name },
+      where: tenantUniqueWhere('McpServer', { name }),
       select: { id: true },
     });
     if (hit && hit.id !== excludeId) {
