@@ -422,20 +422,23 @@ test("管理员：平台资源列表显示所属空间，创建入口提示目�
   test.setTimeout(120_000);
   await loginViaUi(page, E2E_ADMIN_USERNAME, E2E_ADMIN_PASSWORD);
 
-  // 切到已有 provider 的空间（Qwen验证空间）再验证，避免当前空间恰好无资源
-  const switcher = page.getByTestId("workspace-switcher-button");
-  if (await switcher.isVisible().catch(() => false)) {
-    await switcher.click();
-    await page.getByTestId("workspace-switcher-search").fill("Qwen验证空间");
-    const target = page
-      .getByTestId("workspace-switcher-panel")
-      .getByRole("option")
-      .first();
-    await target.click();
-    await expect
-      .poll(async () => switcher.innerText(), { timeout: 15_000 })
-      .toContain("Qwen验证空间");
-  }
+  // 不依赖特定空间数据：先通过 API 在当前空间造一个 Provider，确保列表有资源可断言
+  const apiBase =
+    process.env.WORKSPACE_API_BASE ?? "http://127.0.0.1:13000/api/v1";
+  const loginRes = await page.request.post(`${apiBase}/auth/login`, {
+    data: { username: E2E_ADMIN_USERNAME, password: E2E_ADMIN_PASSWORD },
+  });
+  const adminToken = ((await loginRes.json()) as { accessToken: string }).accessToken;
+  const created = await page.request.post(`${apiBase}/models`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: {
+      providerID: `ui-badge-provider-${Date.now()}`,
+      modelID: "m",
+      name: "Badge Probe",
+      providerType: "cloud",
+    },
+  });
+  expect(created.ok()).toBeTruthy();
 
   // 模型/Provider 页：Provider 行有「所属空间」徽章 + 创建目标提示
   await page.goto("/models");
