@@ -30,6 +30,8 @@ export type InboundCommand =
       attachmentUrl?: string;
       attachmentName?: string;
       attachmentType?: string;
+      /** Webhook 消息策略（过滤规则 + 模板）执行结果的元数据（提取变量/渲染正文/投递目标等），落投递日志 meta */
+      deliveryMeta?: Record<string, any>;
     }
   | {
       kind: 'card_action';
@@ -41,6 +43,17 @@ export type InboundCommand =
       chattype?: string;
       chatId?: string;
       channelId?: string;
+    }
+  | {
+      /** 入站消息被渠道消息策略丢弃（过滤规则命中 discard） */
+      kind: 'skip';
+      /** 丢弃原因（写投递日志 error） */
+      reason: string;
+      /** 命中丢弃规则 id（写投递日志 meta） */
+      matchedRuleId?: string;
+      /** 策略执行详情（可选，写投递日志 meta） */
+      deliveryMeta?: Record<string, any>;
+      dedupKey?: string;
     };
 
 export interface OutboundMessage {

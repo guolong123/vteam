@@ -14,6 +14,7 @@ import {
   INTEGRATIONS_ERRORS,
 } from '../message-channel.constants';
 import { renderFieldTemplate } from '../field-template.util';
+import { buildPolicyInbound } from '../message-policy.util';
 
 /**
  * GitHub per-event built-in templates.
@@ -280,6 +281,42 @@ export class GithubWebhookAdapter extends MessageAdapter {
     const dedupKey = dedupHeader
       ? dedupHeader.toString()
       : crypto.createHash('sha1').update(rawBody).digest('hex');
+
+    // Webhook 消息策略（过滤规则 + 模板 + 投递目标）：有策略时走策略链路
+    const policyInbound = buildPolicyInbound(
+      channel,
+      event,
+      parsed,
+      dedupKey,
+      req,
+    );
+    if (policyInbound) {
+      if (policyInbound.skip) {
+        return [
+          {
+            kind: 'skip',
+            reason: policyInbound.skip.reason,
+            matchedRuleId: policyInbound.skip.matchedRuleId,
+            dedupKey,
+            deliveryMeta: {
+              rawPayload: policyInbound.skip.rawPayload,
+              requestInfo: policyInbound.skip.requestInfo,
+            },
+          },
+        ];
+      }
+      const deliver = policyInbound.deliver;
+      if (deliver) {
+        const cmd: InboundCommand = {
+          kind: 'post_message',
+          text: deliver.text,
+          senderName: deliver.senderName,
+          dedupKey,
+          deliveryMeta: deliver.deliveryMeta,
+        };
+        return [cmd];
+      }
+    }
 
     const mapping = this.resolveFieldMapping(
       event,

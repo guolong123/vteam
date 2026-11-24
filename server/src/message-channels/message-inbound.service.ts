@@ -204,6 +204,48 @@ export class MessageInboundService implements MessageHost {
         continue;
       }
 
+      // Webhook 消息策略命中 discard：在绑定/投递之前短路，写 skipped 日志
+      if (cmd.kind === 'skip') {
+        const skipCmd = cmd as {
+          kind: 'skip';
+          reason: string;
+          matchedRuleId?: string;
+          dedupKey?: string;
+          deliveryMeta?: Record<string, any>;
+        };
+        const skipDedup =
+          skipCmd.dedupKey ??
+          (cmd as { senderExternalId?: string }).senderExternalId ??
+          null;
+        const meta: Record<string, any> = {
+          ...(skipCmd.deliveryMeta ?? {}),
+          matchedRuleId: skipCmd.matchedRuleId ?? null,
+          action: 'discard',
+          ruleReason: skipCmd.reason,
+          responseInfo: {
+            httpStatus: 200,
+            ok: false,
+            delivered: false,
+            reason: skipCmd.reason,
+            targets: [],
+          },
+        };
+        await this.delivery.log(
+          DELIVERY_DIRECTIONS.inbound,
+          'post_message',
+          DELIVERY_STATUS.skipped,
+          {
+            channelId,
+            externalId: skipDedup,
+            error: skipCmd.reason,
+            payload: cmd as unknown,
+            meta,
+          },
+        );
+        results.push({ ok: false });
+        continue;
+      }
+
       /**
        * **成员定向绑定优先**（2026-11-13 用户需求）：
        * 渠道可以绑定到具体席位（`team_member_message_channels`），此时入站消息
@@ -236,6 +278,29 @@ export class MessageInboundService implements MessageHost {
         }
       }
 
+      /**
+       * 消息策略的投递目标覆盖（config.messagePolicies[event].targets）：
+       * - mode='member' 且 member 非空 → 覆盖为单成员私聊（与团队互斥）
+       * - mode='teams' 且 teams 非空 → 覆盖为指定团队列表（fan-out）
+       * - 未配置（teams 空 / 无 member）→ 沿用渠道绑定（向下兼容）
+       * 覆盖仅作用于本次消息，不改写渠道绑定关系。
+       * 必须在「no teams bound」检查之前执行，否则策略指定目标但渠道未绑定会被误拦。
+       */
+      const policyTarget = (cmd as any).deliveryMeta?.deliveryTarget as
+        | { mode: 'teams' | 'member'; teams?: string[]; member?: string }
+        | undefined;
+      if (policyTarget?.mode === 'member' && policyTarget.member) {
+        memberLinks = [{ memberId: policyTarget.member }];
+        teamLinks = [];
+      } else if (
+        policyTarget?.mode === 'teams' &&
+        Array.isArray(policyTarget.teams) &&
+        policyTarget.teams.length > 0
+      ) {
+        memberLinks = [];
+        teamLinks = policyTarget.teams.map((teamId) => ({ teamId }));
+      }
+
       if (memberLinks.length === 0 && teamLinks.length === 0) {
         await this.delivery.log(
           DELIVERY_DIRECTIONS.inbound,
@@ -249,6 +314,16 @@ export class MessageInboundService implements MessageHost {
               null,
             error: 'no teams bound',
             payload: cmd as unknown,
+            meta: {
+              ...((cmd as any).deliveryMeta ?? {}),
+              responseInfo: {
+                httpStatus: 200,
+                ok: false,
+                delivered: false,
+                error: 'no teams bound',
+                targets: [],
+              },
+            },
           },
         );
         results.push({ ok: false });
@@ -270,6 +345,7 @@ export class MessageInboundService implements MessageHost {
          * 成员可用 `vteam_wecom_reply` 直接回复到企微。
          */
         if (memberLinks.length > 0) {
+          const cmdAny = cmd as any;
           if (!this.chatService) {
             await this.delivery.log(
               DELIVERY_DIRECTIONS.inbound,
@@ -277,18 +353,15 @@ export class MessageInboundService implements MessageHost {
               DELIVERY_STATUS.failed,
               {
                 channelId,
-                externalId:
-                  (cmd as { dedupKey?: string }).dedupKey ??
-                  (cmd as { senderExternalId?: string }).senderExternalId ??
-                  null,
+                externalId: cmdAny.dedupKey ?? cmdAny.senderExternalId ?? null,
                 error: 'chatService not available',
                 payload: cmd as unknown,
+                meta: cmdAny.deliveryMeta ?? undefined,
               },
             );
             results.push({ ok: false });
             continue;
           }
-          const cmdAny = cmd as any;
           const wecomUserId: string | undefined =
             cmdAny.wecomUserId ?? cmdAny.senderExternalId;
           const wecomUserName: string | undefined =
@@ -341,9 +414,50 @@ export class MessageInboundService implements MessageHost {
                 lastInternalId = internalMessageId;
                 memberOk = true;
               }
+              await this.delivery.log(
+                DELIVERY_DIRECTIONS.inbound,
+                'post_message',
+                DELIVERY_STATUS.ok,
+                {
+                  channelId,
+                  externalId: dedupKey,
+                  payload: cmd as unknown,
+                  meta: {
+                    ...(cmdAny.deliveryMeta ?? {}),
+                    responseInfo: {
+                      httpStatus: 200,
+                      ok: true,
+                      delivered: true,
+                      internalMessageId,
+                      target: { type: 'member_dm', memberId: link.memberId },
+                    },
+                  } as any,
+                },
+              );
             } catch (e) {
               this.logger.warn(
                 `成员定向投递失败 channel=${channelId} member=${link.memberId}: ${(e as Error).message}`,
+              );
+              await this.delivery.log(
+                DELIVERY_DIRECTIONS.inbound,
+                'post_message',
+                DELIVERY_STATUS.failed,
+                {
+                  channelId,
+                  externalId: dedupKey,
+                  error: (e as Error).message ?? String(e),
+                  payload: cmd as unknown,
+                  meta: {
+                    ...(cmdAny.deliveryMeta ?? {}),
+                    responseInfo: {
+                      httpStatus: 200,
+                      ok: false,
+                      delivered: false,
+                      error: (e as Error).message ?? String(e),
+                      target: { type: 'member_dm', memberId: link.memberId },
+                    },
+                  } as any,
+                },
               );
             }
           }
@@ -396,6 +510,7 @@ export class MessageInboundService implements MessageHost {
                   null,
                 error: 'team_group channel not found',
                 payload: cmd as unknown,
+                meta: cmdAny.deliveryMeta ?? undefined,
               },
             );
             continue;
@@ -420,6 +535,7 @@ export class MessageInboundService implements MessageHost {
                   externalId: dedupKey,
                   error: 'duplicate',
                   payload: cmd as unknown,
+                  meta: cmdAny.deliveryMeta ?? undefined,
                 },
               );
               continue;
@@ -437,6 +553,7 @@ export class MessageInboundService implements MessageHost {
                 externalId: dedupKey,
                 error: 'chatService not available',
                 payload: cmd as unknown,
+                meta: cmdAny.deliveryMeta ?? undefined,
               },
             );
             continue;
@@ -498,7 +615,22 @@ export class MessageInboundService implements MessageHost {
                 DELIVERY_STATUS.ok,
                 null,
                 cmd as unknown,
-                { internalMessageId, ...wecomMeta } as unknown,
+                {
+                  internalMessageId,
+                  ...wecomMeta,
+                  ...(cmdAny.deliveryMeta ?? {}),
+                  responseInfo: {
+                    httpStatus: 200,
+                    ok: true,
+                    delivered: true,
+                    internalMessageId,
+                    target: {
+                      type: 'team_group',
+                      teamId,
+                      channelId: groupChannel.id,
+                    },
+                  },
+                } as unknown,
               );
             } else {
               await this.delivery.log(
@@ -512,6 +644,18 @@ export class MessageInboundService implements MessageHost {
                   meta: {
                     internalMessageId,
                     ...wecomMeta,
+                    ...(cmdAny.deliveryMeta ?? {}),
+                    responseInfo: {
+                      httpStatus: 200,
+                      ok: true,
+                      delivered: true,
+                      internalMessageId,
+                      target: {
+                        type: 'team_group',
+                        teamId,
+                        channelId: groupChannel.id,
+                      },
+                    },
                   } as unknown,
                 },
               );
@@ -521,13 +665,27 @@ export class MessageInboundService implements MessageHost {
             if (internalMessageId) lastInternalId = internalMessageId;
           } catch (e) {
             const errMsg = (e as Error).message ?? String(e);
+            const failMeta: Record<string, any> = {
+              ...(cmdAny.deliveryMeta ?? {}),
+              responseInfo: {
+                httpStatus: 200,
+                ok: false,
+                delivered: false,
+                error: errMsg,
+                target: {
+                  type: 'team_group',
+                  teamId,
+                  channelId: groupChannel.id,
+                },
+              },
+            };
             if (ingressId) {
               await this.delivery.finish(
                 ingressId,
                 DELIVERY_STATUS.failed,
                 errMsg,
                 cmd as unknown,
-                null,
+                failMeta,
               );
             } else {
               await this.delivery.log(
@@ -539,6 +697,7 @@ export class MessageInboundService implements MessageHost {
                   externalId: dedupKey,
                   error: errMsg,
                   payload: cmd as unknown,
+                  meta: failMeta,
                 },
               );
             }
