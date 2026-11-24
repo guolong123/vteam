@@ -2691,6 +2691,18 @@ version: 0.1.0
       version: 0,
     },
   });
+  // 每团队一群聊频道：会话列表（GET /conversations）按 team_group 频道聚合，
+  // 缺它会出现「团队页能看到团队、会话页却 0 群聊」的割裂。
+  await prisma.chatChannel.upsert({
+    where: { id: 'c_seed_team_group_1' },
+    update: {},
+    create: {
+      id: 'c_seed_team_group_1',
+      type: 'team_group',
+      teamId: seedTeamId,
+      workspaceId: 'ws_default',
+    },
+  });
   const teamRoleMap: Record<string, string> = {
     a_product: 'product',
     a_project_manager: 'project_manager',
