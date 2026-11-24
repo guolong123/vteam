@@ -51,17 +51,21 @@ model User {
   resetToken        String?   @map("reset_token")
   /// 重置 token 过期时间（生成后 30 分钟内有效）
   resetTokenExpires DateTime? @map("reset_token_expires")
+  /// 最近一次使用的空间（登录/切换空间时写入，作为默认当前空间）
+  lastWorkspaceId   String?   @map("last_workspace_id")
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
-  role           Role            @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  taskCreated    Task[]          @relation("TaskCreator")
-  agentsCreated  Agent[]         @relation("AgentCreator")
-  assignedIssues Issue[]         @relation("IssueAssigneeUser")
-  createdIssues  Issue[]         @relation("IssueCreatorUser")
-  teamsCreated   Team[]          @relation("TeamCreator")
-  teamUserMembers TeamUserMember[]
-  membersCreated Member[]        @relation("MemberCreator")
+  role             Role              @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  taskCreated      Task[]            @relation("TaskCreator")
+  agentsCreated    Agent[]           @relation("AgentCreator")
+  assignedIssues   Issue[]           @relation("IssueAssigneeUser")
+  createdIssues    Issue[]           @relation("IssueCreatorUser")
+  teamsCreated     Team[]            @relation("TeamCreator")
+  teamUserMembers  TeamUserMember[]
+  ownedWorkspaces  Workspace[]       @relation("WorkspaceOwner")
+  workspaceMembers WorkspaceMember[]
+  membersCreated   Member[]          @relation("MemberCreator")
 
   @@map("users")
 }
@@ -81,44 +85,143 @@ model Role {
 }
 
 // ==================================================================
+// 工作空间（租户）域
+//
+// 空间 = 租户边界：所有用户态资源带 workspaceId；平台内置资源归属
+// ws_system（isSystem=true，所有人隐式可读、普通用户只读）。
+// 用户与空间为 M:N（WorkspaceMember），当前空间由 JWT 的 wid 表达。
+// ==================================================================
+
+model Workspace {
+  id          String   @id
+  name        String
+  slug        String?  @unique
+  isSystem    Boolean  @default(false) @map("is_system")
+  status      String   @default("active") @db.VarChar(16)
+  ownerUserId String?  @map("owner_user_id")
+  /** worker 注册加入码的 SHA-256（仅非默认空间需要；默认空间保持单租户兼容） */
+  workerJoinTokenHash String? @map("worker_join_token_hash") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  owner                      User?                       @relation("WorkspaceOwner", fields: [ownerUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  members                    WorkspaceMember[]
+  teams                      Team[]
+  memberProfiles             Member[]
+  memberNotificationChannels MemberNotificationChannel[]
+  tasks                      Task[]
+  sessions                   Session[]
+  chatChannels               ChatChannel[]
+  messages                   Message[]
+  messageReceipts            MessageReceipt[]
+  issues                     Issue[]
+  artifacts                  Artifact[]
+  plans                      Plan[]
+  agents                     Agent[]
+  agentRoles                 AgentRole[]
+  skills                     Skill[]
+  tools                      Tool[]
+  executionPolicies          ExecutionPolicy[]
+  models                     Model[]
+  modelCredentials           ModelCredential[]
+  providerTombstones         ProviderTombstone[]
+  gitCredentials             GitCredential[]
+  gitRepos                   GitRepo[]
+  gitRepoGrants              GitRepoGrant[]
+  mcpServers                 McpServer[]
+  workers                    Worker[]
+  taskGroupInstances         TaskGroupInstance[]
+  realtimeEvents             RealtimeEvent[]
+  triggers                   Trigger[]
+  hooks                      Hook[]
+  messageChannels            MessageChannel[]
+  notificationChannels       NotificationChannel[]
+  externalUsers              ExternalUser[]
+  modelUsages                ModelUsage[]
+
+  @@index([ownerUserId], map: "idx_workspaces_owner")
+  @@index([isSystem], map: "idx_workspaces_is_system")
+  @@map("workspaces")
+}
+
+/// 资源空间迁移审计（管理员把资源在空间之间移动 / 移到系统空间共享 / 从系统空间回收）。
+/// 只存 id 串（软关联），不建外键：审计事实不参与任何域的删除编排。
+model WorkspaceRelocation {
+  id              String   @id
+  /// 资源类型（Agent / Skill / Model / Worker …，见 workspaces.constants RELOCATABLE_TYPES）
+  resourceType    String   @map("resource_type") @db.VarChar(32)
+  resourceId      String   @map("resource_id")
+  fromWorkspaceId String   @map("from_workspace_id")
+  toWorkspaceId   String   @map("to_workspace_id")
+  reason          String?  @db.VarChar(512)
+  actorUserId     String   @map("actor_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([resourceType, resourceId], map: "idx_ws_relocations_resource")
+  @@index([createdAt], map: "idx_ws_relocations_created_at")
+  @@index([toWorkspaceId], map: "idx_ws_relocations_to_ws")
+  @@map("workspace_relocations")
+}
+
+/// 用户 × 空间成员关系（空间内角色：owner / admin / member）。
+model WorkspaceMember {
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  role        String   @default("member") @db.VarChar(16)
+  joinedAt    DateTime @default(now()) @map("joined_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([workspaceId, userId])
+  @@index([userId], map: "idx_workspace_members_user")
+  @@map("workspace_members")
+}
+
+// ==================================================================
 // 团队域（全局团队 + FIFO 排队，vteam-team-refactor expand 阶段）
 // ==================================================================
 
 model Team {
-  id                 String   @id
-  name               String   @unique
-  description        String?  @db.Text
-  reuseSession       Boolean  @default(true) @map("reuse_session")
+  workspaceId        String    @default("ws_default") @map("workspace_id")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id                 String    @id
+  name               String
+  description        String?   @db.Text
+  reuseSession       Boolean   @default(true) @map("reuse_session")
   // 托管模式（session-unification Todo 6/9：从 tasks.managedMode 迁入，按团队行读取）
-  managedMode        Boolean  @default(false) @map("managed_mode")
-  currentTaskId      String?  @map("current_task_id")
-  mainAgentMemberId  String?  @map("main_agent_member_id")
+  managedMode        Boolean   @default(false) @map("managed_mode")
+  currentTaskId      String?   @map("current_task_id")
+  mainAgentMemberId  String?   @map("main_agent_member_id")
   /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
-  preferredWorkerId  String?  @map("preferred_worker_id")
+  preferredWorkerId  String?   @map("preferred_worker_id")
   /// 群聊默认模型（md_ 目录行 id）；成员级 defaultModelId 优先于它
-  defaultModelId     String?  @map("default_model_id")
+  defaultModelId     String?   @map("default_model_id")
   /// 并行任务并发上限（并行任务计划 D1）：NULL = 不限；start 时校验活跃占用（in_progress+blocked）。
-  maxConcurrentTasks Int?     @map("max_concurrent_tasks")
-  version            Int      @default(0) @map("version")
-  createdBy          String   @map("created_by")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  maxConcurrentTasks Int?      @map("max_concurrent_tasks")
+  version            Int       @default(0) @map("version")
+  createdBy          String    @map("created_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  creator      User          @relation("TeamCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  currentTask  Task?         @relation("TeamCurrentTask", fields: [currentTaskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  mainAgentMember TeamMember? @relation("TeamMainAgent", fields: [mainAgentMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  defaultModel Model?        @relation("TeamDefaultModel", fields: [defaultModelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
-  members      TeamMember[]
-  userMembers  TeamUserMember[]
-  sessions     Session[]
-  taskGroupInstances TaskGroupInstance[]
-  queues       TeamQueue[]
-  tasks        Task[]        @relation("TaskTeam")
-  chatChannels ChatChannel[]
-  messageChannelLinks TeamMessageChannel[]
+  creator                  User                      @relation("TeamCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentTask              Task?                     @relation("TeamCurrentTask", fields: [currentTaskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  mainAgentMember          TeamMember?               @relation("TeamMainAgent", fields: [mainAgentMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  defaultModel             Model?                    @relation("TeamDefaultModel", fields: [defaultModelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  members                  TeamMember[]
+  userMembers              TeamUserMember[]
+  sessions                 Session[]
+  taskGroupInstances       TaskGroupInstance[]
+  queues                   TeamQueue[]
+  tasks                    Task[]                    @relation("TaskTeam")
+  chatChannels             ChatChannel[]
+  messageChannelLinks      TeamMessageChannel[]
   notificationChannelLinks TeamNotificationChannel[]
 
+  @@unique([workspaceId, name], map: "uk_teams_workspace_name")
   @@index([mainAgentMemberId], map: "idx_teams_main_agent_member")
+  @@index([workspaceId], map: "idx_teams_workspace")
   @@map("teams")
 }
 
@@ -133,15 +236,17 @@ model Team {
 /// 引擎原生权限（permission/tools/model/worker）仍属 ExecutionPolicy / Agent，与岗位解耦
 /// （2026-09-21：`policyId` 间接层已移除）。
 model AgentRole {
-  id          String   @id
+  workspaceId              String    @default("ws_default") @map("workspace_id")
+  workspace                Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id                       String    @id
   /// machine-safe 唯一标识（`^[a-z][a-z0-9_-]{0,62}$`）：内置=模板 role（product/…），
   /// 自定义由服务层校验；回填派生的自定义 key 见 migration 的确定性规则。
-  key         String   @unique(map: "uk_agent_roles_key")
-  name        String
-  description String?  @db.Text
+  key                      String
+  name                     String
+  description              String?   @db.Text
   /// 'builtin'（seed 的 7 个模板角色）| 'custom'（用户创建 / 回填派生）。
   /// 与 Agent.type / ExecutionPolicy.type 同风格：String 承载，不引 Prisma enum（sqlite 测试兼容）。
-  type        String
+  type                     String
   /// 预填默认 Agent（内部，可选）。删除被绑定的 Agent 时仅清空本列（SetNull），
   /// 不阻塞 Agent 删除（review fix m8）。回填不设置本列，仅 7 个 builtin 行指向模板 Agent。
   ///
@@ -154,7 +259,7 @@ model AgentRole {
   /// 成员 `roleId` → 本列 → 工具裸名映射能力点 → `false` 则 403。
   /// 可空仅为兼容未写矩阵的行；`null` 等同 `{}`（全放行），故 migration/seed 保证出厂行非空。
   /// 执行 Agent 的引擎原生权限（edit/read/bash/task）仍在 `Agent.policyId`，与本列无关。
-  capabilities Json?   @map("capabilities")
+  capabilities             Json?     @map("capabilities")
   /// 能力矩阵**最后一次被打戳的时刻**（2026-09-29 T11）。
   /// 与 `capabilities` 分离的原因：default-allow 下「键缺失 ⇒ 允许」，运维需要能区分
   /// 「该岗位从未配过矩阵（沿用出厂语义）」与「配过但这三键还没进目录（升级遗留）」——
@@ -163,57 +268,59 @@ model AgentRole {
   capabilitiesConfiguredAt DateTime? @map("capabilities_configured_at")
   /// 角色指令（"这个岗位是什么"）。列级可空（todo 4 前 builtin 行暂空），
   /// 但每个 builtin 行最终必须非空（todo 4 填充 role_prompt）。
-  rolePrompt  String?  @db.Text @map("role_prompt")
+  rolePrompt       String?  @map("role_prompt") @db.Text
   /// 【纪律固定提示】每次/隔 N 条用户消息，**前置到 user 消息**（非 system）重复注入的提示词。
   /// 用途：岗位纪律（如 PM「只协调不执行」）写进 system 的 rolePrompt 仍会被长会话稀释遗忘，
   /// 用用户消息级重复提醒对抗遗忘。空/null = 不启用。
-  disciplinePrompt String? @db.Text @map("discipline_prompt")
+  disciplinePrompt String?  @db.Text @map("discipline_prompt")
   /// 注入频率：0=关闭；1=每条用户消息；N≥2=每 N 条用户消息注入一次。默认 3。
   /// 计数按 (团队席位 × 岗位) 的用户消息轮次，纯记账，不阻塞派发。
-  disciplineEvery Int     @default(3) @map("discipline_every")
+  disciplineEvery  Int      @default(3) @map("discipline_every")
   /// 稳定排序（列表展示；内置按 role 序 1..7，回填派生的自定义行沿用 100+）。
-  sortOrder   Int      @default(0) @map("sort_order")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  sortOrder                Int       @default(0) @map("sort_order")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
 
-  defaultAgent Agent?       @relation("AgentRoleDefaultAgent", fields: [defaultAgentId], references: [id], onDelete: SetNull, onUpdate: Restrict)
-  members      TeamMember[]
-  memberDefaults Member[]   @relation("MemberDefaultRole")
+  defaultAgent   Agent?       @relation("AgentRoleDefaultAgent", fields: [defaultAgentId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  members        TeamMember[]
+  memberDefaults Member[]     @relation("MemberDefaultRole")
 
+  @@unique([workspaceId, key], map: "uk_agent_roles_workspace_key")
   @@index([defaultAgentId], map: "idx_agent_roles_default_agent")
   @@index([sortOrder], map: "idx_agent_roles_sort_order")
+  @@index([workspaceId], map: "idx_agent_roles_workspace")
   @@map("agent_roles")
 }
 
 model TeamMember {
-  id             String   @id
-  teamId         String   @map("team_id")
+  id                String   @id
+  teamId            String   @map("team_id")
   /// 平台级成员（members.id）。expand 阶段可空，回填后收紧为 NOT NULL。
-  memberId       String?  @map("member_id")
-  agentId        String   @map("agent_id")
-  alias          String?
-  seq            Int      @default(1)
-  workDir        String?  @map("work_dir")
-  overrideModelId String? @map("override_model_id")
+  memberId          String?  @map("member_id")
+  agentId           String   @map("agent_id")
+  alias             String?
+  seq               Int      @default(1)
+  workDir           String?  @map("work_dir")
+  overrideModelId   String?  @map("override_model_id")
   /// 成员级首选 worker（软绑定单节点）：成员显式 > 团队 > 现状；null/空 = 不覆盖
-  preferredWorkerId String? @map("preferred_worker_id")
+  preferredWorkerId String?  @map("preferred_worker_id")
   /// 成员角色（agent_roles）。onDelete: Restrict —— 在用角色不可静默删除，
   /// 必须先解绑成员再删角色（FK 报错即显式拦截，绝不静默置空）。
   roleId         String?  @map("role_id")
   createdAt      DateTime @default(now()) @map("created_at")
 
-  team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  member       Member?       @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  role         AgentRole?    @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  sessions     Session[]
+  team               Team                @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  member             Member?             @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent              Agent               @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  role               AgentRole?          @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sessions           Session[]
   taskGroupInstances TaskGroupInstance[]
-  chatChannels ChatChannel[]
-  mainForTeams Team[]        @relation("TeamMainAgent")
+  chatChannels       ChatChannel[]
+  mainForTeams       Team[]              @relation("TeamMainAgent")
 
+  @@unique([teamId, agentId, seq], map: "uk_team_members_team_agent_seq")
   @@index([roleId], map: "idx_team_members_role")
   @@index([memberId], map: "idx_team_members_member")
-  @@unique([teamId, agentId, seq], map: "uk_team_members_team_agent_seq")
   /// 一个**成员**在一个团队只能有一个席位（2026-11-17）。
   ///
   /// 这是 MCP 工具用「平台成员 id（mbr_）」定位席位的**前提**：没有这条约束，
@@ -261,44 +368,46 @@ model TeamUserMember {
 // ==================================================================
 
 model Member {
-  id                String   @id
+  workspaceId        String    @default("ws_default") @map("workspace_id")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id                 String    @id
   /// 成员名（全局唯一，@ 与私聊列表寻址用）
-  name              String   @unique
+  name               String
   /// 默认岗位（入群时预填 team_members.role_id；权限仍按席位 roleId 判定）
-  defaultRoleId     String   @map("default_role_id")
+  defaultRoleId      String    @map("default_role_id")
   /// 绑定的执行 Agent（prompt/policy/skills 来源）
-  agentId           String   @map("agent_id")
+  agentId            String    @map("agent_id")
   /// 默认模型（席位可覆盖）
-  defaultModelId    String?  @map("default_model_id")
+  defaultModelId     String?   @map("default_model_id")
   /// 默认 worker 偏好（席位可覆盖）
-  preferredWorkerId String?  @map("preferred_worker_id")
+  preferredWorkerId  String?   @map("preferred_worker_id")
   /// 成员私有工作目录（会话默认 cwd；团队目录按轮授权切换）
-  privateWorkDir    String?  @map("private_work_dir") @db.VarChar(255)
+  privateWorkDir     String?   @map("private_work_dir") @db.VarChar(255)
   /// 成员性格（`persona.constants.ts` 的 PERSONA_LIBRARY key；可空）。
   /// **成员级属性**：同一 Agent/岗位的不同成员可有不同表达与协作风格；
   /// 非空时优先于 `agents.persona`（Agent 列降级为存量兼容回退，UI 已迁到成员）。
-  persona           String?  @db.VarChar(32)
+  persona            String?   @db.VarChar(32)
   /// 成员专属提示词：成员级**特殊行为描述**（如多个开发者成员各自负责范围不同）。
   /// 与 `Agent.prompt`（岗位职责范围）组合，关系由 `promptMode` 决定；TEXT 承载长文本。
-  prompt            String?  @db.Text
+  prompt             String?   @db.Text
   /// 成员提示词与 Agent 提示词的关系：
   /// `append`（默认，在 Agent 岗位职责之上追加【成员专属要求】）/ `override`（覆盖 Agent 提示词段）。
   /// 字符串列 + 应用层常量（双库兼容，不引 Prisma enum）。
-  promptMode        String   @default("append") @map("prompt_mode") @db.VarChar(16)
+  promptMode         String    @default("append") @map("prompt_mode") @db.VarChar(16)
   /// active / disabled（停用后不可加群、不可派发）
-  status            String   @default("active") @db.VarChar(16)
-  description       String?  @db.Text
+  status             String    @default("active") @db.VarChar(16)
+  description        String?   @db.Text
   /// 回填溯源（旧 team_members.id），唯一保证回填脚本可重跑
-  originTeamMemberId String? @unique @map("origin_team_member_id")
-  createdBy         String   @map("created_by")
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  originTeamMemberId String?   @unique @map("origin_team_member_id")
+  createdBy          String    @map("created_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  role              AgentRole     @relation("MemberDefaultRole", fields: [defaultRoleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  agent             Agent         @relation("MemberAgent", fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  defaultModel      Model?        @relation("MemberDefaultModel", fields: [defaultModelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
-  preferredWorker   Worker?       @relation("MemberPreferredWorker", fields: [preferredWorkerId], references: [id], onDelete: SetNull, onUpdate: Restrict)
-  creator           User          @relation("MemberCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  role              AgentRole                   @relation("MemberDefaultRole", fields: [defaultRoleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent             Agent                       @relation("MemberAgent", fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  defaultModel      Model?                      @relation("MemberDefaultModel", fields: [defaultModelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  preferredWorker   Worker?                     @relation("MemberPreferredWorker", fields: [preferredWorkerId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  creator           User                        @relation("MemberCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   teamMembers       TeamMember[]
   chatChannels      ChatChannel[]
   notificationLinks MemberNotificationChannel[]
@@ -306,25 +415,31 @@ model Member {
   messageChannelLinks MemberMessageChannel[]
   sessions          Session[]
 
+  @@unique([workspaceId, name], map: "uk_members_workspace_name")
   @@index([defaultRoleId], map: "idx_members_default_role")
   @@index([agentId], map: "idx_members_agent")
   @@index([status], map: "idx_members_status")
+  @@index([workspaceId], map: "idx_members_workspace")
   @@map("members")
 }
 
 /// 成员 × 通知渠道绑定（渠道归属唯一：同一渠道至多属于一个成员或一个团队）。
 model MemberNotificationChannel {
-  memberId              String   @map("member_id")
+  workspaceId           String    @default("ws_default") @map("workspace_id")
+  workspace             Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  memberId              String    @map("member_id")
   /// 归属唯一：一个渠道最多属于一个成员（团队归属由服务层查 team_notification_channels 判定）
-  notificationChannelId String   @unique(map: "uk_member_notif_channel") @map("notification_channel_id")
+  notificationChannelId String    @map("notification_channel_id")
   /// 绑定人（审计用；不建 FK，用户删除不影响配置）
-  createdBy             String?  @map("created_by")
-  createdAt             DateTime @default(now()) @map("created_at")
+  createdBy             String?   @map("created_by")
+  createdAt             DateTime  @default(now()) @map("created_at")
 
   member              Member              @relation(fields: [memberId], references: [id], onDelete: Cascade, onUpdate: Restrict)
   notificationChannel NotificationChannel @relation(fields: [notificationChannelId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@id([memberId, notificationChannelId])
+  @@unique([workspaceId, notificationChannelId], map: "uk_member_notif_workspace_channel")
+  @@index([workspaceId], map: "idx_member_notification_channels_workspace")
   @@map("member_notification_channels")
 }
 
@@ -333,29 +448,31 @@ model MemberNotificationChannel {
 // ==================================================================
 
 model Task {
-  id                  String    @id
-  title               String
+  workspaceId        String    @default("ws_default") @map("workspace_id")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id                 String    @id
+  title              String
   // 任务描述可能超过 VARCHAR(191)，TEXT 承载（K8s 部署 500：value too long for column description）
-  description         String?   @db.Text
-  priority            String    @default("medium")
-  status              String    @default("pending")
-  backgroundDocs      Json?     @map("background_docs")
+  description        String?   @db.Text
+  priority           String    @default("medium")
+  status             String    @default("pending")
+  backgroundDocs     Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
-  resetAfterComplete  Boolean   @default(false) @map("reset_after_complete")
+  resetAfterComplete Boolean   @default(false) @map("reset_after_complete")
   /// 长期值班任务（常驻进行中、无终态，默认 false）。
   /// 勾选后：进度巡检完全不排期（无唤醒、无自动置阻塞、无停滞公告），且 Agent 不得把它
   /// 推向终态（`mark-pending-review` 返 403）。人工完成通道（mark-pending-review/accept/
   /// archive/block/resume）不受影响，且额外允许硬删。
   /// 代价：这是**一刀切豁免**——真正卡死的长驻任务也不会被看门狗自动阻塞，运维需自行巡看。
-  longRunning         Boolean   @default(false) @map("long_running")
-  createdBy           String    @map("created_by")
-  version             Int       @default(0)
-  teamId              String?   @map("team_id")
-  createdAt           DateTime  @default(now()) @map("created_at")
-  startedAt           DateTime? @map("started_at")
-  pendingReviewAt     DateTime? @map("pending_review_at")
-  completedAt         DateTime? @map("completed_at")
-  archivedAt          DateTime? @map("archived_at")
+  longRunning        Boolean   @default(false) @map("long_running")
+  createdBy          String    @map("created_by")
+  version            Int       @default(0)
+  teamId             String?   @map("team_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  startedAt          DateTime? @map("started_at")
+  pendingReviewAt    DateTime? @map("pending_review_at")
+  completedAt        DateTime? @map("completed_at")
+  archivedAt         DateTime? @map("archived_at")
 
   creator                  User                      @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   team                     Team?                     @relation("TaskTeam", fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -376,6 +493,7 @@ model Task {
   notificationChannelLinks TaskNotificationChannel[]
 
   @@index([teamId, status], map: "idx_tasks_team_status")
+  @@index([workspaceId], map: "idx_tasks_workspace")
   @@map("tasks")
 }
 
@@ -404,50 +522,52 @@ model TaskEvent {
 // ==================================================================
 
 model Session {
-  id           String   @id
-  taskId       String?  @map("task_id")
-  teamId       String?  @map("team_id") // team-mode 执行上下文（nullable 便于存量回填；业务层 team-mode 必填）
-  agentId      String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
-  teamMemberId String?  @map("team_member_id")
+  workspaceId      String        @default("ws_default") @map("workspace_id")
+  workspace        Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id               String        @id
+  taskId           String?       @map("task_id")
+  teamId           String?       @map("team_id") // team-mode 执行上下文（nullable 便于存量回填；业务层 team-mode 必填）
+  agentId          String        @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
+  teamMemberId     String?       @map("team_member_id")
   // team-mode 幂等键承载列（STORED 生成列：task_id 为空时 = team_id|team_member_id，其余为 NULL；DB 唯一索引仅约束 task-less 行）
   // @db.VarChar(384)：对齐 20260904000000 迁移实际 DDL（VARCHAR(384) 生成列）；
   // 之前无长度声明（默认 191）与库漂移，导致 migrate dev 误提无关 ALTER（P3 skill 版本迁移前置修复，只对齐类型，不碰生成表达式）。
-  teamMemberKey String?  @db.VarChar(384) @map("team_member_key")
-  workerId     String?  @map("worker_id")
-  instanceRef  String?  @map("instance_ref")
-  status       String   @default("created")
+  teamMemberKey    String?       @map("team_member_key") @db.VarChar(384)
+  workerId         String?       @map("worker_id")
+  instanceRef      String?       @map("instance_ref")
+  status           String        @default("created")
   // trigger-unification todo-7：空闲判死 DB sidecar（ingress 活动回写与 dispatcher
   // watchdog 起点/活动事件回写同一列；scanIdleSessions 按 status='running' AND
   // (lastActivityAt < cutoff OR (lastActivityAt IS NULL AND updatedAt < cutoff))
   // 检出。活动列为 NULL 时回退自身 updatedAt，不授予新 lease；pending/active
   // 否决仍独立保留。
-  lastActivityAt DateTime? @map("last_activity_at")
+  lastActivityAt   DateTime?     @map("last_activity_at")
   // ── 全局会话（37 篇 P3）：一成员一条 team-mode 会话；current_* 仅作展示/兼容，
   // 鉴权与落库以 session_turns 冻结的轮次上下文为准。member_key = member_id（应用层列）。
-  memberId         String?   @map("member_id")
+  memberId         String?       @map("member_id")
   /// 应用层维护的成员唯一键：team-mode 行 = member_id，task 行 = NULL（task_id 为空才参与唯一）
-  memberKey        String?   @unique(map: "uk_sessions_member") @map("member_key")
+  memberKey        String?       @unique(map: "uk_sessions_member") @map("member_key")
   /// 最近使用的席位（tmm_），展示/兼容用，不作鉴权依据
-  seatId           String?   @map("seat_id")
-  currentTeamId    String?   @map("current_team_id")
-  currentTaskId    String?   @map("current_task_id")
-  currentChannelId String?   @map("current_channel_id")
+  seatId           String?       @map("seat_id")
+  currentTeamId    String?       @map("current_team_id")
+  currentTaskId    String?       @map("current_task_id")
+  currentChannelId String?       @map("current_channel_id")
   /// 轮次序号（每次入队 +1，session_turns.seq 的来源）
-  turnSeq          Int       @default(0) @map("turn_seq")
+  turnSeq          Int           @default(0) @map("turn_seq")
   /// idle / running（信息态；执行互斥由 session_turns.running_key 唯一索引兜底）
-  busyState        String    @default("idle") @map("busy_state") @db.VarChar(16)
-  busySince        DateTime? @map("busy_since")
+  busyState        String        @default("idle") @map("busy_state") @db.VarChar(16)
+  busySince        DateTime?     @map("busy_since")
   /// 最近一轮结果：ok / error / timeout / cancelled
-  lastTurnOutcome  String?   @map("last_turn_outcome") @db.VarChar(16)
+  lastTurnOutcome   String?   @map("last_turn_outcome") @db.VarChar(16)
   /// 最近一次上下文压缩（长期不活跃 → 发消息前主动压缩）的时刻与规模，
   /// 仅由 worker compact 回流置位；纯可观测字段，不参与空闲判死与调度。
-  compactedAt       DateTime? @map("compacted_at")
-  compactTokenBefore Int?     @map("compact_token_before")
-  compactTokenAfter  Int?     @map("compact_token_after")
-  member           Member?   @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  compactedAt        DateTime? @map("compacted_at")
+  compactTokenBefore Int?      @map("compact_token_before")
+  compactTokenAfter  Int?      @map("compact_token_after")
+  member            Member?   @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   turns            SessionTurn[]
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
   task       Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -460,33 +580,34 @@ model Session {
   @@index([memberId], map: "idx_sessions_member")
   // trigger-unification todo-7：空闲判死扫描索引（status='running' AND last_activity_at < cutoff；NULL 行按 updatedAt 回退）。
   @@index([status, lastActivityAt], map: "idx_sessions_status_last_activity")
+  @@index([workspaceId], map: "idx_sessions_workspace")
   @@map("sessions")
 }
 
 /// 每轮不可变上下文（37 篇 §3.6.2）：全局会话下一成员跨群服务多轮，
 /// 回复/回执/中止/审计必须按本轮冻结的 team/channel/seat 收口，不能读 Session.current_*。
 model SessionTurn {
-  id             String    @id // st_ 前缀
-  sessionId      String    @map("session_id")
-  seq            Int       // session.turnSeq 递增；FIFO 排序键
-  memberId       String    @map("member_id")
-  seatId         String?   @map("seat_id")
-  teamId         String?   @map("team_id")
-  channelId      String?   @map("channel_id")
-  taskId         String?   @map("task_id")
-  messageId      String?   @map("message_id")
+  id              String    @id // st_ 前缀
+  sessionId       String    @map("session_id")
+  seq             Int // session.turnSeq 递增；FIFO 排序键
+  memberId        String    @map("member_id")
+  seatId          String?   @map("seat_id")
+  teamId          String?   @map("team_id")
+  channelId       String?   @map("channel_id")
+  taskId          String?   @map("task_id")
+  messageId       String?   @map("message_id")
   /// user_mention / agent_notify / hook_wake / task_start / manual
-  source         String    @default("user_mention") @db.VarChar(32)
+  source          String    @default("user_mention") @db.VarChar(32)
   /// pending / running / done / failed / cancelled / expired（待执行，不是产品队列位次）
-  status         String    @default("pending") @db.VarChar(16)
+  status          String    @default("pending") @db.VarChar(16)
   /// 应用层维护：status=running 时 = session_id，其余 NULL；唯一索引保证「每会话至多一轮在飞」
-  runningKey     String?   @unique(map: "uk_session_turns_running") @map("running_key")
-  enqueuedAt     DateTime  @default(now()) @map("enqueued_at")
-  startedAt      DateTime? @map("started_at")
-  endedAt        DateTime? @map("ended_at")
-  error          String?   @db.VarChar(1024)
-  engineMessageId String?  @map("engine_message_id")
-  session        Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  runningKey      String?   @unique(map: "uk_session_turns_running") @map("running_key")
+  enqueuedAt      DateTime  @default(now()) @map("enqueued_at")
+  startedAt       DateTime? @map("started_at")
+  endedAt         DateTime? @map("ended_at")
+  error           String?   @db.VarChar(1024)
+  engineMessageId String?   @map("engine_message_id")
+  session         Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([sessionId, seq], map: "uk_session_turns_seq")
   @@index([sessionId, status, seq], map: "idx_session_turns_pick")
@@ -500,6 +621,8 @@ model SessionTurn {
 // ==================================================================
 
 model ChatChannel {
+  workspaceId  String    @default("ws_default") @map("workspace_id")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id           String    @id
   type         String
   teamId       String?   @map("team_id")
@@ -529,6 +652,7 @@ model ChatChannel {
   @@index([teamId], map: "idx_chat_channels_team_id")
   @@index([memberId], map: "idx_chat_channels_member")
   @@index([teamId, type], map: "idx_chat_channels_team_type")
+  @@index([workspaceId], map: "idx_chat_channels_workspace")
   @@map("chat_channels")
 }
 
@@ -546,67 +670,74 @@ model ChatChannel {
 
 /// 外部渠道用户（企微/通用 webhook 等入站消息的外部发送者，人工维护资料）
 model ExternalUser {
-  id            String   @id // eu_ 前缀，IdGeneratorService 生成
+  workspaceId    String    @default("ws_default") @map("workspace_id")
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id             String    @id // eu_ 前缀，IdGeneratorService 生成
   /// 外部平台用户稳定标识：`id:<企微 userid>`；无 userid 时回退 `name:<展示名>`
-  externalId    String   @unique @map("external_id") @db.VarChar(191)
+  externalId     String    @map("external_id") @db.VarChar(191)
   /// 渠道展示名（企微用户名/昵称，入站可更新；「姓名」未填写时作为展示名）
-  displayName   String   @map("display_name") @db.VarChar(191)
+  displayName    String    @map("display_name") @db.VarChar(191)
   /// 管理字段（人工维护，name 优先于 displayName 展示）
-  name          String?  @db.VarChar(64)
-  position      String?  @db.VarChar(64)
-  company       String?  @db.VarChar(128)
-  contact       String?  @db.VarChar(191)
+  name           String?   @db.VarChar(64)
+  position       String?   @db.VarChar(64)
+  company        String?   @db.VarChar(128)
+  contact        String?   @db.VarChar(191)
   /// 来源渠道类型：wecom_aibot / generic_webhook / ...
-  source        String   @default("wecom_aibot") @db.VarChar(32)
+  source         String    @default("wecom_aibot") @db.VarChar(32)
   firstMessageAt DateTime? @map("first_message_at")
   lastMessageAt  DateTime? @map("last_message_at")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-  messages      Message[]
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  messages       Message[]
 
+  @@unique([workspaceId, externalId], map: "uk_external_users_workspace_external")
   @@index([displayName], map: "idx_external_users_display_name")
   @@index([lastMessageAt], map: "idx_external_users_last_message_at")
+  @@index([workspaceId], map: "idx_external_users_workspace")
   @@map("external_users")
 }
 
 model Message {
-  id               String   @id
-  channelId        String   @map("channel_id")
-  taskId           String?  @map("task_id")
-  senderType       String   @map("sender_type")
-  senderId         String?  @map("sender_id")
-  senderInstanceId String?  @map("sender_instance_id") // 消息精确归属实例（agent sender 时为 ta_ 实例 id）
+  workspaceId      String    @default("ws_default") @map("workspace_id")
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id               String    @id
+  channelId        String    @map("channel_id")
+  taskId           String?   @map("task_id")
+  senderType       String    @map("sender_type")
+  senderId         String?   @map("sender_id")
+  senderInstanceId String?   @map("sender_instance_id") // 消息精确归属实例（agent sender 时为 ta_ 实例 id）
   // 入站消息所属企微会话 id（仅 sender_type=external 且来自 WeCom 时有值）：
   // 出站按它锚定目标会话，避免多群共用 bot 时被渠道级 lastChatid（每条入站覆盖）
   // 带偏到别的群；取不到才回退 lastChatid。详见 20261009000000 迁移说明。
-  externalChatId  String?  @map("external_chat_id")
+  externalChatId   String?   @map("external_chat_id")
   /// 外部渠道用户目录指针（仅 sender_type=external 且入站沉淀成功时有值）：
   /// sender_id 仍是展示名（群聊渲染依赖），本列才是「同一外部人」的稳定关联。
-  externalUserId  String?  @map("external_user_id")
+  externalUserId   String?   @map("external_user_id")
   content          Json
   /// 正文 text 的生成列（DB 侧 GENERATED，仅读）：会话列表预览/未读统计直接读它，
   /// 避免把含大量工具输出的 content JSON 整包取回解析。
-  bodyText         String?  @map("body_text") @db.MediumText
+  bodyText         String?   @map("body_text") @db.MediumText
   mentions         Json?
   // UX-10 群聊附件：客户端先 POST /uploads 拿 url，随消息提交（图片/文档均可）
-  attachmentUrl    String?  @map("attachment_url")
-  attachmentName   String?  @map("attachment_name")
-  attachmentType   String?  @map("attachment_type")
+  attachmentUrl    String?   @map("attachment_url")
+  attachmentName   String?   @map("attachment_name")
+  attachmentType   String?   @map("attachment_type")
   // 多附件（一条消息可带 N 个文件，JSON 数组 [{url,name,size,ext}]）：
   // 新链路以本列为主，上面三字段保留为「首个附件」的兼容读路径（旧前端/旧 MCP 契约不炸）。
   // 读取统一走 normalizeMessageAttachments（本列优先、三字段回退单元素）。
-  attachments      Json?    @map("attachments")
-  status           String   @default("sent")
-  createdAt        DateTime @default(now()) @map("created_at")
+  attachments      Json?     @map("attachments")
+  status           String    @default("sent")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
-  channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  task    Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  channel      ChatChannel   @relation(fields: [channelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task         Task?         @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   externalUser ExternalUser? @relation(fields: [externalUserId], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
   @@index([channelId, id], map: "idx_messages_channel_id")
   @@index([taskId, createdAt], map: "idx_messages_task_created")
   @@index([channelId, taskId], map: "idx_messages_channel_task")
   @@index([externalUserId, id], map: "idx_messages_external_user_id")
+  @@index([workspaceId], map: "idx_messages_workspace")
   @@map("messages")
 }
 
@@ -620,6 +751,8 @@ model Message {
 // `from::to::sha1(内容去空白后前64字符)`，永不 NULL，issueId 不再参与组键；
 // kind=wake/round-notify 为保留位，永不写入，仅防未来误用）
 model MessageReceipt {
+  workspaceId    String    @default("ws_default") @map("workspace_id")
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id             String    @id // mr_ 前缀，服务层 IdGeneratorService 生成
   messageId      String    @map("message_id") // 触发派发的源消息（notify 落库的那条）
   fromInstanceId String    @map("from_instance_id") // 派发人实例
@@ -649,6 +782,7 @@ model MessageReceipt {
   @@index([teamId, status], map: "idx_message_receipts_team_status")
   // reply-join drain 检查覆盖索引（countPendingFor: fromInstanceId+teamId+status）
   @@index([fromInstanceId, teamId, status], map: "idx_message_receipts_from_status")
+  @@index([workspaceId], map: "idx_message_receipts_workspace")
   @@map("message_receipts")
 }
 
@@ -672,6 +806,8 @@ model MessageReceipt {
 // ==================================================================
 
 model Trigger {
+  workspaceId     String    @default("ws_default") @map("workspace_id")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id              String    @id // tmr_ 前缀冻结，服务层 IdGeneratorService 生成
   kind            String // handler 注册键（TRIGGER_KIND 白名单，服务层强制）
   status          String    @default("pending") // pending|firing|fired|cancelled|failed
@@ -695,6 +831,7 @@ model Trigger {
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
   @@index([status, dueAt], map: "idx_triggers_status_due_at")
+  @@index([workspaceId], map: "idx_triggers_workspace")
   @@map("triggers")
 }
 
@@ -712,6 +849,8 @@ model Trigger {
 // ==================================================================
 
 model Hook {
+  workspaceId     String    @default("ws_default") @map("workspace_id")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id              String    @id // hks_ 前缀冻结，服务层 IdGeneratorService 生成
   scopeType       String    @map("scope_type") // 归属域（team/task，all_idle 静默评估域）
   scopeId         String    @map("scope_id") // 归属 id
@@ -737,6 +876,7 @@ model Hook {
   @@index([status, scopeType, scopeId], map: "idx_hooks_status_scope")
   @@index([status, kind], map: "idx_hooks_status_kind")
   @@index([rootTaskId, status], map: "idx_hooks_root_task_status")
+  @@index([workspaceId], map: "idx_hooks_workspace")
   @@map("hooks")
 }
 
@@ -745,14 +885,16 @@ model Hook {
 // ==================================================================
 
 model Artifact {
-  id             String   @id
-  taskId         String   @map("task_id")
+  workspaceId    String    @default("ws_default") @map("workspace_id")
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id             String    @id
+  taskId         String    @map("task_id")
   type           String
   title          String
   category       String?
-  currentVersion Int      @default(0) @map("current_version")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  currentVersion Int       @default(0) @map("current_version")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   task     Task              @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   versions ArtifactVersion[]
@@ -760,6 +902,7 @@ model Artifact {
   @@index([taskId, type], map: "idx_artifacts_task_type")
   @@index([taskId, category], map: "idx_artifacts_task_category")
   @@index([taskId], map: "idx_artifacts_task")
+  @@index([workspaceId], map: "idx_artifacts_workspace")
   @@map("artifacts")
 }
 
@@ -787,6 +930,8 @@ model ArtifactVersion {
 // ==================================================================
 
 model Issue {
+  workspaceId        String    @default("ws_default") @map("workspace_id")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id                 String    @id
   taskId             String    @map("task_id")
   title              String
@@ -819,6 +964,7 @@ model Issue {
 
   @@index([taskId, status], map: "idx_issues_task_status")
   @@index([assigneeAgentId], map: "idx_issues_assignee_agent")
+  @@index([workspaceId], map: "idx_issues_workspace")
   @@map("issues")
 }
 
@@ -846,29 +992,31 @@ model IssueActivity {
 // ==================================================================
 
 model Agent {
-  id              String   @id
-  name            String
-  type            String
-  baseAgentId     String?  @map("base_agent_id")
+  workspaceId    String    @default("ws_default") @map("workspace_id")
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id             String    @id
+  name           String
+  type           String
+  baseAgentId    String?   @map("base_agent_id")
   /// machine-safe 标识；opencode agent 名 = `vteam-<agentKey>`。
   /// 模板取原岗位键（注入名与现状逐字节一致，如 `vteam-product`）；
   /// 自定义/克隆须由用户提供（service 层强制，DB 列保持可空以兼容存量行）。
   /// `Agent.role` 列已于 20260919000010 迁移 drop（agent-role-decommission todo 7）：
   /// 岗位标签改由 `AgentRole` / `TeamMember.roleId` 承载，能力由 `policyId` 承载。
-  agentKey        String?  @unique @map("agent_key")
+  agentKey       String?   @map("agent_key")
   // ⚠️ 出厂默认提示词为多段长文本（16 篇 §3~§7 四方向结构），MySQL 需 TEXT 承载
-  prompt          String   @db.Text
-  defaultModelId  String?  @map("default_model_id")
+  prompt         String    @db.Text
+  defaultModelId String?   @map("default_model_id")
   // @deprecated 2026-08-21 已下线：群聊 @Agent 自动回复“收到，正在处理…”机制已删除（模型不可用时无法区分）。
   // 列保留以兼容存量 DB，业务层已不再读写；下次重建库可删。
-  ackMessage      String?  @map("ack_message")
+  ackMessage     String?   @map("ack_message")
   // 性格（vteam-team-collaboration tc-persona：PERSONA_LIBRARY 的 key，可空；
   // 存量 agent 不动，运行时由 buildSystemInstructions 拼接进系统提示，不改写 prompt）
-  persona         String?
-  policyId        String?  @map("policy_id")
-  createdBy       String   @map("created_by")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  persona        String?
+  policyId       String?   @map("policy_id")
+  createdBy      String    @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   baseAgent         Agent?            @relation("AgentClone", fields: [baseAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   clones            Agent[]           @relation("AgentClone")
@@ -877,25 +1025,31 @@ model Agent {
   creator           User              @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   skills            AgentSkill[]
   teamMembers       TeamMember[]
-  defaultMembers    Member[]           @relation("MemberAgent")
+  defaultMembers    Member[]          @relation("MemberAgent")
   sessions          Session[]
   channels          ChatChannel[]
   authoredArtifacts ArtifactVersion[] @relation("ArtifactAuthor")
   assignedIssues    Issue[]           @relation("IssueAssigneeAgent")
   createdIssues     Issue[]           @relation("IssueCreatorAgent")
 
+  @@unique([workspaceId, agentKey], map: "uk_agents_workspace_key")
+  @@index([workspaceId], map: "idx_agents_workspace")
   @@map("agents")
 }
 
 model ExecutionPolicy {
-  id          String   @id
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id          String    @id
   name        String
-  description String?  @db.Text
+  description String?   @db.Text
   type        String
   config      Json
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
+  @@index([workspaceId], map: "idx_execution_policies_workspace")
   @@map("execution_policies")
 }
 
@@ -917,24 +1071,28 @@ model AgentSkill {
 // ==================================================================
 
 model Skill {
-  id          String   @id
-  name        String   @unique
+  workspaceId    String    @default("ws_default") @map("workspace_id")
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id             String    @id
+  name           String
   // 技能描述可能超过 VARCHAR(191)，TEXT 承载（同类 description 长文本预防）
-  description String?  @db.Text
+  description    String?   @db.Text
   // SKILL.md 全文（T1 新增列：worker 注入需原文写出，DB 为唯一事实源）
   // F3-1：@db.Text 承载长文档（VARCHAR(191) 导致 >191 字符 SKILL.md 落库 500）
   // ⚠️ 不带 @default：MySQL TEXT 列禁止字面量默认值（P3018/1101），create 必传 content 无需 DB 默认
-  content     String   @db.Text
-  fileMeta    Json?    @map("file_meta")
-  enabled     Boolean  @default(false)
+  content        String    @db.Text
+  fileMeta       Json?     @map("file_meta")
+  enabled        Boolean   @default(false)
   // 当前版本号（P3 skill 版本：每次 update/rollback 追加 SkillVersion 行后 +1，v1 由回填/create 落库）
-  currentVersion Int      @default(1) @map("current_version")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  currentVersion Int       @default(1) @map("current_version")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   agentSkills AgentSkill[]
   versions    SkillVersion[]
 
+  @@unique([workspaceId, name], map: "uk_skills_workspace_name")
+  @@index([workspaceId], map: "idx_skills_workspace")
   @@map("skills")
 }
 
@@ -958,19 +1116,24 @@ model SkillVersion {
 }
 
 model Tool {
-  id          String   @id
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id          String    @id
   name        String
-  action      String   @unique
+  action      String
   source      String
   execution   String
-  mcpServer   String?  @map("mcp_server")
-  description String?  @db.Text
+  mcpServer   String?   @map("mcp_server")
+  description String?   @db.Text
   schema      Json?
-  initCommand Json?    @map("init_command")
-  enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  initCommand Json?     @map("init_command")
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
+  @@unique([workspaceId, action], map: "uk_tools_workspace_action")
+  @@index([workspaceId], map: "idx_tools_workspace")
   @@map("tools")
 }
 
@@ -979,9 +1142,11 @@ model Tool {
 // ==================================================================
 
 model Model {
-  id           String   @id
-  providerID   String   @map("provider_id")
-  modelID      String   @map("model_id")
+  workspaceId  String    @default("ws_default") @map("workspace_id")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id           String    @id
+  providerID   String    @map("provider_id")
+  modelID      String    @map("model_id")
   name         String
   capabilities Json?
   /**
@@ -996,31 +1161,30 @@ model Model {
    * 线上曾用 provider 级模板把 20 个不支持图片的模型标成支持，之后默认同步全部
    * 跳过（因为它们"有值"），只能靠人工跑 overwrite 才能纠正。
    */
-  capabilitiesSource String? @map("capabilities_source")
+  capabilitiesSource String?  @map("capabilities_source")
   enabled      Boolean  @default(true)
   baseUrl      String?  @map("base_url") @db.Text
   providerType String   @default("cloud") @map("provider_type")
   /**
    * provider 级**固定请求头**（JSON 对象，如 opencode-go 网关要求的
    * `{"x-opencode-session":"vteam"}`）。
-   *
    * 为什么是头而不是请求体：该网关**只认 `x-opencode-session` 头**——实测裸请求报
    * `MissingSessionID`，body 里加 `user`/`safety_identifier` 完全无效，加头立即通过。
    * dsh 引擎早有同类机制（DSH_SESSION_HEADER），opencode 引擎此前没有，导致该路由
    * 在 opencode worker 上永远跑不通。
-   *
    * 存在 model 行上而不是独立 provider 表：与 baseUrl/providerType 同源，
    * updateProvider 会按 providerID 原子重写全部行。
    */
-  headers      Json?    @map("headers")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  headers      Json?     @map("headers")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
   workerAvailabilities WorkerModelAvailability[]
-  defaultForMembers    Member[]                   @relation("MemberDefaultModel")
-  teamDefaults         Team[]                     @relation("TeamDefaultModel")
+  defaultForMembers    Member[]                  @relation("MemberDefaultModel")
+  teamDefaults         Team[]                    @relation("TeamDefaultModel")
 
-  @@unique([providerID, modelID], map: "uk_models_provider_model")
+  @@unique([workspaceId, providerID, modelID], map: "uk_models_workspace_provider_model")
+  @@index([workspaceId], map: "idx_models_workspace")
   @@map("models")
 }
 
@@ -1040,6 +1204,8 @@ model WorkerModelAvailability {
 // ==================================================================
 
 model ModelCredential {
+  workspaceId   String    @default("ws_default") @map("workspace_id")
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id            String    @id
   // token 全局 provider 粒度（关键决策①）——凭据按 providerID 关联，不建 FK
   // （models.provider_id 非唯一，逻辑关联经 ModelsService 查询 provider 解析）
@@ -1053,7 +1219,8 @@ model ModelCredential {
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  @@unique([providerID], map: "uk_model_credentials_provider")
+  @@unique([workspaceId, providerID], map: "uk_model_credentials_workspace_provider")
+  @@index([workspaceId], map: "idx_model_credentials_workspace")
   @@map("model_credentials")
 }
 
@@ -1065,18 +1232,25 @@ model ModelCredential {
 /// sync / worker 快照上报 / listProviders 据此忽略其 live 上报；显式重新添加
 /// （保存凭据、新建模型）时清除该行。
 model ProviderTombstone {
-  providerID String   @id @map("provider_id")
-  deletedAt  DateTime @default(now()) @map("deleted_at")
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  providerID  String    @map("provider_id")
+  deletedAt   DateTime  @default(now()) @map("deleted_at")
 
+  @@id([workspaceId, providerID])
+  @@index([workspaceId], map: "idx_provider_tombstones_workspace")
   @@map("provider_tombstones")
 }
 
 // ===== git 仓库凭证域（17 篇《仓库权限与凭证机制》§3.1/§3.2，B 方案落地）=====
 
 model GitCredential {
+  workspaceId   String    @default("ws_default") @map("workspace_id")
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id            String    @id
   // 凭证名称（人类可识别，复用时区分，Q1 全局唯一）
-  name          String    @unique
+  name          String
   // 认证方式：ssh_key | https_token
   authType      String    @map("auth_type")
   credentialRef String    @map("credential_ref") @db.Text
@@ -1087,37 +1261,47 @@ model GitCredential {
   updatedAt     DateTime  @updatedAt @map("updated_at")
   revokedAt     DateTime? @map("revoked_at")
 
+  @@unique([workspaceId, name], map: "uk_git_credentials_workspace_name")
+  @@index([workspaceId], map: "idx_git_credentials_workspace")
   @@map("git_credentials")
 }
 
 model GitRepo {
+  workspaceId  String    @default("ws_default") @map("workspace_id")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id           String    @id
-  repoUrl      String    @unique @map("repo_url")
+  repoUrl      String    @map("repo_url")
   credentialId String    @map("credential_id")
   createdBy    String    @map("created_by")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
   revokedAt    DateTime? @map("revoked_at")
 
+  @@unique([workspaceId, repoUrl], map: "uk_git_repos_workspace_repo_url")
   @@index([credentialId], map: "idx_git_repos_credential")
+  @@index([workspaceId], map: "idx_git_repos_workspace")
   @@map("git_repos")
 }
 
 model GitRepoGrant {
-  id         String    @id
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id          String    @id
   // agentId 逻辑关联（不建 FK：agents 域主键，Agent 生命周期独立）
   // repoId 逻辑关联 GitRepo.id（不建 Prisma relation，Restrict 由服务层编排）
-  agentId    String    @map("agent_id")
-  repoId     String    @map("repo_id")
-  permission String
-  effect     String
-  grantedBy  String    @map("granted_by")
-  grantedAt  DateTime  @default(now()) @map("granted_at")
-  revokedAt  DateTime? @map("revoked_at")
+  agentId     String    @map("agent_id")
+  repoId      String    @map("repo_id")
+  permission  String
+  effect      String
+  grantedBy   String    @map("granted_by")
+  grantedAt   DateTime  @default(now()) @map("granted_at")
+  revokedAt   DateTime? @map("revoked_at")
 
-  @@unique([agentId, repoId], map: "uk_git_repo_grants_agent_repo")
+  @@unique([workspaceId, agentId, repoId], map: "uk_git_repo_grants_workspace_agent_repo")
   @@index([agentId], map: "idx_git_repo_grants_agent")
   @@index([repoId], map: "idx_git_repo_grants_repo")
+  @@index([workspaceId], map: "idx_git_repo_grants_workspace")
   @@map("git_repo_grants")
 }
 
@@ -1126,17 +1310,22 @@ model GitRepoGrant {
 // ==================================================================
 
 model McpServer {
-  id        String   @id
-  name      String   @unique
-  type      String // local | remote（11 篇 §5.1 两型）
-  command   Json? // local：{command[], cwd?, environment?, timeout?}
-  url       String? // remote：合法 http(s) URL
-  headers   Json? // remote：{header: value}
-  oauth     Json? // remote：{clientId?, clientSecret?, scope?} 或 false（显式禁用）
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id          String    @id
+  name        String
+  type        String // local | remote（11 篇 §5.1 两型）
+  command     Json? // local：{command[], cwd?, environment?, timeout?}
+  url         String? // remote：合法 http(s) URL
+  headers     Json? // remote：{header: value}
+  oauth       Json? // remote：{clientId?, clientSecret?, scope?} 或 false（显式禁用）
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
+  @@unique([workspaceId, name], map: "uk_mcp_servers_workspace_name")
+  @@index([workspaceId], map: "idx_mcp_servers_workspace")
   @@map("mcp_servers")
 }
 
@@ -1145,6 +1334,8 @@ model McpServer {
 // ==================================================================
 
 model Worker {
+  workspaceId     String    @default("ws_default") @map("workspace_id")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id              String    @id
   name            String?
   opencodeVersion String    @map("opencode_version")
@@ -1154,6 +1345,9 @@ model Worker {
   // worker 默认模型兜底（分派时 Agent 未配模型 → 用执行 worker 默认模型，C8）
   defaultModelId  String?   @map("default_model_id")
   tokenHash       String?   @map("token_hash")
+  // 控制面派发到该 worker 时使用的鉴权令牌密文（AES-256-GCM，注册时写入）。
+  // NULL = 旧数据/全局共享 token 模式 → WorkerClient 回退 env WORKER_TOKEN。
+  dispatchTokenRef String?  @map("dispatch_token_ref") @db.Text
   // worker 自更新（worker-self-update Todo 2）：worker 心跳/注册上报的**代码版本**
   // （pack-worker 构建期戳的 git 短 SHA / `manual-<date>` / `dev`）。NULL = 该 worker
   // 从未上报（旧版 worker 或版本解析失败）= 版本未知，UI 展示「未知」而非假装一致。
@@ -1176,13 +1370,16 @@ model Worker {
   sessions            Session[]
   taskGroupInstances  TaskGroupInstance[]
   modelAvailabilities WorkerModelAvailability[]
-  defaultForMembers   Member[]                   @relation("MemberPreferredWorker")
+  defaultForMembers   Member[]                  @relation("MemberPreferredWorker")
 
   @@index([status, lastHeartbeatAt], map: "idx_workers_status_heartbeat")
+  @@index([workspaceId], map: "idx_workers_workspace")
   @@map("workers")
 }
 
 model TaskGroupInstance {
+  workspaceId  String    @default("ws_default") @map("workspace_id")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id           String    @id
   taskId       String?   @map("task_id")
   teamId       String?   @map("team_id")
@@ -1195,8 +1392,9 @@ model TaskGroupInstance {
   task       Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  worker Worker @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker     Worker      @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  @@index([workspaceId], map: "idx_task_group_instances_workspace")
   @@map("task_group_instances")
 }
 
@@ -1205,15 +1403,19 @@ model TaskGroupInstance {
 // ==================================================================
 
 model RealtimeEvent {
-  id        String   @id
-  type      String
-  scopeType String   @map("scope_type")
-  scopeId   String?  @map("scope_id")
-  payload   Json
-  createdAt DateTime @default(now()) @map("created_at")
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id          String    @id
+  type        String
+  scopeType   String    @map("scope_type")
+  scopeId     String?   @map("scope_id")
+  payload     Json
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   @@index([scopeType, scopeId, id], map: "idx_realtime_events_scope_id")
   @@index([createdAt], map: "idx_realtime_events_created_at")
+  @@index([workspaceId], map: "idx_realtime_events_workspace")
   @@map("realtime_events")
 }
 
@@ -1233,32 +1435,35 @@ model RealtimeEvent {
 // plan_tasks 是唯一 choke 点，经 PlanStepsService 由 `vteam_todo` MCP 工具写入；
 // opencode-todos 链已退役。两表勿 DROP。
 model Plan {
-  id                 String   @id // pl_ 前缀，服务层 IdGeneratorService 生成
-  taskId             String   @unique @map("task_id") // 一任务一计划
+  workspaceId        String    @default("ws_default") @map("workspace_id")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id                 String    @id // pl_ 前缀，服务层 IdGeneratorService 生成
+  taskId             String    @unique @map("task_id") // 一任务一计划
   title              String
-  summary            String?  @db.Text
-  scopeIn            String?  @db.Text
-  scopeOut           String?  @db.Text
+  summary            String?   @db.Text
+  scopeIn            String?   @db.Text
+  scopeOut           String?   @db.Text
   status             String // draft/reviewing/pending_final/approved/rejected/executing/completed
-  createdBy          String   @map("created_by") // 主 Agent 实例 id
-  reviewerInstanceId String?  @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派)
-  rejectCount        Int      @default(0) @map("reject_count")
+  createdBy          String    @map("created_by") // 主 Agent 实例 id
+  reviewerInstanceId String?   @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派)
+  rejectCount        Int       @default(0) @map("reject_count")
   // todo2 plans 复活：用户确认审计（加法-only 可空列，todo11 确认门消费，命名锁定勿改）
-  confirmedBy        String?  @map("confirmed_by")
+  confirmedBy        String?   @map("confirmed_by")
   confirmedAt        DateTime? @map("confirmed_at")
-  rejectReason       String?  @db.Text @map("reject_reason")
+  rejectReason       String?   @map("reject_reason") @db.Text
   // 定稿门审计（加法-only 可空列，finalize pending_final→approved 消费，命名锁定勿改）
-  finalizedBy        String?  @map("finalized_by")
+  finalizedBy        String?   @map("finalized_by")
   finalizedAt        DateTime? @map("finalized_at")
   // 定稿冻结双锚（加法-only 可空列，plan-finalize-actions todo 2 finalize 消费，命名锁定勿改）
-  frozenVersion      String?  @map("frozen_version")
-  frozenHash         String?  @map("frozen_hash")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  frozenVersion      String?   @map("frozen_version")
+  frozenHash         String?   @map("frozen_hash")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   task      Task       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   planTasks PlanTask[]
 
+  @@index([workspaceId], map: "idx_plans_workspace")
   @@map("plans")
 }
 
@@ -1325,7 +1530,7 @@ model Memory {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  task    Task?    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([level], map: "idx_memories_level")
   @@index([taskId, createdAt], map: "idx_memories_task_time")
@@ -1368,22 +1573,26 @@ model AgentQuestion {
 // ==================================================================
 
 model MessageChannel {
-  id         String   @id
-  name       String   @db.VarChar(64)
-  type       String   @db.VarChar(32)
-  config     Json     @default("{}")
-  secrets    Json     @default("{}")
-  enabled    Boolean  @default(true)
-  lastStatus String?  @map("last_status") @db.VarChar(16)
-  lastError  String?  @map("last_error") @db.VarChar(512)
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id          String    @id
+  name        String    @db.VarChar(64)
+  type        String    @db.VarChar(32)
+  config      Json      @default("{}")
+  secrets     Json      @default("{}")
+  enabled     Boolean   @default(true)
+  lastStatus  String?   @map("last_status") @db.VarChar(16)
+  lastError   String?   @map("last_error") @db.VarChar(512)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   deliveries MessageDelivery[]
   taskLinks  TaskMessageChannel[]
   teamLinks  TeamMessageChannel[]
   memberLinks MemberMessageChannel[]
 
+  @@index([workspaceId], map: "idx_message_channels_workspace")
   @@map("message_channels")
 }
 
@@ -1406,22 +1615,26 @@ model MessageDelivery {
 }
 
 model NotificationChannel {
-  id         String   @id
-  name       String   @db.VarChar(64)
-  type       String   @db.VarChar(32)
-  config     Json     @default("{}")
-  secrets    Json     @default("{}")
-  enabled    Boolean  @default(true)
-  lastStatus String?  @map("last_status") @db.VarChar(16)
-  lastError  String?  @map("last_error") @db.VarChar(512)
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  /// 归属空间。默认 ws_default 仅用于 seed/回填等未显式指定空间的写入；请求链路由租户中间件强制注入。
+  workspaceId String    @default("ws_default") @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id          String    @id
+  name        String    @db.VarChar(64)
+  type        String    @db.VarChar(32)
+  config      Json      @default("{}")
+  secrets     Json      @default("{}")
+  enabled     Boolean   @default(true)
+  lastStatus  String?   @map("last_status") @db.VarChar(16)
+  lastError   String?   @map("last_error") @db.VarChar(512)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
-  deliveries NotificationDelivery[]
-  taskLinks  TaskNotificationChannel[]
-  teamLinks  TeamNotificationChannel[]
+  deliveries  NotificationDelivery[]
+  taskLinks   TaskNotificationChannel[]
+  teamLinks   TeamNotificationChannel[]
   memberLinks MemberNotificationChannel[]
 
+  @@index([workspaceId], map: "idx_notification_channels_workspace")
   @@map("notification_channels")
 }
 
@@ -1468,15 +1681,15 @@ model TaskNotificationChannel {
 }
 
 model TeamMessageChannel {
- teamId           String         @map("team_id")
- messageChannelId String         @map("message_channel_id")
- team             Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
- messageChannel   MessageChannel @relation(fields: [messageChannelId], references: [id], onDelete: Cascade)
+  teamId           String         @map("team_id")
+  messageChannelId String         @map("message_channel_id")
+  team             Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  messageChannel   MessageChannel @relation(fields: [messageChannelId], references: [id], onDelete: Cascade)
 
- @@id([teamId, messageChannelId])
- @@unique([teamId, messageChannelId])
- @@index([teamId])
- @@map("team_message_channels")
+  @@id([teamId, messageChannelId])
+  @@unique([teamId, messageChannelId])
+  @@index([teamId])
+  @@map("team_message_channels")
 }
 
 /**
@@ -1506,15 +1719,15 @@ model MemberMessageChannel {
 }
 
 model TeamNotificationChannel {
- teamId                String              @map("team_id")
- notificationChannelId String              @map("notification_channel_id")
- team                  Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
- notificationChannel   NotificationChannel @relation(fields: [notificationChannelId], references: [id], onDelete: Cascade)
+  teamId                String              @map("team_id")
+  notificationChannelId String              @map("notification_channel_id")
+  team                  Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  notificationChannel   NotificationChannel @relation(fields: [notificationChannelId], references: [id], onDelete: Cascade)
 
- @@id([teamId, notificationChannelId])
- @@unique([teamId, notificationChannelId])
- @@index([teamId])
- @@map("team_notification_channels")
+  @@id([teamId, notificationChannelId])
+  @@unique([teamId, notificationChannelId])
+  @@index([teamId])
+  @@map("team_notification_channels")
 }
 
 // ==================================================================
@@ -1541,32 +1754,35 @@ model TeamNotificationChannel {
 // ==================================================================
 
 model ModelUsage {
-  id           String  @id // us_ 前缀，服务层 IdGeneratorService 生成（onModuleInit 需 resyncIdPrefix('us')，见域注释）
+  workspaceId      String    @default("ws_default") @map("workspace_id")
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id               String    @id // us_ 前缀，服务层 IdGeneratorService 生成（onModuleInit 需 resyncIdPrefix('us')，见域注释）
   // 调用发生时的归属快照：全部为 id 串软关联（不建 FK，理由见上方域注释）
-  teamId       String  @map("team_id") // 团队（聚合一级维度，非空）
-  teamMemberId String  @map("team_member_id") // 成员归属键（聚合主维度：成员 × 模型）
-  sessionId    String  @map("session_id") // 产生本次调用的会话
-  channelId    String  @map("channel_id") // 产生本次调用的渠道（群聊）
-  agentId      String  @map("agent_id") // 实际执行调用的成员实例
-  taskId       String? @map("task_id") // 任务维度可空（非 task-mode 调用无任务）
+  teamId           String    @map("team_id") // 团队（聚合一级维度，非空）
+  teamMemberId     String    @map("team_member_id") // 成员归属键（聚合主维度：成员 × 模型）
+  sessionId        String    @map("session_id") // 产生本次调用的会话
+  channelId        String    @map("channel_id") // 产生本次调用的渠道（群聊）
+  agentId          String    @map("agent_id") // 实际执行调用的成员实例
+  taskId           String?   @map("task_id") // 任务维度可空（非 task-mode 调用无任务）
   /// 模型标识 = `providerID/modelID` 组合串（上游事件体原样透传）。
   /// 缺失记固定串 `'unknown'`——空串会被当成一个真实模型名参与分组，污染统计口径。
-  model String
+  model            String
   // 六个计数口径与 worker `ServeTokens` 一一对应；脏值（缺字段/NaN/负数）服务层归零
-  inputTokens      Int @default(0) @map("input_tokens")
-  outputTokens     Int @default(0) @map("output_tokens")
-  reasoningTokens  Int @default(0) @map("reasoning_tokens")
-  cacheReadTokens  Int @default(0) @map("cache_read_tokens")
-  cacheWriteTokens Int @default(0) @map("cache_write_tokens")
-  totalTokens      Int @default(0) @map("total_tokens")
+  inputTokens      Int       @default(0) @map("input_tokens")
+  outputTokens     Int       @default(0) @map("output_tokens")
+  reasoningTokens  Int       @default(0) @map("reasoning_tokens")
+  cacheReadTokens  Int       @default(0) @map("cache_read_tokens")
+  cacheWriteTokens Int       @default(0) @map("cache_write_tokens")
+  totalTokens      Int       @default(0) @map("total_tokens")
   /// 上游上报的费用原值（美元）；NULL = 上游未给（未知），非 0 = 免费
-  cost      Float?
-  createdAt DateTime @default(now()) @map("created_at")
+  cost             Float?
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   // 聚合查询面：成员透视 / 模型透视 / 时间维度游标（只累计，不做时间序列切片）
   @@index([teamId, teamMemberId], map: "idx_usage_team_member")
   @@index([teamId, model], map: "idx_usage_team_model")
   @@index([createdAt], map: "idx_usage_created")
+  @@index([workspaceId], map: "idx_model_usages_workspace")
   @@map("model_usages")
 }
 

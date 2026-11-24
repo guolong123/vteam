@@ -1436,7 +1436,14 @@ describe('ExecServer：GET /file（FR-41 文件拉取端点）', () => {
     tmpDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-file-'));
     const { driver } = mockDriver();
     const { sender } = createSender();
-    exec = new ExecServer({ port: 0, driver, sender, workerToken: TOKEN, logger: SILENT_LOGGER });
+    exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: TOKEN,
+      logger: SILENT_LOGGER,
+      workDir: tmpDir,
+    });
     bound = await exec.start();
   });
 
@@ -1480,6 +1487,20 @@ describe('ExecServer：GET /file（FR-41 文件拉取端点）', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.equals(content)).toBe(true);
+  });
+
+  it('M2：workDir 内的文件正常读取（工作目录根内）', async () => {
+    const file = join(tmpDir, 'inside.txt');
+    fs.writeFileSync(file, 'inside');
+    const res = await getFile(bound, file, TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.toString('utf8')).toBe('inside');
+  });
+
+  it('M2：workDir / 临时目录之外的绝对路径 → 403（阻断任意文件读取）', async () => {
+    // process.execPath（node 可执行文件）必然存在且不在 workDir/tmpdir 下
+    const res = await getFile(bound, process.execPath, TOKEN);
+    expect(res.status).toBe(403);
   });
 
   it('文件不存在 → 404', async () => {

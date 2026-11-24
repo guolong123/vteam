@@ -8873,12 +8873,16 @@ export class PlatformMcpService implements OnModuleInit {
    * 跨任务/冒充 403 语义原样保留），返回 `ExecContext.callerId`（tmm_ 成员 id）。
    *
    * 仅有的补充路径：args **双空**（`channel_send` 无任何身份入参；`wecom_reply` /
-   * team-free 工具可缺省上下文）→ 复用「该 worker 最近一次会话」解析
-   * （与 `channelSend`/`wecomReply` 的回填同源：`SESSION.findFirst({workerId}) orderBy
-   * createdAt desc`），命中 taskId → `assertWorkerTask`；命中 teamId → `assertWorkerTeam`；
-   * 仅 teamMemberId → 校验 `selfInstanceId`（若传）后返回。**解析不到成员 → fail-closed
-   * 403 `PLATFORM_MCP_TOOL_NOT_PERMITTED`**（契约 §4：服务端是平台工具的唯一闸门，
-   * todos 4/5 后不得 pass-through）。
+   * team-free 工具可缺省上下文）→ **必须显式带 `selfInstanceId`**，按该成员自己的
+   * 会话唯一解析（`SESSION.findFirst({teamMemberId: selfInstanceId, workerId})`，
+   * 最近一条），命中 taskId → `assertWorkerTask`；命中 teamId → `assertWorkerTeam`；
+   * 仅 teamMemberId → 校验后返回。
+   *
+   * **M0 fail-closed（安全修复）**：已停用「按该 worker 最近一次会话回填」启发式——
+   * 同一 worker 并发多个会话时最近会话可能属于别的成员/团队，会把调用归属到别人的
+   * 任务或团队（跨空间越权的直接路径）。因此双空且未传 `selfInstanceId`、或传了
+   * `selfInstanceId` 却解析不到唯一会话 → **403 `PLATFORM_MCP_TOOL_NOT_PERMITTED`**
+   * （契约 §4：服务端是平台工具的唯一闸门，todos 4/5 后不得 pass-through）。
    */
   async resolveToolCallerId(
     ctx: PlatformMcpContext,
@@ -8892,14 +8896,13 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * 双空上下文回填（task-11）：与 `resolveToolCallerId` 共用同一会话回退实现
+   * 双空上下文回填（task-11）：与 `resolveToolCallerId` 共用同一会话解析实现
    * （`resolveSessionFallback`），单点 precedence，不做第二套绑定逻辑。
    * 显式 taskId/teamId → `resolveExecContext` 全量校验（tm_ 误传 400、mismatch 403
-   * 原样）；双空 → 回填最近会话 ids 并随 callerId 一并返回，调用方（controller）
-   * 在 gate 与 handler 前合并入参。回填不到 → fail-closed 403
-   * `PLATFORM_MCP_TOOL_NOT_PERMITTED`。
-   * 已知启发式局限：同一 worker 并发多会话时最近会话回填可能误归属（与
-   * `channel_send` 既有取舍一致）；显式传参恒优先。
+   * 原样）；双空且**显式传了 selfInstanceId** → 只按该成员自己的会话回填 ids 并随
+   * callerId 一并返回，调用方（controller）在 gate 与 handler 前合并入参。
+   * 双空且无 selfInstanceId / selfInstanceId 无法唯一解析 → fail-closed 403
+   * `PLATFORM_MCP_TOOL_NOT_PERMITTED`（M0：不再按 worker 最近会话猜测归属）。
    */
   async resolveToolCallerWithContext(
     ctx: PlatformMcpContext,
@@ -8913,28 +8916,32 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * worker 最近会话回退（`resolveToolCallerId` 与 `resolveToolCallerWithContext`
-   * 共用）：precedence 为最近会话 taskId > teamId > teamMemberId（带既有
-   * anti-impersonation 校验）> fail-closed 403。
+   * 双空上下文会话解析（`resolveToolCallerId` 与 `resolveToolCallerWithContext` 共用）。
+   *
+   * M0 fail-closed 语义：
+   * - 双空且**未显式提供 selfInstanceId**：没有任何确定的调用方身份，直接 403
+   *   `PLATFORM_MCP_TOOL_NOT_PERMITTED`（不再按「worker 最近会话」启发式猜测；
+   *   同一 worker 并发多会话时最近会话属于别人的成员/团队，归错即越权）。
+   * - 显式 selfInstanceId：只按该成员**自己的**会话解析（`teamMemberId + workerId`
+   *   最近一条）；任务关闭后 workerId 被 reset 清空的场景走「唯一未绑定会话 adopt」
+   *   （仍按 selfInstanceId 精确匹配且要求唯一，不采纳他人会话）。
+   * - 以上都解析不到 → 403 fail-closed，调用方改显式传 taskId/teamId 即可恢复。
    */
   private async resolveSessionFallback(
     ctx: PlatformMcpContext,
     args: { selfInstanceId?: string },
   ): Promise<{ callerId: string; taskId?: string; teamId?: string }> {
-    const sessionSelect = {
-      taskId: true,
-      teamId: true,
-      teamMemberId: true,
-      agentId: true,
-      // 2026-11-17：身份可能以**平台成员 id**（mbr_）传入，需与会话的 memberId 比对
-      memberId: true,
-    } as const;
-    /**
-     * 调用方身份解析（2026-11-17）：`selfInstanceId` 既可能是席位 id（tmm_，旧）也可能是
-     * 平台成员 id（mbr_，新）。mbr_ 不能直接和会话的 `team_member_id` 比字符串，
-     * 否则「成员级身份」在回退路径上必然被误判成冒充 —— 这里先把它展开成席位集合。
-     */
     const rawSelf = (args.selfInstanceId ?? '').trim();
+    if (!rawSelf) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
+        message:
+          '无法解析调用方身份：工具调用未显式提供 taskId/teamId，也未提供 selfInstanceId，' +
+          '按 fail-closed 策略拒绝调用。请显式传 taskId（任务工具）或 teamId（团队工具）后重试。',
+      });
+    }
+    // 成员级身份（mbr_）→ 展开成该成员的全部席位（tmm_）；确保按成员 id 调用时
+    // 只采纳自己的会话，绝不回退命中别人的最近会话（2026-11-17 事故修复 + M0 fail-closed）。
     const isMemberId = rawSelf.startsWith('mbr_');
     const memberSeatIds: string[] = isMemberId
       ? (
@@ -8945,92 +8952,64 @@ export class PlatformMcpService implements OnModuleInit {
         ).map((x) => x.id)
       : [];
 
-    // ① selfInstanceId 精确维度（治本）：先按调用方**自己的**会话解析上下文。
-    //    跨团队 worker 上「最近会话」可能属于别的成员/团队——线上事故 2026-10-13：
-    //    值班群 tm_0000000002 的企微回复被回填成 tm_0000000008（该团队无企微绑定），
-    //    报错却写成「当前团队未绑定企业微信渠道」，把模型引向完全错误的方向。
-    //    有 selfInstanceId 时优先自己的会话，团队必然正确（成员跨团队多会话时取最近）。
-    if (rawSelf) {
-      const ownWhere = isMemberId
-        ? memberSeatIds.length > 0
-          ? { workerId: ctx.workerId, teamMemberId: { in: memberSeatIds } }
-          : null
-        : { workerId: ctx.workerId, teamMemberId: rawSelf };
-      const own = ownWhere
-        ? await this.prisma.session.findFirst({
-            where: ownWhere,
-            orderBy: { createdAt: 'desc' },
-            select: sessionSelect,
-          })
-        : null;
-      if (own) {
-        return this.resolveSessionToCaller(ctx, own, rawSelf);
-      }
+    const sessionSelect = {
+      taskId: true,
+      teamId: true,
+      teamMemberId: true,
+      agentId: true,
+    } as const;
+
+    // ① selfInstanceId 精确维度：只认调用方**自己的**会话（最近一条）。
+    const ownWhere = isMemberId
+      ? memberSeatIds.length > 0
+        ? { teamMemberId: { in: memberSeatIds }, workerId: ctx.workerId }
+        : null
+      : { teamMemberId: rawSelf, workerId: ctx.workerId };
+    const own = ownWhere
+      ? await this.prisma.session.findFirst({
+          where: ownWhere,
+          orderBy: { createdAt: 'desc' },
+          select: sessionSelect,
+        })
+      : null;
+    if (own) {
+      return this.resolveSessionToCaller(ctx, own, rawSelf);
     }
 
-    const session = await this.prisma.session.findFirst({
-      where: { workerId: ctx.workerId },
-      orderBy: { createdAt: 'desc' },
-      select: sessionSelect,
-    });
-    // 任务关闭后会话 workerId 被 reset 清空，回退路径同样兜底 adopt 一次
-    // （teamMemberId 全局唯一，按 selfInstanceId 精确匹配且必须唯一）。
-    let fallbackSession = session;
-    if (!fallbackSession && rawSelf) {
-      const orphanWhere = isMemberId
-        ? memberSeatIds.length > 0
-          ? { teamMemberId: { in: memberSeatIds }, workerId: null }
-          : null
-        : { teamMemberId: rawSelf, workerId: null };
-      const orphans = orphanWhere
-        ? await this.prisma.session.findMany({
-            where: orphanWhere,
-            select: sessionSelect,
-            take: 2,
-          })
-        : [];
-      if (orphans.length === 1) {
-        fallbackSession = orphans[0];
-        await this.prisma.session.updateMany({
+    // ② 任务关闭后会话 workerId 被 reset 清空：adopt 该成员唯一未绑定会话
+    //    （teamMemberId 全局唯一，按 selfInstanceId 精确匹配且必须唯一，不碰他人会话）。
+    const orphanWhere = isMemberId
+      ? memberSeatIds.length > 0
+        ? { teamMemberId: { in: memberSeatIds }, workerId: null }
+        : null
+      : { teamMemberId: rawSelf, workerId: null };
+    const orphans = orphanWhere
+      ? await this.prisma.session.findMany({
           where: orphanWhere,
-          data: { workerId: ctx.workerId },
-        });
-        this.logger.log(
-          `[mcp] adopt 未绑定会话(双空上下文) member=${rawSelf} worker=${ctx.workerId}`,
-        );
-      }
-    }
-    const effectiveSession = fallbackSession ?? session;
-    // ② 防误归属（治本）：显式给了 selfInstanceId，但回退命中的会话属于**别的成员**
-    //    ——宁可 fail-closed 要求显式传参，也不静默把调用归属到他人/他的团队
-    //    （归属错误会连带误导后续所有权限判定与业务动作）。
-    const ownerMismatch = isMemberId
-      ? Boolean(
-          effectiveSession?.memberId && effectiveSession.memberId !== rawSelf,
-        ) ||
-        Boolean(
-          effectiveSession?.teamMemberId &&
-          memberSeatIds.length > 0 &&
-          !memberSeatIds.includes(effectiveSession.teamMemberId),
-        )
-      : Boolean(
-          effectiveSession?.teamMemberId &&
-          effectiveSession.teamMemberId !== rawSelf,
-        );
-    if (rawSelf && effectiveSession && ownerMismatch) {
+          select: sessionSelect,
+          take: 2,
+        })
+      : [];
+    if (orphans.length !== 1) {
       throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        code: isMemberId
+          ? PLATFORM_MCP_ERRORS.FORBIDDEN
+          : PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
         message:
-          `无法可靠解析调用上下文：该 worker 最近会话属于成员 ${effectiveSession.teamMemberId}` +
-          `${effectiveSession.teamId ? `（团队 ${effectiveSession.teamId}）` : ''}，` +
-          `与调用方 ${rawSelf} 不一致。请显式传 teamId（建议同时传 selfInstanceId / selfSessionId）后重试。`,
+          `无法从显式 selfInstanceId（${rawSelf}）唯一确定调用上下文：` +
+          `该 worker 上既无该成员的绑定会话，也无唯一可 adopt 的未绑定会话，` +
+          `按 fail-closed 策略拒绝调用。请显式传 taskId/teamId 后重试。`,
       });
     }
-    return this.resolveSessionToCaller(
-      ctx,
-      effectiveSession,
-      args.selfInstanceId,
+    const adopted = orphans[0];
+    await this.prisma.session.updateMany({
+      where: orphanWhere,
+      data: { workerId: ctx.workerId },
+    });
+    this.logger.log(
+      `[mcp] adopt 未绑定会话(双空+selfInstanceId) member=${rawSelf} worker=${ctx.workerId}`,
     );
+    return this.resolveSessionToCaller(ctx, adopted, rawSelf);
   }
 
   /**

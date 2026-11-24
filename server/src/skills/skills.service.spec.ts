@@ -15,6 +15,7 @@ import {
   SkillsService,
   SKILL_VERSION_NOT_FOUND,
 } from './skills.service';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /** 构造 Prisma 已知错误（P2002 兜底路径验证）。 */
 function prismaError(code: string): Prisma.PrismaClientKnownRequestError {
@@ -154,7 +155,7 @@ describe('SkillsService', () => {
       const result = await service.create(input);
 
       expect(prisma.skill.findUnique).toHaveBeenCalledWith({
-        where: { name: 'git-ops' },
+        where: tenantUniqueWhere('Skill', { name: 'git-ops' }),
       });
       expect(prisma.skill.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -428,7 +429,7 @@ describe('SkillsService', () => {
         where: { id: 'sk_0000000001' },
       });
       expect(prisma.skill.findUnique).toHaveBeenNthCalledWith(2, {
-        where: { name: 'git-ops-v2' },
+        where: tenantUniqueWhere('Skill', { name: 'git-ops-v2' }),
       });
       expect(prisma.skill.update).toHaveBeenCalledWith({
         where: { id: 'sk_0000000001' },
@@ -727,7 +728,7 @@ describe('SkillsService', () => {
       await service.rollback('sk_0000000001', 1);
 
       expect(prisma.skill.findUnique).toHaveBeenNthCalledWith(2, {
-        where: { name: 'git-ops' },
+        where: tenantUniqueWhere('Skill', { name: 'git-ops' }),
       });
       expect(prisma.skill.update).toHaveBeenCalledWith(
         expect.objectContaining({

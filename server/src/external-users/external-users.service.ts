@@ -19,6 +19,7 @@ import {
   QueryExternalUsersDto,
 } from './dto/query-external-users.dto';
 import { UpdateExternalUserDto } from './dto/update-external-user.dto';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /** 调用者可见频道投影（team_group + 调用者 team_user_members 团队）。 */
 interface VisibleChannel {
@@ -369,13 +370,13 @@ export class ExternalUsersService implements OnModuleInit {
     // 先稳定 id：只有没命中时才回退名字键（避免同名合并后再升级时丢稳定身份）
     const hitById = idKey
       ? await this.prisma.externalUser.findUnique({
-          where: { externalId: idKey },
+          where: tenantUniqueWhere('ExternalUser', { externalId: idKey }),
         })
       : null;
     const hit =
       hitById ??
       (await this.prisma.externalUser.findUnique({
-        where: { externalId: nameKey },
+        where: tenantUniqueWhere('ExternalUser', { externalId: nameKey }),
       }));
 
     if (hit) {
@@ -401,7 +402,9 @@ export class ExternalUsersService implements OnModuleInit {
         }
         // 并发升级竞态：另一实例已把同一 externalId 写到别的行 → 重查命中即用
         const raced = await this.prisma.externalUser.findUnique({
-          where: { externalId: patch.externalId ?? hit.externalId },
+          where: tenantUniqueWhere('ExternalUser', {
+            externalId: patch.externalId ?? hit.externalId,
+          }),
         });
         if (raced) {
           return raced;
@@ -431,7 +434,7 @@ export class ExternalUsersService implements OnModuleInit {
       }
       // 多实例并发创建同一 externalId：唯一键兜底，重查一次即可
       const raced = await this.prisma.externalUser.findUnique({
-        where: { externalId },
+        where: tenantUniqueWhere('ExternalUser', { externalId }),
       });
       if (raced) {
         return raced;

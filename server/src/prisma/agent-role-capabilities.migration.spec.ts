@@ -201,7 +201,7 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
     const roleModel =
       schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
     const agentModel = schema.match(/^model Agent \{[\s\S]*?^\}/m)?.[0] ?? '';
-    expect(roleModel).toMatch(/capabilities Json\?\s+@map\("capabilities"\)/);
+    expect(roleModel).toMatch(/capabilities\s+Json\?\s+@map\("capabilities"\)/);
     expect(roleModel).not.toMatch(/^\s*policyId\s/m);
     expect(agentModel).toMatch(/policyId\s+String\?\s+@map\("policy_id"\)/);
   });

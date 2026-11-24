@@ -37,3 +37,40 @@ export function isPlatformAdmin(perms: RolePermissions): boolean {
   const users = p.users as { manage?: boolean } | undefined;
   return users?.manage === true;
 }
+
+/** 判定所需的最小用户形状（避免 permissions.ts 反向依赖 store 运行时）。 */
+export interface SpaceAwareUser {
+  currentWorkspaceId?: string | null;
+  workspaces?: Array<{ id: string; role?: string }> | null;
+  permissions?: RolePermissions;
+}
+
+/** 当前空间的成员角色（owner/admin/member）；找不到返回 undefined。 */
+export function currentWorkspaceRole(
+  user: SpaceAwareUser | null | undefined,
+): string | undefined {
+  const wsId = user?.currentWorkspaceId;
+  if (!wsId || !user?.workspaces) return undefined;
+  return user.workspaces.find((w) => w.id === wsId)?.role;
+}
+
+/**
+ * 当前空间管理员（owner/admin）判定：对齐后端 WorkspaceAdminGuard /
+ * PermissionGuard 的空间管理员兜底语义。
+ */
+export function isWorkspaceManager(
+  user: SpaceAwareUser | null | undefined,
+): boolean {
+  const role = currentWorkspaceRole(user);
+  return role === "owner" || role === "admin";
+}
+
+/**
+ * 是否可管理当前空间（平台管理员不受限；空间管理员限本空间）。
+ * 跨空间与平台级能力仍用 isPlatformAdmin。
+ */
+export function canManageCurrentSpace(
+  user: SpaceAwareUser | null | undefined,
+): boolean {
+  return isPlatformAdmin(user?.permissions) || isWorkspaceManager(user);
+}

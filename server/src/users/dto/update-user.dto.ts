@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsEmail,
   IsNotEmpty,
   IsOptional,
@@ -47,4 +48,22 @@ export class UpdateUserDto {
   @IsString()
   @IsNotEmpty()
   roleId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '用户应加入的工作空间 id 全量集合（传则同步成员关系：增/删；owner 空间不可移除；空数组=不加入任何空间）',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  workspaceIds?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      '用户的当前空间（须在 workspaceIds 内；缺省保持原值，不可用时取第一个）',
+  })
+  @IsOptional()
+  @IsString()
+  currentWorkspaceId?: string;
 }

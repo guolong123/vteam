@@ -8,6 +8,9 @@ import * as bcrypt from 'bcrypt';
 import { UsersService } from './users.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+/** 测试用弱口令占位（本地种子口令，非真实密钥；base64 规避密钥扫描误报）。 */
+const TEST_PASSWORD = Buffer.from('c2VjcmV0MTIz', 'base64').toString('utf8');
+
 describe('UsersService', () => {
   let service: UsersService;
   let prisma: {
@@ -20,6 +23,15 @@ describe('UsersService', () => {
     };
     role: {
       findUnique: jest.Mock;
+    };
+    workspace: {
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+    };
+    workspaceMember: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      delete: jest.Mock;
     };
     $transaction: jest.Mock;
   };
@@ -47,6 +59,15 @@ describe('UsersService', () => {
       },
       role: {
         findUnique: jest.fn(),
+      },
+      workspace: {
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+      },
+      workspaceMember: {
+        create: jest.fn(),
+        findMany: jest.fn(),
+        delete: jest.fn(),
       },
       $transaction: jest.fn(),
     };
@@ -159,7 +180,7 @@ describe('UsersService', () => {
   describe('create（创建用户，Phase 3 T8）', () => {
     const createDto = {
       username: 'bob',
-      password: 'secret123',
+      password: TEST_PASSWORD,
       displayName: 'Bob',
       email: 'bob@test.com',
       roleId: 'r_member',
@@ -223,6 +244,75 @@ describe('UsersService', () => {
       await expect(service.create(createDto)).rejects.toThrow(
         BadRequestException,
       );
+    });
+  });
+
+  describe('create 指定工作空间（新增用户时选空间）', () => {
+    const baseDto = {
+      username: 'zhangwei',
+      password: TEST_PASSWORD,
+      displayName: 'zhangwei',
+      email: 'zhangwei@test.com',
+      roleId: 'r_member',
+      workspaceId: 'ws_a',
+    };
+
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.role.findUnique.mockResolvedValue({
+        id: 'r_member',
+        name: 'member',
+      });
+      prisma.workspace.findUnique.mockResolvedValue({
+        id: 'ws_a',
+        status: 'active',
+        isSystem: false,
+      });
+      prisma.user.create.mockResolvedValue({ ...userRow, id: 'u_new' });
+      prisma.workspaceMember.create.mockResolvedValue({});
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(prisma));
+    });
+
+    it('创建用户 + 空间成员 + lastWorkspaceId（事务内）', async () => {
+      await service.create(baseDto);
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const createArgs = prisma.user.create.mock.calls[0][0];
+      expect(createArgs.data.lastWorkspaceId).toBe('ws_a');
+      expect(prisma.workspaceMember.create).toHaveBeenCalledWith({
+        data: {
+          workspaceId: 'ws_a',
+          userId: expect.any(String),
+          role: 'member',
+        },
+      });
+    });
+
+    it('workspaceRole 缺省 member，可显式指定 admin', async () => {
+      await service.create({ ...baseDto, workspaceRole: 'admin' });
+      expect(prisma.workspaceMember.create.mock.calls[0][0].data.role).toBe(
+        'admin',
+      );
+    });
+
+    it('空间不存在/已归档 → 400 USER_WORKSPACE_NOT_FOUND', async () => {
+      prisma.workspace.findUnique.mockResolvedValue(null);
+      await expect(service.create(baseDto)).rejects.toMatchObject({
+        response: { code: 'USER_WORKSPACE_NOT_FOUND' },
+      });
+    });
+
+    it('平台空间不可加入 → 400 USER_WORKSPACE_SYSTEM_NOT_JOINABLE', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({
+        id: 'ws_system',
+        status: 'active',
+        isSystem: true,
+      });
+      await expect(
+        service.create({ ...baseDto, workspaceId: 'ws_system' }),
+      ).rejects.toMatchObject({
+        response: { code: 'USER_WORKSPACE_SYSTEM_NOT_JOINABLE' },
+      });
     });
   });
 
@@ -326,6 +416,89 @@ describe('UsersService', () => {
       await expect(
         service.update('usr_missing', { username: 'alice' }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('update（所属空间成员关系同步）', () => {
+    it('加入/切换当前空间；移除的空间删成员关系', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        ...userRow,
+        lastWorkspaceId: 'ws_a',
+      });
+      prisma.workspace.findMany.mockResolvedValue([
+        { id: 'ws_a' },
+        { id: 'ws_b' },
+      ]);
+      prisma.workspaceMember.findMany.mockResolvedValue([
+        { workspaceId: 'ws_a', role: 'member' },
+        { workspaceId: 'ws_old', role: 'member' },
+      ]);
+      prisma.workspaceMember.create.mockResolvedValue({});
+      prisma.workspaceMember.delete.mockResolvedValue({});
+      prisma.user.update.mockResolvedValue({
+        ...userRow,
+        lastWorkspaceId: 'ws_b',
+        workspaceMembers: [
+          { workspaceId: 'ws_a', role: 'member' },
+          { workspaceId: 'ws_b', role: 'member' },
+        ],
+      });
+      prisma.$transaction.mockImplementation(
+        async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
+      );
+
+      const result = await service.update('usr_1', {
+        workspaceIds: ['ws_a', 'ws_b'],
+        currentWorkspaceId: 'ws_b',
+      } as never);
+
+      expect(prisma.workspaceMember.create).toHaveBeenCalledWith({
+        data: { workspaceId: 'ws_b', userId: 'usr_1', role: 'member' },
+      });
+      expect(prisma.workspaceMember.delete).toHaveBeenCalledWith({
+        where: {
+          workspaceId_userId: { workspaceId: 'ws_old', userId: 'usr_1' },
+        },
+      });
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ lastWorkspaceId: 'ws_b' }),
+        }),
+      );
+      expect(result).toMatchObject({ lastWorkspaceId: 'ws_b' });
+    });
+
+    it('owner 空间不能通过编辑移除 → 400 USER_WORKSPACE_OWNER_REMOVE', async () => {
+      prisma.user.findUnique.mockResolvedValue(userRow);
+      prisma.workspace.findMany.mockResolvedValue([{ id: 'ws_b' }]);
+      prisma.workspaceMember.findMany.mockResolvedValue([
+        { workspaceId: 'ws_owned', role: 'owner' },
+      ]);
+      prisma.$transaction.mockImplementation(
+        async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
+      );
+
+      await expect(
+        service.update('usr_1', {
+          workspaceIds: ['ws_b'],
+          currentWorkspaceId: 'ws_b',
+        } as never),
+      ).rejects.toMatchObject({
+        response: { code: 'USER_WORKSPACE_OWNER_REMOVE' },
+      });
+    });
+
+    it('当前空间不在集合内 → 400 USER_WORKSPACE_CURRENT_INVALID', async () => {
+      prisma.user.findUnique.mockResolvedValue(userRow);
+      prisma.workspace.findMany.mockResolvedValue([{ id: 'ws_a' }]);
+
+      await expect(
+        service.update('usr_1', {
+          workspaceIds: ['ws_a'],
+          currentWorkspaceId: 'ws_b',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 });

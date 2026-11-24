@@ -1,6 +1,7 @@
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import {
   CoordinationMetricsResponse,
   CoordinationMetricsService,
@@ -40,7 +41,7 @@ export class CoordinationMetricsController {
    * 窗口内无任何消息 ⇒ 全 0 指标（不是错误）。
    */
   @Get('teams/:teamId/coordination-metrics')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary:
       '团队协调度指标（PM 产出物数/消息占比/派发 vs 亲做/群私双报；仅管理员；只读）',

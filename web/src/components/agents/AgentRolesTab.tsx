@@ -20,6 +20,7 @@
  *   默认 Agent 只有 defaultAgentId 一个槽位（外部引擎名槽位已随该功能下线移除）。
  *   能力点目录（key / 中文名 / 覆盖工具）见 `src/api/role-capabilities.ts`。
  */
+import { SpaceBadge } from "@/src/components/ui/space-badge";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -428,6 +429,7 @@ export function AgentRolesTab({
                   <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
                     <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
                       {role.name}
+                      <SpaceBadge workspaceId={(role as unknown as { workspaceId?: string }).workspaceId} />
                     </span>
                     <span
                       data-testid="role-type-badge"

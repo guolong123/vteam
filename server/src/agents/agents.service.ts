@@ -459,6 +459,7 @@ export class AgentsService implements OnModuleInit {
       })),
     );
     return rows.map((agent, i) => ({
+      workspaceId: (agent as unknown as { workspaceId?: string }).workspaceId,
       id: agent.id,
       name: agent.name,
       role: agent.agentKey,

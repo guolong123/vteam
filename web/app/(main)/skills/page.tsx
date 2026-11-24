@@ -42,6 +42,7 @@
  *   遵循「扩展 token」范式不写 tokens.ts 基线。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；scoped 动画 stmmcp- 前缀防污染。
  */
+import { CreateSpaceHint, SpaceBadge } from "@/src/components/ui/space-badge";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -237,6 +238,7 @@ interface McpSyncResult {
 
 interface SkillItem {
   id: string;
+  workspaceId?: string;
   name: string;
   version: string;
   desc: string;
@@ -248,6 +250,7 @@ interface SkillItem {
 
 interface BuiltinTool {
   id: string;
+  workspaceId?: string;
   name: string;
   version: string;
   desc: string;
@@ -290,6 +293,7 @@ function toSkillItem(s: ApiSkill): SkillItem {
   const fileMeta = s.fileMeta as { version?: string } | null;
   return {
     id: s.id,
+    workspaceId: (s as unknown as { workspaceId?: string }).workspaceId,
     name: s.name,
     version: fileMeta?.version ?? "v1",
     desc: s.description ?? "—",
@@ -324,6 +328,7 @@ function toBuiltinTool(t: ApiTool): BuiltinTool {
   const backendDesc = typeof t.description === "string" ? t.description.trim() : "";
   return {
     id: t.id,
+    workspaceId: (t as unknown as { workspaceId?: string }).workspaceId,
     name: t.name,
     version: "v1",
     desc: backendDesc || `调用标识 ${t.action}`,
@@ -623,6 +628,7 @@ function SkillItemRow({
             {s.name}
           </span>
           <VersionPill version={s.version} />
+          <SpaceBadge workspaceId={s.workspaceId} />
         </div>
         <span
           style={{
@@ -830,6 +836,7 @@ function BuiltinToolRow({
             {t.name}
           </span>
           <VersionPill version={t.version} />
+          <SpaceBadge workspaceId={t.workspaceId} />
         </div>
         <span
           style={{
@@ -1223,6 +1230,7 @@ function McpServerRow({
           }}
         >
           {server.name}
+          <SpaceBadge workspaceId={(server as unknown as { workspaceId?: string }).workspaceId} />
         </span>
         <span
           style={{
@@ -2510,6 +2518,12 @@ export default function SkillToolManagePage() {
   const loadError = (() => {
     const err = skillsQuery.error ?? builtinToolsQuery.error ?? mcpToolsQuery.error ?? mcpServersQuery.error;
     if (!err) return null;
+    // 已有缓存数据时不要用整页错误态盖住列表（典型场景：MCP 保存后自动同步失败，
+    // 列表数据仍在缓存，整页 error 会让页面看似“加载失败”且必须手动重试）。
+    const hasCachedData = Boolean(
+      skillsQuery.data ?? builtinToolsQuery.data ?? mcpToolsQuery.data ?? mcpServersQuery.data,
+    );
+    if (hasCachedData) return null;
     return isApiError(err) ? err.message : "加载技能/工具列表失败";
   })();
   const isLoading = skillsQuery.isPending || builtinToolsQuery.isPending || mcpToolsQuery.isPending || mcpServersQuery.isPending;
@@ -2889,6 +2903,7 @@ export default function SkillToolManagePage() {
           width: "100%",
         }}
       >
+        <CreateSpaceHint />
         {/* 页面内反馈条（编辑/启停/上传/注册 的操作反馈，3s 自动消失） */}
         {notice && (
           <div

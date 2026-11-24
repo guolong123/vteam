@@ -5,8 +5,11 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionGuard } from './permission.guard';
 import { REQUIRE_PERMISSION_KEY } from '../decorators/require-permission.decorator';
 
-function mockContext(user: { id?: string } | undefined) {
-  const request = { user };
+function mockContext(
+  user: { id?: string } | undefined,
+  tenant?: { workspaceId: string },
+) {
+  const request = { user, tenant };
   return {
     switchToHttp: () => ({ getRequest: () => request }),
     getHandler: () => ({}),
@@ -28,11 +31,13 @@ describe('PermissionGuard', () => {
   let reflector: { getAllAndOverride: jest.Mock };
   let prisma: {
     user: { findUnique: jest.Mock };
+    workspaceMember: { findUnique: jest.Mock };
   };
 
   beforeEach(async () => {
     prisma = {
       user: { findUnique: jest.fn() },
+      workspaceMember: { findUnique: jest.fn() },
     };
     reflector = { getAllAndOverride: jest.fn().mockReturnValue('agents.view') };
 
@@ -187,5 +192,80 @@ describe('PermissionGuard', () => {
       REQUIRE_PERMISSION_KEY,
       [context.getHandler(), context.getClass()],
     );
+  });
+
+  it('平台权限点：自定义角色可单独授予 platform.relocate_resource', async () => {
+    reflector.getAllAndOverride.mockReturnValue('platform.relocate_resource');
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u_x',
+      enabled: true,
+      role: { permissions: { platform: { relocate_resource: true } } },
+    });
+    await expect(guard.canActivate(mockContext({ id: 'u_x' }))).resolves.toBe(
+      true,
+    );
+  });
+
+  it('平台权限点：未授予 → 403（成员只读语义不放行写类权限点）', async () => {
+    reflector.getAllAndOverride.mockReturnValue('platform.relocate_resource');
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u_member',
+      enabled: true,
+      role: { permissions: { all: false } },
+    });
+    await expect(
+      guard.canActivate(mockContext({ id: 'u_member' })),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('空间管理员兜底：本空间 owner/admin 可写空间级资源（如 teams.create）', async () => {
+    reflector.getAllAndOverride.mockReturnValue('teams.create');
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u_space_admin',
+      enabled: true,
+      role: { permissions: { all: false } },
+    });
+    prisma.workspaceMember.findUnique.mockResolvedValue({ role: 'admin' });
+    await expect(
+      guard.canActivate(
+        mockContext({ id: 'u_space_admin' }, { workspaceId: 'ws_a' }),
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it('空间管理员不能操作平台级资源（users.create / roles.manage）', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u_space_admin',
+      enabled: true,
+      role: { permissions: { all: false } },
+    });
+    prisma.workspaceMember.findUnique.mockResolvedValue({ role: 'admin' });
+    for (const point of [
+      'users.create',
+      'roles.manage',
+      'stats.manage',
+      'platform.relocate_resource',
+    ]) {
+      reflector.getAllAndOverride.mockReturnValue(point);
+      await expect(
+        guard.canActivate(
+          mockContext({ id: 'u_space_admin' }, { workspaceId: 'ws_a' }),
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    }
+  });
+
+  it('系统空间不享受空间管理员兜底（只归平台管理员）', async () => {
+    reflector.getAllAndOverride.mockReturnValue('teams.create');
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u_space_admin',
+      enabled: true,
+      role: { permissions: { all: false } },
+    });
+    await expect(
+      guard.canActivate(
+        mockContext({ id: 'u_space_admin' }, { workspaceId: 'ws_system' }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

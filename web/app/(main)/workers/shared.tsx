@@ -67,6 +67,8 @@ export const pulseCss = `
  *  列表接口不返回 capabilities（单行 300KB+，触发 MySQL filesort OOM）；详情接口仍返回。 */
 export interface WorkerItem {
   id: string;
+  /** 所属工作空间（ws_system = 平台共享节点） */
+  workspaceId?: string;
   name: string | null;
   opencodeVersion: string;
   capabilities?: {

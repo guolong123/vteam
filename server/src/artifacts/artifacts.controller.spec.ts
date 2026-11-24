@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
@@ -18,6 +19,9 @@ describe('ArtifactsController', () => {
     findVersion: jest.fn(),
     append: jest.fn(),
     restore: jest.fn(),
+    remove: jest.fn(),
+    // M0：:id 为任务 id 的端点（append）与其他产出物归属 assert
+    assertTaskMember: jest.fn(),
   };
   const prismaMock = {
     user: { findUnique: jest.fn() },
@@ -25,8 +29,11 @@ describe('ArtifactsController', () => {
     teamUserMember: { findUnique: jest.fn() },
   };
 
+  const memberUser = { id: 'u_member' } as any;
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    service.assertTaskMember.mockResolvedValue(undefined);
     const moduleRef = await Test.createTestingModule({
       controllers: [ArtifactsController],
       providers: [
@@ -45,19 +52,27 @@ describe('ArtifactsController', () => {
 
   it('GET /tasks/:id/artifacts：转发 findByTask（id + 查询参数）', async () => {
     await expect(
-      controller.findByTask('t_0000000001', {
+      controller.findByTask(
+        't_0000000001',
+        {
+          type: 'text',
+          accepted: 'true',
+          page: 1,
+          pageSize: 20,
+        },
+        memberUser,
+      ),
+    ).resolves.toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+    expect(service.findByTask).toHaveBeenCalledWith(
+      't_0000000001',
+      {
         type: 'text',
         accepted: 'true',
         page: 1,
         pageSize: 20,
-      }),
-    ).resolves.toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
-    expect(service.findByTask).toHaveBeenCalledWith('t_0000000001', {
-      type: 'text',
-      accepted: 'true',
-      page: 1,
-      pageSize: 20,
-    });
+      },
+      'u_member',
+    );
   });
 
   it('GET /artifacts/:id：转发 findOne', async () => {
@@ -65,20 +80,28 @@ describe('ArtifactsController', () => {
       id: 'art_0000000001',
       currentVersion: 1,
     });
-    await expect(controller.findOne('art_0000000001')).resolves.toEqual({
+    await expect(
+      controller.findOne('art_0000000001', memberUser),
+    ).resolves.toEqual({
       id: 'art_0000000001',
       currentVersion: 1,
     });
-    expect(service.findOne).toHaveBeenCalledWith('art_0000000001');
+    expect(service.findOne).toHaveBeenCalledWith('art_0000000001', 'u_member');
   });
 
   it('GET /artifacts/:id/versions/:version：ParseIntPipe 转 number 后转发 findVersion', async () => {
     service.findVersion.mockResolvedValue({ version: 2, contentRef: 'ref' });
-    await expect(controller.findVersion('art_0000000001', 2)).resolves.toEqual({
+    await expect(
+      controller.findVersion('art_0000000001', 2, memberUser),
+    ).resolves.toEqual({
       version: 2,
       contentRef: 'ref',
     });
-    expect(service.findVersion).toHaveBeenCalledWith('art_0000000001', 2);
+    expect(service.findVersion).toHaveBeenCalledWith(
+      'art_0000000001',
+      2,
+      'u_member',
+    );
   });
 
   it('POST /tasks/:id/artifacts：body 组装 payload 后转 append', async () => {
@@ -87,15 +110,23 @@ describe('ArtifactsController', () => {
       artifact: { id: 'art_0000000001' },
     });
     await expect(
-      controller.append('t_0000000001', {
-        type: 'text',
-        title: '验收结论',
-        content: '通过',
-      }),
+      controller.append(
+        't_0000000001',
+        {
+          type: 'text',
+          title: '验收结论',
+          content: '通过',
+        },
+        memberUser,
+      ),
     ).resolves.toEqual({
       status: 'archived',
       artifact: { id: 'art_0000000001' },
     });
+    expect(service.assertTaskMember).toHaveBeenCalledWith(
+      't_0000000001',
+      'u_member',
+    );
     expect(service.append).toHaveBeenCalledWith('t_0000000001', {
       taskId: 't_0000000001',
       type: 'text',
@@ -112,12 +143,16 @@ describe('ArtifactsController', () => {
       artifact: { id: 'art_0000000001', category: '需求' },
     });
     await expect(
-      controller.append('t_0000000001', {
-        type: 'text',
-        title: '需求说明',
-        content: '正文',
-        category: '需求',
-      }),
+      controller.append(
+        't_0000000001',
+        {
+          type: 'text',
+          title: '需求说明',
+          content: '正文',
+          category: '需求',
+        },
+        memberUser,
+      ),
     ).resolves.toEqual({
       status: 'archived',
       artifact: { id: 'art_0000000001', category: '需求' },
@@ -138,12 +173,16 @@ describe('ArtifactsController', () => {
       artifact: { id: 'art_0000000001' },
     });
     await expect(
-      controller.restore('art_0000000001', { version: 1 }),
+      controller.restore('art_0000000001', { version: 1 }, memberUser),
     ).resolves.toEqual({
       status: 'restored',
       artifact: { id: 'art_0000000001' },
     });
-    expect(service.restore).toHaveBeenCalledWith('art_0000000001', 1);
+    expect(service.restore).toHaveBeenCalledWith(
+      'art_0000000001',
+      1,
+      'u_member',
+    );
   });
 
   describe('GET /teams/:id/artifacts（T5 团队聚合端点）', () => {
@@ -205,6 +244,37 @@ describe('ArtifactsController', () => {
       expect(
         Reflect.getMetadata(REQUIRE_PERMISSION_KEY, controller.findByTeam),
       ).toBe('artifacts.view');
+    });
+  });
+
+  describe('M0 止血：产出物归属校验（service 层 assert，控制器透传调用方）', () => {
+    it('DELETE /artifacts/:id：转发 remove（id + userId）', async () => {
+      service.remove.mockResolvedValue(undefined);
+      await expect(
+        controller.remove('art_0000000001', memberUser),
+      ).resolves.toEqual({ deleted: true });
+      expect(service.remove).toHaveBeenCalledWith('art_0000000001', 'u_member');
+    });
+
+    it('POST /tasks/:id/artifacts：非成员 → 403，且不调用归档', async () => {
+      service.assertTaskMember.mockRejectedValue(
+        new ForbiddenException({
+          code: 'PERMISSION_TEAM_NOT_MEMBER',
+          message: '您不是该团队成员',
+        }),
+      );
+
+      await expect(
+        controller.append(
+          't_0000000001',
+          { type: 'text', title: '验收结论', content: '通过' },
+          { id: 'u_out' } as any,
+        ),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+      expect(service.append).not.toHaveBeenCalled();
     });
   });
 

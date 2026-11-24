@@ -19,6 +19,7 @@ import {
 import { CreateToolDto } from './dto/create-tool.dto';
 import { QueryToolsDto } from './dto/query-tools.dto';
 import { UpdateToolDto } from './dto/update-tool.dto';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /** Tool 域主键前缀（对齐 15 篇 §2.2：`tl_<零填充序号>`，如 tl_0000000001）。 */
 const TOOL_ID_PREFIX = 'tl';
@@ -186,7 +187,7 @@ export class ToolsService implements OnModuleInit {
   /** action 唯一校验（仅 POST 注册时）：已存在 → 409 TOOL_ACTION_EXISTS。 */
   private async assertActionAvailable(action: string): Promise<void> {
     const hit = await this.prisma.tool.findUnique({
-      where: { action: action.trim() },
+      where: tenantUniqueWhere('Tool', { action: action.trim() }),
       select: { id: true },
     });
     if (hit) {

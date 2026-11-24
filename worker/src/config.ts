@@ -21,6 +21,16 @@ export interface WorkerConfig {
   workerId: string;
   /** worker 可读名称（注册时可选展示）；默认取 hostname */
   workerName: string;
+  /**
+   * worker 所属工作空间 id（env WORKSPACE_ID）。空 = 不指定，由服务端按既有归属/
+   * 默认空间处理；多空间部署时每个空间的 worker 必须显式设置，否则会落到默认空间。
+   */
+  workspaceId?: string;
+  /**
+   * 空间 worker 加入码（env WORKER_JOIN_TOKEN）：非默认空间注册时服务端校验；
+   * 由管理员 POST /workspaces/:id/worker-token 签发。
+   */
+  joinToken?: string;
   /** opencode serve 端口；0 = 随机端口（D2 端口冲突重试策略的随机起点，T3 由 OS 分配空闲端口） */
   opencodeServePort: number;
   /**
@@ -537,6 +547,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const hostname = os.hostname();
   const workerId = (env.WORKER_ID ?? '').trim() || `w_${hostname}`;
   const workerName = (env.WORKER_NAME ?? '').trim() || hostname;
+  const workspaceId = (env.WORKSPACE_ID ?? '').trim() || undefined;
+  const joinToken = (env.WORKER_JOIN_TOKEN ?? '').trim() || undefined;
   const advertiseHostRaw = (env.WORKER_ADVERTISE_HOST ?? '').trim();
   // 未显式设置时自动探测本机非回环 IPv4 作为上报基址（detectLocalIPv4 失败/无命中回退
   // http://127.0.0.1——仅本机可访问，跨机 worker 场景由启动告警引导显式设置）。
@@ -554,6 +566,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     serverUrl: (env.SERVER_URL ?? '').trim() || 'http://localhost:3000',
     workerId,
     workerName,
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(joinToken ? { joinToken } : {}),
     opencodeServePort: parseNonNegativeInt('OPENCODE_SERVE_PORT', env.OPENCODE_SERVE_PORT, 0),
     serverPassword: (env.OPENCODE_SERVER_PASSWORD ?? '').trim(),
     allowGeneratedPassword: parseBool(

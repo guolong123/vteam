@@ -9,6 +9,8 @@ import { Prisma } from '@prisma/client';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
+import { getTenantContext } from '../common/tenant/tenant-context';
+import { TENANT_WORKSPACE_ID } from '../common/tenant/tenant.constants';
 
 /**
  * 事件作用域（09 篇 §4.2 订阅粒度）。
@@ -34,6 +36,11 @@ export interface RealtimeEvent {
   timestamp: string;
   scopeType: RealtimeScopeType;
   scopeId: string | null;
+  /**
+   * 事件所属工作空间（租户隔离）：SSE 按连接空间过滤、历史补拉按空间查。
+   * 由 emit 时的租户上下文决定；无上下文（启动期/定时任务）回落默认空间。
+   */
+  workspaceId?: string;
   /**
    * 团队域归属（scope=all 全量订阅时的可见团队过滤依据；内存路由字段，不落库、不下发）：
    * - team scope → scopeId；channel scope → 频道 teamId（团队频道）或其任务 teamId（任务频道）；
@@ -226,6 +233,8 @@ export class RealtimeService implements OnModuleInit {
       timestamp: new Date().toISOString(),
       scopeType: resolved.type,
       scopeId: resolved.id ?? null,
+      workspaceId:
+        getTenantContext()?.workspaceId ?? TENANT_WORKSPACE_ID.DEFAULT,
     };
 
     event.teamId = await this.resolveTeamIdOfEvent(event);
@@ -240,6 +249,7 @@ export class RealtimeService implements OnModuleInit {
           type: event.type,
           scopeType: event.scopeType,
           scopeId: event.scopeId,
+          workspaceId: event.workspaceId ?? TENANT_WORKSPACE_ID.DEFAULT,
           payload: event.payload as Prisma.InputJsonValue,
         },
       });
@@ -361,12 +371,21 @@ export class RealtimeService implements OnModuleInit {
     listener: RealtimeEventListener,
     scopes?: RealtimeScope | RealtimeScope[],
     visibleTeamIds?: string[] | null,
+    workspaceId?: string,
   ): () => void {
     const scopeList = this.toScopeList(scopes);
     const teamFilter = this.toTeamFilter(visibleTeamIds);
-    const needsFilter = scopeList.length > 0 || teamFilter !== null;
+    const needsFilter =
+      scopeList.length > 0 || teamFilter !== null || !!workspaceId;
     const wrapped: RealtimeEventListener = needsFilter
       ? (event) => {
+          // 租户隔离：连接所属空间之外的事件一律不下发。
+          if (
+            workspaceId &&
+            (event.workspaceId ?? TENANT_WORKSPACE_ID.DEFAULT) !== workspaceId
+          ) {
+            return;
+          }
           if (!this.passesVisibility(event, teamFilter)) {
             return;
           }
@@ -399,9 +418,14 @@ export class RealtimeService implements OnModuleInit {
     since?: string,
     scopes?: RealtimeScope | RealtimeScope[],
     visibleTeamIds?: string[] | null,
+    workspaceId?: string,
   ): Promise<RealtimeEvent[]> {
     const where: Prisma.RealtimeEventWhereInput =
       this.buildScopeWhereList(scopes);
+    // 租户隔离：历史补拉只取连接所属空间的事件。
+    if (workspaceId) {
+      where.workspaceId = workspaceId;
+    }
     // 无游标（缺省/空串）与 'latest' 一律「仅续增量」：以当前最新 id 为游标，绝不重放历史。
     const skipReplay =
       since === 'latest' ||
@@ -525,6 +549,7 @@ export class RealtimeService implements OnModuleInit {
     scopeId: string | null;
     payload: unknown;
     createdAt: Date;
+    workspaceId?: string;
   }): RealtimeEvent {
     return {
       id: row.id,
@@ -533,6 +558,7 @@ export class RealtimeService implements OnModuleInit {
       timestamp: row.createdAt.toISOString(),
       scopeType: row.scopeType as RealtimeScopeType,
       scopeId: row.scopeId,
+      workspaceId: row.workspaceId ?? TENANT_WORKSPACE_ID.DEFAULT,
     };
   }
 

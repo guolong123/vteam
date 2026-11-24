@@ -1,4 +1,6 @@
 import { INestApplication } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -26,6 +28,20 @@ describe('WorkerEventsController (HTTP)', () => {
         // guard 依赖 WORKER_TOKEN env；mock 返回 undefined → 落到默认 dev-worker-token
         { provide: ConfigService, useValue: { get: jest.fn(() => undefined) } },
         WorkerTokenGuard,
+        {
+          provide: PrismaService,
+          useValue: {
+            workspace: { findFirst: jest.fn().mockResolvedValue(null) },
+            worker: { findUnique: jest.fn().mockResolvedValue(null) },
+          },
+        },
+        {
+          provide: PrismaService,
+          useValue: {
+            workspace: { findFirst: jest.fn().mockResolvedValue(null) },
+            worker: { findUnique: jest.fn().mockResolvedValue(null) },
+          },
+        },
       ],
     }).compile();
 

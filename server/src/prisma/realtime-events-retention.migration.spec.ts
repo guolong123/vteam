@@ -156,7 +156,11 @@ describe('migration 20261015000000_realtime_events_retention', () => {
     expect(baselineSql()).toMatch(/idx_realtime_events_scope_id/);
     // schema 侧两个索引都必须声明齐。
     expect(schemaIndexes()).toEqual(
-      new Set(['idx_realtime_events_scope_id', INDEX]),
+      new Set([
+        'idx_realtime_events_scope_id',
+        INDEX,
+        'idx_realtime_events_workspace',
+      ]),
     );
   });
 

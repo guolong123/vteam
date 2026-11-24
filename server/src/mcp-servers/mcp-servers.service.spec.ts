@@ -11,6 +11,7 @@ import { WorkersService } from '../workers/workers.service';
 import { CreateMcpServerDto } from './dto/create-mcp-server.dto';
 import { UpdateMcpServerDto } from './dto/update-mcp-server.dto';
 import { McpServersService } from './mcp-servers.service';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 describe('McpServersService', () => {
   let service: McpServersService;
@@ -417,7 +418,7 @@ describe('McpServersService', () => {
       const result = await service.create(dto);
 
       expect(prisma.mcpServer.findUnique).toHaveBeenCalledWith({
-        where: { name: 'gitee-ent' },
+        where: tenantUniqueWhere('McpServer', { name: 'gitee-ent' }),
         select: { id: true },
       });
       expect(prisma.mcpServer.create).toHaveBeenCalledWith({
@@ -842,7 +843,7 @@ describe('McpServersService', () => {
       const result = await service.syncTools('ms_0000000009');
 
       expect(prisma.tool.findUnique).toHaveBeenCalledWith({
-        where: { action: 'allocation.list' },
+        where: tenantUniqueWhere('Tool', { action: 'allocation.list' }),
       });
       expect(result).toMatchObject({ created: 1 });
     });

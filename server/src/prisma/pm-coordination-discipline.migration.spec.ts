@@ -356,7 +356,7 @@ describe(`migration ${MIGRATION_DIR_NAME}`, () => {
     // schema.prisma 与 baseline 仍一致（列名/类型不得漂移）。
     const schema = fs.readFileSync(SCHEMA, 'utf8');
     expect(schema).toMatch(
-      /rolePrompt\s+String\?\s+@db\.Text @map\("role_prompt"\)/,
+      /rolePrompt\s+String\?\s+@map\("role_prompt"\)\s+@db\.Text/,
     );
     expect(schema).toMatch(/config\s+Json/);
   });

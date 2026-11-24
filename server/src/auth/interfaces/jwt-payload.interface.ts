@@ -8,6 +8,11 @@ export interface JwtPayload {
   roleId: string;
   /** access | refresh */
   type: string;
+  /**
+   * 当前工作空间 id（登录/切换空间时签入）。
+   * 兼容旧 token：缺省时由 WorkspaceGuard 回退 lastWorkspaceId / 首个成员空间。
+   */
+  wid?: string;
 }
 
 /** JwtAuthGuard 校验通过后挂到 request.user 上的结构 */
@@ -16,6 +21,8 @@ export interface AuthenticatedUser {
   username: string;
   roleId: string;
   tokenType: string;
+  /** 当前工作空间 id（JWT wid；WorkspaceGuard 会回填解析后的实际空间） */
+  workspaceId?: string;
   /** refresh token 载荷不带该字段 */
   isRefresh?: boolean;
 }

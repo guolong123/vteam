@@ -1,4 +1,5 @@
 import { IdGeneratorService } from '../common/id-generator';
+import { runWithTenant } from '../common/tenant/tenant-context';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RealtimeService,
@@ -806,6 +807,7 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
         timestamp: '2026-08-07T01:02:03.000Z',
         scopeType: 'task',
         scopeId: 't_9',
+        workspaceId: 'ws_default',
       });
       expect('projectId' in events[0]).toBe(false);
     });
@@ -883,6 +885,56 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       prisma.realtimeEvent.findFirst.mockResolvedValue(null);
       await service.onModuleInit();
       expect(() => service.onModuleDestroy()).not.toThrow();
+    });
+  });
+
+  describe('M2 空间隔离（事件归属 / 订阅过滤 / 补拉过滤）', () => {
+    it('emit 在租户上下文内 → 事件与落库行带该空间', async () => {
+      const ev = await runWithTenant(
+        { workspaceId: 'ws_a', mode: 'request' },
+        () => service.emit('task.status.changed', { n: 1 }, { type: 'global' }),
+      );
+      expect(ev.workspaceId).toBe('ws_a');
+      expect(prisma.realtimeEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ workspaceId: 'ws_a' }),
+      });
+    });
+
+    it('emit 无租户上下文（定时/启动期）→ 回落默认空间', async () => {
+      const ev = await service.emit('task.status.changed', { n: 1 });
+      expect(ev.workspaceId).toBe('ws_default');
+    });
+
+    it('subscribe 指定空间后只下发本空间事件（他空间事件被丢弃）', async () => {
+      const received: RealtimeEvent[] = [];
+      const off = service.subscribe((e) => received.push(e), [], null, 'ws_a');
+
+      await runWithTenant({ workspaceId: 'ws_a', mode: 'request' }, () =>
+        service.emit('chat.message.new', { messageId: 'm_a' }),
+      );
+      await runWithTenant({ workspaceId: 'ws_b', mode: 'request' }, () =>
+        service.emit('chat.message.new', { messageId: 'm_b' }),
+      );
+      off();
+
+      expect(received).toHaveLength(1);
+      expect(received[0].workspaceId).toBe('ws_a');
+    });
+
+    it('getEventsSince 指定空间 → 查询条件带 workspaceId', async () => {
+      prisma.realtimeEvent.findMany.mockResolvedValue([]);
+      await service.getEventsSince(
+        'ev_0000000001',
+        [{ type: 'global' }],
+        null,
+        'ws_a',
+      );
+
+      expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ workspaceId: 'ws_a' }),
+        }),
+      );
     });
   });
 });

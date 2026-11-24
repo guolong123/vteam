@@ -3,13 +3,13 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
-import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { CreateGitRepoDto } from './dto/create-git-repo.dto';
 import { UpdateGitRepoDto } from './dto/update-git-repo.dto';
 import { GitReposController } from './git-repos.controller';
 import { GitReposService } from './git-repos.service';
 
-describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 AdminGuard）', () => {
+describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 WorkspaceAdminGuard）', () => {
   let controller: GitReposController;
   let service: {
     findAll: jest.Mock;
@@ -55,8 +55,8 @@ describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 
       controllers: [GitReposController],
       providers: [
         { provide: GitReposService, useValue: service },
-        // 方法级 @UseGuards(AdminGuard) 会在 compile 时实例化 guard，
-        // AdminGuard 依赖全局 PrismaService，提供 mock 占位
+        // 方法级 @UseGuards(WorkspaceAdminGuard) 会在 compile 时实例化 guard，
+        // WorkspaceAdminGuard 依赖全局 PrismaService，提供 mock 占位
         {
           provide: PrismaService,
           useValue: { user: { findUnique: jest.fn() } },
@@ -67,34 +67,34 @@ describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 
     controller = module.get<GitReposController>(GitReposController);
   });
 
-  it('GET /git-repos 转发 findAll（成员只读，不挂 AdminGuard）', async () => {
+  it('GET /git-repos 转发 findAll（成员只读，不挂 WorkspaceAdminGuard）', async () => {
     service.findAll.mockResolvedValue([view]);
 
     const result = await controller.findAll();
 
     expect(service.findAll).toHaveBeenCalled();
     expect(result).toEqual([view]);
-    expect(guardsOf('findAll')).not.toContain(AdminGuard);
+    expect(guardsOf('findAll')).not.toContain(WorkspaceAdminGuard);
   });
 
-  it('POST /git-repos 挂 AdminGuard 并转发 create(dto, user.id)', async () => {
+  it('POST /git-repos 挂 WorkspaceAdminGuard 并转发 create(dto, user.id)', async () => {
     service.create.mockResolvedValue(view);
     const dto = new CreateGitRepoDto();
 
     const result = await controller.create(dto, user);
 
-    expect(guardsOf('create')).toContain(AdminGuard);
+    expect(guardsOf('create')).toContain(WorkspaceAdminGuard);
     expect(service.create).toHaveBeenCalledWith(dto, 'u_admin');
     expect(result).toEqual(view);
   });
 
-  it('PATCH /git-repos/:id 挂 AdminGuard 并转发 update(id, dto, user.id)', async () => {
+  it('PATCH /git-repos/:id 挂 WorkspaceAdminGuard 并转发 update(id, dto, user.id)', async () => {
     service.update.mockResolvedValue(view);
     const dto = new UpdateGitRepoDto();
 
     const result = await controller.update('gc_0000000001', dto, user);
 
-    expect(guardsOf('update')).toContain(AdminGuard);
+    expect(guardsOf('update')).toContain(WorkspaceAdminGuard);
     expect(service.update).toHaveBeenCalledWith(
       'gc_0000000001',
       dto,
@@ -103,7 +103,7 @@ describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 
     expect(result).toEqual(view);
   });
 
-  it('DELETE /git-repos/:id 挂 AdminGuard 并转发 remove(id, user.id)', async () => {
+  it('DELETE /git-repos/:id 挂 WorkspaceAdminGuard 并转发 remove(id, user.id)', async () => {
     service.remove.mockResolvedValue({
       id: 'gc_0000000001',
       revokedAt: new Date(),
@@ -111,7 +111,7 @@ describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 
 
     const result = await controller.remove('gc_0000000001', user);
 
-    expect(guardsOf('remove')).toContain(AdminGuard);
+    expect(guardsOf('remove')).toContain(WorkspaceAdminGuard);
     expect(service.remove).toHaveBeenCalledWith('gc_0000000001', 'u_admin');
     expect(result).toMatchObject({ id: 'gc_0000000001' });
   });

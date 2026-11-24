@@ -237,7 +237,8 @@ describe('RealtimeService delta 帧不保留全量快照（incident-realtime-log
       messageId: 'm_stream_1',
       channelId: 'c_1',
     });
-    expect(utf8Bytes(log[0])).toBeLessThan(200);
+    // 事件帧新增 workspaceId（租户隔离字段）：上限随字段增长同步放宽，仍远小于全量快照。
+    expect(utf8Bytes(log[0])).toBeLessThan(260);
     expect(JSON.stringify(log[0].payload)).not.toContain('A'.repeat(64));
     // delta 帧照常消耗 ev_ 序号，latest-id 语义保持
     expect(ev.id).toBe('ev_0000000001');

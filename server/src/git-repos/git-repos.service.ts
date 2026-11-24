@@ -8,6 +8,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 import { GitRepo, GitRepoGrant } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -29,6 +30,8 @@ interface NormalizedGrant {
 
 export interface GitRepoView {
   id: string;
+  /** 所属工作空间（ws_system = 平台共享） */
+  workspaceId: string;
   repoUrl: string;
   credentialId: string;
   credentialName: string | null;
@@ -140,8 +143,10 @@ export class GitReposService implements OnModuleInit {
       });
     }
     const grants = this.normalizeGrants(dto.grantedAgents ?? []);
+    // 多工作空间后 GitRepo 唯一键是 (workspaceId, repoUrl)，必须用复合键查重，
+    // 否则 findUnique({ repoUrl }) 会被 Prisma 拒绝（500）。
     const existing = await (this.prisma as any).gitRepo.findUnique({
-      where: { repoUrl },
+      where: tenantUniqueWhere('GitRepo', { repoUrl }),
       select: { id: true, revokedAt: true },
     });
     if (existing && existing.revokedAt === null) {
@@ -342,6 +347,7 @@ export class GitReposService implements OnModuleInit {
   ): GitRepoView {
     return {
       id: repo.id,
+      workspaceId: (repo as any).workspaceId,
       repoUrl: (repo as any).repoUrl,
       credentialId: (repo as any).credentialId,
       credentialName: credential?.name ?? null,

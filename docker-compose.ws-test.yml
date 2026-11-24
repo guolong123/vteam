@@ -1,0 +1,25 @@
+# 多工作空间特性分支 · 本地独立测试栈覆盖文件
+# 与主 vteam 栈区分：独立项目名（-p vteam-ws）、独立容器名、独立主机端口、独立卷。
+# 用法：
+#   docker compose -p vteam-ws --env-file .env.ws-test.local \
+#     -f docker-compose.yml -f docker-compose.ws-test.yml up -d --build
+services:
+  db:
+    container_name: vteam-ws-db
+  init:
+    container_name: vteam-ws-init
+  server:
+    container_name: vteam-ws-server
+    ports: !override
+      - "13200:3000"
+  web:
+    container_name: vteam-ws-web
+    ports: !override
+      - "13201:3000"
+  worker:
+    container_name: vteam-ws-worker
+    environment:
+      WORKER_ID: w_ws_test
+    ports: !override
+      - "14200:4000"
+      - "14900:4848"

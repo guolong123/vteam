@@ -21,9 +21,13 @@ describe('JwtAuthGuard', () => {
     } as any;
   };
 
-  it('canActivate：@Public() 端点放行，不校验 token', () => {
-    const guard = new JwtAuthGuard(reflector);
-    expect(guard.canActivate(buildContext(true))).toBe(true);
+  it('canActivate：@Public() 端点放行，不校验 token', async () => {
+    const guard = new JwtAuthGuard(
+      reflector,
+      { get: () => undefined } as never,
+      { workspace: { findFirst: jest.fn().mockResolvedValue(null) } } as never,
+    );
+    await expect(guard.canActivate(buildContext(true))).resolves.toBe(true);
     expect(reflector.getAllAndOverride).toHaveBeenCalledWith(
       IS_PUBLIC_KEY,
       expect.any(Array),
@@ -32,7 +36,13 @@ describe('JwtAuthGuard', () => {
 
   describe('handleRequest', () => {
     it('user 为空（无 token / 无效 token）应抛 401 AUTH_UNAUTHORIZED', () => {
-      const guard = new JwtAuthGuard(reflector);
+      const guard = new JwtAuthGuard(
+        reflector,
+        { get: () => undefined } as never,
+        {
+          workspace: { findFirst: jest.fn().mockResolvedValue(null) },
+        } as never,
+      );
       try {
         guard.handleRequest(null, null, 'No auth token');
         fail('应当抛出 UnauthorizedException');
@@ -45,7 +55,13 @@ describe('JwtAuthGuard', () => {
     });
 
     it('user 存在（合法 token）应原样返回', () => {
-      const guard = new JwtAuthGuard(reflector);
+      const guard = new JwtAuthGuard(
+        reflector,
+        { get: () => undefined } as never,
+        {
+          workspace: { findFirst: jest.fn().mockResolvedValue(null) },
+        } as never,
+      );
       const user = { id: 'u_1', username: 'alice', roleId: 'r_member' };
       expect(guard.handleRequest(null, user, null)).toBe(user);
     });

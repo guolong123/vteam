@@ -16,6 +16,8 @@ export type MemoryLevel = "team" | "role" | "global";
 /** GET /memories 条目（对齐 MemoriesService.findAll 返回的完整行）。 */
 export interface MemoryItem {
   id: string;
+  /** 所属工作空间（平台共享=ws_system） */
+  workspaceId?: string;
   level: MemoryLevel;
   content: string;
   description?: string | null;

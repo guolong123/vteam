@@ -29,6 +29,7 @@ import { UpdateAgentRoleDto } from './dto/update-agent-role.dto';
 /** AgentRole 行（含关联，toAgentRoleDto 输入）。能力字段仅 `capabilities`（业务能力点矩阵）。 */
 type AgentRoleRow = {
   id: string;
+  workspaceId?: string;
   key: string;
   name: string;
   description: string | null;
@@ -273,6 +274,7 @@ export class AgentRolesService implements OnModuleInit {
   private toAgentRoleDto(role: AgentRoleRow) {
     return {
       id: role.id,
+      workspaceId: role.workspaceId,
       key: role.key,
       name: role.name,
       description: role.description,

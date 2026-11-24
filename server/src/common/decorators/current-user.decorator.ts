@@ -10,6 +10,8 @@ export interface AuthenticatedUser {
   username: string;
   roleId: string;
   tokenType?: string;
+  /** 当前工作空间 id（JWT wid；WorkspaceGuard 解析后回填实际空间） */
+  workspaceId?: string;
 }
 
 /**

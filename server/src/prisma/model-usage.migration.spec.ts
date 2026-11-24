@@ -99,7 +99,10 @@ function schemaUsageColumns(): Set<string> {
     // Prisma 字段名多为 camelCase，DDL 里是 @map 的 snake_case——必须取 map 值，
     // 否则 camelCase 字段名与迁移里的列名永不相等（守卫会恒红或恒绿）。
     const mapped = /@map\("(\w+)"\)/.exec(t);
-    cols.add(mapped ? mapped[1] : c[1]);
+    const name = mapped ? mapped[1] : c[1];
+    // 历史迁移口径只覆盖业务列；M1 的 workspace_id 由 20261112 迁移建出。
+    if (name === 'workspace' || name === 'workspace_id') continue;
+    cols.add(name);
   }
   return cols;
 }

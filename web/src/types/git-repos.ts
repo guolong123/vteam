@@ -49,6 +49,8 @@ export interface UpdateGitCredentialPayload {
 /** GET /git-repos 条目（脱敏视图：通过 credentialId 关联凭证，含 credentialName/authType/fingerprint）。 */
 export interface GitRepoView {
   id: string;
+  /** 所属工作空间（ws_system = 平台共享） */
+  workspaceId?: string;
   repoUrl: string;
   credentialId: string;
   credentialName: string | null;

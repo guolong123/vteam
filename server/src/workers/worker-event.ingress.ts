@@ -16,6 +16,8 @@ import {
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessageQuestionDispatcher } from '../message-channels/message-question.dispatcher';
+import { runWithTenant } from '../common/tenant/tenant-context';
+import { TENANT_WORKSPACE_ID } from '../common/tenant/tenant.constants';
 import { RealtimeScope } from '../realtime/realtime.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerEventDto } from './dto/worker-event.dto';
@@ -480,7 +482,8 @@ export class WorkerEventIngress {
   async handleEvent(dto: WorkerEventDto): Promise<boolean> {
     // F2 M2（MAJOR）：workerId 必须已注册——WorkerTokenGuard 只校验共享 token（所有 worker
     // 同值），不校验 workerId 归属；未注册 workerId 的事件直接 404 拒绝（防伪造注入）。
-    if (!(await this.isWorkerRegistered(dto.workerId))) {
+    const workerWorkspaceId = await this.workerWorkspaceOf(dto.workerId);
+    if (!workerWorkspaceId) {
       throw new NotFoundException({
         code: WORKER_ERRORS.WORKER_NOT_FOUND,
         message: `Worker ${dto.workerId} 不存在（未注册）`,
@@ -491,6 +494,16 @@ export class WorkerEventIngress {
       this.logger.debug(`[dedup] 跳过重复事件 key=${dedupKey} (${dto.type})`);
       return Promise.resolve(false);
     }
+    // 事件回流在 worker 所属空间上下文内执行：租户中间件据此把会话/消息/事件的
+    // 读写收敛到该空间（共享 worker 的会话归属仍以会话自身的 workspaceId 为准）。
+    return runWithTenant(
+      { workspaceId: workerWorkspaceId, mode: 'request' },
+      () => this.dispatchEventByType(dto),
+    );
+  }
+
+  /** 按事件类型分发（必须在 worker 空间上下文内调用）。 */
+  private async dispatchEventByType(dto: WorkerEventDto): Promise<boolean> {
     switch (dto.type) {
       case 'worker.heartbeat':
         // 心跳走 POST /workers/:id/heartbeat 单独端点（T7），事件通道忽略
@@ -2075,13 +2088,17 @@ export class WorkerEventIngress {
     };
   }
 
-  /** F2 M2：校验 workerId 已注册（Worker 表存在）；未注册事件在 handleEvent 入口被 404 拒绝。 */
-  private async isWorkerRegistered(workerId: string): Promise<boolean> {
+  /**
+   * F2 M2：校验 workerId 已注册并返回其空间归属；未注册事件在 handleEvent 入口被 404 拒绝。
+   * 老数据 workspaceId 缺失时回落默认空间（迁移已回填，此处仅防御）。
+   */
+  private async workerWorkspaceOf(workerId: string): Promise<string | null> {
     const row = await this.prisma.worker.findUnique({
       where: { id: workerId },
-      select: { id: true },
+      select: { id: true, workspaceId: true },
     });
-    return row !== null;
+    if (!row) return null;
+    return row.workspaceId ?? TENANT_WORKSPACE_ID.DEFAULT;
   }
 
   /** F2 MINOR：opencode 会话 id（ses_ 前缀）经 Session.instanceRef 反查平台 sessionId。 */

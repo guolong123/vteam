@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { CreateToolDto } from './dto/create-tool.dto';
 import { QueryToolsDto } from './dto/query-tools.dto';
@@ -28,6 +29,8 @@ describe('ToolsController', () => {
     })
       // @UseGuards(AdminGuard) 在模块 compile 时即被 Nest 实例化（非请求期）→ 必须 override
       .overrideGuard(AdminGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(WorkspaceAdminGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(WorkerOrJwtGuard)
       .useValue({ canActivate: () => true })

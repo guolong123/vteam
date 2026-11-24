@@ -1,4 +1,5 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
+import { WorkerOrJwtAllowed } from '../auth/decorators/worker-or-jwt.decorator';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
@@ -20,7 +21,7 @@ import { ExecutionPolicyService } from './execution-policy.service';
 export class AgentPoliciesController {
   constructor(private readonly policies: ExecutionPolicyService) {}
 
-  @Public()
+  @WorkerOrJwtAllowed()
   @UseGuards(WorkerOrJwtGuard)
   @Get()
   @ApiOperation({

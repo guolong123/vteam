@@ -106,7 +106,7 @@ describe('agent_roles builtin capability current-schema contract (historical 202
     const schema = fs.readFileSync(SCHEMA, 'utf8');
     const roleModel =
       schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
-    expect(roleModel).toMatch(/capabilities Json\?\s+@map\("capabilities"\)/);
+    expect(roleModel).toMatch(/capabilities\s+Json\?\s+@map\("capabilities"\)/);
     expect(roleModel).not.toMatch(/^\s*policyId\s/m);
     expect(roleModel).toContain('@@map("agent_roles")');
   });

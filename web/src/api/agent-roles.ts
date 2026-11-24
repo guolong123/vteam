@@ -16,6 +16,8 @@ export type AgentRoleType = "builtin" | "custom";
 
 export interface AgentRoleDto {
   id: string;
+  /** 所属工作空间（平台共享=ws_system；内置岗位通常在平台空间） */
+  workspaceId?: string;
   key: string;
   name: string;
   description: string | null;

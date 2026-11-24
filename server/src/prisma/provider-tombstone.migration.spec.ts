@@ -84,7 +84,10 @@ function schemaTombstoneColumns(): Set<string> {
     const c = /^(\w+)\s+\w/.exec(t);
     if (!c) continue;
     const mapped = /@map\("(\w+)"\)/.exec(t);
-    cols.add(mapped ? mapped[1] : c[1]);
+    const name = mapped ? mapped[1] : c[1];
+    // M1 租户化新增列不参与本历史迁移的列口径（由 20261112 workspaces expand 迁移建出）
+    if (name === 'workspace' || name === 'workspace_id') continue;
+    cols.add(name);
   }
   return cols;
 }
@@ -109,7 +112,7 @@ describe('migration 20261030050000_provider_tombstone', () => {
     for (const col of schemaTombstoneColumns()) {
       expect(ddl.has(col)).toBe(true);
     }
-    // 契约列恰为 provider_id + deleted_at，无多余列。
+    // 契约列恰为 provider_id + deleted_at（M1 后另有 workspace_id，已在上方口径中排除）。
     expect([...schemaTombstoneColumns()].sort()).toEqual(
       [...EXPECTED_COLUMNS].sort(),
     );
@@ -119,9 +122,10 @@ describe('migration 20261030050000_provider_tombstone', () => {
     expect(sql()).toMatch(/`provider_id`\s+varchar\(191\)[^,\n]*NOT NULL/i);
     expect(sql()).not.toMatch(/`provider_id`[^,\n]*DEFAULT/i);
     expect(sql()).toMatch(/PRIMARY KEY \(`provider_id`\)/);
-    // schema 侧：providerID 直接 @id（经 @map 落到 provider_id）。
+    // schema 侧：M1 后主键改为复合 PK (workspaceId, providerID)，不再单列 @id。
     const m = /^model ProviderTombstone \{([\s\S]*?)^\}/m.exec(schema());
-    expect(m?.[1]).toMatch(/providerID\s+String\s+@id\s+@map\("provider_id"\)/);
+    expect(m?.[1]).toMatch(/@@id\(\[workspaceId, providerID\]\)/);
+    expect(m?.[1]).not.toMatch(/providerID\s+String\s+@id/);
     expect(createdColumns(TABLE).has('id')).toBe(false);
   });
 
@@ -140,8 +144,10 @@ describe('migration 20261030050000_provider_tombstone', () => {
     expect(sql()).not.toMatch(/FOREIGN\s+KEY/i);
     expect(sql()).not.toMatch(/CONSTRAINT/i);
     const m = /^model ProviderTombstone \{([\s\S]*?)^\}/m.exec(schema());
-    // 无 relations：字段仅 String/DateTime 标量（数组类型与 @relation 只会来自关联声明）。
-    expect(m?.[1]).not.toMatch(/@relation/);
+    // M1 后唯一关系 = 归属空间（workspace）；无其它域外键/数组关系。
+    const relations = m?.[1]?.match(/@relation/g) ?? [];
+    expect(relations).toHaveLength(1);
+    expect(m?.[1]).toMatch(/workspace\s+Workspace\s+@relation/);
     expect(m?.[1]).not.toMatch(/\[\]/);
   });
 

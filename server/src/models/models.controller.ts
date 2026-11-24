@@ -9,10 +9,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { WorkerOrJwtAllowed } from '../auth/decorators/worker-or-jwt.decorator';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { CreateModelDto } from './dto/create-model.dto';
 import { QueryModelsDto } from './dto/query-models.dto';
 import { ProbeEndpointDto } from './dto/probe-endpoint.dto';
@@ -84,7 +86,7 @@ export class ModelsController {
    *   静态段 providers 声明在 :id 之前（对齐 @Get('providers') 顺序）。
    */
   @Delete('providers/:providerID/credentials')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '按 provider 吊销凭据（不依赖模型 id，AdminGuard）',
   })
@@ -104,7 +106,7 @@ export class ModelsController {
    *   静态段 providers 声明在 :id 之前（对齐 @Get('providers') 顺序）。
    */
   @Post('providers/:providerID/credentials')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '按 provider 保存凭据（不依赖模型 id，AdminGuard）',
   })
@@ -130,7 +132,7 @@ export class ModelsController {
    *   静态段 providers 声明在 :id 之前（对齐 @Get('providers') 顺序）。
    */
   @Delete('providers/:providerID')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '按 provider 物理删除（全部模型行 + 凭据 + 可用性，AdminGuard）',
   })
@@ -146,7 +148,7 @@ export class ModelsController {
    *   静态段 probe-endpoint 声明在 :id 之前（Nest 路由按声明顺序匹配）。
    */
   @Post('probe-endpoint')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary:
       '探测端点模型元数据（vLLM max_model_len → 上下文长度预填，AdminGuard）',
@@ -195,7 +197,7 @@ export class ModelsController {
    *   静态段 providers 声明在 :id 之前（Nest 路由按声明顺序匹配）。
    */
   @Patch('providers/:providerID')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary:
       '更新 Provider 配置（providerType/baseUrl 全模型行原子重写，AdminGuard）',
@@ -213,7 +215,7 @@ export class ModelsController {
    * 声明在 :id 之前——静态段先于参数段。
    */
   @Post('sync')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '实时同步 opencode 模型（live 拉取 + 孤儿禁用，AdminGuard）',
   })
@@ -229,7 +231,7 @@ export class ModelsController {
    *
    * ⚠️ 必须声明在 `@Get(':id')` **之前**，否则 'worker-catalog' 会被 `:id` 捕获。
    */
-  @Public()
+  @WorkerOrJwtAllowed()
   @UseGuards(WorkerOrJwtGuard)
   @Get('worker-catalog')
   @ApiOperation({
@@ -252,7 +254,7 @@ export class ModelsController {
    *   providerID+modelID 撞唯一 → 409 MODEL_EXISTS
    */
   @Post()
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '创建模型目录条目（AdminGuard）' })
   create(@Body() dto: CreateModelDto) {
     return this.modelsService.create(dto);
@@ -264,7 +266,7 @@ export class ModelsController {
    *   不存在 → 404；改 providerID/modelID 撞唯一 → 409
    */
   @Patch(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '更新模型目录条目（编辑/启停，部分更新，AdminGuard）',
   })
@@ -278,7 +280,7 @@ export class ModelsController {
    *   先清理该模型的 WorkerModelAvailability（FK onDelete Restrict）再删 model。
    */
   @Delete(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '删除模型目录条目（物理删除，清理 availability，AdminGuard）',
   })
@@ -293,7 +295,7 @@ export class ModelsController {
    *   targetWorkerIds 非空 → 凭据定向下发到指定 worker；空 → 全量广播。
    */
   @Post(':id/credentials')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '保存模型 provider 凭据（AES-256-GCM 加密存储 + C5 下发）',
   })
@@ -323,7 +325,7 @@ export class ModelsController {
    *   凭据不存在 → 404 MODEL_CREDENTIAL_NOT_FOUND。
    */
   @Delete(':id/credentials')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '吊销模型凭据（revokedAt 软撤销）' })
   revokeCredential(@Param('id') id: string) {
     return this.modelsService.revokeCredential(id);

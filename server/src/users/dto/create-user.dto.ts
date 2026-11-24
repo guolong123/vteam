@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -48,4 +49,24 @@ export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
   roleId: string;
+
+  @ApiPropertyOptional({
+    description:
+      '可选：创建后加入的工作空间 id（不填 = 首次登录自动创建个人空间）',
+    example: 'ws_0000000001',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  workspaceId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '可选的加入空间时的空间角色（owner/admin/member；缺省 member；owner 只用于空间创建者）',
+    enum: ['admin', 'member'],
+    example: 'member',
+  })
+  @IsOptional()
+  @IsIn(['admin', 'member'])
+  workspaceRole?: 'admin' | 'member';
 }

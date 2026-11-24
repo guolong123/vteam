@@ -71,6 +71,7 @@
  * - 权限：isAdmin（roleName==='admin'）控制配置/删除，成员只读（后端 AdminGuard 403 兜底）。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；root flex:1 铺满（AppShell 提供导航）。
  */
+import { CreateSpaceHint, SpaceBadge } from "@/src/components/ui/space-badge";
 import {
   useCallback,
   useEffect,
@@ -165,6 +166,8 @@ interface ProviderRow {
   name: string | null;
   providerType: string | null;
   baseUrl: string | null;
+  /** 所属空间（平台共享=ws_system） */
+  workspaceId?: string;
   /** null = 未入目录（集成项无模型行，列表显示「未入目录」） */
   modelCount: number | null;
   status: CredentialStatus;
@@ -193,6 +196,7 @@ function mergeProviderRows(
     name: null,
     providerType: p.providerType ?? null,
     baseUrl: p.baseUrl ?? null,
+    workspaceId: (p as unknown as { workspaceId?: string }).workspaceId,
     modelCount: p.modelCount,
     status: toStatus(p),
     fingerprint: p.fingerprint,
@@ -3259,6 +3263,7 @@ export default function ProvidersTab() {
                 >
                   {syncMutation.isPending ? "同步中…" : "↻ 同步"}
                 </button>
+                <CreateSpaceHint style={{ alignSelf: "center" }} />
                 <button
                   type="button"
                   data-testid="provider-add-button"
@@ -3619,6 +3624,7 @@ export default function ProvidersTab() {
                         </span>
                       )}
                     </span>
+                    <SpaceBadge workspaceId={p.workspaceId} />
 
                     {/* 模型数（集成行未入目录 → 「未入目录」，不出数字） */}
                     <span

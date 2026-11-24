@@ -1,4 +1,5 @@
 import { ExternalUsersService } from './external-users.service';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /**
  * ExternalUsersService 单元测试（external-users 契约 §2.1-§2.5 / §4）。
@@ -547,7 +548,7 @@ describe('ExternalUsersService', () => {
       // 无 idKey → 只按 nameKey 查一次
       expect(prisma.externalUser.findUnique).toHaveBeenCalledTimes(1);
       expect(prisma.externalUser.findUnique).toHaveBeenCalledWith({
-        where: { externalId: 'name:宋工' },
+        where: tenantUniqueWhere('ExternalUser', { externalId: 'name:宋工' }),
       });
       expect(idGen.nextId).toHaveBeenCalledWith('eu');
       expect(prisma.externalUser.create).toHaveBeenCalledWith({
@@ -614,10 +615,10 @@ describe('ExternalUsersService', () => {
       });
 
       expect(prisma.externalUser.findUnique).toHaveBeenNthCalledWith(1, {
-        where: { externalId: 'id:GuoLong' },
+        where: tenantUniqueWhere('ExternalUser', { externalId: 'id:GuoLong' }),
       });
       expect(prisma.externalUser.findUnique).toHaveBeenNthCalledWith(2, {
-        where: { externalId: 'name:宋工' },
+        where: tenantUniqueWhere('ExternalUser', { externalId: 'name:宋工' }),
       });
       expect(prisma.externalUser.update).toHaveBeenCalledWith({
         where: { id: 'eu_bk_deadbeefdeadbeef' },

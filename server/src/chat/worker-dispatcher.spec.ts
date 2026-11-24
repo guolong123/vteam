@@ -10590,8 +10590,11 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.execute.mock.calls[0][1].system).toContain(
         MAIN_AGENT_INSTRUCTION,
       );
-      // 计划模式指令注入已下线 → dispatch 零 task 表读取（主门判定只看 team 表）
-      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      // 计划模式指令注入已下线 → dispatch 不依赖 task 行做门控；M2 起允许一次
+      // 「仅取 workspaceId」的目录归属查询（用于工作目录空间化），不得读取其它字段。
+      for (const call of prisma.task.findUnique.mock.calls) {
+        expect(call[0]).toMatchObject({ select: { workspaceId: true } });
+      }
     });
 
     /**

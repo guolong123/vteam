@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { isApiError } from "@/lib/errors";
 import { AgentAvatar, ConfirmDialog, EmptyState, PageWindow, Pagination, PrimaryButton, RowAction } from "@/src/components/ui";
+import { useReadOnlyView } from "@/hooks/use-read-only-view";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -49,6 +50,7 @@ function statusLabel(status: string | null | undefined): string {
 
 export default function TeamsPage() {
   const router = useRouter();
+  const readOnlyView = useReadOnlyView();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -132,7 +134,14 @@ export default function TeamsPage() {
           <button type="button" data-testid="unified-tab-members" onClick={() => router.push("/members")} style={{ padding: "5px 16px", border: "none", borderRadius: radius.sm, backgroundColor: "transparent", color: neutral[500], fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>成员</button>
         </div>
         <span style={{ flex: 1 }} />
-        <PrimaryButton testid="create-team-button" onClick={() => router.push("/teams/new")}>＋ 新建团队</PrimaryButton>
+        <PrimaryButton
+          testid="create-team-button"
+          disabled={!!readOnlyView}
+          title={readOnlyView ? `只读视图（${readOnlyView.name}）下不可创建团队` : undefined}
+          onClick={() => router.push("/teams/new")}
+        >
+          ＋ 新建团队
+        </PrimaryButton>
       </div>
 
       {/* 页内不再重复顶栏的「团队与成员」（视觉优化清单 AES-06）：
@@ -155,7 +164,14 @@ export default function TeamsPage() {
         {teamsQuery.isPending ? (
           <div style={{ padding: space.xl, textAlign: "center", color: neutral[400], fontSize: fontSize.sm }}>加载中…</div>
         ) : items.length === 0 ? (
-          <EmptyState title="还没有团队" description="点击右上角「新建团队」创建第一个团队" />
+          <EmptyState
+            title="还没有团队"
+            description={
+              readOnlyView
+                ? `当前为管理员只读视图「${readOnlyView.name}」，不可创建团队`
+                : "点击右上角「新建团队」创建第一个团队"
+            }
+          />
         ) : (
           <div style={{ minHeight: 0, overflowY: "auto" }}>
           {items.map((team) => {

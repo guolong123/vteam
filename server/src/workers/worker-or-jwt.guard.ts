@@ -5,6 +5,8 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma/prisma.service';
+import { resolveWorkspaceByWorkerToken } from '../common/tenant/worker-space-token';
 import { AuthGuard } from '@nestjs/passport';
 import { createHash, timingSafeEqual } from 'crypto';
 import { Request } from 'express';
@@ -34,7 +36,10 @@ import { WorkerTokenRequest } from './worker-token.guard';
 export class WorkerOrJwtGuard implements CanActivate {
   private readonly jwtGuard = new (AuthGuard('jwt'))();
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<WorkerTokenRequest>();
@@ -44,10 +49,19 @@ export class WorkerOrJwtGuard implements CanActivate {
       const expected =
         this.config.get<string>('WORKER_TOKEN') ?? DEFAULT_WORKER_TOKEN;
       if (!this.safeEqual(token.trim(), expected)) {
-        throw new UnauthorizedException({
-          code: WORKER_ERRORS.TOKEN_INVALID,
-          message: 'X-Worker-Token 无效',
-        });
+        // 单令牌模式：空间注册令牌同样可用于 worker 拉取端点
+        const workspaceId = await resolveWorkspaceByWorkerToken(
+          this.prisma as unknown as {
+            workspace: { findFirst: (args: unknown) => Promise<unknown> };
+          },
+          token,
+        );
+        if (!workspaceId) {
+          throw new UnauthorizedException({
+            code: WORKER_ERRORS.TOKEN_INVALID,
+            message: 'X-Worker-Token 无效',
+          });
+        }
       }
       request.workerToken = token.trim();
       return true;

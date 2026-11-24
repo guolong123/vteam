@@ -20,6 +20,7 @@ import {
   MEMBERS_ERRORS,
   NOTIFICATION_CHANNEL_ERRORS,
 } from './members.constants';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 /** 成员列表/详情统一 include（角色/Agent/默认模型/默认 worker + 计数）。 */
 const MEMBER_INCLUDE = {
@@ -360,7 +361,7 @@ export class MembersService implements OnModuleInit {
       for (let seq = count + 1; seq < count + 100; seq += 1) {
         const candidate = defaultMemberName(role?.key ?? '', seq);
         const exists = await this.prisma.member.findUnique({
-          where: { name: candidate },
+          where: tenantUniqueWhere('Member', { name: candidate }),
           select: { id: true },
         });
         if (!exists) {
@@ -759,7 +760,7 @@ export class MembersService implements OnModuleInit {
     // 最多尝试 100 次，防御极端情况下的死循环
     while (index <= 100) {
       const exists = await this.prisma.member.findUnique({
-        where: { name },
+        where: tenantUniqueWhere('Member', { name }),
         select: { id: true },
       });
       if (!exists) return name;

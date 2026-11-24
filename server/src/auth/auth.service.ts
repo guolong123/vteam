@@ -9,6 +9,8 @@ import { JwtService } from '@nestjs/jwt';
 import { randomBytes } from 'node:crypto';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { WorkspacesService } from '../workspaces/workspaces.service';
+import type { WorkspaceSummary } from '../workspaces/workspaces.constants';
 import { AUTH_ERRORS, BUILTIN_ROLES, JWT_TOKEN_TYPE } from './auth.constants';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
@@ -36,6 +38,10 @@ export interface AuthUserView {
    * 前端导航过滤 / 路由守卫以此为数据源（ISSUE-005）。
    */
   permissions: Record<string, unknown>;
+  /** 当前工作空间 id（登录/刷新/切换空间时解析） */
+  currentWorkspaceId?: string | null;
+  /** 我可访问的工作空间列表（含系统空间，isSystem=true） */
+  workspaces?: WorkspaceSummary[];
 }
 
 export interface TokenPair {
@@ -49,6 +55,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly workspaces: WorkspacesService,
   ) {}
 
   /** POST /auth/register：创建内置账号（默认角色 member，无项目） */
@@ -99,6 +106,16 @@ export class AuthService {
       },
     });
 
+    // 每个新用户一个个人空间（owner）。失败不阻断注册：登录/首次请求会自愈创建。
+    try {
+      await this.workspaces.createForUser(
+        user.id,
+        `${user.displayName || user.username} 的空间`,
+      );
+    } catch {
+      // 空间创建失败不回滚账号；resolveOrCreateDefault 会在首次登录时补建
+    }
+
     return {
       id: user.id,
       username: user.username,
@@ -136,15 +153,24 @@ export class AuthService {
       });
     }
 
-    const tokens = await this.signTokens(user.id, user.username, user.roleId);
+    const workspaceId = await this.workspaces.resolveOrCreateDefault(user.id);
+    const tokens = await this.signTokens(
+      user.id,
+      user.username,
+      user.roleId,
+      workspaceId,
+    );
     return {
       ...tokens,
-      user: this.toUserView(user),
+      user: await this.buildUserView(user, workspaceId),
     };
   }
 
   /** GET /auth/profile：返回当前登录用户资料（JWT 已鉴权） */
-  async profile(userId: string): Promise<AuthUserView> {
+  async profile(
+    userId: string,
+    currentWorkspaceId?: string,
+  ): Promise<AuthUserView> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { role: true },
@@ -155,7 +181,40 @@ export class AuthService {
         message: '用户不存在',
       });
     }
-    return this.toUserView(user);
+    const workspaceId =
+      currentWorkspaceId &&
+      (await this.workspaces.canAccess(userId, currentWorkspaceId))
+        ? currentWorkspaceId
+        : await this.workspaces.resolveOrCreateDefault(userId);
+    return this.buildUserView(user, workspaceId);
+  }
+
+  /**
+   * POST /auth/workspace：切换当前空间（校验成员关系后重签 token）。
+   * 前端切换空间 = 调本接口换新 access/refresh token。
+   */
+  async switchWorkspace(
+    userId: string,
+    workspaceId: string,
+  ): Promise<TokenPair & { user: AuthUserView }> {
+    await this.workspaces.switchTo(userId, workspaceId);
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { role: true },
+    });
+    if (!user) {
+      throw new UnauthorizedException({
+        code: AUTH_ERRORS.UNAUTHORIZED,
+        message: '用户不存在',
+      });
+    }
+    const tokens = await this.signTokens(
+      user.id,
+      user.username,
+      user.roleId,
+      workspaceId,
+    );
+    return { ...tokens, user: await this.buildUserView(user, workspaceId) };
   }
 
   /** POST /auth/refresh：校验 refresh token 并签发新 token 对 */
@@ -186,7 +245,11 @@ export class AuthService {
         message: '账号不存在或已禁用',
       });
     }
-    return this.signTokens(user.id, user.username, user.roleId);
+    const workspaceId =
+      payload.wid && (await this.workspaces.canAccess(user.id, payload.wid))
+        ? payload.wid
+        : await this.workspaces.resolveOrCreateDefault(user.id);
+    return this.signTokens(user.id, user.username, user.roleId, workspaceId);
   }
 
   /** POST /auth/forgot-password：按用户名/邮箱生成一次性重置 token（内网手动传递，无邮件服务） */
@@ -247,6 +310,7 @@ export class AuthService {
     sub: string,
     username: string,
     roleId: string,
+    workspaceId?: string,
   ): Promise<TokenPair> {
     const secret = this.config.get<string>('JWT_SECRET') ?? 'dev-secret';
     const accessExpiresIn =
@@ -254,15 +318,33 @@ export class AuthService {
     const refreshExpiresIn =
       this.config.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d';
 
+    const base = {
+      sub,
+      username,
+      roleId,
+      ...(workspaceId ? { wid: workspaceId } : {}),
+    };
     const accessToken = await this.jwt.signAsync(
-      { sub, username, roleId, type: JWT_TOKEN_TYPE.ACCESS },
+      { ...base, type: JWT_TOKEN_TYPE.ACCESS },
       { secret, expiresIn: accessExpiresIn as any },
     );
     const refreshToken = await this.jwt.signAsync(
-      { sub, username, roleId, type: JWT_TOKEN_TYPE.REFRESH },
+      { ...base, type: JWT_TOKEN_TYPE.REFRESH },
       { secret, expiresIn: refreshExpiresIn as any },
     );
     return { accessToken, refreshToken };
+  }
+
+  /** 用户视图 + 当前空间 + 空间列表（登录/刷新/profile 共用）。 */
+  private async buildUserView(
+    user: Parameters<AuthService['toUserView']>[0],
+    currentWorkspaceId: string,
+  ): Promise<AuthUserView> {
+    return {
+      ...this.toUserView(user),
+      currentWorkspaceId,
+      workspaces: await this.workspaces.listForUser(user.id),
+    };
   }
 
   private toUserView(user: {

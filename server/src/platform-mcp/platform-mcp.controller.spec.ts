@@ -16,6 +16,8 @@ import {
   SECRET_COMMAND_BUDGET_HEADER,
 } from './platform-mcp.constants';
 import { PlatformToolPermissionService } from './platform-tool-permission.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { getTenantContext } from '../common/tenant/tenant-context';
 
 /**
  * POST /api/v1/platform-mcp 端点测试（阶段 1，经 HTTP 层验证）。
@@ -29,6 +31,10 @@ import { PlatformToolPermissionService } from './platform-tool-permission.servic
 describe('PlatformMcpController (HTTP)', () => {
   let app: INestApplication;
   let toolPermission: { assertToolAllowed: jest.Mock };
+  let prisma: {
+    worker: { findUnique: jest.Mock };
+    workspace: { findFirst: jest.Mock };
+  };
   let service: {
     resolveToolCallerId: jest.Mock;
     resolveToolCallerWithContext: jest.Mock;
@@ -72,6 +78,12 @@ describe('PlatformMcpController (HTTP)', () => {
       .set('x-worker-id', 'w_0001');
 
   beforeEach(async () => {
+    prisma = {
+      worker: {
+        findUnique: jest.fn().mockResolvedValue({ workspaceId: 'ws_default' }),
+      },
+      workspace: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
     service = {
       resolveToolCallerId: jest.fn().mockResolvedValue('tmm_sender'),
       // selfSessionId → 成员（2026-11-17）：默认解析到 mbr_sender
@@ -222,6 +234,7 @@ describe('PlatformMcpController (HTTP)', () => {
         { provide: PlatformToolPermissionService, useValue: toolPermission },
         // guard 依赖 WORKER_TOKEN env；mock 返回 undefined → 落到默认 dev-worker-token
         { provide: ConfigService, useValue: { get: jest.fn(() => undefined) } },
+        { provide: PrismaService, useValue: prisma },
         WorkerTokenGuard,
       ],
     }).compile();
@@ -232,6 +245,59 @@ describe('PlatformMcpController (HTTP)', () => {
 
   afterEach(async () => {
     await app.close();
+  });
+
+  describe('M2 租户上下文（worker 空间注入）', () => {
+    it('tools/call 在 worker 所属空间上下文中执行（handler 内 ALS 可见 workspaceId）', async () => {
+      let captured: ReturnType<typeof getTenantContext> | undefined;
+      service.taskContext.mockImplementation(() => {
+        captured = getTenantContext();
+        return { taskId: 't_0000000001' };
+      });
+      prisma.worker.findUnique.mockResolvedValue({ workspaceId: 'ws_a' });
+
+      await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {
+            name: 'task_context',
+            arguments: { taskId: 't_0000000001' },
+          },
+        })
+        .expect(200);
+
+      expect(prisma.worker.findUnique).toHaveBeenCalledWith({
+        where: { id: 'w_0001' },
+        select: { workspaceId: true },
+      });
+      expect(captured?.workspaceId).toBe('ws_a');
+      expect(captured?.userId).toBeUndefined();
+      expect(captured?.mode).toBe('request');
+    });
+
+    it('未注册 workerId → 回落默认空间（保证旧行为可用）', async () => {
+      let captured: ReturnType<typeof getTenantContext> | undefined;
+      service.taskContext.mockImplementation(() => {
+        captured = getTenantContext();
+        return { taskId: 't_1' };
+      });
+      prisma.worker.findUnique.mockResolvedValue(null);
+
+      await mcpPost()
+        .set('x-worker-id', 'w_missing')
+        .send({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'task_context', arguments: { taskId: 't_1' } },
+        })
+        .expect(200);
+
+      expect(captured?.workspaceId).toBe('ws_default');
+    });
   });
 
   describe('鉴权（WorkerTokenGuard）', () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import { CreateSpaceHint, SpaceBadge } from "@/src/components/ui/space-badge";
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -224,8 +225,11 @@ function GitRepoRow({ repo, grants, isAdmin, onConfigure, onDelete }: { repo: Gi
       */}
       <span data-testid="git-repo-url" data-repo-url={repo.repoUrl} title={repo.repoUrl} style={{ ...REPO_COLS.url, display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
         <span data-testid="git-repo-name" style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{parsed.name}</span>
-        <span data-testid="git-repo-origin" style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {parsed.owner ? `${parsed.owner} · ${parsed.host}` : parsed.host || repo.repoUrl}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs }}>
+          <span data-testid="git-repo-origin" style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {parsed.owner ? `${parsed.owner} · ${parsed.host}` : parsed.host || repo.repoUrl}
+          </span>
+          <SpaceBadge workspaceId={repo.workspaceId} />
         </span>
       </span>
       <span style={REPO_COLS.auth}><AuthTypeBadge authType={repo.authType} /></span>
@@ -531,7 +535,8 @@ export default function GitReposPage() {
               active={tab}
               onChange={(k) => setTab(k as "repos" | "credentials")}
             />
-            <div style={{ marginLeft: "auto", display: "flex", gap: space.sm, paddingBottom: 0 }}>
+            <div style={{ marginLeft: "auto", display: "flex", gap: space.sm, paddingBottom: 0, alignItems: "center" }}>
+              <CreateSpaceHint />
               {isAdmin && tab === "repos" && <PrimaryButton testid="git-repos-add" onClick={() => { setModalError(null); setRepoModal({ mode: "create" }); }}>新增仓库</PrimaryButton>}
               {isAdmin && tab === "credentials" && <PrimaryButton testid="git-credentials-add" onClick={() => { setModalError(null); setCredModal({ mode: "create" }); }}>新增凭证</PrimaryButton>}
             </div>

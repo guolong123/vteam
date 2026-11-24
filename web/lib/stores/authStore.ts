@@ -6,7 +6,13 @@ import {
   persist,
   type StateStorage,
 } from "zustand/middleware";
-import { setAuthToken, setRefreshHandler, setUnauthorizedHandler } from "@/lib/api";
+import {
+  api,
+  setAuthToken,
+  setRefreshHandler,
+  setUnauthorizedHandler,
+  setWorkspaceOverride,
+} from "@/lib/api";
 import { jwtExpiryMs, proactiveRefreshDelayMs } from "@/lib/jwt";
 
 export const AUTH_PERSIST_KEY = "agent-platform-auth";
@@ -39,6 +45,17 @@ const dualStorage: StateStorage = {
   },
 };
 
+/** 我可访问的工作空间（后端 WorkspaceSummary；系统空间 isSystem=true，只读）。 */
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  isSystem: boolean;
+  status?: string;
+  role?: string;
+  ownerUserId?: string | null;
+  createdAt?: string;
+}
+
 /** 登录用户信息（对齐 09 篇 §3.1 Auth 模块响应中的 user 字段）。 */
 export interface User {
   id: string;
@@ -54,6 +71,10 @@ export interface User {
    */
   permissions?: Record<string, unknown>;
   enabled?: boolean;
+  /** 当前工作空间 id（M1 后端返回；旧持久化数据缺失时由 /auth/profile 补） */
+  currentWorkspaceId?: string | null;
+  /** 可访问的工作空间列表（含系统空间，isSystem=true） */
+  workspaces?: WorkspaceSummary[];
 }
 
 interface AuthState {
@@ -78,7 +99,34 @@ interface AuthState {
   setPersistMode: (remember: boolean) => void;
   /** 登出：清空 token/user 与 api 层 token。 */
   logout: () => void;
+  /**
+   * 管理员跨空间只读视图（临时）：非空时所有 HTTP 请求带 `X-Workspace-Id`，
+   * 服务端按目标空间返回数据且拒绝写操作。null = 关闭。
+   */
+  viewWorkspace: { id: string; name: string } | null;
+  /** 开启/关闭跨空间只读视图（同时同步 api 层请求头）。 */
+  setViewWorkspace: (workspace: { id: string; name: string } | null) => void;
+  /**
+   * 切换当前工作空间（POST /auth/workspace 重签 token）。
+   * 成功后 token/user 一并更新；调用方负责清 react-query 缓存并刷新页面数据。
+   */
+  switchWorkspace: (workspaceId: string) => Promise<User>;
 }
+
+/* ------------------------------------------------------------------ *
+ * token 续期状态（**必须声明在 useAuthStore 之前**）
+ *
+ * zustand persist 使用同步 storage 时，`onRehydrateStorage` 回调会在
+ * `create()` 执行期间同步触发；若 `proactiveTimer` 等 let 变量声明在文件
+ * 下方，回调内访问会命中 TDZ（ReferenceError）→ 水合 Promise 永久 reject
+ * → `persist.hasHydrated()` 永远 false → 硬刷新后路由/登录守卫全部失效。
+ * ------------------------------------------------------------------ */
+/** 在飞刷新 Promise（单飞：并发 401 只发一次 POST /auth/refresh）。 */
+let inflightRefresh: Promise<string | null> | null = null;
+/** 主动续期定时器（到期前按剩余寿命排期刷新）。 */
+let proactiveTimer: ReturnType<typeof setTimeout> | null = null;
+/** 主动续期提前量下限（与 lib/jwt 同源口径的最小值）。 */
+const PROACTIVE_MIN_DELAY_MS = 60_000;
 
 /**
  * 认证状态 store。token + user 经 zustand persist 持久化到 dualStorage
@@ -91,10 +139,13 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       refreshToken: null,
       user: null,
+      viewWorkspace: null,
 
       setAuth: (token, refreshToken, user) => {
         setAuthToken(token);
-        setStore({ token, refreshToken, user });
+        // 重新登录/切换账号：清除跨空间只读视图，避免请求头残留
+        setWorkspaceOverride(null);
+        setStore({ token, refreshToken, user, viewWorkspace: null });
         scheduleProactiveRefresh({ token, refreshToken });
       },
 
@@ -114,8 +165,40 @@ export const useAuthStore = create<AuthState>()(
 
       logout: () => {
         setAuthToken(null);
+        setWorkspaceOverride(null);
         clearProactiveRefresh();
-        setStore({ token: null, refreshToken: null, user: null });
+        setStore({
+          token: null,
+          refreshToken: null,
+          user: null,
+          viewWorkspace: null,
+        });
+      },
+
+      setViewWorkspace: (workspace) => {
+        setWorkspaceOverride(workspace?.id ?? null);
+        setStore({ viewWorkspace: workspace });
+      },
+
+      switchWorkspace: async (workspaceId) => {
+        const res = await api.post<{
+          accessToken: string;
+          refreshToken: string;
+          user: User;
+        }>("/auth/workspace", { workspaceId });
+        setAuthToken(res.accessToken);
+        setWorkspaceOverride(null);
+        setStore({
+          token: res.accessToken,
+          refreshToken: res.refreshToken,
+          user: res.user,
+          viewWorkspace: null,
+        });
+        scheduleProactiveRefresh({
+          token: res.accessToken,
+          refreshToken: res.refreshToken,
+        });
+        return res.user;
       },
     }),
     {
@@ -125,18 +208,27 @@ export const useAuthStore = create<AuthState>()(
         token: state.token,
         refreshToken: state.refreshToken,
         user: state.user,
+        // 跨空间只读视图随页面刷新保留（否则刷新后请求头静默丢失，写保护形同虚设）
+        viewWorkspace: state.viewWorkspace,
       }),
       onRehydrateStorage: () => (state) => {
         // localStorage → memory 水合完成后，把 token 同步到 api 层，
         // 并按 token 剩余寿命排期主动续期（刷新页面后同样保持免登录）。
         // ⚠️ 此处**不能**引用 useAuthStore：同步存储下水合可能发生在 create() 期间，
         // 那时 const 绑定尚未完成（TDZ）→ 直接用 state 里的 token 对排期即可。
-        if (state?.token) {
-          setAuthToken(state.token);
-          scheduleProactiveRefresh({
-            token: state.token,
-            refreshToken: state.refreshToken ?? null,
-          });
+        try {
+          if (state?.token) {
+            setAuthToken(state.token);
+            // 刷新后恢复跨空间只读请求头，避免「横幅没了、写操作却按当前空间放行」的错位
+            setWorkspaceOverride(state.viewWorkspace?.id ?? null);
+            scheduleProactiveRefresh({
+              token: state.token,
+              refreshToken: state.refreshToken ?? null,
+            });
+          }
+        } catch (err) {
+          // 防御：续期排期异常不应让水合 Promise 失败（否则 hasHydrated 永远 false）。
+          console.warn("[auth] rehydrate 后续期排期失败（已忽略）", err);
         }
       },
     }
@@ -146,13 +238,6 @@ export const useAuthStore = create<AuthState>()(
 /* ------------------------------------------------------------------ *
  * token 续期（保证「记住我」下 1 周免登录）
  * ------------------------------------------------------------------ */
-
-/** 在飞刷新 Promise（单飞：并发 401 只发一次 POST /auth/refresh）。 */
-let inflightRefresh: Promise<string | null> | null = null;
-/** 主动续期定时器（到期前按剩余寿命排期刷新）。 */
-let proactiveTimer: ReturnType<typeof setTimeout> | null = null;
-/** 主动续期提前量下限（与 lib/jwt 同源口径的最小值）。 */
-const PROACTIVE_MIN_DELAY_MS = 60_000;
 
 function clearProactiveRefresh(): void {
   if (proactiveTimer !== null) {

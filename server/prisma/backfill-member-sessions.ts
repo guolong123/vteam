@@ -24,6 +24,7 @@
  * 前置：已应用迁移 20261106190000_global_session（sessions.member_key 唯一索引）。
  */
 import { PrismaClient } from '@prisma/client';
+import { SEED_WORKSPACE, seedUniqueWhere } from './tenant-unique';
 
 const prisma = new PrismaClient();
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -68,7 +69,10 @@ async function main() {
     for (const member of members) {
       report.scanned += 1;
       const existing = await prisma.session.findUnique({
-        where: { memberKey: member.id },
+        where: seedUniqueWhere(
+          { memberKey: member.id },
+          SEED_WORKSPACE.DEFAULT,
+        ),
         select: { id: true },
       });
       if (existing) {

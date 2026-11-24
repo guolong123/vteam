@@ -10,10 +10,12 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { WorkerOrJwtAllowed } from '../auth/decorators/worker-or-jwt.decorator';
 import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { CreateMcpServerDto } from './dto/create-mcp-server.dto';
 import { QueryMcpServersDto } from './dto/query-mcp-servers.dto';
@@ -41,7 +43,7 @@ export class McpServersController {
    * worker 拉取（X-Worker-Token）带 x-worker-id：按该 worker 上报的 mcpUrl 覆盖
    * 内置 vteam 地址（集群外 worker 场景，见 McpServersService.findAll）。
    */
-  @Public()
+  @WorkerOrJwtAllowed()
   @UseGuards(WorkerOrJwtGuard)
   @Get()
   @ApiOperation({ summary: 'MCP 服务器列表（type/enabled 过滤 + 分页）' })
@@ -51,7 +53,7 @@ export class McpServersController {
   }
 
   /** GET /api/v1/mcp-servers/:id → 200 + McpServer；不存在 → 404。 */
-  @Public()
+  @WorkerOrJwtAllowed()
   @UseGuards(WorkerOrJwtGuard)
   @Get(':id')
   @ApiOperation({ summary: 'MCP 服务器详情' })
@@ -65,7 +67,7 @@ export class McpServersController {
    *   → 201 + McpServer；name 冲突 → 409；配置非法 → 400
    */
   @Post()
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '创建 MCP 服务器（local/remote 配置校验）' })
   create(@Body() dto: CreateMcpServerDto) {
     return this.mcpServersService.create(dto);
@@ -77,7 +79,7 @@ export class McpServersController {
    * 不存在 → 404；改 name 撞唯一 → 409；配置非法 → 400
    */
   @Patch(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '更新 MCP 服务器（编辑/启停，部分更新）' })
   update(@Param('id') id: string, @Body() dto: UpdateMcpServerDto) {
     return this.mcpServersService.update(id, dto);
@@ -88,7 +90,7 @@ export class McpServersController {
    * DELETE /api/v1/mcp-servers/:id → 200；不存在 → 404 MCP_SERVER_NOT_FOUND
    */
   @Delete(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '删除 MCP 服务器（物理删除）' })
   remove(@Param('id') id: string) {
     return this.mcpServersService.remove(id);
@@ -101,7 +103,7 @@ export class McpServersController {
    * 不存在 → 404；连接/发现失败 → 400 MCP_SERVER_SYNC_FAILED
    */
   @Post(':id/sync')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({ summary: '同步 MCP 服务器工具（发现并物化为 Tool 行）' })
   syncTools(@Param('id') id: string) {
     return this.mcpServersService.syncTools(id);

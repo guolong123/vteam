@@ -62,6 +62,16 @@ const document: OpenAPIObject = {
   },
 };
 
+/** 复合唯一键改造后 where 形如 { workspaceId_action: { workspaceId, action } }；统一取旧字段。 */
+function whereField(call: any[], field: string): unknown {
+  const where = call?.[0]?.where ?? {};
+  if (where[field] !== undefined) return where[field];
+  const compound = Object.entries(where).find(([k]) =>
+    k.startsWith('workspaceId_'),
+  )?.[1] as Record<string, unknown> | undefined;
+  return compound?.[field];
+}
+
 describe('SwaggerToolSyncService', () => {
   let service: SwaggerToolSyncService;
   let docs: { getDocument: jest.Mock };
@@ -96,8 +106,8 @@ describe('SwaggerToolSyncService', () => {
 
     expect(synced).toBe(3);
     expect(prisma.tool.upsert).toHaveBeenCalledTimes(3);
-    const names = prisma.tool.upsert.mock.calls.map(
-      (call) => call[0].where.action,
+    const names = prisma.tool.upsert.mock.calls.map((call) =>
+      whereField(call, 'action'),
     );
     expect(names).toEqual(['listusers', 'createuser', 'getuser']);
   });
@@ -106,9 +116,9 @@ describe('SwaggerToolSyncService', () => {
     await service.syncToToolsTable();
 
     const call = prisma.tool.upsert.mock.calls.find(
-      (c) => c[0].where.action === 'listusers',
+      (c) => whereField(c, 'action') === 'listusers',
     )![0];
-    expect(call.where).toEqual({ action: 'listusers' });
+    expect(whereField([{ where: call.where }], 'action')).toBe('listusers');
     expect(call.update.name).toBe('listusers');
     expect(call.update.source).toBe('mcp');
     expect(call.update.execution).toBe('mcp');
@@ -122,7 +132,7 @@ describe('SwaggerToolSyncService', () => {
     await service.syncToToolsTable();
 
     const createUser = prisma.tool.upsert.mock.calls.find(
-      (c) => c[0].where.action === 'createuser',
+      (c) => whereField(c, 'action') === 'createuser',
     )![0];
     expect(createUser.update.schema).toEqual({
       type: 'object',

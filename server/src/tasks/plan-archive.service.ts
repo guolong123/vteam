@@ -39,7 +39,7 @@ export class PlanArchiveService {
   ): Promise<{ archived: number; skipped: number; failed: number }> {
     const zero = { archived: 0, skipped: 0, failed: 0 };
     try {
-      const directory = this.planDocs.taskDirectory(taskId);
+      const directory = await this.planDocs.resolveTaskDirectory(taskId);
       const located = await this.planDocs.locateWorkerForTask(taskId);
       if (!located) {
         this.logger.warn(

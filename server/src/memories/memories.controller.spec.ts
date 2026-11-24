@@ -2,7 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
-import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { QueryMemoriesDto } from './dto/query-memories.dto';
 import { MemoryMaintenanceService } from './memory-maintenance.service';
 import { MemoriesController } from './memories.controller';
@@ -41,8 +41,8 @@ describe('MemoriesController', () => {
         { provide: PrismaService, useValue: prisma },
       ],
     })
-      // @UseGuards(AdminGuard) 在模块 compile 时即被 Nest 实例化（非请求期）→ 必须 override
-      .overrideGuard(AdminGuard)
+      // @UseGuards(WorkspaceAdminGuard) 在模块 compile 时即被 Nest 实例化（非请求期）→ 必须 override
+      .overrideGuard(WorkspaceAdminGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
@@ -50,49 +50,49 @@ describe('MemoriesController', () => {
   });
 
   describe('守卫元数据（memory-enhancement Todo 2：权限下沉 service）', () => {
-    it('GET /memories 不再挂 AdminGuard（成员感知过滤下沉 service）', () => {
+    it('GET /memories 不再挂 WorkspaceAdminGuard（成员感知过滤下沉 service）', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.findAll,
       );
-      expect(guards ?? []).not.toContain(AdminGuard);
+      expect(guards ?? []).not.toContain(WorkspaceAdminGuard);
     });
 
-    it('DELETE /memories/:id 不再挂 AdminGuard（per-row 鉴权在 service）', () => {
+    it('DELETE /memories/:id 不再挂 WorkspaceAdminGuard（per-row 鉴权在 service）', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.remove,
       );
-      expect(guards ?? []).not.toContain(AdminGuard);
+      expect(guards ?? []).not.toContain(WorkspaceAdminGuard);
     });
 
-    it('POST /memories/:id/restore 与 /purge 不挂 AdminGuard（per-row 鉴权在 service）', () => {
+    it('POST /memories/:id/restore 与 /purge 不挂 WorkspaceAdminGuard（per-row 鉴权在 service）', () => {
       expect(
         Reflect.getMetadata(
           '__guards__',
           MemoriesController.prototype.restore,
         ) ?? [],
-      ).not.toContain(AdminGuard);
+      ).not.toContain(WorkspaceAdminGuard);
       expect(
         Reflect.getMetadata('__guards__', MemoriesController.prototype.purge) ??
           [],
-      ).not.toContain(AdminGuard);
+      ).not.toContain(WorkspaceAdminGuard);
     });
 
-    it('PATCH /memories/:id 保留 AdminGuard（编辑权限不放开）', () => {
+    it('PATCH /memories/:id 保留 WorkspaceAdminGuard（编辑权限仅平台管理员/空间管理员（仅本空间））', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.update,
       );
-      expect(guards).toContain(AdminGuard);
+      expect(guards).toContain(WorkspaceAdminGuard);
     });
 
-    it('POST /memories/maintain 保留 AdminGuard（跨团队全局动作，仅管理员）', () => {
+    it('POST /memories/maintain 保留 WorkspaceAdminGuard（空间级动作：平台管理员或当前空间管理员）', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.maintain,
       );
-      expect(guards).toContain(AdminGuard);
+      expect(guards).toContain(WorkspaceAdminGuard);
     });
   });
 
@@ -348,8 +348,8 @@ describe('MemoriesController', () => {
   });
 });
 
-describe('MemoriesController AdminGuard（PATCH 编辑仍 admin-only）', () => {
-  let guard: AdminGuard;
+describe('MemoriesController WorkspaceAdminGuard（PATCH 编辑仍 admin-only）', () => {
+  let guard: WorkspaceAdminGuard;
   let prisma: {
     user: {
       findUnique: jest.Mock;
@@ -372,13 +372,16 @@ describe('MemoriesController AdminGuard（PATCH 编辑仍 admin-only）', () => 
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [AdminGuard, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        WorkspaceAdminGuard,
+        { provide: PrismaService, useValue: prisma },
+      ],
     }).compile();
 
-    guard = module.get<AdminGuard>(AdminGuard);
+    guard = module.get<WorkspaceAdminGuard>(WorkspaceAdminGuard);
   });
 
-  it('非 admin（无 users:manage）→ 403 FORBIDDEN_ADMIN', async () => {
+  it('非 admin（无 users:manage）→ 403 FORBIDDEN_WORKSPACE_ADMIN', async () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 'u_member',
       enabled: true,
@@ -387,6 +390,8 @@ describe('MemoriesController AdminGuard（PATCH 编辑仍 admin-only）', () => 
 
     await expect(
       guard.canActivate(mockContext({ id: 'u_member' })),
-    ).rejects.toMatchObject({ response: { code: 'FORBIDDEN_ADMIN' } });
+    ).rejects.toMatchObject({
+      response: { code: 'FORBIDDEN_WORKSPACE_ADMIN' },
+    });
   });
 });

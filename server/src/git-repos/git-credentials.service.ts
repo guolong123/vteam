@@ -18,6 +18,7 @@ import {
   GIT_CREDENTIAL_ID_PREFIX,
   GIT_REPOS_ERRORS,
 } from './git-repos.constants';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 export interface GitCredentialView {
   id: string;
@@ -69,7 +70,7 @@ export class GitCredentialsService implements OnModuleInit {
       });
     }
     const existing = await this.prisma.gitCredential.findUnique({
-      where: { name: dto.name },
+      where: tenantUniqueWhere('GitCredential', { name: dto.name }),
       select: { id: true, revokedAt: true },
     });
     if (existing && existing.revokedAt === null) {
@@ -129,7 +130,7 @@ export class GitCredentialsService implements OnModuleInit {
     const data: Record<string, unknown> = {};
     if (dto.name !== undefined) {
       const dup = await this.prisma.gitCredential.findUnique({
-        where: { name: dto.name },
+        where: tenantUniqueWhere('GitCredential', { name: dto.name }),
         select: { id: true, revokedAt: true },
       });
       if (dup && dup.id !== id && dup.revokedAt === null) {

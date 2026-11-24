@@ -7,6 +7,7 @@ import { WorkerClient } from '../workers/worker.client';
 import { WorkersService } from '../workers/workers.service';
 import { MODEL_ERRORS } from './models.constants';
 import { ModelsService } from './models.service';
+import { tenantUniqueWhere } from '../common/tenant/tenant-unique';
 
 describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）', () => {
   let service: ModelsService;
@@ -480,6 +481,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           providerID: 'vllm',
           providerType: 'local',
           baseUrl: 'http://vllm:8000/v1',
+          workspaceId: undefined,
         },
       ]);
 
@@ -487,7 +489,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       // 关键：元数据查询不再带 where.enabled 过滤（停用行的 baseUrl 仍需回显）。
       expect(prisma.model.findMany).toHaveBeenCalledWith({
-        select: { providerID: true, providerType: true, baseUrl: true },
+        select: {
+          providerID: true,
+          providerType: true,
+          baseUrl: true,
+          workspaceId: true,
+        },
       });
       expect(result).toEqual([
         {
@@ -736,12 +743,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       const result = await service.create(createDto);
 
       expect(prisma.model.findUnique).toHaveBeenCalledWith({
-        where: {
-          providerID_modelID: {
-            providerID: 'opencode-go',
-            modelID: 'deepseek-v4-flash',
-          },
-        },
+        where: tenantUniqueWhere('Model', {
+          providerID: 'opencode-go',
+          modelID: 'deepseek-v4-flash',
+        }),
         select: { id: true },
       });
       expect(prisma.model.create).toHaveBeenCalledWith({
@@ -1432,7 +1437,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       });
       // 删除意图落盘：外部 worker（keta）再上报该 provider，sync 也不会复活它
       expect(prisma.providerTombstone.upsert).toHaveBeenCalledWith({
-        where: { providerID: 'vllm' },
+        where: tenantUniqueWhere('ProviderTombstone', { providerID: 'vllm' }),
         create: { providerID: 'vllm' },
         update: { deletedAt: expect.any(Date) },
       });
@@ -1629,12 +1634,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.model.findUnique).toHaveBeenCalledTimes(1);
       expect(prisma.model.findUnique).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: {
-            providerID_modelID: {
-              providerID: 'opencode',
-              modelID: 'big-pickle',
-            },
-          },
+          where: tenantUniqueWhere('Model', {
+            providerID: 'opencode',
+            modelID: 'big-pickle',
+          }),
         }),
       );
       expect(prisma.workerModelAvailability.upsert).toHaveBeenCalledTimes(1);
@@ -2231,7 +2234,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       const result = await service.setCredential('md_0000000001', 'new-token');
 
       expect(prisma.modelCredential.update).toHaveBeenCalledWith({
-        where: { providerID: 'opencode-go' },
+        where: tenantUniqueWhere('ModelCredential', {
+          providerID: 'opencode-go',
+        }),
         data: {
           credentialRef: 'iv:newtag:newdata',
           fingerprint: 'sk-n****xxxx',
@@ -2706,7 +2711,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       const result = await service.revokeCredential('md_0000000001');
 
       expect(prisma.modelCredential.update).toHaveBeenCalledWith({
-        where: { providerID: 'opencode-go' },
+        where: tenantUniqueWhere('ModelCredential', {
+          providerID: 'opencode-go',
+        }),
         data: { revokedAt: now },
       });
       expect(result).toMatchObject({ configured: false, revokedAt: now });
@@ -2750,10 +2757,14 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(prisma.model.findUnique).not.toHaveBeenCalled();
       expect(prisma.modelCredential.findUnique).toHaveBeenCalledWith({
-        where: { providerID: 'opencode-go' },
+        where: tenantUniqueWhere('ModelCredential', {
+          providerID: 'opencode-go',
+        }),
       });
       expect(prisma.modelCredential.update).toHaveBeenCalledWith({
-        where: { providerID: 'opencode-go' },
+        where: tenantUniqueWhere('ModelCredential', {
+          providerID: 'opencode-go',
+        }),
         data: { revokedAt: now },
       });
       expect(result).toMatchObject({ configured: false, revokedAt: now });

@@ -50,15 +50,28 @@ describe('ArtifactsService', () => {
       task: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         findMany: jest.fn(),
+        findUnique: jest.fn(),
       },
       team: { findUnique: jest.fn() },
+      // M0 归属校验：task → team → team_user_members
+      teamUserMember: { findUnique: jest.fn() },
       $transaction: jest.fn((cb: any) => cb(prisma)),
     };
     return new ArtifactsService(prisma as any, idGen as any, realtime as any);
   };
 
+  /** M0：归属校验的调用方 id（成员默认放行，各用例按需覆盖为非成员）。 */
+  const VIEWER = 'u_member';
+
   beforeEach(() => {
     service = createService();
+    // M0 归属校验默认通过：任务归属 tm_1、调用者是该团队成员
+    prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+    prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+    prisma.artifact.findUnique.mockResolvedValue({
+      id: 'art_0000000001',
+      taskId: 't_0000000001',
+    });
     // P2：mock 静态落盘（doc/file 有内容时归档走 saveTextFile，单测不真实写盘）
     jest.spyOn(FileStorageService, 'saveTextFile').mockResolvedValue({
       url: STORED_URL,
@@ -603,7 +616,7 @@ describe('ArtifactsService', () => {
         createdAt: FIXED_DATE,
       });
 
-      const result = await service.restore('art_0000000001', 1);
+      const result = await service.restore('art_0000000001', 1, VIEWER);
 
       // 去重绕过：内容与 v1 完全相同仍强制递增，不走 duplicate 短路
       expect(result.status).toBe('restored');
@@ -634,12 +647,12 @@ describe('ArtifactsService', () => {
       prisma.artifact.findUnique.mockResolvedValue(artifactRow);
       prisma.artifactVersion.findFirst.mockResolvedValue(null);
 
-      await expect(service.restore('art_0000000001', 99)).rejects.toMatchObject(
-        {
-          status: 404,
-          response: { code: 'ARTIFACT_VERSION_NOT_FOUND' },
-        },
-      );
+      await expect(
+        service.restore('art_0000000001', 99, VIEWER),
+      ).rejects.toMatchObject({
+        status: 404,
+        response: { code: 'ARTIFACT_VERSION_NOT_FOUND' },
+      });
       expect(prisma.artifact.update).not.toHaveBeenCalled();
       expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
       expect(prisma.task.updateMany).not.toHaveBeenCalled();
@@ -648,10 +661,12 @@ describe('ArtifactsService', () => {
     it('产出物不存在 → 404 ARTIFACT_NOT_FOUND（不写库）', async () => {
       prisma.artifact.findUnique.mockResolvedValue(null);
 
-      await expect(service.restore('art_999', 1)).rejects.toMatchObject({
-        status: 404,
-        response: { code: 'ARTIFACT_NOT_FOUND' },
-      });
+      await expect(service.restore('art_999', 1, VIEWER)).rejects.toMatchObject(
+        {
+          status: 404,
+          response: { code: 'ARTIFACT_NOT_FOUND' },
+        },
+      );
       expect(prisma.artifact.update).not.toHaveBeenCalled();
       expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
     });
@@ -664,7 +679,7 @@ describe('ArtifactsService', () => {
       });
 
       try {
-        await service.restore('art_0000000001', 1);
+        await service.restore('art_0000000001', 1, VIEWER);
         fail('应抛出 ConflictException');
       } catch (e) {
         expect(e).toBeInstanceOf(ConflictException);
@@ -915,11 +930,15 @@ describe('ArtifactsService', () => {
         },
       ]);
 
-      const result = await service.findByTask('t_0000000001', {
-        type: 'text',
-        page: 1,
-        pageSize: 20,
-      });
+      const result = await service.findByTask(
+        't_0000000001',
+        {
+          type: 'text',
+          page: 1,
+          pageSize: 20,
+        },
+        VIEWER,
+      );
 
       expect(prisma.artifact.findMany).toHaveBeenCalledWith({
         where: { taskId: 't_0000000001', type: 'text' },
@@ -975,15 +994,23 @@ describe('ArtifactsService', () => {
         },
       ]);
 
-      const accepted = await service.findByTask('t_0000000001', {
-        accepted: 'true',
-      });
+      const accepted = await service.findByTask(
+        't_0000000001',
+        {
+          accepted: 'true',
+        },
+        VIEWER,
+      );
       expect(accepted.total).toBe(1);
       expect(accepted.items[0].id).toBe('art_0000000001');
 
-      const rejected = await service.findByTask('t_0000000001', {
-        accepted: 'false',
-      });
+      const rejected = await service.findByTask(
+        't_0000000001',
+        {
+          accepted: 'false',
+        },
+        VIEWER,
+      );
       expect(rejected.total).toBe(1);
       expect(rejected.items[0].id).toBe('art_0000000002');
     });
@@ -1001,10 +1028,14 @@ describe('ArtifactsService', () => {
       prisma.artifact.findMany.mockResolvedValue(artifacts);
       prisma.artifactVersion.findMany.mockResolvedValue([]);
 
-      const result = await service.findByTask('t_0000000001', {
-        page: 2,
-        pageSize: 1,
-      });
+      const result = await service.findByTask(
+        't_0000000001',
+        {
+          page: 2,
+          pageSize: 1,
+        },
+        VIEWER,
+      );
       expect(result.total).toBe(3);
       expect(result.items).toHaveLength(1);
       expect(result.items[0].id).toBe('art_0000000002');
@@ -1049,7 +1080,7 @@ describe('ArtifactsService', () => {
         ],
       });
 
-      const result = await service.findOne('art_0000000001');
+      const result = await service.findOne('art_0000000001', VIEWER);
 
       expect(prisma.artifact.findUnique).toHaveBeenCalledWith({
         where: { id: 'art_0000000001' },
@@ -1071,7 +1102,7 @@ describe('ArtifactsService', () => {
 
     it('findOne 不存在 → 404 ARTIFACT_NOT_FOUND', async () => {
       prisma.artifact.findUnique.mockResolvedValue(null);
-      await expect(service.findOne('art_999')).rejects.toMatchObject({
+      await expect(service.findOne('art_999', VIEWER)).rejects.toMatchObject({
         status: 404,
         response: { code: 'ARTIFACT_NOT_FOUND' },
       });
@@ -1091,7 +1122,7 @@ describe('ArtifactsService', () => {
         createdAt: FIXED_DATE,
       });
 
-      const result = await service.findVersion('art_0000000001', 2);
+      const result = await service.findVersion('art_0000000001', 2, VIEWER);
 
       expect(prisma.artifactVersion.findFirst).toHaveBeenCalledWith({
         where: { artifactId: 'art_0000000001', version: 2 },
@@ -1104,7 +1135,7 @@ describe('ArtifactsService', () => {
     it('findVersion 不存在 → 404 ARTIFACT_VERSION_NOT_FOUND', async () => {
       prisma.artifactVersion.findFirst.mockResolvedValue(null);
       await expect(
-        service.findVersion('art_0000000001', 99),
+        service.findVersion('art_0000000001', 99, VIEWER),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -1122,10 +1153,11 @@ describe('ArtifactsService', () => {
         createdAt: FIXED_DATE,
       });
 
-      const result = (await service.findVersion('art_0000000001', 2)) as Record<
-        string,
-        unknown
-      >;
+      const result = (await service.findVersion(
+        'art_0000000001',
+        2,
+        VIEWER,
+      )) as Record<string, unknown>;
 
       expect(result).toEqual(
         expect.objectContaining({
@@ -1155,10 +1187,11 @@ describe('ArtifactsService', () => {
         createdAt: FIXED_DATE,
       });
 
-      const result = (await service.findVersion('art_0000000001', 1)) as Record<
-        string,
-        unknown
-      >;
+      const result = (await service.findVersion(
+        'art_0000000001',
+        1,
+        VIEWER,
+      )) as Record<string, unknown>;
 
       expect(result.fileUrl).toBeUndefined();
       expect(result.fileName).toBeUndefined();
@@ -1413,9 +1446,13 @@ describe('ArtifactsService', () => {
         },
       ]);
 
-      const result = await service.findByTask('t_0000000001', {
-        category: '需求',
-      });
+      const result = await service.findByTask(
+        't_0000000001',
+        {
+          category: '需求',
+        },
+        VIEWER,
+      );
 
       expect(prisma.artifact.findMany).toHaveBeenCalledWith({
         where: { taskId: 't_0000000001', category: '需求' },
@@ -1441,7 +1478,7 @@ describe('ArtifactsService', () => {
       ]);
       prisma.artifactVersion.findMany.mockResolvedValue([]);
 
-      const result = await service.findByTask('t_0000000001', {});
+      const result = await service.findByTask('t_0000000001', {}, VIEWER);
 
       expect(prisma.artifact.findMany).toHaveBeenCalledWith({
         where: { taskId: 't_0000000001' },
@@ -1626,9 +1663,13 @@ describe('ArtifactsService', () => {
         },
       ]);
 
-      const result = await service.findByTask('t_0000000001', {
-        category: '计划',
-      });
+      const result = await service.findByTask(
+        't_0000000001',
+        {
+          category: '计划',
+        },
+        VIEWER,
+      );
 
       expect(prisma.artifact.findMany).toHaveBeenCalledWith({
         where: { taskId: 't_0000000001', category: '计划' },
@@ -2154,13 +2195,135 @@ describe('ArtifactsService', () => {
         createdAt: FIXED_DATE,
       });
 
-      await service.restore('art_0000000001', 1);
+      await service.restore('art_0000000001', 1, VIEWER);
 
       expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           version: 3,
           authorAgentId: 'a_project_manager',
         }),
+      });
+    });
+  });
+
+  // ── M0 止血：产出物归属校验（artifact → task → team → team_user_members） ──
+  describe('M0 归属校验（artifact/task → team → team_user_members）', () => {
+    const artifactRow = {
+      id: 'art_0000000001',
+      taskId: 't_0000000001',
+      type: 'text',
+      title: '验收结论',
+      currentVersion: 1,
+      createdAt: FIXED_DATE,
+      updatedAt: FIXED_DATE,
+      versions: [],
+    };
+
+    it('findOne：非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER（不泄露内容）', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(artifactRow);
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.findOne('art_0000000001', 'u_outsider'),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+    });
+
+    it('findByTask：非团队成员 → 403，且不查产出物列表', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.findByTask('t_0000000001', {}, 'u_outsider'),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+      expect(prisma.artifact.findMany).not.toHaveBeenCalled();
+    });
+
+    it('findVersion：非团队成员 → 403（版本正文不外泄）', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000001',
+        version: 1,
+        contentRef: '机密正文',
+        filePath: null,
+        sha256: 'h',
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.findVersion('art_0000000001', 1, 'u_outsider'),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+    });
+
+    it('restore：非团队成员 → 403，且不写库', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(artifactRow);
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.restore('art_0000000001', 1, 'u_outsider'),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+      expect(prisma.artifact.update).not.toHaveBeenCalled();
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+    });
+
+    it('remove：非团队成员 → 403，且不删库', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(artifactRow);
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.remove('art_0000000001', 'u_outsider'),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('任务不存在 → 404 TASK_NOT_FOUND（而不是静默空列表）', async () => {
+      prisma.task.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.findByTask('t_missing', {}, VIEWER),
+      ).rejects.toMatchObject({
+        status: 404,
+        response: { code: 'TASK_NOT_FOUND' },
+      });
+    });
+
+    it('任务无归属团队（teamId 空）→ 403 fail-closed（不可判定归属即拒绝）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ teamId: null });
+
+      await expect(
+        service.findByTask('t_no_team', {}, VIEWER),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+    });
+
+    it('成员放行：团队成员可读详情（默认归属 mock 命中）', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(artifactRow);
+
+      const result = await service.findOne('art_0000000001', VIEWER);
+
+      expect(result.id).toBe('art_0000000001');
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_1', userId: VIEWER } },
+        select: { id: true },
       });
     });
   });

@@ -9,10 +9,12 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { WorkerOrJwtAllowed } from '../auth/decorators/worker-or-jwt.decorator';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { CreateToolDto } from './dto/create-tool.dto';
 import { QueryToolsDto } from './dto/query-tools.dto';
@@ -45,7 +47,7 @@ export class ToolsController {
    * admin 缺省全量。worker（X-Worker-Token）viewer 为空不强制过滤，
    * 显式带 enabled=true 即只取启用工具。
    */
-  @Public()
+  @WorkerOrJwtAllowed()
   @UseGuards(WorkerOrJwtGuard)
   @Get()
   @ApiOperation({
@@ -65,7 +67,7 @@ export class ToolsController {
    *   → 201 + Tool 对象；action 冲突 → 409 `TOOL_ACTION_EXISTS`。
    */
   @Post()
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '注册工具（无 source 入参，execution=mcp→mcp 其余→custom）',
   })
@@ -79,7 +81,7 @@ export class ToolsController {
    * 不存在 → 404 `TOOL_NOT_FOUND`。
    */
   @Patch(':id')
-  @UseGuards(AdminGuard)
+  @UseGuards(WorkspaceAdminGuard)
   @ApiOperation({
     summary: '更新工具（仅 schema/initCommand/enabled；停用替代删除）',
   })

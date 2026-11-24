@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { WorkersModule } from '../workers/workers.module';
 import { GitCredentialsController } from './git-credentials.controller';
 import { GitCredentialsService } from './git-credentials.service';
@@ -24,6 +25,7 @@ import { GitReposService } from './git-repos.service';
     GitReposService,
     CredentialCryptoService,
     AdminGuard,
+    WorkspaceAdminGuard,
   ],
   exports: [GitCredentialsService, GitReposService],
 })

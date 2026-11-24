@@ -8,11 +8,31 @@ jest.mock('bcrypt', () => ({
 
 const mockPrisma = {
   role: { upsert: jest.fn().mockResolvedValue({ id: 'r_admin' }) },
-  user: { upsert: jest.fn().mockResolvedValue({ id: 'u_admin' }) },
-  agent: { upsert: jest.fn().mockResolvedValue({}) },
+  user: {
+    upsert: jest.fn().mockResolvedValue({ id: 'u_admin' }),
+    findUnique: jest
+      .fn()
+      .mockResolvedValue({ id: 'u_admin', username: 'admin' }),
+    findMany: jest.fn().mockResolvedValue([]),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    update: jest.fn().mockResolvedValue({}),
+  },
+  // 多工作空间引导（M1）：空间 upsert / 成员关系 create / 各平台表 updateMany 归一系统空间
+  workspace: { upsert: jest.fn().mockResolvedValue({ id: 'ws_default' }) },
+  workspaceMember: {
+    findMany: jest.fn().mockResolvedValue([]),
+    create: jest.fn().mockResolvedValue({}),
+  },
+  agent: {
+    upsert: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
   // 角色 ExecutionPolicy seed（vteam-role-behavior-enforcement Todo 3）：
   // mock 缺少该 key 时 seed 首次 policy upsert 即抛 TypeError。
-  executionPolicy: { upsert: jest.fn().mockResolvedValue({}) },
+  executionPolicy: {
+    upsert: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
   model: {
     findMany: jest.fn().mockResolvedValue([]),
     upsert: jest.fn().mockResolvedValue({}),
@@ -21,9 +41,20 @@ const mockPrisma = {
   // Provider tombstone（删除不复活）：seed 在模型 upsert 前查删除意图。
   // mock 缺少该 key 时 seed 首个模型 upsert 前即抛 TypeError。
   providerTombstone: { findMany: jest.fn().mockResolvedValue([]) },
-  tool: { upsert: jest.fn().mockResolvedValue({}) },
-  mcpServer: { upsert: jest.fn().mockResolvedValue({}) },
-  skill: { upsert: jest.fn().mockResolvedValue({}) },
+  tool: {
+    upsert: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
+  mcpServer: {
+    upsert: jest.fn().mockResolvedValue({}),
+    findUnique: jest.fn().mockResolvedValue(null),
+    update: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
+  skill: {
+    upsert: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
   team: {
     upsert: jest.fn().mockResolvedValue({ id: 'tm_0000000001' }),
     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -205,6 +236,19 @@ const splitSentences = (text: string): string[] =>
         .trim(),
     )
     .filter((s) => s.length >= 8);
+
+/**
+ * 复合唯一键改造（M1）后，seed 的 upsert where 变成 `{ workspaceId_xxx: { workspaceId, ...fields } }`。
+ * 该 helper 统一取旧字段值，兼容两种形态（迁移期单键 / 复合键）。
+ */
+function whereField(call: any[], field: string): unknown {
+  const where = call?.[0]?.where ?? {};
+  if (where[field] !== undefined) return where[field];
+  const compound = Object.entries(where).find(([k]) =>
+    k.startsWith('workspaceId_'),
+  )?.[1] as Record<string, unknown> | undefined;
+  return compound?.[field];
+}
 
 describe('seed（模板 Agent 预置 + 角色策略）', () => {
   beforeEach(() => {
@@ -637,7 +681,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     mockPrisma.skill.upsert.mock.calls.filter((call) =>
       Object.prototype.hasOwnProperty.call(
         PLAN_SKILL_TOOLS,
-        String(call[0].where.name),
+        String(whereField(call, 'name')),
       ),
     );
 
@@ -659,14 +703,14 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const calls = planSkillCalls();
-    expect(calls.map((call) => String(call[0].where.name)).sort()).toEqual(
-      Object.keys(PLAN_SKILL_TOOLS).sort(),
-    );
+    expect(
+      calls.map((call) => String(whereField(call, 'name'))).sort(),
+    ).toEqual(Object.keys(PLAN_SKILL_TOOLS).sort());
     for (const call of calls) {
       expect(call[0].create.enabled).toBe(true);
       // F2-L1：update 不得含 enabled——管理员手动停用后重跑 seed 不强制启用
       expect(call[0].update).not.toHaveProperty('enabled');
-      expect(call[0].create.name).toBe(call[0].where.name);
+      expect(call[0].create.name).toBe(whereField(call, 'name'));
       expect(typeof call[0].create.content).toBe('string');
       expect(call[0].create.content.length).toBeGreaterThan(100);
     }
@@ -676,11 +720,13 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const calls = mockPrisma.skill.upsert.mock.calls.filter(
-      (call) => String(call[0].where.name) === 'learning-mode',
+      (call) => String(whereField(call, 'name')) === 'learning-mode',
     );
     expect(calls).toHaveLength(1);
     const { where, create, update } = calls[0][0];
-    expect(where).toEqual({ name: 'learning-mode' });
+    expect(where).toEqual({
+      workspaceId_name: { workspaceId: 'ws_system', name: 'learning-mode' },
+    });
     expect(create.id).toBe('sk_builtin_learning_mode');
     expect(create.name).toBe('learning-mode');
     expect(create.enabled).toBe(true);
@@ -696,7 +742,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const calls = mockPrisma.skill.upsert.mock.calls.filter(
-      (call) => String(call[0].where.name) === 'learning-mode',
+      (call) => String(whereField(call, 'name')) === 'learning-mode',
     );
     expect(calls).toHaveLength(1);
     const { create } = calls[0][0];
@@ -718,7 +764,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     const calls = planSkillCalls();
     expect(calls).toHaveLength(6);
     for (const call of calls) {
-      const name = String(call[0].where.name);
+      const name = String(whereField(call, 'name'));
       const content = call[0].create.content as string;
       expect(content).toContain(`name: ${name}`);
       expect(content).toContain('description:');
@@ -734,7 +780,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const byName = new Map(
       planSkillCalls().map((call) => [
-        String(call[0].where.name),
+        String(whereField(call, 'name')),
         call[0].create.content as string,
       ]),
     );
@@ -783,7 +829,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const byName = new Map(
       planSkillCalls().map((call) => [
-        String(call[0].where.name),
+        String(whereField(call, 'name')),
         call[0].create.content as string,
       ]),
     );
@@ -797,7 +843,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const byName = new Map(
       planSkillCalls().map((call) => [
-        String(call[0].where.name),
+        String(whereField(call, 'name')),
         call[0].create.content as string,
       ]),
     );
@@ -831,7 +877,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const byName = new Map(
       planSkillCalls().map((call) => [
-        String(call[0].where.name),
+        String(whereField(call, 'name')),
         call[0].create.content as string,
       ]),
     );
@@ -876,7 +922,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const byName = new Map(
       planSkillCalls().map((call) => [
-        String(call[0].where.name),
+        String(whereField(call, 'name')),
         call[0].create.content as string,
       ]),
     );
@@ -927,7 +973,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const toolCalls = mockPrisma.tool.upsert.mock.calls;
     const planReview = toolCalls.find(
-      (call) => call[0].where.action === 'plan_review',
+      (call) => whereField(call, 'action') === 'plan_review',
     );
     expect(planReview).toBeUndefined();
   });
@@ -937,7 +983,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const toolCalls = mockPrisma.tool.upsert.mock.calls;
     const row = toolCalls.find(
-      (call) => call[0].where.action === 'git_repos_list',
+      (call) => whereField(call, 'action') === 'git_repos_list',
     );
     expect(row).toBeDefined();
     expect(row[0].create).toMatchObject({
@@ -953,7 +999,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const toolCalls = mockPrisma.tool.upsert.mock.calls;
     const row = toolCalls.find(
-      (call) => call[0].where.action === 'plan_complete',
+      (call) => whereField(call, 'action') === 'plan_complete',
     );
     expect(row).toBeDefined();
     expect(row[0].create).toMatchObject({
@@ -1000,7 +1046,9 @@ describe('seed（计划 skills + 评审子句）', () => {
       ['hook_register', 'vteam_hook_register'],
       ['hook_cancel', 'vteam_hook_cancel'],
     ] as const) {
-      const row = toolCalls.find((call) => call[0].where.action === action);
+      const row = toolCalls.find(
+        (call) => whereField(call, 'action') === action,
+      );
       expect(row).toBeDefined();
       expect(row[0].create).toMatchObject({
         name,
@@ -1016,7 +1064,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     const toolCalls = mockPrisma.tool.upsert.mock.calls;
     const row = toolCalls.find(
-      (call) => call[0].where.action === 'secret_command',
+      (call) => whereField(call, 'action') === 'secret_command',
     );
     expect(row).toBeDefined();
     expect(row[0].create).toMatchObject({
@@ -1037,13 +1085,15 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const toolCalls = mockPrisma.tool.upsert.mock.calls;
-    const bash = toolCalls.find((call) => call[0].where.action === 'bash');
+    const bash = toolCalls.find(
+      (call) => whereField(call, 'action') === 'bash',
+    );
     expect(bash).toBeDefined();
     expect(bash[0].create.description).toBe(
       '执行 shell 命令（有副作用，默认需确认）',
     );
     const taskCreate = toolCalls.find(
-      (call) => call[0].where.action === 'task_create',
+      (call) => whereField(call, 'action') === 'task_create',
     );
     expect(taskCreate).toBeDefined();
     expect(taskCreate[0].create.description).toBe(
@@ -1109,7 +1159,7 @@ describe('seed（计划 skills + 评审子句）', () => {
         sortOrder: role.sortOrder,
       });
       const patches = mockPrisma.agentRole.updateMany.mock.calls.filter(
-        (c) => String(c[0].where.id) === role.id,
+        (c) => String(c[0].where?.id) === role.id,
       );
       // 补齐分支 1：仅对 defaultAgentId 为空的存量内置行绑定默认 Agent。
       expect(patches[0]?.[0].where).toMatchObject({
@@ -1135,15 +1185,15 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const externalCalls = mockPrisma.agentRole.upsert.mock.calls.filter(
-      (call) => call[0].where.key !== undefined,
+      (call) => whereField(call, 'key') !== undefined,
     );
     expect(externalCalls).toHaveLength(3);
-    expect(externalCalls.map((call) => String(call[0].where.key))).toEqual([
-      ...EXTERNAL_AGENT_ROLE_KEYS,
-    ]);
+    expect(
+      externalCalls.map((call) => String(whereField(call, 'key'))),
+    ).toEqual([...EXTERNAL_AGENT_ROLE_KEYS]);
     expect(EXTERNAL_AGENT_ROLES.map((r) => r.sortOrder)).toEqual([8, 9, 10]);
     for (const role of EXTERNAL_AGENT_ROLES) {
-      const call = externalCalls.find((c) => c[0].where.key === role.key);
+      const call = externalCalls.find((c) => whereField(c, 'key') === role.key);
       expect(call).toBeDefined();
       // 幂等策略：update 空对象 = create-if-absent（≙ INSERT ... ON DUPLICATE no-op），
       // 重跑 seed 不产生重复行、不覆盖运营者对既有行的编辑。
@@ -1415,9 +1465,9 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     await main();
     const m = new Map<string, string>();
     for (const call of mockPrisma.skill.upsert.mock.calls.filter((c) =>
-      String(c[0].where.name).startsWith('plan-review-'),
+      String(whereField(c, 'name')).startsWith('plan-review-'),
     )) {
-      m.set(String(call[0].where.name), call[0].create.content as string);
+      m.set(String(whereField(call, 'name')), call[0].create.content as string);
     }
     return m;
   };

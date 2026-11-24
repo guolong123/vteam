@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { AdminGuard } from '../users/admin.guard';
 import { McpServersModule } from '../mcp-servers/mcp-servers.module';
 import { ModelsModule } from '../models/models.module';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -48,6 +49,8 @@ import { WorkersService } from './workers.service';
     SessionLifecycleService,
     WorkerEventIngress,
     PermissionGuard,
+    // M0 止血：GET /workers/register-token 改挂 AdminGuard（平台级共享凭据仅管理员可读）
+    AdminGuard,
   ],
   exports: [
     WorkersService,

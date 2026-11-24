@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { AdminGuard } from '../users/admin.guard';
+import { WorkspaceAdminGuard } from '../common/guards/workspace-admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { WorkersModule } from '../workers/workers.module';
 import { ToolsController } from './tools.controller';
@@ -18,6 +19,6 @@ import { ToolsService } from './tools.service';
 @Module({
   imports: [RealtimeModule, WorkersModule],
   controllers: [ToolsController],
-  providers: [ToolsService, AdminGuard, WorkerOrJwtGuard],
+  providers: [ToolsService, AdminGuard, WorkspaceAdminGuard, WorkerOrJwtGuard],
 })
 export class ToolsModule {}

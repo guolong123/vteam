@@ -73,6 +73,8 @@
 #                       ℹ️ `latest` 是**浮动**标签（跟上游发布），与控制面「按 opencode 版本串精确过滤
 #                       worker」的口径不同 ⇒ 生产上建议用缺省钉版。
 #   --token <token>     X_WORKER_TOKEN（注册鉴权，需与 server 侧约定一致；缺省引导手动填写）
+#   --workspace-id <id> 所属工作空间（非默认空间必填；默认 ws_default 可省略）
+#   --join-token <tok>  空间加入码（非默认空间注册必填；控制面「安装向导」自动签发）
 #   --src-url <url>     worker 发布包下载地址（缺省 ${SERVER_URL%/}/worker-src.tar.gz）
 #   --dir <path>        安装目录（缺省 $HOME/vteam-worker）
 #   --mcp-url <url>     内置 vteam MCP 地址覆盖（WORKER_MCP_URL，可选）：集群外 worker 必须设置
@@ -115,6 +117,8 @@ set -euo pipefail
 # ------------------------------ 参数解析 ------------------------------
 SERVER_URL=""
 WORKER_ID=""
+WORKSPACE_ID=""
+WORKER_JOIN_TOKEN=""
 CONCURRENCY=""
 CONCURRENCY_SET=""
 OPENCODE_VERSION=""
@@ -154,6 +158,8 @@ while [[ $# -gt 0 ]]; do
     --dsh-home-dir) DSH_HOME_DIR="${2:-}"; shift 2 ;;
     --dsh-bin) DSH_BIN="${2:-}"; shift 2 ;;
     --worker-id) WORKER_ID="${2:-}"; shift 2 ;;
+    --workspace-id) WORKSPACE_ID="${2:-}"; shift 2 ;;
+    --join-token) WORKER_JOIN_TOKEN="${2:-}"; shift 2 ;;
     --concurrency) CONCURRENCY="${2:-}"; CONCURRENCY_SET="1"; shift 2 ;;
     --opencode) OPENCODE_VERSION="${2:-}"; shift 2 ;;
     --token) WORKER_TOKEN="${2:-}"; shift 2 ;;
@@ -167,7 +173,7 @@ while [[ $# -gt 0 ]]; do
     --no-service) NO_SERVICE="1"; shift ;;
     --system-service) SYSTEM_SERVICE="1"; shift ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--engine/--dsh-provider/--dsh-model/--dsh-api-key/--dsh-base-url/--dsh-session-header/--dsh-session-header-value/--dsh-home-dir/--dsh-bin/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--serve-port/--work-dir/--system-service/--no-service）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--engine/--dsh-provider/--dsh-model/--dsh-api-key/--dsh-base-url/--dsh-session-header/--dsh-session-header-value/--dsh-home-dir/--dsh-bin/--worker-id/--workspace-id/--join-token/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--serve-port/--work-dir/--system-service/--no-service）" >&2
       exit 1
       ;;
   esac
@@ -677,6 +683,14 @@ if [ -n "${WORKER_TOKEN}" ]; then
   update_env X_WORKER_TOKEN "${WORKER_TOKEN}"
 fi
 update_env WORKER_ID "${WORKER_ID}"
+# 空间归属（M4）：非默认空间注册必须携带加入码（服务端 WORKER_JOIN_TOKEN_INVALID 兜底）。
+# 默认空间可不传；显式传 --workspace-id 才覆盖既有 .env，避免升级安装误改历史空间归属。
+if [ -n "${WORKSPACE_ID}" ]; then
+  update_env WORKSPACE_ID "${WORKSPACE_ID}"
+fi
+if [ -n "${WORKER_JOIN_TOKEN}" ]; then
+  update_env WORKER_JOIN_TOKEN "${WORKER_JOIN_TOKEN}"
+fi
 # 并发上限 → WORKER_MAX_INSTANCES（worker 读该变量并随注册上报 capabilities.maxInstances）；
 # 未显式传 --concurrency 时不写，保留 worker 自己的缺省（5）。
 if [ -n "${CONCURRENCY_SET}" ]; then

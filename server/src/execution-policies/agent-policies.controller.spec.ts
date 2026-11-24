@@ -60,6 +60,8 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
           useValue: {
             agent: { findMany: jest.fn().mockResolvedValue([]) },
             executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+            workspace: { findFirst: jest.fn().mockResolvedValue(null) },
+            worker: { findUnique: jest.fn().mockResolvedValue(null) },
           },
         },
         { provide: IdGeneratorService, useValue: { seed: jest.fn() } },

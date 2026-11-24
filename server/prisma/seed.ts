@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'node:crypto';
+import { SEED_WORKSPACE, seedUniqueWhere } from './tenant-unique';
 
 // ========================================================================
 // 自包含常量（dev-path parity）：本文件不再 import `../src/...`。
@@ -1237,6 +1238,7 @@ async function main() {
       update: {},
       create: {
         id: policyId,
+        workspaceId: SEED_WORKSPACE.SYSTEM,
         name: agent.name,
         description: boundary.scopeSummary,
         type: 'template',
@@ -1277,6 +1279,7 @@ async function main() {
     update: {},
     create: {
       id: EXTERNAL_SYSTEM_AGENT_ID,
+      workspaceId: SEED_WORKSPACE.SYSTEM,
       name: EXTERNAL_SYSTEM_AGENT_NAME,
       type: 'system',
       agentKey: null,
@@ -1308,6 +1311,7 @@ async function main() {
       update: {},
       create: {
         id: role.id,
+        workspaceId: SEED_WORKSPACE.SYSTEM,
         key: role.key,
         name: role.name,
         type: 'builtin',
@@ -1336,10 +1340,11 @@ async function main() {
   // 矩阵一概不动）；仅 capabilities 仍为 NULL 的存量行由随后的 updateMany 补 9 工具矩阵。
   for (const role of EXTERNAL_AGENT_ROLES) {
     await prisma.agentRole.upsert({
-      where: { key: role.key },
+      where: seedUniqueWhere({ key: role.key }, SEED_WORKSPACE.SYSTEM),
       update: {},
       create: {
         id: role.id,
+        workspaceId: SEED_WORKSPACE.SYSTEM,
         key: role.key,
         name: role.name,
         type: 'custom',
@@ -1427,14 +1432,12 @@ async function main() {
       continue;
     }
     await prisma.model.upsert({
-      where: {
-        providerID_modelID: {
-          providerID: row.providerID,
-          modelID: row.modelID,
-        },
-      },
+      where: seedUniqueWhere(
+        { providerID: row.providerID, modelID: row.modelID },
+        SEED_WORKSPACE.DEFAULT,
+      ),
       update: {},
-      create: row,
+      create: { ...row, workspaceId: SEED_WORKSPACE.DEFAULT },
     });
   }
 
@@ -1459,10 +1462,11 @@ async function main() {
 
   for (const tool of builtinTools) {
     await prisma.tool.upsert({
-      where: { action: tool.action },
+      where: seedUniqueWhere({ action: tool.action }, SEED_WORKSPACE.SYSTEM),
       update: {},
       create: {
         id: `tl_builtin_${tool.action}`,
+        workspaceId: SEED_WORKSPACE.SYSTEM,
         name: tool.name,
         action: tool.action,
         description: tool.description,
@@ -1488,10 +1492,10 @@ async function main() {
   // 会建出重复 server、旧工具残留。迁移失败不阻断 seed（try/catch + console.warn）。
   try {
     const legacyServer = await prisma.mcpServer.findUnique({
-      where: { name: 'keta-platform' },
+      where: seedUniqueWhere({ name: 'keta-platform' }, SEED_WORKSPACE.SYSTEM),
     });
     const vteamServer = await prisma.mcpServer.findUnique({
-      where: { name: 'vteam' },
+      where: seedUniqueWhere({ name: 'vteam' }, SEED_WORKSPACE.SYSTEM),
     });
 
     if (legacyServer) {
@@ -1542,7 +1546,7 @@ async function main() {
   }
 
   await prisma.mcpServer.upsert({
-    where: { name: 'vteam' },
+    where: seedUniqueWhere({ name: 'vteam' }, SEED_WORKSPACE.SYSTEM),
     update: {
       type: 'remote',
       url: platformMcpUrl,
@@ -1554,6 +1558,7 @@ async function main() {
     },
     create: {
       id: 'ms_vteam',
+      workspaceId: SEED_WORKSPACE.SYSTEM,
       name: 'vteam',
       type: 'remote',
       url: platformMcpUrl,
@@ -1574,7 +1579,7 @@ async function main() {
   const vteamApiUrl = `${platformMcpUrl.replace(/\/api\/v1\/platform-mcp$/, '')}/api/v1/vteam-api/mcp`;
 
   await prisma.mcpServer.upsert({
-    where: { name: 'vteam-api' },
+    where: seedUniqueWhere({ name: 'vteam-api' }, SEED_WORKSPACE.SYSTEM),
     update: {
       type: 'remote',
       url: vteamApiUrl,
@@ -1586,6 +1591,7 @@ async function main() {
     },
     create: {
       id: 'ms_vteam_api',
+      workspaceId: SEED_WORKSPACE.SYSTEM,
       name: 'vteam-api',
       type: 'remote',
       url: vteamApiUrl,
@@ -1763,7 +1769,7 @@ async function main() {
 
   for (const t of vteamTools) {
     await prisma.tool.upsert({
-      where: { action: t.action },
+      where: seedUniqueWhere({ action: t.action }, SEED_WORKSPACE.SYSTEM),
       update: {
         mcpServer: 'vteam',
         source: 'mcp',
@@ -1773,6 +1779,7 @@ async function main() {
       },
       create: {
         id: `tl_vteam_${t.action}`,
+        workspaceId: SEED_WORKSPACE.SYSTEM,
         name: t.name,
         action: t.action,
         description: t.description,
@@ -2655,12 +2662,13 @@ version: 0.1.0
 
   for (const skill of BUILTIN_SKILLS) {
     await prisma.skill.upsert({
-      where: { name: skill.name },
+      where: seedUniqueWhere({ name: skill.name }, SEED_WORKSPACE.SYSTEM),
       // L1：重跑不覆盖 enabled——管理员手动停用（enabled=false）后重跑 seed 不得强制启用；
       // 新建行默认启用（create.enabled=true）。
       update: { description: skill.description, content: skill.content },
       create: {
         id: skill.id,
+        workspaceId: SEED_WORKSPACE.SYSTEM,
         name: skill.name,
         description: skill.description,
         content: skill.content,
@@ -2702,9 +2710,26 @@ version: 0.1.0
       plan: ['许', '计'],
       librarian: ['文', '知'],
     };
-    const cn = ['零','一','二','三','四','五','六','七','八','九','十'];
+    const cn = [
+      '零',
+      '一',
+      '二',
+      '三',
+      '四',
+      '五',
+      '六',
+      '七',
+      '八',
+      '九',
+      '十',
+    ];
     const n = Math.max(1, Math.floor(seq));
-    const num = n <= 10 ? cn[n] : n < 20 ? `十${cn[n - 10] ?? ''}` : `${cn[Math.floor(n / 10)] ?? ''}十${n % 10 ? cn[n % 10] : ''}`;
+    const num =
+      n <= 10
+        ? cn[n]
+        : n < 20
+          ? `十${cn[n - 10] ?? ''}`
+          : `${cn[Math.floor(n / 10)] ?? ''}十${n % 10 ? cn[n % 10] : ''}`;
     const parts = map[role] ?? ['成', '员'];
     return `${parts[0]}${num}${parts[1]}`;
   };
@@ -2822,6 +2847,83 @@ version: 0.1.0
       createdBy: admin.id,
       sourceType: 'system',
     },
+  });
+
+  // ---- 多工作空间引导（幂等）：系统空间 + 默认空间 + 用户成员关系 ----
+  // 空间行由迁移 SQL 兜底创建；这里再 upsert 一次，保证「全新库 + 手工 seed」也可用。
+  // 注：全程用 Prisma 客户端调用（不用 MySQL 方言 SQL），确保 sqlite 测试库同样可跑。
+  const adminUserForWs = await prisma.user.findUnique({
+    where: { username: 'admin' },
+    select: { id: true },
+  });
+  await prisma.workspace.upsert({
+    where: { id: SEED_WORKSPACE.SYSTEM },
+    update: { isSystem: true, status: 'active' },
+    create: {
+      id: SEED_WORKSPACE.SYSTEM,
+      name: '平台空间',
+      slug: 'system',
+      isSystem: true,
+      status: 'active',
+      ownerUserId: null,
+    },
+  });
+  await prisma.workspace.upsert({
+    where: { id: SEED_WORKSPACE.DEFAULT },
+    update: { status: 'active' },
+    create: {
+      id: SEED_WORKSPACE.DEFAULT,
+      name: '默认空间',
+      slug: 'default',
+      isSystem: false,
+      status: 'active',
+      ownerUserId: adminUserForWs?.id ?? null,
+    },
+  });
+  await prisma.user.updateMany({
+    where: { lastWorkspaceId: null },
+    data: { lastWorkspaceId: SEED_WORKSPACE.DEFAULT },
+  });
+  const allUsers = await prisma.user.findMany({
+    select: { id: true, username: true },
+  });
+  const existingMembers = await prisma.workspaceMember.findMany({
+    where: { workspaceId: SEED_WORKSPACE.DEFAULT },
+    select: { userId: true },
+  });
+  const memberIds = new Set(
+    existingMembers.map((m: { userId: string }) => m.userId),
+  );
+  for (const u of allUsers) {
+    if (memberIds.has(u.id)) continue;
+    await prisma.workspaceMember.create({
+      data: {
+        workspaceId: SEED_WORKSPACE.DEFAULT,
+        userId: u.id,
+        role: u.username === 'admin' ? 'owner' : 'member',
+      },
+    });
+  }
+  // 平台内置资源统一归系统空间（所有空间可读、普通用户只读）。
+  // 迁移已对存量行做同样归属；seed 对「由旧逻辑写在默认空间」的行在这里纠正。
+  await prisma.agentRole.updateMany({
+    data: { workspaceId: SEED_WORKSPACE.SYSTEM },
+  });
+  await prisma.agent.updateMany({
+    where: { type: 'template' },
+    data: { workspaceId: SEED_WORKSPACE.SYSTEM },
+  });
+  await prisma.skill.updateMany({
+    data: { workspaceId: SEED_WORKSPACE.SYSTEM },
+  });
+  await prisma.tool.updateMany({
+    data: { workspaceId: SEED_WORKSPACE.SYSTEM },
+  });
+  await prisma.executionPolicy.updateMany({
+    data: { workspaceId: SEED_WORKSPACE.SYSTEM },
+  });
+  await prisma.mcpServer.updateMany({
+    data: { workspaceId: SEED_WORKSPACE.SYSTEM },
   });
 
   console.log('Seed 完成：');
