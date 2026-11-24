@@ -14,6 +14,7 @@ import {
   INTEGRATIONS_ERRORS,
 } from '../message-channel.constants';
 import { renderFieldTemplate } from '../field-template.util';
+import { buildPolicyInbound } from '../message-policy.util';
 
 /**
  * GenericWebhook 入站适配器（inbound-only）。
@@ -211,6 +212,43 @@ export class GenericWebhookInboundAdapter extends MessageAdapter {
       : crypto.createHash('sha1').update(rawBody).digest('hex');
 
     const eventName = this.resolveEventName(req, parsed);
+
+    // Webhook 消息策略（过滤规则 + 模板 + 投递目标）：有策略时走策略链路
+    const policyInbound = buildPolicyInbound(
+      channel,
+      eventName,
+      parsed,
+      dedupKey,
+      req,
+    );
+    if (policyInbound) {
+      if (policyInbound.skip) {
+        return [
+          {
+            kind: 'skip',
+            reason: policyInbound.skip.reason,
+            matchedRuleId: policyInbound.skip.matchedRuleId,
+            dedupKey,
+            deliveryMeta: {
+              rawPayload: policyInbound.skip.rawPayload,
+              requestInfo: policyInbound.skip.requestInfo,
+            },
+          },
+        ];
+      }
+      const deliver = policyInbound.deliver;
+      if (deliver) {
+        const cmd: InboundCommand = {
+          kind: 'post_message',
+          text: deliver.text,
+          senderName: deliver.senderName,
+          dedupKey,
+          deliveryMeta: deliver.deliveryMeta,
+        };
+        return [cmd];
+      }
+    }
+
     const fieldMapping = this.resolveFieldMapping(
       eventName,
       (channel.config ?? {}) as Record<string, any>,
