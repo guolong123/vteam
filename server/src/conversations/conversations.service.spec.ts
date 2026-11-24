@@ -1,4 +1,5 @@
 import { ConversationsService } from './conversations.service';
+import { runWithTenant } from '../common/tenant/tenant-context';
 
 /**
  * 会话聚合（P2）单元测试：群聊 + 成员私聊聚合、摘要/未读/排序、可见性为空。
@@ -210,5 +211,19 @@ describe('ConversationsService', () => {
     const result: any = await service.list('u_2');
     expect(result).toEqual({ items: [], total: 0 });
     expect(prisma.chatChannel.findMany).not.toHaveBeenCalled();
+  });
+
+  it('当前空间上下文下，团队成员关系查询必须限定空间（不串空间的私聊/群聊）', async () => {
+    await runWithTenant(
+      { workspaceId: 'ws_current', userId: 'u_1', mode: 'request' },
+      async () => {
+        await service.list('u_1');
+      },
+    );
+    const where = prisma.teamUserMember.findMany.mock.calls[0][0].where;
+    expect(where.userId).toBe('u_1');
+    expect(where.team.workspaceId).toBe('ws_current');
+    const teamWhere = prisma.team.findMany.mock.calls[0][0].where;
+    expect(teamWhere.workspaceId).toBe('ws_current');
   });
 });

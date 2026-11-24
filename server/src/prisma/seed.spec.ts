@@ -61,6 +61,7 @@ const mockPrisma = {
   },
   teamMember: { upsert: jest.fn().mockResolvedValue({}) },
   teamUserMember: { upsert: jest.fn().mockResolvedValue({}) },
+  chatChannel: { upsert: jest.fn().mockResolvedValue({}) },
   // AgentRole seed（agent-role-entity todo 1）：mock 缺少该 key 时 seed 首次 role upsert 即抛 TypeError。
   agentRole: {
     upsert: jest.fn().mockResolvedValue({}),

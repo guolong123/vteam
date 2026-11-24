@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { getTenantContext } from '../common/tenant/tenant-context';
 import { CHANNEL_TYPE } from '../common/constants/event.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueryConversationsDto } from './dto/query-conversations.dto';
@@ -40,8 +41,18 @@ export class ConversationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(userId: string, query: QueryConversationsDto = {}) {
+    // 这些查询走 (prisma as any) 绕过了租户中间件的自动注入，
+    // 必须显式按当前空间过滤：否则别的空间的团队/私聊会出现在本空间会话列表
+    // （点进去还报「团队不存在」）。
+    const ctx = getTenantContext();
+    const workspaceId = ctx?.workspaceId;
     const memberships = await (this.prisma as any).teamUserMember.findMany({
-      where: { userId },
+      where: {
+        userId,
+        ...(workspaceId
+          ? { team: { workspaceId } }
+          : {}),
+      },
       select: { teamId: true },
     });
     const teamIds = [
@@ -50,7 +61,10 @@ export class ConversationsService {
     if (teamIds.length === 0) return { items: [], total: 0 };
 
     const teams = await (this.prisma as any).team.findMany({
-      where: { id: { in: teamIds } },
+      where: {
+        id: { in: teamIds },
+        ...(workspaceId ? { workspaceId } : {}),
+      },
       select: { id: true, name: true },
     });
 
