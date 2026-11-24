@@ -27,6 +27,8 @@ import { QueryTeamsDto } from './dto/query-teams.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto, UpdateMemberDto } from './dto/add-member.dto';
 import { isMemberSessionScope } from '../workers/session-scope';
+import { isPlatformAdminByUserId } from '../users/admin-permission';
+import { assertTeamAccess } from '../common/team-access';
 
 const ID_PREFIX = {
   team: 'tm',
@@ -411,12 +413,20 @@ export class TeamsService implements OnModuleInit {
     return full;
   }
 
-  async findAll(query: QueryTeamsDto) {
+  async findAll(query: QueryTeamsDto, userId?: string) {
     const page = normalizePage(query.page);
     const pageSize = normalizePageSize(query.pageSize);
     const where: any = {};
     if (query.name?.trim()) {
       where.name = { contains: query.name.trim() };
+    }
+    // 成员感知：平台管理员看全量；普通成员仅看自己加入的团队（team_user_members）。
+    // userId 缺省仅用于兼容内部旧调用（如单测），HTTP 入口 controller 必传。
+    if (userId) {
+      const isAdmin = await isPlatformAdminByUserId(this.prisma, userId);
+      if (!isAdmin) {
+        where.userMembers = { some: { userId } };
+      }
     }
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.team.count({ where }),
@@ -526,7 +536,15 @@ export class TeamsService implements OnModuleInit {
     return result;
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId?: string) {
+    // 成员感知：非成员不可读团队详情/成员名单（管理员放行）
+    if (userId) {
+      await assertTeamAccess(this.prisma, id, {
+        userId,
+        allowPlatformAdmin: true,
+        onMissingTeam: 'not-found',
+      });
+    }
     const team = await this.prisma.team.findUnique({
       where: { id },
       include: {

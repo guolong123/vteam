@@ -65,17 +65,23 @@ describe('TeamsController', () => {
     expect(result).toEqual({ id: 'tm_0000000001' });
   });
 
-  it('GET /teams 转发 query 到 findAll', async () => {
+  it('GET /teams 转发 query + 当前用户 id 到 findAll', async () => {
     service.findAll.mockResolvedValue({ items: [], total: 0 });
-    const result = await controller.findAll({ page: 1, pageSize: 20 } as any);
-    expect(service.findAll).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
+    const result = await controller.findAll(
+      { page: 1, pageSize: 20 } as any,
+      { id: 'u_1' } as any,
+    );
+    expect(service.findAll).toHaveBeenCalledWith(
+      { page: 1, pageSize: 20 },
+      'u_1',
+    );
     expect(result).toEqual({ items: [], total: 0 });
   });
 
-  it('GET /teams/:id 转发 id 到 findOne', async () => {
+  it('GET /teams/:id 转发 id + 当前用户 id 到 findOne', async () => {
     service.findOne.mockResolvedValue({ id: 'tm_1' });
-    const result = await controller.findOne('tm_1');
-    expect(service.findOne).toHaveBeenCalledWith('tm_1');
+    const result = await controller.findOne('tm_1', { id: 'u_1' } as any);
+    expect(service.findOne).toHaveBeenCalledWith('tm_1', 'u_1');
     expect(result).toEqual({ id: 'tm_1' });
   });
 

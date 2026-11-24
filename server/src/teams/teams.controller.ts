@@ -43,8 +43,11 @@ export class TeamsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('teams.view')
   @ApiOperation({ summary: '团队列表（分页 + name 搜索）' })
-  findAll(@Query() query: QueryTeamsDto) {
-    return this.teamsService.findAll(query);
+  findAll(
+    @Query() query: QueryTeamsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamsService.findAll(query, user.id);
   }
 
   @Get(':id')
@@ -54,8 +57,8 @@ export class TeamsController {
     summary:
       '团队详情（含 members + reuseSession + currentTaskId + activeTaskCount）',
   })
-  findOne(@Param('id') id: string) {
-    return this.teamsService.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.teamsService.findOne(id, user.id);
   }
 
   @Patch(':id')

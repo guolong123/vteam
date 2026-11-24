@@ -502,6 +502,48 @@ describe('TeamsService', () => {
     });
   });
 
+  describe('findAll（成员可见性）', () => {
+    const setupFindAll = () => {
+      prisma.$transaction = jest.fn().mockResolvedValue([0, []]);
+      prisma.team.count = jest.fn().mockResolvedValue(0);
+      prisma.team.findMany = jest.fn().mockResolvedValue([]);
+    };
+    beforeEach(() => {
+      setupFindAll();
+      prisma.user.findUnique.mockReset();
+    });
+
+    it('普通成员：只返回其加入的团队（where.userMembers.some.userId）', async () => {
+      // 非管理员角色（member 权限矩阵）
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u_member',
+        enabled: true,
+        role: { permissions: { teams: { view: true } } },
+      });
+      await service.findAll({ page: 1, pageSize: 20 } as any, 'u_member');
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where.userMembers).toEqual({ some: { userId: 'u_member' } });
+    });
+
+    it('平台管理员：不加成员过滤，看全部团队', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u_admin',
+        enabled: true,
+        role: { permissions: { all: true } },
+      });
+      await service.findAll({ page: 1, pageSize: 20 } as any, 'u_admin');
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where.userMembers).toBeUndefined();
+    });
+
+    it('无 userId（内部调用兼容）：不加成员过滤', async () => {
+      await service.findAll({ page: 1, pageSize: 20 } as any);
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where.userMembers).toBeUndefined();
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
   describe('findAll', () => {
     it('分页 + name 搜索 + total 正确', async () => {
       prisma.team.count.mockResolvedValue(2);
@@ -706,6 +748,41 @@ describe('TeamsService', () => {
           },
         }),
       );
+    });
+  });
+
+  describe('findOne（成员可见性）', () => {
+    beforeEach(() => {
+      prisma.team.findUnique.mockReset().mockResolvedValue(teamRow());
+      prisma.teamUserMember.findUnique.mockReset();
+      prisma.user.findUnique.mockReset();
+    });
+
+    it('非成员访问团队详情 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u_member',
+        enabled: true,
+        role: { permissions: { teams: { view: true } } },
+      });
+      await expect(
+        service.findOne('tm_0000000001', 'u_member'),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+    });
+
+    it('平台管理员可访问任意团队详情', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u_admin',
+        enabled: true,
+        role: { permissions: { all: true } },
+      });
+      prisma.task.groupBy.mockResolvedValue([]);
+      const result = await service.findOne('tm_0000000001', 'u_admin');
+      expect(result).toBeDefined();
     });
   });
 
