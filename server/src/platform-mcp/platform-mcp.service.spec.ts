@@ -23,6 +23,7 @@ import {
   MAX_SILENT_WAKE_ATTEMPTS,
 } from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
+import { FileStorageService } from '../uploads/uploads.service';
 import {
   WorkerClient,
   WorkerUnavailableException,
@@ -9741,6 +9742,127 @@ describe('PlatformMcpService', () => {
         mediaId: 'media_file_1',
         filename: '测试报告.docx',
       });
+    });
+
+    it('msgtype=file 带 media → 字节归档到文档站，附件随群聊镜像落库（可跳文档站）', async () => {
+      const adapter = arrangeTeamChannel({
+        id: 's_task_1',
+        teamId: 'tm_1',
+        taskId: 't_0000000001',
+        teamMemberId: senderInstanceId,
+        agentId: senderAgentId,
+      });
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_arch');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+      const fsReadSpy = jest
+        .spyOn(fs.promises, 'readFile')
+        .mockResolvedValue(Buffer.from('docx-bytes'));
+      const saveSpy = jest
+        .spyOn(FileStorageService, 'saveBufferFile')
+        .mockResolvedValue({
+          url: '/uploads/archived.docx',
+          name: '报告.docx',
+          size: 10,
+          ext: 'docx',
+        });
+      artifactsService.archiveFile.mockReset().mockResolvedValue({
+        artifactId: 'art_arch_1',
+        version: 1,
+        status: 'created',
+      });
+      prisma.artifactVersion.findMany.mockResolvedValue([]); // 归档表未命中 → 走 /uploads 直读
+
+      try {
+        const result = await service.wecomReply(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: senderInstanceId,
+          msgtype: 'file',
+          media: '/uploads/report.docx',
+          filename: '报告.docx',
+          text: '报告见附件',
+        });
+
+        expect(result.wecomSent).toBe(true);
+        expect(fsReadSpy).toHaveBeenCalled();
+        expect(saveSpy).toHaveBeenCalledWith(
+          Buffer.from('docx-bytes'),
+          '报告.docx',
+        );
+        // 归档到文档站（产出物表）：taskId 来自会话回填
+        expect(artifactsService.archiveFile).toHaveBeenCalledWith(
+          't_0000000001',
+          expect.objectContaining({
+            fileRef: '/uploads/report.docx',
+            storedUrl: '/uploads/archived.docx',
+            sha256: expect.any(String),
+            title: '报告.docx',
+          }),
+        );
+        // 入群聊：镜像消息挂 legacy 三字段 + 新数组（带 artifactId/taskId）
+        const created = (prisma.message.create as jest.Mock).mock.calls[0][0];
+        expect(created.data).toMatchObject({
+          attachmentUrl: '/uploads/archived.docx',
+          attachmentName: '报告.docx',
+          attachmentType: 'docx',
+          attachments: [
+            expect.objectContaining({
+              url: '/uploads/archived.docx',
+              name: '报告.docx',
+              ext: 'docx',
+              artifactId: 'art_arch_1',
+              taskId: 't_0000000001',
+            }),
+          ],
+        });
+      } finally {
+        fsReadSpy.mockRestore();
+        saveSpy.mockRestore();
+      }
+    });
+
+    it('msgtype=file 无 task 上下文 → 附件仍入群，但不写归档表（降级）', async () => {
+      const adapter = arrangeTeamChannel();
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_notask');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+      const fsReadSpy = jest
+        .spyOn(fs.promises, 'readFile')
+        .mockResolvedValue(Buffer.from('pdf-bytes'));
+      const saveSpy = jest
+        .spyOn(FileStorageService, 'saveBufferFile')
+        .mockResolvedValue({
+          url: '/uploads/fallback.pdf',
+          name: 'fallback.pdf',
+          size: 9,
+          ext: 'pdf',
+        });
+      artifactsService.archiveFile.mockReset();
+
+      try {
+        const result = await service.wecomReply(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: senderInstanceId,
+          msgtype: 'file',
+          media: '/uploads/manual.pdf',
+          filename: 'manual.pdf',
+        });
+
+        expect(result.wecomSent).toBe(true);
+        expect(artifactsService.archiveFile).not.toHaveBeenCalled();
+        const created = (prisma.message.create as jest.Mock).mock.calls[0][0];
+        expect(created.data.attachments).toEqual([
+          expect.objectContaining({ url: '/uploads/fallback.pdf' }),
+        ]);
+        expect(created.data.attachments[0]).not.toHaveProperty('artifactId');
+      } finally {
+        fsReadSpy.mockRestore();
+        saveSpy.mockRestore();
+      }
     });
 
     it('媒体上传必须带目标渠道 channelId（多 bot media_id 隔离，否则 40007）', async () => {

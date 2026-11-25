@@ -7095,6 +7095,9 @@ export class PlatformMcpService implements OnModuleInit {
     let wecomSent = false;
     let resolvedCard: unknown = args.card ?? null;
     let mirrorContent: any = null;
+    // file/image 回复成功后归档得到的附件元数据：镜像到团队群聊时挂载，
+    // 与 group_post 的 fileRef 附件同一形状（含 artifactId/taskId 可跳文档站）。
+    let mirrorAttachment: GroupPostAttachment | undefined;
     let sendError: string | null = null;
     try {
       if (msgtype === 'text' || msgtype === 'markdown') {
@@ -7979,6 +7982,13 @@ export class PlatformMcpService implements OnModuleInit {
           (args.media
             ? args.media.split(/[\\/]/).pop() || defaultName
             : defaultName)) as string;
+        // 归档源：从 media 读到字节时记录，企微发送成功后落盘+归档+挂群聊附件。
+        // 仅传 mediaId 时 server 拿不到字节（企微侧 media_id 不可反查内容），无法归档。
+        let archiveSource: {
+          buffer: Buffer;
+          fileRef: string;
+          filename: string;
+        } | null = null;
         if (!mediaIdToSend) {
           const mediaRef = (args.media ?? '').trim();
           if (!mediaRef) {
@@ -8086,6 +8096,11 @@ export class PlatformMcpService implements OnModuleInit {
             sendError = `${mediaKind} 上传失败（uploadMedia 返回空）`;
             throw new Error(sendError);
           }
+          archiveSource = {
+            buffer,
+            fileRef: mediaRef,
+            filename: resolvedFilename,
+          };
         }
         // Send：文件仅走主动推送（官方长连接协议 回复消息 无「文件消息」，
         // aibot_respond_msg 只支持 stream/markdown/card；主动推送 aibot_send_msg
@@ -8130,6 +8145,16 @@ export class PlatformMcpService implements OnModuleInit {
             `wecom_reply ${mediaKind} both methods failed teamId=${teamId} mediaId=${mediaIdToSend} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
           );
           throw new Error(sendError);
+        }
+        // 企微已发出 → 把同一份字节归档到文档站并生成附件元数据，随镜像消息落入团队群聊。
+        // 失败仅 warn：不影响已送达的企微回复与群聊镜像（与 group_post 归档降级一致）。
+        if (archiveSource) {
+          mirrorAttachment = await this.archiveWecomMediaAttachment(
+            legacyTaskId,
+            archiveSource.buffer,
+            archiveSource.fileRef,
+            archiveSource.filename,
+          );
         }
         mirrorContent = {
           text: mirrorText || rawText || `[${mediaKind}] ${resolvedFilename}`,
@@ -8267,6 +8292,7 @@ export class PlatformMcpService implements OnModuleInit {
               status: MESSAGE_STATUS.sent,
               senderId: senderAgentId,
               senderInstanceId: instanceId,
+              ...this.attachmentMessageFields(mirrorAttachment),
             },
           });
           mirrorMessageId = updated.id;
@@ -8290,6 +8316,7 @@ export class PlatformMcpService implements OnModuleInit {
               content: mirrorContent as any,
               mentions: null,
               status: MESSAGE_STATUS.sent,
+              ...this.attachmentMessageFields(mirrorAttachment),
             },
           });
           mirrorMessageId = msg.id;
@@ -10040,6 +10067,83 @@ export class PlatformMcpService implements OnModuleInit {
       );
       return undefined;
     }
+  }
+
+  /**
+   * wecom_reply file/image：企微发送成功后，把已读到内存的字节归档到文档站。
+   * - 有 taskId（会话回填）→ archiveFile 写产出物表，附件带 artifactId/taskId 可跳文档站
+   * - 无 taskId（纯团队会话）→ 仅落盘 uploads 挂附件（降级，与 group_post 归档失败一致）
+   * - 任一环节失败仅 warn，不阻断已送达的企微回复与群聊镜像。
+   */
+  private async archiveWecomMediaAttachment(
+    taskId: string | null,
+    buffer: Buffer,
+    fileRef: string,
+    filename: string,
+  ): Promise<GroupPostAttachment | undefined> {
+    try {
+      const name = filename || fileRef.split(/[\\/]/).pop() || 'attachment';
+      const stored = await FileStorageService.saveBufferFile(buffer, name);
+      const sha256 = createHash('sha256').update(buffer).digest('hex');
+      let artifactId: string | undefined;
+      if (taskId) {
+        await this.artifactsService
+          .archiveFile(taskId, {
+            fileRef,
+            storedUrl: stored.url,
+            storedName: stored.name,
+            sha256,
+            title: name,
+          })
+          .then((res) => {
+            artifactId = res.artifactId;
+          })
+          .catch((err) => {
+            this.logger.warn(
+              `wecom_reply 文件归档写入失败（附件仍入群）: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      }
+      this.logger.log(
+        `wecom_reply 文件附件已挂载: archived=${artifactId ? 'yes' : 'no'} taskId=${taskId ?? 'null'} ${fileRef} -> ${stored.url}`,
+      );
+      return {
+        attachmentUrl: stored.url,
+        attachmentName: stored.name,
+        attachmentType: stored.ext,
+        ...(artifactId && taskId ? { artifactId, taskId } : {}),
+      };
+    } catch (err) {
+      this.logger.warn(
+        `wecom_reply 文件归档失败（不影响企微发送）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * 群聊/镜像消息的附件落库字段：legacy 三字段 + 新 attachments 数组（唯一真相）。
+   * 新数组带 artifactId/taskId → 前端可直接跳完整文档站（与右侧附件清单同界面）。
+   */
+  private attachmentMessageFields(
+    attachment?: GroupPostAttachment,
+  ): Record<string, unknown> {
+    if (!attachment) return {};
+    return {
+      attachmentUrl: attachment.attachmentUrl,
+      attachmentName: attachment.attachmentName,
+      attachmentType: attachment.attachmentType,
+      attachments: [
+        {
+          url: attachment.attachmentUrl,
+          name: attachment.attachmentName,
+          ext: attachment.attachmentType,
+          ...(attachment.artifactId
+            ? { artifactId: attachment.artifactId, taskId: attachment.taskId }
+            : {}),
+        },
+      ],
+    };
   }
 
   /** read_file 归档路径：从 uploads 读 contentRef 落盘文件；读失败 → 404 业务错误。 */
