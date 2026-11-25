@@ -8,14 +8,17 @@ import { SessionLifecycleService } from './session-lifecycle.service';
 describe('SessionLifecycleService', () => {
   let service: SessionLifecycleService;
   let prisma: {
+    worker: { findUnique: jest.Mock };
     session: {
       findUnique: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
     taskGroupInstance: {
       findFirst: jest.Mock;
       create: jest.Mock;
       findMany: jest.Mock;
+      updateMany: jest.Mock;
     };
     $transaction: jest.Mock;
   };
@@ -55,11 +58,17 @@ describe('SessionLifecycleService', () => {
 
   beforeEach(async () => {
     prisma = {
-      session: { findUnique: jest.fn(), update: jest.fn() },
+      session: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      worker: { findUnique: jest.fn() },
       taskGroupInstance: {
         findFirst: jest.fn(),
         create: jest.fn(),
         findMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       $transaction: jest.fn(),
     };
@@ -449,7 +458,7 @@ describe('SessionLifecycleService', () => {
       expect(result).toMatchObject({ id: 's_0000000001', reused: true });
     });
 
-    it('failed 判死会话 → 原地复活（清 workerId/instanceRef、status=created、软移除旧实例行），不复用坏会话', async () => {
+    it('failed 会话不再在事务内清绑定：原样返回，由 reviveFailedSession 事务外探活判定', async () => {
       const existing = {
         id: 's_0000000057',
         teamId: 'tm_0000000009',
@@ -473,35 +482,15 @@ describe('SessionLifecycleService', () => {
         'tmm_0000000044',
       );
 
-      // 关键：不再返回绑着旧 DSH 会话的 existing
+      // 关键回归：事务内**绝不**清 instanceRef（那等于丢掉 agent 的连续上下文）。
+      // 「是否重建」是事务外的决定（探活 404 / 连续失败达阈值），见 describe 下一节。
       expect(result).toMatchObject({
         id: 's_0000000057',
-        workerId: null,
-        instanceRef: null,
-        status: SESSION_STATUS.created,
-        reused: false,
-        revived: true,
+        workerId: 'w_vteam-worker-dsh-0',
+        instanceRef: 'dsh-e42ef68ba69dbf57e2589c8b',
       });
-      expect(tx.session.create).not.toHaveBeenCalled();
-      expect(tx.session.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 's_0000000057' },
-          data: expect.objectContaining({
-            workerId: null,
-            instanceRef: null,
-            status: SESSION_STATUS.created,
-          }),
-        }),
-      );
-      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            workerId: 'w_vteam-worker-dsh-0',
-            instanceId: 'dsh-e42ef68ba69dbf57e2589c8b',
-          }),
-          data: expect.objectContaining({ removedAt: expect.any(Date) }),
-        }),
-      );
+      expect(tx.session.update).not.toHaveBeenCalled();
+      expect(tx.taskGroupInstance.updateMany).not.toHaveBeenCalled();
     });
 
     it('并发竞态：create 报 P2002 → 重读命中胜者行，reused=true', async () => {
@@ -568,6 +557,185 @@ describe('SessionLifecycleService', () => {
         service.ensureTeamSession('tm_0000000001', 'tmm_0000000001'),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(tx.session.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('失败会话处置（reviveFailedSession / decideRevive）', () => {
+    const failedRow = (overrides: Record<string, unknown> = {}) => ({
+      id: 's_0000000018',
+      status: SESSION_STATUS.failed,
+      teamId: 'tm_0000000004',
+      teamMemberId: 'tmm_0000000016',
+      workerId: 'worker-37',
+      instanceRef: 'ses_ee68b6891ffeJ9JH3zRjqxDxWZ',
+      consecutiveFailures: 0,
+      ...overrides,
+    });
+
+    it('探活 alive（HTTP 200）→ keep：保留 workerId/instanceRef，只把状态复位', async () => {
+      prisma.session.findUnique.mockResolvedValue(failedRow());
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'worker-37',
+        capabilities: {},
+      });
+      const client = {
+        getMessages: jest.fn().mockResolvedValue([]),
+      } as any;
+      (service as any).workerClient = client;
+
+      const result = await service.reviveFailedSession('s_0000000018', {
+        teamId: 'tm_0000000004',
+        teamMemberId: 'tmm_0000000016',
+      });
+
+      expect(result).toMatchObject({ revived: true, action: 'keep' });
+      // 关键：**不清绑定**（这正是线上丢上下文的根因）
+      expect(prisma.session.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 's_0000000018', status: SESSION_STATUS.failed },
+          data: { status: SESSION_STATUS.idle, busyState: 'idle' },
+        }),
+      );
+      const patch = prisma.session.updateMany.mock.calls[0][0].data;
+      expect(patch.instanceRef).toBeUndefined();
+      expect(patch.workerId).toBeUndefined();
+      expect(prisma.taskGroupInstance.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('探活 404（SESSION_NOT_FOUND）→ rebuild：软移除实例行 + 清绑定 + 计数归零', async () => {
+      prisma.session.findUnique.mockResolvedValue(
+        failedRow({ consecutiveFailures: 1 }),
+      );
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'worker-37',
+        capabilities: {},
+      });
+      const notFound = Object.assign(new Error('会话不存在'), {
+        code: 'SESSION_NOT_FOUND',
+      });
+      const client = {
+        getMessages: jest.fn().mockRejectedValue(notFound),
+      } as any;
+      (service as any).workerClient = client;
+      // 让 isWorkerSessionInvalid 认它：用真实异常类型
+      const { WorkerUnavailableException } = await import('./worker.client');
+      client.getMessages.mockRejectedValue(
+        new WorkerUnavailableException(
+          'worker-37',
+          'not found',
+          404,
+          'SESSION_NOT_FOUND' as any,
+        ),
+      );
+
+      const result = await service.reviveFailedSession('s_0000000018', {
+        teamId: 'tm_0000000004',
+        teamMemberId: 'tmm_0000000016',
+      });
+
+      expect(result).toMatchObject({ revived: true, action: 'rebuild' });
+      expect(prisma.taskGroupInstance.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            workerId: 'worker-37',
+            instanceId: 'ses_ee68b6891ffeJ9JH3zRjqxDxWZ',
+            removedAt: null,
+          }),
+        }),
+      );
+      expect(prisma.session.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            workerId: null,
+            instanceRef: null,
+            status: SESSION_STATUS.created,
+            consecutiveFailures: 0,
+          }),
+        }),
+      );
+    });
+
+    it('探活不可用（worker 不可达/超时）→ keep：没有证据说明会话坏了，不做破坏性操作', async () => {
+      prisma.session.findUnique.mockResolvedValue(failedRow());
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'worker-37',
+        capabilities: {},
+      });
+      const client = {
+        getMessages: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+      } as any;
+      (service as any).workerClient = client;
+
+      const result = await service.reviveFailedSession('s_0000000018');
+
+      expect(result).toMatchObject({ revived: true, action: 'keep' });
+      expect(prisma.taskGroupInstance.updateMany).not.toHaveBeenCalled();
+      expect(
+        prisma.session.updateMany.mock.calls[0][0].data.instanceRef,
+      ).toBeUndefined();
+    });
+
+    it('DSH 坏会话（探活仍 200）但连续失败达阈值 3 → rebuild', async () => {
+      prisma.session.findUnique.mockResolvedValue(
+        failedRow({
+          workerId: 'w_vteam-worker-dsh-0',
+          instanceRef: 'dsh-e42ef68ba69dbf57e2589c8b',
+          consecutiveFailures: 3,
+        }),
+      );
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_vteam-worker-dsh-0',
+        capabilities: {},
+      });
+      (service as any).workerClient = {
+        getMessages: jest.fn().mockResolvedValue([]),
+      };
+
+      const result = await service.reviveFailedSession('s_0000000018');
+
+      expect(result).toMatchObject({ revived: true, action: 'rebuild' });
+      expect(prisma.session.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ instanceRef: null, workerId: null }),
+        }),
+      );
+    });
+
+    it('连续失败 2 次（未达阈值）且探活 alive → 仍然 keep', async () => {
+      prisma.session.findUnique.mockResolvedValue(
+        failedRow({ consecutiveFailures: 2 }),
+      );
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'worker-37',
+        capabilities: {},
+      });
+      (service as any).workerClient = {
+        getMessages: jest.fn().mockResolvedValue([]),
+      };
+
+      const result = await service.reviveFailedSession('s_0000000018');
+      expect(result).toMatchObject({ action: 'keep' });
+    });
+
+    it('会话已不是 failed（并发已处置）→ 幂等返回 revived=false，不写库', async () => {
+      prisma.session.findUnique.mockResolvedValue(
+        failedRow({ status: SESSION_STATUS.idle }),
+      );
+
+      const result = await service.reviveFailedSession('s_0000000018');
+
+      expect(result).toMatchObject({ revived: false, action: null });
+      expect(prisma.session.updateMany).not.toHaveBeenCalled();
+      expect(prisma.taskGroupInstance.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('未注入 WorkerClient（存量单测/精简部署）→ 探活 unknown → keep', async () => {
+      prisma.session.findUnique.mockResolvedValue(failedRow());
+
+      const result = await service.reviveFailedSession('s_0000000018');
+
+      expect(result).toMatchObject({ action: 'keep' });
+      expect(prisma.worker.findUnique).not.toHaveBeenCalled();
     });
   });
 

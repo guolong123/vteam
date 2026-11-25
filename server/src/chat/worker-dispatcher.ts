@@ -1463,6 +1463,24 @@ export const FALLBACK_WAKE_TEXT =
   '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务';
 
 /**
+ * 单会话「失败后自动继续」尝试上限（每轮，成功/新派发即清）。
+ *
+ * 为什么需要上限：自动继续本质是「替用户说一句继续」——一次是救场，无限次就是
+ * 死循环（同一错误会连着烧掉很多轮模型调用）。3 与静默唤醒的 MAX_SILENT_WAKE_ATTEMPTS
+ * 同量级，语义也都是「同一轮故障内的有限自愈」。
+ */
+export const AUTO_CONTINUE_MAX_ATTEMPTS = 3;
+
+/**
+ * 失败后自动继续的延迟（ms）。
+ *
+ * 为什么不是立刻补发：① 同一轮失败会连出多条 error 事件，立刻补发会连环重试；
+ * ② 留几秒让「正在打字的用户」或「其他成员的 @」先到——已经有人在推进，就不该
+ * 由平台抢先重试（那才是真的打断人）。
+ */
+export const AUTO_CONTINUE_DELAY_MS = 8_000;
+
+/**
  * 原始分派快照 TTL（ms）：dispatch 202 受理后内存暂存，超时视为过期（防泄漏）。
  * 取 2h：覆盖空闲判死 30min + 静默窗口 600s×3 的全部恢复窗口；重启后内存丢失
  * 即按无快照回退通用文案（见 tryAutoRestart）。
@@ -1771,6 +1789,28 @@ export class WorkerDispatcher
   private readonly failedSessions = new Set<string>();
 
   /**
+   * 失败后自动继续的尝试次数（sessionId → 次数）。成功轮或新一轮用户派发即清，
+   * 只用于给「同一轮故障内的自愈」设上限（见 AUTO_CONTINUE_MAX_ATTEMPTS）。
+   */
+  private readonly autoContinueAttempts = new Map<string, number>();
+
+  /**
+   * 失败后自动继续的延迟触发器（sessionId → timer）。
+   *
+   * 为什么要延迟 + 去重：
+   * 1) 同一轮失败会连出多条 agent.status{error}（durable failed + interrupted 映射各一条），
+   *    不延迟就会瞬间连环补发；
+   * 2) 留一个短窗口让用户/其他成员的消息先到——人已经在打字回，就不该由我们抢先重试。
+   */
+  private readonly autoContinueTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * 失败后自动继续的延迟（ms）。字段而非常量直读：单测要把它压到毫秒级，
+   * 否则每个用例都得等真实 8s；生产值见 AUTO_CONTINUE_DELAY_MS。
+   */
+  public autoContinueDelayMs = AUTO_CONTINUE_DELAY_MS;
+
+  /**
    * 异常终止通知去重键（`<sessionId>:<reasonType>`，缺陷 5）：
    * 同一会话的同一类异常终止只发一次群聊通知；新一轮派发时按 sessionId 清空
    * （与 failedSessions 同步，见 dispatch 路径）。
@@ -2068,6 +2108,11 @@ export class WorkerDispatcher
     this.pending.clear();
     this.pendingBySession.clear();
     this.silentWakeAttempts.clear();
+    this.autoContinueAttempts.clear();
+    for (const timer of this.autoContinueTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.autoContinueTimers.clear();
     this.dispatchSnapshots.clear();
     this.snapshotSessionIndex.clear();
     if (this.idleScanTimer) {
@@ -2233,6 +2278,14 @@ export class WorkerDispatcher
       teamId,
       input.targetInstanceId,
     );
+    // 失败会话先探活再决定「保留 / 重建」（2026-11-25 线上丢上下文事故修复）：
+    // 失败≠会话已坏，绝大多数失败要保留同一个引擎会话继续（等价用户说「继续」）。
+    if (ensured.status === SESSION_STATUS.failed) {
+      await this.reviveIfFailed(ensured.id, {
+        teamId,
+        teamMemberId: input.targetInstanceId,
+      });
+    }
     await this.dispatch({
       messageId: await this.idGen.nextId(MESSAGE_ID_PREFIX),
       channelId: input.channelId,
@@ -2243,6 +2296,9 @@ export class WorkerDispatcher
         : {}),
       ...(input.internal ? { internal: true } : {}),
       text: input.text,
+      // kind 透传（仅非 execution 时带上，保证既有调用/断言的载荷逐字节不变）：
+      // dispatcher 内部据此判定「是否重置自动继续预算」（wake 不重置）。
+      ...(kind === 'execution' ? {} : { kind }),
       targets: [
         {
           agentId: ensured.agentId,
@@ -2255,6 +2311,44 @@ export class WorkerDispatcher
     // HookService 落 hook.target.wakeSessionId 以关联后续 agent.error /
     // session.updated(failed)；其余调用方忽略返回值，向后兼容。
     return ensured.id;
+  }
+
+  /**
+   * 失败会话的复活入口（**薄封装**）：判定与动作都在 SessionLifecycleService
+   * 的 reviveFailedSession 里（探活 404 → 重建；否则保留绑定继续）。
+   *
+   * 为什么放在 dispatcher：这里才知道本轮派发的 team/席位维度（member-scope 会话
+   * 的 team_member_id 是「最近席位」，软移除实例行必须用本轮维度）。
+   * 永不抛错：复活失败不应阻断这一条消息的派发（最坏沿用旧绑定重试一轮）。
+   */
+  private async reviveIfFailed(
+    sessionId: string,
+    dims?: { teamId?: string | null; teamMemberId?: string | null },
+  ): Promise<{ revived: boolean; action: 'keep' | 'rebuild' | null } | null> {
+    // 单测/精简装配可能只 mock 了 ensure*/bind*：缺该方法时直接跳过（等价 keep），
+    // 不让一条 warn 刷满日志（复活本身是增强，不是主链路前置条件）。
+    if (typeof this.sessionLifecycle?.reviveFailedSession !== 'function') {
+      return null;
+    }
+    try {
+      const result = await this.sessionLifecycle.reviveFailedSession(
+        sessionId,
+        dims,
+      );
+      if (result.revived && result.action === 'rebuild') {
+        // 重建意味着引擎上下文已丢：清掉内存里针对旧会话的游标/快照，
+        // 避免新会话第一轮拿到旧游标（pollCursors）导致漏检。
+        this.pollCursors.delete(sessionId);
+        this.clearDispatchSnapshotBySession(sessionId);
+      }
+      return result;
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      this.logger.warn(
+        `会话 ${sessionId} 复活判定失败（按保留绑定继续）: ${this.describeError(err)}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -2741,17 +2835,45 @@ export class WorkerDispatcher
             workerId as string,
             instanceId,
           );
-    const session = await (this.prisma as any).session.findUnique({
+    let session = await (this.prisma as any).session.findUnique({
       where: { id: sessionId },
       select: {
         id: true,
         memberId: true,
+        status: true,
         workerId: true,
         instanceRef: true,
         teamId: true,
         teamMemberId: true,
       },
     });
+
+    // 失败会话先探活再决定「保留 / 重建」（2026-11-25 线上丢上下文事故修复）：
+    // 失败≠会话已坏。绝大多数失败（上游 400/中断/静默）引擎会话仍然健康，必须保留
+    // 同一个 instanceRef 继续——用户口径是「像我说继续那样」，不是换一个新大脑。
+    // 只有探活 404（opencode 会话确实没了）或同一会话连续失败达阈值（DSH 坏会话
+    // 不体现 404）才清绑定重建。探测属网络 IO，故在事务外；处置后**重读**绑定字段，
+    // 否则会把旧的（可能引擎侧已删）会话 id 当成本轮投递目标。
+    if (session?.status === SESSION_STATUS.failed) {
+      const revived = await this.reviveIfFailed(sessionId, {
+        teamId,
+        teamMemberId,
+      });
+      if (revived?.action === 'rebuild') {
+        session = await (this.prisma as any).session.findUnique({
+          where: { id: sessionId },
+          select: {
+            id: true,
+            memberId: true,
+            status: true,
+            workerId: true,
+            instanceRef: true,
+            teamId: true,
+            teamMemberId: true,
+          },
+        });
+      }
+    }
     if (useMemberSession) {
       if (!session || session.memberId !== platformMemberId) {
         throw new Error(
@@ -3658,6 +3780,17 @@ export class WorkerDispatcher
 
       this.completedSessions.delete(sessionId);
       this.failedSessions.delete(sessionId);
+      // 用户/其他成员的新一轮派发 = 新一轮故障预算（wake 自身不清，否则自动继续
+      // 的计数会被它自己的派发重置 → 上限失效 → 死循环）。
+      if (request.kind !== 'wake') {
+        this.autoContinueAttempts.delete(sessionId);
+        // 新一轮（非 wake）派发即取消挂起的自动继续：现场已经有人推进了。
+        const pending = this.autoContinueTimers.get(sessionId);
+        if (pending) {
+          clearTimeout(pending);
+          this.autoContinueTimers.delete(sessionId);
+        }
+      }
       // 新一轮派发：清该会话的异常终止通知去重键（新一轮终止要能再通知一次）
       for (const key of this.terminationNotices) {
         if (key.startsWith(`${sessionId}:`))
@@ -3729,6 +3862,11 @@ export class WorkerDispatcher
       }
       // 本轮完成：唤醒重试计数复零（下一轮 dispatch 重新开始计算）。
       this.silentWakeAttempts.delete(sessionId);
+      // 本轮成功 → 「同一引擎会话连续失败」计数归零：该计数只用于识别**一直失败**
+      // 的坏会话（DSH 探活不体现 404），偶发失败不该累积成重启理由。
+      void this.clearConsecutiveFailures(sessionId);
+      // 成功即清「自动继续」计数：下一轮故障重新获得完整的自愈预算。
+      this.autoContinueAttempts.delete(sessionId);
     }
     // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
     let settled: Awaited<ReturnType<typeof this.handleTeamTaskCompleted>>;
@@ -4439,6 +4577,10 @@ export class WorkerDispatcher
     if (isError) {
       if (emitSessionId) {
         this.failedSessions.add(emitSessionId);
+        // 会话健康计数：同一 instanceRef 连续失败 +1（成功轮归零，见 task.completed
+        // 回流）。DSH 的坏会话不体现 404，只能靠这个计数判定「会话已坏」才重建；
+        // opencode 以探活 404 为准，本计数只是兜底。
+        void this.bumpConsecutiveFailures(emitSessionId);
       }
       if (typeof payload.workerId === 'string' && payload.workerId) {
         this.unregisterExecution(payload.workerId, scope, teamMemberId);
@@ -4473,6 +4615,17 @@ export class WorkerDispatcher
       await this.finishTurnAndDrain(emitSessionId, SESSION_TURN_STATUS.failed, {
         error: payload.error ?? 'agent 处理失败',
       });
+      // 失败后「自动继续」（用户口径 2026-11-25）：可恢复类失败要与「用户接着说继续」
+      // 等价——**往同一个引擎会话再投一条消息**，而不是等人来 @ 导致下一条撞上
+      // status=failed（旧实现在那里换新会话 = 记忆清零）。硬错误（额度/鉴权/模型不存在/
+      // 明确 4xx）不自动重试，避免连续烧钱，但会话仍保留（revive 走 keep 分支）。
+      await this.maybeAutoContinueAfterFailure({
+        sessionId: emitSessionId,
+        teamId,
+        teamMemberId,
+        agentId: resolvedAgentId,
+        error: payload.error ?? 'agent 处理失败',
+      });
     } else {
       this.emitLoading({
         taskId: scope,
@@ -4480,6 +4633,192 @@ export class WorkerDispatcher
         sessionId: emitSessionId,
         phase: payload.phase === 'thinking' ? 'thinking' : 'operating',
       });
+    }
+  }
+
+  /**
+   * 失败后自动「继续」（**同一会话**再投一条消息）。
+   *
+   * 语义对齐用户说「继续」：不换引擎会话、不新建会话、不清上下文，只是再发一条
+   * 「上一轮中断了，请接着做」的 prompt。
+   *
+   * 只对**可恢复**失败自动补发（用户 2026-11-25 决策）：
+   * - 可恢复：中断（interrupted/abort）、首字超时、静默、模型忙/限流、上游 5xx/网络；
+   * - 不可恢复：额度不足、鉴权失败、模型不存在、参数类 400 —— 重试必然同样失败，
+   *   只会连续烧钱 + 刷群，**不自动补发**（会话仍然保留，用户可手动重发）。
+   *
+   * 次数上限：每个会话每轮（内存键，成功/新派发即清）最多 AUTO_CONTINUE_MAX_ATTEMPTS 次，
+   * 防止「一失败就自动重试」变成死循环。任务已终态（completed/archived）不补发。
+   * 全部 fire-and-forget：绝不阻塞失败收口，也不向调用方抛错。
+   */
+  private async maybeAutoContinueAfterFailure(input: {
+    sessionId: string;
+    teamId: string;
+    teamMemberId: string;
+    agentId: string;
+    error: string;
+  }): Promise<void> {
+    const { sessionId, teamId, teamMemberId, agentId, error } = input;
+    const errorType = inferErrorType(error);
+    if (isQuotaError(errorType) || errorType === 'model_not_found') {
+      this.logger.warn(
+        `会话 ${sessionId} 失败（${errorType}）属不可恢复类，不自动继续：${error}`,
+      );
+      return;
+    }
+    // 明确的上游 4xx 参数错误同样不该自动重试（400/422 不是抖动）。注意
+    // 「Request path cannot be relayed」这类网关 400 虽被归为 model_error，
+    // 但它是**转发链路**问题，重试同一路径大概率仍失败 ⇒ 只保留会话、不自动补发。
+    if (/request path cannot be relayed/i.test(error)) {
+      this.logger.warn(
+        `会话 ${sessionId} 失败属转发链路错误，不自动继续（保留会话待用户复述）：${error}`,
+      );
+      return;
+    }
+    const attempts = this.autoContinueAttempts.get(sessionId) ?? 0;
+    if (attempts >= AUTO_CONTINUE_MAX_ATTEMPTS) {
+      this.logger.warn(
+        `会话 ${sessionId} 已自动继续 ${attempts} 次仍失败，停止重试（等用户介入）`,
+      );
+      return;
+    }
+    // 同一波失败只排一次延迟补发（多条 error 事件不会叠加成连环重试）。
+    if (this.autoContinueTimers.has(sessionId)) {
+      return;
+    }
+    // 终态任务不再补发（收尾流量）：与 tryAutoRestart 同口径。
+    const taskId = await this.taskIdOfSession(sessionId);
+    if (taskId) {
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { status: true },
+      });
+      if (!task || task.status === 'completed' || task.status === 'archived') {
+        this.logger.log(`会话 ${sessionId} 归属任务已终态/缺失，跳过自动继续`);
+        return;
+      }
+    }
+    const channel = await this.resolveTeamChannel(teamId, teamMemberId);
+    if (!channel) {
+      return;
+    }
+    this.logger.warn(
+      `会话 ${sessionId} 失败后可恢复（${errorType}），${this.autoContinueDelayMs}ms 后` +
+        `自动向**同一会话**补发继续（第 ${attempts + 1}/${AUTO_CONTINUE_MAX_ATTEMPTS} 次）：${error}`,
+    );
+    const timer = setTimeout(() => {
+      this.autoContinueTimers.delete(sessionId);
+      void this.performAutoContinue({
+        sessionId,
+        teamId,
+        teamMemberId,
+        agentId,
+        taskId,
+        channelId: channel.id,
+      });
+    }, this.autoContinueDelayMs);
+    timer.unref?.();
+    this.autoContinueTimers.set(sessionId, timer);
+  }
+
+  /**
+   * 真正补发「继续」（延迟窗口到期后执行）。
+   *
+   * 补发前**再核对一次现场**——延迟窗口里现场可能已经变了：
+   * - 会话已不是 failed（用户/其他成员的消息已经把它带起来了）→ 跳过，不重复打扰；
+   * - 该成员已有执行在飞 → 跳过（同一轮正在跑，再塞一条就是插队打断）。
+   */
+  private async performAutoContinue(input: {
+    sessionId: string;
+    teamId: string;
+    teamMemberId: string;
+    agentId: string;
+    taskId: string | null;
+    channelId: string;
+  }): Promise<void> {
+    const { sessionId, teamId, teamMemberId, agentId, taskId, channelId } =
+      input;
+    try {
+      const row = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { status: true, workerId: true },
+      });
+      if (!row) {
+        return;
+      }
+      if (row.status === SESSION_STATUS.running) {
+        this.logger.log(
+          `会话 ${sessionId} 已有新一轮在跑，跳过自动继续（不插队）`,
+        );
+        return;
+      }
+      if (
+        row.workerId &&
+        this.isAgentExecuting(
+          row.workerId,
+          toExecutionScope(null, teamId),
+        )?.has(teamMemberId)
+      ) {
+        this.logger.log(
+          `成员 ${teamMemberId} 已有执行在飞，跳过自动继续（不插队）`,
+        );
+        return;
+      }
+      const attempts = this.autoContinueAttempts.get(sessionId) ?? 0;
+      this.autoContinueAttempts.set(sessionId, attempts + 1);
+      await this.dispatchAgentMention({
+        taskId: taskId ?? null,
+        teamId,
+        channelId,
+        text: this.buildWakeText(teamId, teamMemberId),
+        targetInstanceId: teamMemberId,
+        kind: 'wake',
+      });
+      this.logger.warn(
+        `会话 ${sessionId} 已向同一会话补发继续（第 ${attempts + 1}/${AUTO_CONTINUE_MAX_ATTEMPTS} 次）`,
+      );
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      this.logger.error(
+        `会话 ${sessionId} 自动继续派发失败（等用户/其他成员触发）: ${this.describeError(err)}`,
+      );
+      void agentId;
+    }
+  }
+
+  /**
+   * 会话连续失败计数 +1（尽力而为，失败只记 debug）。
+   *
+   * 为什么需要：失败≠会话已坏，但**连续**失败才是坏会话的信号——尤其 DSH 的
+   * sessionController 坏会话探活仍返回 200，无法靠 404 发现。任一轮成功即归零
+   * （见 handleTaskCompleted），所以这个计数只在「一直失败」时才会涨到阈值。
+   */
+  private async bumpConsecutiveFailures(sessionId: string): Promise<void> {
+    try {
+      await this.prisma.session.update({
+        where: { id: sessionId },
+        data: { consecutiveFailures: { increment: 1 } },
+      });
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      this.logger.debug(
+        `会话 ${sessionId} 连续失败计数写入失败: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /** 本轮成功 → 连续失败计数归零（只在该会话计数确实非 0 时才写，省一次 DB 往返）。 */
+  private async clearConsecutiveFailures(sessionId: string): Promise<void> {
+    try {
+      await this.prisma.session.updateMany({
+        where: { id: sessionId, consecutiveFailures: { gt: 0 } },
+        data: { consecutiveFailures: 0 },
+      });
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      this.logger.debug(
+        `会话 ${sessionId} 连续失败计数归零失败: ${this.describeError(err)}`,
+      );
     }
   }
 

@@ -2344,6 +2344,31 @@ describe('WorkerEventIngress', () => {
       );
     });
 
+    it('failed 不再写成会话状态（会话仍可继续投递）：只记 lastTurnOutcome + 透传 emit', async () => {
+      const e = event('w_1', 'evw_failed_status', 'session.updated', {
+        sessionId: 's_1',
+        status: 'failed',
+        taskId: 't_1',
+        error: 'Upstream request failed: [400] Request path cannot be relayed',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+      // 关键回归：绝不再把「本轮失败」落成 sessions.status='failed'
+      //（旧行为会让下一次派发清 instanceRef 新建会话 = agent 记忆清零）
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_1' },
+        data: { lastTurnOutcome: 'error' },
+      });
+      expect(prisma.session.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'failed' } }),
+      );
+      // 前端仍要看到失败：emit 原样透传 failed
+      expect(realtime.emit).toHaveBeenCalledWith(
+        'session.updated',
+        { sessionId: 's_1', status: 'failed', workerId: 'w_1' },
+        { type: 'task', id: 't_1' },
+      );
+    });
+
     it('非法 status 不更新 DB，但 emit 透传原值（防御性）', async () => {
       const e = event('w_1', 'evw_4', 'session.updated', {
         sessionId: 's_1',

@@ -594,6 +594,43 @@ export class WorkerEventIngress {
       this.str(raw.agentId),
     );
     const mapped = this.mapSessionStatus(raw.status);
+    // 本轮失败 ≠ 会话不可用（2026-11-25 线上丢上下文事故）：
+    // worker 在「本轮终态非 succeeded」时无条件上送 session.updated{failed}，
+    // 而 failed 曾被当成「会话已坏」→ 下一次派发清 instanceRef 重建，agent 的连续
+    // 上下文清零（实测 s_0000000018：ses_ee68b6891ffe… → ses_defb66352ffe…，新会话
+    // messages=[]）。本轮结果应记在 last_turn_outcome，会话状态只反映「是否可继续投递」。
+    if (mapped === SESSION_STATUS.failed) {
+      try {
+        await this.prisma.session.updateMany({
+          where: { id: sessionId ?? '' },
+          data: { lastTurnOutcome: 'error' },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[ingress] session ${sessionId ?? '-'} lastTurnOutcome 更新失败: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      await this.realtime.emit(
+        EVENT_TYPES.SESSION_UPDATED,
+        {
+          sessionId: sessionId ?? null,
+          // 前端仍要看到「这轮失败了」：原样透传 failed，但**不落库**为会话状态。
+          status: 'failed',
+          workerId: dto.workerId,
+        },
+        this.scopeOf(raw.taskId),
+      );
+      if (sessionId) {
+        this.touchSessionActivity({ type: 'session.updated', sessionId });
+        this.notify(this.sessionActivityCallbacks, {
+          type: 'session.updated',
+          sessionId,
+          taskId: this.str(raw.taskId),
+          status: 'failed',
+        });
+      }
+      return;
+    }
     if (sessionId && mapped) {
       // updateMany 幂等：status 已一致时不产生更新（不抛）。
       // DB 更新失败仅记 warn，不阻断 emit——事件流转优先（前端感知），落库终态由 T10/重放兜底。

@@ -5792,6 +5792,166 @@ describe('WorkerDispatcher', () => {
   // handleAgentStatus：agent.loading / agent.error 本地回调映射
   // ------------------------------------------------------------------
 
+  describe('失败后自动继续（同一会话，等价用户说「继续」）', () => {
+    const teamSession = {
+      id: 's_0000000001',
+      teamId: 'tm_0000000001',
+      teamMemberId: 'tmm_0000000001',
+      agentId: 'a_product',
+      workerId: 'w_0000000001',
+    };
+
+    /** 让 resolveTeamChannel 命中一个频道。 */
+    const stubTeamChannel = (): void => {
+      (prisma as any).teamMember.findUnique.mockResolvedValue({
+        id: 'tmm_0000000001',
+        memberId: null,
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+    };
+
+    /** 造一个延迟压到毫秒级的 dispatcher（生产值是 8s，单测不能真等）。 */
+    const createFastDispatcher = () => {
+      const d = createDispatcher();
+      d.autoContinueDelayMs = 20;
+      return d;
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 80));
+
+    it('可恢复失败（模型忙/超时）→ 延迟后向同一会话补发 wake（不新建会话）', async () => {
+      prisma.session.findUnique.mockResolvedValue(teamSession);
+      prisma.task.findUnique.mockResolvedValue({ status: 'in_progress' });
+      stubTeamChannel();
+      const d = createFastDispatcher();
+      const mentionSpy = jest
+        .spyOn(d, 'dispatchAgentMention')
+        .mockResolvedValue('s_0000000001');
+
+      await d.handleAgentStatus({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        status: 'error',
+        error: 'Upstream request failed: model busy, please try again',
+      });
+
+      // 延迟窗口内不立即补发（给「正在打字的用户」优先）
+      expect(mentionSpy).not.toHaveBeenCalled();
+      await settle();
+      expect(mentionSpy).toHaveBeenCalledTimes(1);
+      const payload = mentionSpy.mock.calls[0][0] as any;
+      // 关键：目标仍是**同一席位/同一会话**，kind=wake（不重置自愈预算）
+      expect(payload.targetInstanceId).toBe('tmm_0000000001');
+      expect(payload.kind).toBe('wake');
+      expect(payload.teamId).toBe('tm_0000000001');
+    });
+
+    it('不可恢复失败（额度不足）→ 不自动补发（避免连续烧钱）', async () => {
+      prisma.session.findUnique.mockResolvedValue(teamSession);
+      stubTeamChannel();
+      const d = createFastDispatcher();
+      const mentionSpy = jest
+        .spyOn(d, 'dispatchAgentMention')
+        .mockResolvedValue('s_0000000001');
+
+      await d.handleAgentStatus({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        status: 'error',
+        error: "You've reached your weekly usage limit for your plan",
+      });
+
+      await settle();
+      expect(mentionSpy).not.toHaveBeenCalled();
+    });
+
+    it('转发链路 400（Request path cannot be relayed）→ 不自动补发', async () => {
+      prisma.session.findUnique.mockResolvedValue(teamSession);
+      stubTeamChannel();
+      const d = createFastDispatcher();
+      const mentionSpy = jest
+        .spyOn(d, 'dispatchAgentMention')
+        .mockResolvedValue('s_0000000001');
+
+      await d.handleAgentStatus({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        status: 'error',
+        error: 'Upstream request failed: [400] Request path cannot be relayed',
+      });
+
+      await settle();
+      expect(mentionSpy).not.toHaveBeenCalled();
+    });
+
+    it('延迟窗口内会话已被带起来（status=running）→ 跳过，不插队', async () => {
+      prisma.session.findUnique
+        .mockResolvedValueOnce(teamSession)
+        .mockResolvedValue({ status: 'running', workerId: 'w_0000000001' });
+      prisma.task.findUnique.mockResolvedValue({ status: 'in_progress' });
+      stubTeamChannel();
+      const d = createFastDispatcher();
+      const mentionSpy = jest
+        .spyOn(d, 'dispatchAgentMention')
+        .mockResolvedValue('s_0000000001');
+
+      await d.handleAgentStatus({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        status: 'error',
+        error: 'timeout waiting for first token',
+      });
+
+      await settle();
+      expect(mentionSpy).not.toHaveBeenCalled();
+    });
+
+    it('同一波多条 error 只排一次补发（去重）', async () => {
+      prisma.session.findUnique.mockResolvedValue(teamSession);
+      prisma.task.findUnique.mockResolvedValue({ status: 'in_progress' });
+      stubTeamChannel();
+      const d = createFastDispatcher();
+      const mentionSpy = jest
+        .spyOn(d, 'dispatchAgentMention')
+        .mockResolvedValue('s_0000000001');
+
+      for (const err of ['timeout A', 'timeout B']) {
+        await d.handleAgentStatus({
+          taskId: request.taskId,
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          status: 'error',
+          error: err,
+        });
+      }
+
+      await settle();
+      expect(mentionSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('失败回流累加 consecutiveFailures（成功轮才归零）', async () => {
+      prisma.session.findUnique.mockResolvedValue(teamSession);
+      stubTeamChannel();
+      const d = createFastDispatcher();
+
+      await d.handleAgentStatus({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        status: 'error',
+        error: 'quota exceeded',
+      });
+
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { consecutiveFailures: { increment: 1 } },
+      });
+    });
+  });
+
   describe('handleAgentStatus 团队归一（Todo10：fail/resolve 全走 resolveTeamChannel）', () => {
     const teamSession = {
       id: 's_0000000001',
