@@ -90,8 +90,12 @@ DROP INDEX `tools_action_key` ON `tools`;
 -- ============ 3) 各资源表加 workspace_id（NOT NULL DEFAULT ws_default，随后回填平台资源到 ws_system） ============
 
 -- AlterTable
-ALTER TABLE `agent_roles` ADD COLUMN `workspace_id` VARCHAR(191) NOT NULL DEFAULT 'ws_default',
-    MODIFY `default_opencode_agent_name` VARCHAR(191) NULL;
+-- ⚠️ 不再 MODIFY `default_opencode_agent_name`：该列已被后序迁移
+-- `20261121220000_drop_external_agent_columns` 删除（外部 agent 功能下线）。
+-- 本迁移时间戳（11-12）早于那次删列（11-21），但文件是后写的 —— 保留该 MODIFY 会让
+-- `migrate deploy` 在任何已应用删列迁移的库上以 1054 Unknown column 失败
+-- （2026-11-25 生产 v1.7.0 升级即因此回滚）。只增列即可。
+ALTER TABLE `agent_roles` ADD COLUMN `workspace_id` VARCHAR(191) NOT NULL DEFAULT 'ws_default';
 
 -- AlterTable
 ALTER TABLE `agents` ADD COLUMN `workspace_id` VARCHAR(191) NOT NULL DEFAULT 'ws_default',
