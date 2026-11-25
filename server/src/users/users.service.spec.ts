@@ -96,6 +96,46 @@ describe('UsersService', () => {
       expect(prisma.$transaction).toHaveBeenCalled();
     });
 
+    it('按当前空间过滤（User 是系统本体，中间件不注入 ⇒ 必须显式过滤）', async () => {
+      // 2026-11-25：GET /users 被团队「添加用户成员」下拉复用，语义是「本空间所有成员」。
+      // 不过滤会把别的空间的用户也列出来（选中即跨空间拉人）。
+      const { runWithTenant } = await import('../common/tenant/tenant-context');
+      prisma.$transaction.mockResolvedValue([[userRow], 1]);
+
+      await runWithTenant({ workspaceId: 'ws_default' } as any, () =>
+        service.findAll(1, 20),
+      );
+
+      const where = prisma.user.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.workspaceMembers).toEqual({
+        some: { workspaceId: 'ws_default' },
+      });
+    });
+
+    it('无租户上下文（单测/seed）→ 不过滤，保持旧行为', async () => {
+      prisma.$transaction.mockResolvedValue([[userRow], 1]);
+
+      await service.findAll(1, 20);
+
+      const where = prisma.user.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.workspaceMembers).toBeUndefined();
+    });
+
+    it('search + 空间过滤同时生效（AND 组合，不互相覆盖）', async () => {
+      const { runWithTenant } = await import('../common/tenant/tenant-context');
+      prisma.$transaction.mockResolvedValue([[userRow], 1]);
+
+      await runWithTenant({ workspaceId: 'ws_default' } as any, () =>
+        service.findAll(1, 20, 'seed'),
+      );
+
+      const where = prisma.user.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.workspaceMembers).toEqual({
+        some: { workspaceId: 'ws_default' },
+      });
+      expect(where?.OR).toBeDefined();
+    });
+
     it('附带所属团队数 _count.teamUserMembers（MOCK-05）', async () => {
       const listRow = {
         ...userRow,

@@ -427,12 +427,76 @@ export class TeamsService implements OnModuleInit {
     return full;
   }
 
-  async findAll(query: QueryTeamsDto) {
+  /**
+   * 团队列表（09 篇 §3.3：**调用者所属团队列表**，`[team]` 成员仅见已加入）。
+   *
+   * 可见性口径必须与 `GET /conversations` 一致（37 篇 §5.3 / D7）：
+   * 两者都按 `team_user_members` 过滤。此前这里只按租户（workspace）过滤，
+   * 导致「团队页能看到全部团队、会话页却 0 条」的割裂
+   * （2026-11-25 线上：默认空间的普通用户 guolong/hm 没有任何 team_user_members 行，
+   *  团队列表 9 条、会话列表 0 条）。
+   *
+   * 平台管理员（r_admin）保留全空间可见：他们要管理所有团队，且 `POST /teams`
+   * 建团队时创建者会被写入 team_user_members，普通用户天然只看自己加入的。
+   */
+  /**
+   * 解析「该用户可见的团队 id 集合」。
+   *
+   * - 返回 `null` → **不做成员过滤**（平台管理员，或无法判定用户身份的单测/内部调用）；
+   * - 返回数组（可能为空）→ 只允许这些团队。
+   *
+   * 与 `ConversationsService.list` 同一口径（`team_user_members` + 当前空间），
+   * 避免「团队页有、会话页没有」的割裂。
+   */
+  private async resolveVisibleTeamIds(
+    userId?: string,
+  ): Promise<string[] | null> {
+    if (!userId) {
+      return null;
+    }
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { roleId: true },
+      });
+      // 平台管理员：全空间可见（管理诉求），不做成员过滤。
+      if (!user || user.roleId === 'r_admin') {
+        return null;
+      }
+      const ctx = getTenantContext();
+      const workspaceId = ctx?.workspaceId;
+      const rows = await (this.prisma as any).teamUserMember.findMany({
+        where: {
+          userId,
+          ...(workspaceId ? { team: { workspaceId } } : {}),
+        },
+        select: { teamId: true },
+      });
+      return [
+        ...new Set((rows ?? []).map((r: any) => r.teamId).filter(Boolean)),
+      ] as string[];
+    } catch (err) {
+      // fail-open：可见性解析失败不阻断列表（最坏是回到旧行为，而不是 500）。
+      this.logger.warn(
+        `团队可见性解析失败 user=${userId}（fail-open 不过滤）: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  async findAll(query: QueryTeamsDto, userId?: string) {
     const page = normalizePage(query.page);
     const pageSize = normalizePageSize(query.pageSize);
     const where: any = {};
     if (query.name?.trim()) {
       where.name = { contains: query.name.trim() };
+    }
+    // 成员可见性：非管理员只看自己加入的团队（与 /conversations 同口径）。
+    const visibleTeamIds = await this.resolveVisibleTeamIds(userId);
+    if (visibleTeamIds !== null) {
+      where.id = { in: visibleTeamIds };
     }
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.team.count({ where }),

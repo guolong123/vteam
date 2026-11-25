@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { getTenantContext } from '../common/tenant/tenant-context';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -70,14 +71,34 @@ export class UsersService {
     const safePage = normalizePage(page);
     const safePageSize = normalizePageSize(pageSize);
 
-    const where = search
-      ? {
-          OR: [
-            { username: { contains: search } },
-            { displayName: { contains: search } },
-          ],
-        }
+    /**
+     * 按**当前空间**过滤（`User` 是系统本体，不在租户模型表里 ⇒ 中间件不注入）。
+     *
+     * 为什么必须显式过滤：`GET /users` 被团队「添加用户成员」下拉复用，语义是
+     * 「列出本空间的所有成员」。不过滤会把别的空间的用户也列出来，选中后
+     * 加进团队等于跨空间拉人（2026-11-25 用户反馈）。
+     *
+     * 无租户上下文（单测/seed/内部调用）→ 不过滤，保持旧行为。
+     */
+    const workspaceId = getTenantContext()?.workspaceId;
+    const scope = workspaceId
+      ? { workspaceMembers: { some: { workspaceId } } }
       : undefined;
+
+    const where =
+      search || scope
+        ? {
+            ...(scope ?? {}),
+            ...(search
+              ? {
+                  OR: [
+                    { username: { contains: search } },
+                    { displayName: { contains: search } },
+                  ],
+                }
+              : {}),
+          }
+        : undefined;
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.user.findMany({

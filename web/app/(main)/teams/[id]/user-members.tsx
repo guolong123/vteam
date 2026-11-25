@@ -5,11 +5,31 @@
  * 仅展示 TeamDto.userMembers（id/userId/role/joinedAt）+ 按用户 ID 添加/移除。
  * 无邀请/审批流；失败行内展示，不做路由跳转。
  */
-import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { teamsApi, type TeamUserMemberDto } from "@/src/api/teams";
 import { fontFamily, fontSize, neutral, radius, space } from "@/src/theme/tokens";
+
+/**
+ * `GET /users` 条目（只取选择器需要的字段）。
+ *
+ * 该端点由租户中间件按**当前空间**过滤，所以下拉里天然只有本空间成员
+ * （「列出命名空间下的所有成员」）。
+ */
+interface WorkspaceUserItem {
+  id: string;
+  username: string;
+  displayName: string;
+  roleId: string;
+  enabled: boolean;
+}
+
+interface WorkspaceUsersResponse {
+  items: WorkspaceUserItem[];
+  total: number;
+}
 
 function UserMemberRow({
   member,
@@ -130,6 +150,25 @@ export function UserMembersSection({
   const [role, setRole] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * 当前空间的用户清单（`GET /users` 由租户中间件按空间过滤）。
+   * 供「选择用户」下拉使用——此前只能手输用户 ID，用户根本不知道别人的 ID 是什么。
+   */
+  const usersQuery = useQuery({
+    queryKey: ["workspace-users"],
+    queryFn: () =>
+      api.get<WorkspaceUsersResponse>("/users", {
+        query: { page: 1, pageSize: 200 },
+      }),
+    staleTime: 60_000,
+  });
+
+  /** 下拉候选：排除已在团队里的用户（避免选了必报「已是团队成员」）。 */
+  const candidates = useMemo(() => {
+    const joined = new Set(members.map((m) => m.userId));
+    return (usersQuery.data?.items ?? []).filter((u) => !joined.has(u.id));
+  }, [usersQuery.data, members]);
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["team", teamId] });
     queryClient.invalidateQueries({ queryKey: ["teams"] });
@@ -194,14 +233,20 @@ export function UserMembersSection({
           border: `1px dashed ${neutral[300]}`,
         }}
       >
-        <div style={{ flex: 2, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
-          <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>用户 ID</label>
-          <input
-            data-testid="user-member-userid-input"
+        <div style={{ flex: 2, minWidth: 240, display: "flex", flexDirection: "column", gap: space.xs }}>
+          <label
+            htmlFor="user-member-userid-select"
+            style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}
+          >
+            选择用户
+          </label>
+          <select
+            id="user-member-userid-select"
+            data-testid="user-member-userid-select"
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
-            placeholder="输入用户 ID（如 seed-member 的 ID）"
-            aria-label="用户 ID"
+            aria-label="选择用户"
+            disabled={usersQuery.isLoading}
             style={{
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
@@ -209,10 +254,32 @@ export function UserMembersSection({
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-
-              fontFamily: fontFamily.mono,
+              fontFamily: fontFamily.body,
+              cursor: usersQuery.isLoading ? "default" : "pointer",
             }}
-          />
+          >
+            <option value="">
+              {usersQuery.isLoading
+                ? "加载用户中…"
+                : candidates.length === 0
+                  ? "本空间没有可添加的用户"
+                  : "请选择用户…"}
+            </option>
+            {candidates.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.displayName || u.username}（{u.username}）
+                {u.enabled ? "" : " · 已禁用"}
+              </option>
+            ))}
+          </select>
+          {usersQuery.isError && (
+            <span
+              data-testid="user-member-users-error"
+              style={{ fontSize: fontSize.xs, color: "var(--color-danger-text)" }}
+            >
+              用户列表加载失败，请刷新重试
+            </span>
+          )}
         </div>
         <div style={{ flex: 1, minWidth: 140, display: "flex", flexDirection: "column", gap: space.xs }}>
           <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>角色（可选）</label>
