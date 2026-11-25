@@ -4,12 +4,18 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SESSION_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  isWorkerSessionInvalid,
+  WorkerClient,
+  WorkerEndpointRef,
+} from './worker.client';
 import {
   GLOBAL_SESSION_ERRORS,
   SESSION_TURN_STATUS,
@@ -20,6 +26,54 @@ const TASK_GROUP_INSTANCE_ID_PREFIX = 'ti';
 
 /** Session 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const SESSION_ID_PREFIX = 's';
+
+/** 首次 bind 的 instanceRef 占位（真实 opencode 会话尚未创建）。 */
+const PENDING_INSTANCE_REF = 'pending';
+
+/** 会话健康探测超时（ms）：探测只是「决定要不要重建」，不能拖住用户的那条消息。 */
+const ENGINE_PROBE_TIMEOUT_MS = 5_000;
+
+/** 给 Promise 加超时（超时 reject，调用方按 unknown 处理）。 */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`engine probe timeout after ${ms}ms`)),
+      ms,
+    );
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * 「引擎会话已坏」的失败计数阈值（只对**不体现 404** 的引擎生效，当前是 DSH）。
+ *
+ * 为什么需要：opencode 的 serve 重启/会话被删会明确回 404，探活即可判定；而 DSH 的
+ * 坏会话（sessionController service unavailable / 会话文件损坏）仍然会正常响应
+ * `GET /sessions/:id/messages`，探活看不出问题 ⇒ 只能靠「同一 instanceRef 连续 N 轮
+ * 都失败」兜底。N=3 是经验值：偶发两次上游抖动不该丢掉 agent 的连续上下文。
+ */
+export const SESSION_REBUILD_FAILURE_THRESHOLD = 3;
+
+/**
+ * 引擎会话健康探测结果：
+ * - `alive`   —— 引擎侧会话还在（可继续投递，等价用户说「继续」）；
+ * - `gone`    —— 引擎侧会话确实不存在（HTTP 404，只能重建）；
+ * - `unknown` —— 探测不了（worker 不可达/超时/报错）⇒ **按 alive 处理**（见 decideRevive）。
+ */
+export type EngineSessionProbe = 'alive' | 'gone' | 'unknown';
+
+/** failed 会话的处置：`keep` = 保留引擎会话绑定继续用；`rebuild` = 清绑定新建。 */
+export type ReviveAction = 'keep' | 'rebuild';
 
 const SESSION_ERRORS = {
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
@@ -56,6 +110,13 @@ export class SessionLifecycleService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
+    /**
+     * 会话健康探测用（`GET /sessions/:id/messages`）。@Optional：存量单测零 provider
+     * 构造仍可编译——缺席时探活一律返回 `unknown`，处置按 keep（内存优先），
+     * 与「失败不再清 instanceRef」的目标一致。
+     */
+    @Optional()
+    private readonly workerClient?: WorkerClient,
   ) {}
 
   /**
@@ -152,6 +213,193 @@ export class SessionLifecycleService implements OnModuleInit {
   }
 
   /**
+   * 处置一条 `status=failed` 的会话（**事务外**，可能含网络探测）。
+   *
+   * 这是「失败后不丢上下文」的唯一出口：
+   * - `keep`    —— 保留 workerId/instanceRef，只把 status 复位（下一条消息仍打进
+   *                同一个引擎会话，等价用户说「继续」）；
+   * - `rebuild` —— 软移除旧实例行 + 清绑定 + status=created（下一轮 createSession 新建）。
+   *
+   * 幂等：并发两路同时进来时，第二次读到 status 已不是 failed 就直接返回。
+   */
+  async reviveFailedSession(
+    sessionId: string,
+    dims?: { teamId?: string | null; teamMemberId?: string | null },
+  ): Promise<{
+    revived: boolean;
+    action: ReviveAction | null;
+    reason?: string;
+  }> {
+    const row = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        status: true,
+        teamId: true,
+        teamMemberId: true,
+        workerId: true,
+        instanceRef: true,
+        consecutiveFailures: true,
+      },
+    });
+    if (!row || row.status !== SESSION_STATUS.failed) {
+      return { revived: false, action: null };
+    }
+    const decision = await this.decideRevive({
+      workerId: row.workerId,
+      instanceRef: row.instanceRef,
+      consecutiveFailures: row.consecutiveFailures,
+    });
+    const teamId = dims?.teamId ?? row.teamId;
+    const teamMemberId = dims?.teamMemberId ?? row.teamMemberId;
+    if (decision.action === 'keep') {
+      // 保留绑定：只把「上一轮失败」这个状态复位，绑定与计数一律不动。
+      await this.prisma.session.updateMany({
+        where: { id: sessionId, status: SESSION_STATUS.failed },
+        data: { status: SESSION_STATUS.idle, busyState: 'idle' },
+      });
+      this.logger.log(
+        `[session-revive] 会话 ${sessionId} 判失败但引擎会话保留（${decision.reason}）` +
+          ` instanceRef=${row.instanceRef ?? '-'} 连续失败=${row.consecutiveFailures}`,
+      );
+      return { revived: true, action: 'keep', reason: decision.reason };
+    }
+    // rebuild：旧引擎会话已不可用 —— 软移除实例行、清绑定、计数归零。
+    if (row.workerId && row.instanceRef) {
+      await this.prisma.taskGroupInstance.updateMany({
+        where: {
+          teamId: teamId ?? undefined,
+          teamMemberId: teamMemberId ?? undefined,
+          workerId: row.workerId,
+          instanceId: row.instanceRef,
+          removedAt: null,
+        },
+        data: { removedAt: new Date() },
+      });
+    }
+    await this.prisma.session.updateMany({
+      where: { id: sessionId, status: SESSION_STATUS.failed },
+      data: {
+        workerId: null,
+        instanceRef: null,
+        status: SESSION_STATUS.created,
+        busyState: 'idle',
+        consecutiveFailures: 0,
+      },
+    });
+    this.logger.warn(
+      `[session-revive] 会话 ${sessionId} 重建引擎会话（${decision.reason}）` +
+        ` 旧实例=${row.instanceRef ?? '-'} 连续失败=${row.consecutiveFailures}`,
+    );
+    return { revived: true, action: 'rebuild', reason: decision.reason };
+  }
+
+  /**
+   * 探测引擎侧会话是否还活着（`GET /sessions/:id/messages`）。
+   *
+   * 判定口径（**只认 404 为「没了」**）：
+   * - 200 → `alive`；
+   * - 404 + SESSION_NOT_FOUND → `gone`（serve 重启/会话被删，只能重建）；
+   * - 其余（worker 不可达、超时、5xx、未注入 client）→ `unknown`。
+   *
+   * 为什么 5xx/网络错误不算 gone：那说明我们**没能力判断**，此时清掉 instanceRef
+   * 等于凭一次抖动丢掉 agent 的连续上下文——宁可保留，让下一轮自己再判。
+   */
+  async probeEngineSession(
+    workerId: string | null,
+    instanceRef: string | null,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<EngineSessionProbe> {
+    if (!workerId || !instanceRef || !this.workerClient) {
+      return 'unknown';
+    }
+    if (instanceRef === PENDING_INSTANCE_REF) {
+      // 占位引用：从没建过真实会话，不是「坏」，只是待建。
+      return 'unknown';
+    }
+    try {
+      const workerRow = await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { id: true, capabilities: true },
+      });
+      if (!workerRow) {
+        return 'unknown';
+      }
+      const ref: WorkerEndpointRef = {
+        id: workerRow.id,
+        capabilities: workerRow.capabilities as Record<string, unknown>,
+      };
+      await withTimeout(
+        this.workerClient.getMessages(ref, instanceRef, { limit: 1 }),
+        opts.timeoutMs ?? ENGINE_PROBE_TIMEOUT_MS,
+      );
+      return 'alive';
+    } catch (err) {
+      if (isWorkerSessionInvalid(err)) {
+        return 'gone';
+      }
+      this.logger.warn(
+        `引擎会话健康探测失败 worker=${workerId} session=${instanceRef}（按未知处理，保留绑定）: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 'unknown';
+    }
+  }
+
+  /**
+   * 决定 `status=failed` 会话该「保留引擎会话继续」还是「清绑定重建」。
+   *
+   * 用户口径（2026-11-25 线上事故 s_0000000018 之后确认）：
+   * **失败 ≠ 会话已坏**。复活的预期是「往同一个会话再发一条消息（像人说『继续』）」，
+   * 而不是换一个新会话——换会话等于把 agent 的连续上下文清零。
+   *
+   * 判定顺序：
+   * 1. 探活 `gone`（HTTP 404）→ `rebuild`：会话在引擎侧确实没了，保留绑定只会一直 404；
+   * 2. 探活 `alive` → `keep`：会话健康，直接继续（**这是绝大多数失败**）；
+   * 3. 探活 `unknown`（worker 不可达/未注入 client）→ `keep`：没证据说明会话坏了，
+   *    不做破坏性操作（下一轮探活/失败计数会再判）；
+   * 4. DSH 等「坏会话不体现 404」的引擎：`consecutiveFailures >= 阈值` → `rebuild`。
+   */
+  async decideRevive(input: {
+    workerId: string | null;
+    instanceRef: string | null;
+    consecutiveFailures?: number | null;
+  }): Promise<{
+    action: ReviveAction;
+    probe: EngineSessionProbe;
+    reason: string;
+  }> {
+    const failures = input.consecutiveFailures ?? 0;
+    const probe = await this.probeEngineSession(
+      input.workerId,
+      input.instanceRef,
+    );
+    if (probe === 'gone') {
+      return {
+        action: 'rebuild',
+        probe,
+        reason: '引擎会话不存在（HTTP 404），只能新建',
+      };
+    }
+    if (failures >= SESSION_REBUILD_FAILURE_THRESHOLD) {
+      return {
+        action: 'rebuild',
+        probe,
+        reason: `同一引擎会话连续失败 ${failures} 次（≥${SESSION_REBUILD_FAILURE_THRESHOLD}），判定会话已坏`,
+      };
+    }
+    return {
+      action: 'keep',
+      probe,
+      reason:
+        probe === 'alive'
+          ? '引擎会话仍健康，保留绑定继续（不新建会话）'
+          : '探测不可用（按未知处理），保留绑定继续（不做破坏性操作）',
+    };
+  }
+
+  /**
    * 团队会话确保存在（team-free-chat 无任务直聊）：
    * 按 uk_sessions_team_member 键（team_member_key = teamId|teamMemberId，仅 task_id 为空行参与）
    * 查找，命中则复用，未命中则创建 `{teamId 必填，taskId 置空}` 行。
@@ -183,46 +431,9 @@ export class SessionLifecycleService implements OnModuleInit {
         },
       });
       if (existing) {
-        // 判死终态（watchdog 首字超时/空闲无输出）**不得继续复用**：
-        // failed 会话仍绑着旧 worker 的 instanceRef（如 DSH 的 dsh-xxx 会话文件），
-        // 复用会把消息发回那个坏会话 —— 用户实测「发到了错误的 opencode session」
-        // 且模型设置不生效（每回合 ensureModelFor 对坏会话 selectModel 失败 →
-        // 重启运行时 → 首字超时，循环失败）。
-        // 修复：原地「复活」该行 —— 清 workerId/instanceRef（下次分派 createSession
-        // 新建干净会话）+ status=created + 软移除旧 TaskGroupInstance 行。
-        // 保留 session 行本身（id 不变、幂等、不换 sid），仅清绑定。
-        if (existing.status === SESSION_STATUS.failed) {
-          if (existing.workerId && existing.instanceRef) {
-            await tx.taskGroupInstance.updateMany({
-              where: {
-                teamId: existing.teamId,
-                teamMemberId: existing.teamMemberId,
-                workerId: existing.workerId,
-                instanceId: existing.instanceRef,
-                removedAt: null,
-              },
-              data: { removedAt: new Date() },
-            });
-          }
-          const revived = await tx.session.update({
-            where: { id: existing.id },
-            data: {
-              workerId: null,
-              instanceRef: null,
-              status: SESSION_STATUS.created,
-            },
-            select: {
-              id: true,
-              teamId: true,
-              teamMemberId: true,
-              agentId: true,
-              workerId: true,
-              instanceRef: true,
-              status: true,
-            },
-          });
-          return { ...revived, reused: false, revived: true };
-        }
+        // failed 会话的处置已上移到 reviveFailedSession（事务外先探活再决定），
+        // 这里命中 failed 只可能是并发窗口（另一条分派刚判败）——按普通复用返回，
+        // 由下一次分派走同一套探活判定（绝不在事务内做网络探测）。
         return { ...existing, reused: true };
       }
       const select = {
@@ -323,34 +534,7 @@ export class SessionLifecycleService implements OnModuleInit {
         select,
       });
       if (existing) {
-        // 判死终态（见 ensureTeamSession 同款注释）：failed 会话仍绑旧 worker 的
-        // instanceRef，复用会把消息发回坏 DSH/opencode 会话 → 模型切换不生效、
-        // 历史串场。原地复活：清绑定 + status=created + 软移除旧实例行。
-        if (existing.status === SESSION_STATUS.failed) {
-          if (existing.workerId && existing.instanceRef) {
-            await tx.taskGroupInstance.updateMany({
-              where: {
-                teamId: existing.currentTeamId,
-                teamMemberId: existing.seatId,
-                workerId: existing.workerId,
-                instanceId: existing.instanceRef,
-                removedAt: null,
-              },
-              data: { removedAt: new Date() },
-            });
-          }
-          const revived = await tx.session.update({
-            where: { id: existing.id },
-            data: {
-              workerId: null,
-              instanceRef: null,
-              status: SESSION_STATUS.created,
-              busyState: 'idle',
-            },
-            select,
-          });
-          return { ...revived, reused: false, revived: true };
-        }
+        // failed 会话的处置见 reviveFailedSession（事务外探活后决定是否重建）。
         // 上下文只在调用方显式给出时更新（不覆盖未提供的维度）。
         const data: Record<string, unknown> = {};
         if (context.seatId !== undefined) data.seatId = context.seatId;

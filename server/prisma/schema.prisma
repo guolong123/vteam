@@ -564,6 +564,10 @@ model Session {
   compactedAt        DateTime? @map("compacted_at")
   compactTokenBefore Int?      @map("compact_token_before")
   compactTokenAfter  Int?      @map("compact_token_after")
+  /// 同一 instanceRef 的连续失败轮次数（会话健康探测用，见 session-lifecycle 的
+  /// reviveFailedSession）：任一轮成功即归零；达到阈值（DSH 3）才允许判定
+  /// 「引擎会话已坏」并清绑定重建。opencode 引擎以 HTTP 404 为准，不依赖本列。
+  consecutiveFailures Int    @default(0) @map("consecutive_failures")
   member            Member?   @relation(fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   turns            SessionTurn[]
   createdAt        DateTime      @default(now()) @map("created_at")

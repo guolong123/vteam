@@ -61,6 +61,12 @@ export interface DispatchRequest {
    * 由 `dispatchAgentMention` 透传；其他 dispatch 调用方缺省 false，行为不变。
    */
   internal?: boolean;
+  /**
+   * 执行分类（execution/wake/review/nudge）——由 dispatchAgentMention 透传，
+   * 仅用于 dispatcher 内部的状态清理口径（wake 不得重置「失败后自动继续」预算，
+   * 否则预算会被它自己的派发清零而失效）。缺省 execution。
+   */
+  kind?: 'execution' | 'wake' | 'review' | 'nudge';
 }
 
 /** 分派结果：mock 实现返回回复（已落库）；真实实现为空（回复经 worker 事件回流）。 */

@@ -505,4 +505,78 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     );
     jest.useRealTimers();
   });
+
+  /**
+   * 2026-11-25 线上事故回归（vteam.ketaops.cc tm_0000000004 / 项目经理-1）：
+   *
+   * 一轮执行被判失败（上游 400）→ 会话 status=failed → 下一次派发**清掉 instanceRef
+   * 新建 opencode 会话**，agent 的连续上下文清零
+   * （实测 ses_ee68b6891ffe… → ses_defb66352ffe…，新会话 messages=[]）。
+   *
+   * 期望：失败后仍然复用**同一个**引擎会话（等价用户说「继续」），只有探活 404
+   * 或连续失败达阈值才允许新建。这里用真实 SessionLifecycleService + mock Prisma
+   * 验证「failed 会话再次派发时不 createSession」。
+   */
+  it('回归：failed 会话再次派发 → 探活 alive 时继续用同一引擎会话（不 createSession）', async () => {
+    const lifecycle = new SessionLifecycleService(
+      prisma as unknown as PrismaService,
+      idGen as unknown as IdGeneratorService,
+      {
+        getMessages: jest.fn().mockResolvedValue([]),
+      } as unknown as WorkerClient,
+    );
+    const d = new WorkerDispatcher(
+      prisma as unknown as PrismaService,
+      idGen as unknown as IdGeneratorService,
+      realtime as unknown as RealtimeService,
+      workersService as unknown as WorkersService,
+      workerClient as unknown as WorkerClient,
+      lifecycle,
+      artifactsService as unknown as ArtifactsService,
+      config as unknown as ConfigService,
+      ingress as unknown as WorkerEventIngress,
+    );
+
+    // 会话处于 failed 且仍绑着旧引擎会话（正是事故现场的状态）
+    prisma.session.findUnique.mockResolvedValue({
+      id: 's_0000000001',
+      teamId: 'tm_0000000001',
+      teamMemberId: 'tmm_0000000001',
+      agentId: 'a_product',
+      workerId: 'w_0000000001',
+      instanceRef: 'ses_keepme',
+      status: 'failed',
+      consecutiveFailures: 0,
+      memberId: null,
+    } as any);
+    prisma.session.updateMany.mockResolvedValue({ count: 1 });
+    (prisma as any).taskGroupInstance = {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn(),
+    };
+    workersService.assignWorker.mockResolvedValue('w_0000000001');
+
+    await d.dispatch({
+      ...request,
+      targets: [
+        {
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          instanceId: 'tmm_0000000001',
+        },
+      ],
+    } as any);
+    await flush();
+
+    // 关键断言：没有新建引擎会话，且投递目标是**原来的** ses_
+    expect(workerClient.createSession).not.toHaveBeenCalled();
+    const execPayload = workerClient.execute.mock.calls[0][1] as any;
+    expect(execPayload.sessionId).toBe('ses_keepme');
+    // 只把状态复位，绑定一律不动
+    const statusPatch = prisma.session.updateMany.mock.calls.find(
+      (c: any) => c[0]?.data?.status === 'idle',
+    );
+    expect(statusPatch?.[0]?.data?.instanceRef).toBeUndefined();
+  });
 });

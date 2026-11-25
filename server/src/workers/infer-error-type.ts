@@ -8,7 +8,11 @@ export function inferErrorType(error?: string): string {
   const e = (error ?? '').toLowerCase();
   if (/invalid api key|unauthorized|401|credential/.test(e))
     return 'auth_failed';
-  if (/quota|insufficient|billing/.test(e)) return 'quota_exceeded';
+  // usage limit / plan limit 也是额度类（2026-11-25：上游「You've reached your weekly
+  // usage limit for your plan」原本落到 model_error，被当成可重试的抖动 → 自动继续
+  // 会连续烧掉额度。归到 quota_exceeded 后属于不可自动重试）。
+  if (/quota|insufficient|billing|usage limit|plan limit|exceeded your/.test(e))
+    return 'quota_exceeded';
   if (/model not found|provider.*not found|did you mean/.test(e))
     return 'model_not_found';
   if (/timeout|model_busy|busy|rate.?limit|overloaded|try again/.test(e))

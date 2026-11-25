@@ -127,7 +127,7 @@ describe('全局会话（P3）', () => {
       expect(result.reused).toBe(true);
     });
 
-    it('failed 判死会话 → 原地复活（清绑定、status=created、软移除旧实例行），不再复用坏 DSH 会话', async () => {
+    it('failed 会话不在事务内清绑定（原样返回），改为事务外 reviveFailedSession 探活判定', async () => {
       tx.member.findUnique.mockResolvedValue({
         id: 'mbr_1',
         name: 'x',
@@ -156,24 +156,16 @@ describe('全局会话（P3）', () => {
 
       const result: any = await service().ensureMemberSession('mbr_1');
 
+      // 关键回归：ensure* 不再凭 status=failed 就清 instanceRef（那等于丢上下文）。
+      // 「要不要重建」由 reviveFailedSession 在事务外探活后决定（见 session-lifecycle.spec）。
       expect(result).toMatchObject({
         id: 's_failed',
-        workerId: null,
-        instanceRef: null,
-        status: 'created',
-        reused: false,
-        revived: true,
+        workerId: 'w_vteam-worker-dsh-0',
+        instanceRef: 'dsh-e42ef68ba69dbf57e2589c8b',
       });
       expect(tx.session.create).not.toHaveBeenCalled();
-      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            workerId: 'w_vteam-worker-dsh-0',
-            instanceId: 'dsh-e42ef68ba69dbf57e2589c8b',
-          }),
-          data: expect.objectContaining({ removedAt: expect.any(Date) }),
-        }),
-      );
+      expect(tx.session.update).not.toHaveBeenCalled();
+      expect(tx.taskGroupInstance.updateMany).not.toHaveBeenCalled();
     });
 
     it('成员不存在 → 404；已停用 → 400', async () => {
