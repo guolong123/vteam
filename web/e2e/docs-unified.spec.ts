@@ -13,9 +13,11 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
  * Fixture（自给自足，beforeAll 经 API 创建临时团队/任务 + afterAll 删除临时团队）：
  * - 运行时从 seed 的 `vteam开发团队` 解析 7 个成员，再创建临时团队和任务；不依赖
  *   旧运行留下的 task/session/channel 行。
- * - 任务上 10 行 `t12qa-*`：text 含 XSS payload（category=测试报告）/ md（需求）/
- *   txt（设计）/ pdf（测试用例）/ docx（运维）/ text v1+v2（实现）/ text（其他）/
- *   text 无分类 NULL（删除用）/ ghost 缺失文件 / tsx 原型（设计）。
+ * - 任务上 11 行 `t12qa-*`：text 含 XSS payload（category=测试报告）/ md（需求）/
+ *   txt（设计）/ csv（表格渲染，引号内逗号）/ pdf（测试用例）/ docx（运维）/
+ *   text v1+v2（实现）/ text（其他）/ text 无分类 NULL（删除用）/ ghost 缺失文件 /
+ *   tsx 原型（设计）。file 行 content 空格数各不同（1~7），避开后端按 sha256(content)
+ *   的同 taskId+type 幂等去重。
  * - 分类覆盖七类 + NULL（未分类 chip 用）；`计划` 类由系统自动归档产生，e2e fixture
  *   不预置该类行；file 行 content 纯空白（防 append P2 落盘覆盖 fileRef）；断言
  *   一律按 `t12qa-` 前缀过滤自家行。
@@ -201,6 +203,17 @@ test.beforeAll("T12 fixture seeding（创建临时团队/任务→直写 10 行�
       "text/plain",
       Buffer.from("t12qa design notes\nsecond line\n", "utf8"),
     );
+    // CSV fixture：含引号包裹的逗号字段 + 版本号（验证表格解析不做数字类型推断）。
+    const csvUrl = await uploadSample(
+      api,
+      auth,
+      "t12qa-vulns.csv",
+      "text/csv",
+      Buffer.from(
+        'cve,component,version,severity\n"CVE-2026-18401,with,comma",jackson-core,2.15.2,high\nCVE-2026-88425,jackson-core,2.15.2,medium\n',
+        "utf8",
+      ),
+    );
     const pdfUrl = await uploadSample(
       api,
       auth,
@@ -256,6 +269,16 @@ test.beforeAll("T12 fixture seeding（创建临时团队/任务→直写 10 行�
       fileRef: txtUrl,
       content: "  ",
       category: "设计",
+    });
+    await create({
+      type: "file",
+      title: `${P}vulns-csv`,
+      fileRef: csvUrl,
+      // 7 个空格：避开既有 file fixture 的 1~6 空格 content，否则会被
+      // 后端 sha256(content) 幂等去重（同 taskId+type+sha256 → duplicate 静默跳过），
+      // 把 ghost / demo 行挤掉。
+      content: "       ",
+      category: "测试用例",
     });
     await create({
       type: "file",
@@ -505,7 +528,7 @@ test.describe("prototypes：徽标→tab→深链→团队级聚合（T16）", (
   });
 });
 
-test.describe("edge：txt/csv/json 预览 + pdf 沙箱 + docx 富渲染 + ghost", () => {
+test.describe("edge：txt/json 纯文本 + csv 表格 + pdf 沙箱 + docx 富渲染 + ghost", () => {
   test("txt→<pre> 预览 + 下载兜底", async ({ page }) => {
     await page.goto(TASK_URL);
     await selectRow(page, `${P}design-txt`);
@@ -517,6 +540,40 @@ test.describe("edge：txt/csv/json 预览 + pdf 沙箱 + docx 富渲染 + ghost"
     ).toBeVisible();
     await expect(viewer.locator("pre")).toContainText("t12qa design notes");
     await expect(viewer.getByTestId("docs-file-download")).toBeVisible();
+  });
+
+  test("csv→表格渲染（引号内逗号不拆列 + 版本号原样）", async ({ page }) => {
+    await page.goto(TASK_URL);
+    await selectRow(page, `${P}vulns-csv`);
+    const viewer = page.getByTestId("artifact-viewer");
+    await expect(
+      viewer.locator('[data-testid="docs-content-view"][data-render="csv"]'),
+    ).toBeVisible();
+    const body = viewer.getByTestId("docs-sheet-body");
+    await expect(body.locator("table")).toBeVisible();
+    // 表头 + 两行数据；引号包裹的逗号必须留在同一个单元格，不能拆成多列。
+    await expect(body.locator("tr")).toHaveCount(3);
+    await expect(
+      body.getByRole("cell", { name: "CVE-2026-18401,with,comma" }),
+    ).toHaveCount(1);
+    // 版本号原样展示，不被 SheetJS 猜成数字（2.15.2 / 5.3 这类）。
+    await expect(body.getByRole("cell", { name: "2.15.2" })).toHaveCount(2);
+    await expect(viewer.getByTestId("docs-file-download")).toBeVisible();
+  });
+
+  test("列表/详情徽章展示具体文件类型（CSV 而非「文件」）", async ({ page }) => {
+    await page.goto(TASK_URL);
+    const badge = ownRow(page, `${P}vulns-csv`).getByTestId(
+      "artifact-type-badge",
+    );
+    await expect(badge).toHaveText("CSV");
+    await expect(badge).toHaveAttribute("data-type", "file");
+    await expect(badge).toHaveAttribute("data-file-ext", "csv");
+    // 详情头部徽章同步展示具体类型（当前版本的扩展名）。
+    await selectRow(page, `${P}vulns-csv`);
+    await expect(
+      page.getByTestId("artifact-viewer").getByTestId("artifact-type-badge"),
+    ).toHaveText("CSV");
   });
 
   test("pdf→沙箱 iframe（无 allow-scripts）", async ({ page }) => {
