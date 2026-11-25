@@ -2693,16 +2693,27 @@ version: 0.1.0
   });
   // 每团队一群聊频道：会话列表（GET /conversations）按 team_group 频道聚合，
   // 缺它会出现「团队页能看到团队、会话页却 0 群聊」的割裂。
-  await prisma.chatChannel.upsert({
-    where: { id: 'c_seed_team_group_1' },
-    update: {},
-    create: {
-      id: 'c_seed_team_group_1',
-      type: 'team_group',
-      teamId: seedTeamId,
-      workspaceId: 'ws_default',
-    },
+  //
+  // ⚠️ 幂等键必须是**生成列 team_group_key**（= team_id），不能是固定 id：
+  // `chat_channels` 上有 `uk_channels_team_group_single`（唯一约束 team_group_key），
+  // 而存量库的该团队群聊频道 id 是 `c_0000000001` 之类的历史值。用固定 id 做 upsert
+  // 会「查不到 → 走 create → 撞 team_group_key 唯一约束」⇒ P2002
+  // （2026-11-25 v1.7.1 生产升级即因此失败：迁移成功但 seed 崩，init Job 红）。
+  // 故先按 teamGroupKey 查，命中即复用（不覆盖既有频道），未命中才建。
+  const existingTeamGroup = await prisma.chatChannel.findFirst({
+    where: { teamGroupKey: seedTeamId },
+    select: { id: true },
   });
+  if (!existingTeamGroup) {
+    await prisma.chatChannel.create({
+      data: {
+        id: 'c_seed_team_group_1',
+        type: 'team_group',
+        teamId: seedTeamId,
+        workspaceId: 'ws_default',
+      },
+    });
+  }
   const teamRoleMap: Record<string, string> = {
     a_product: 'product',
     a_project_manager: 'project_manager',

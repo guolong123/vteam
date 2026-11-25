@@ -61,7 +61,13 @@ const mockPrisma = {
   },
   teamMember: { upsert: jest.fn().mockResolvedValue({}) },
   teamUserMember: { upsert: jest.fn().mockResolvedValue({}) },
-  chatChannel: { upsert: jest.fn().mockResolvedValue({}) },
+  // 群聊频道幂等：seed 先按 teamGroupKey 查（生成列唯一约束），未命中才 create。
+  // 用固定 id 做 upsert 会撞 uk_channels_team_group_single（2026-11-25 v1.7.1 事故）。
+  chatChannel: {
+    findFirst: jest.fn().mockResolvedValue(null),
+    create: jest.fn().mockResolvedValue({}),
+    upsert: jest.fn().mockResolvedValue({}),
+  },
   // AgentRole seed（agent-role-entity todo 1）：mock 缺少该 key 时 seed 首次 role upsert 即抛 TypeError。
   agentRole: {
     upsert: jest.fn().mockResolvedValue({}),
@@ -285,6 +291,29 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       agentKey: null,
       policyId: null,
     });
+  });
+
+  it('回归：示例团队群聊频道按 teamGroupKey 查重（不得用固定 id upsert 撞唯一约束）', async () => {
+    // 2026-11-25 v1.7.1 生产升级事故：迁移成功但 seed 崩在
+    //   Invalid `prisma.chatChannel.upsert()`: Unique constraint failed on
+    //   `uk_channels_team_group_single`
+    // 根因：存量库该团队的 team_group 频道 id 是 c_0000000001 之类的历史值，
+    // seed 却用固定 id `c_seed_team_group_1` 做 upsert ⇒ 查不到 → create →
+    // 撞生成列 team_group_key(=team_id) 的唯一约束。
+    // 正确做法：先按 teamGroupKey 查，命中即复用，未命中才 create。
+    await main();
+
+    const calledWithTeamGroupKey =
+      mockPrisma.chatChannel.findFirst.mock.calls.some(
+        (c) => c[0]?.where?.teamGroupKey === 'tm_0000000001',
+      );
+    expect(calledWithTeamGroupKey).toBe(true);
+
+    // 且不得再用固定 id 走 upsert（那是事故写法）
+    const fixedIdUpsert = mockPrisma.chatChannel.upsert.mock.calls.some(
+      (c) => c[0]?.where?.id === 'c_seed_team_group_1',
+    );
+    expect(fixedIdUpsert).toBe(false);
   });
 
   it('已移除默认 ACK 文案（收到，正在处理… 机制已下线）', async () => {
