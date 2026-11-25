@@ -123,6 +123,8 @@ describe('TeamsService', () => {
         create: jest.fn(),
         findFirst: jest.fn(),
         findUnique: jest.fn(),
+        // findAll 的成员可见性过滤（与 /conversations 同口径）
+        findMany: jest.fn().mockResolvedValue([]),
         delete: jest.fn(),
       },
       user: { findUnique: jest.fn() },
@@ -539,6 +541,62 @@ describe('TeamsService', () => {
       expect(result.total).toBe(2);
       expect(result.items).toHaveLength(2);
       expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('普通用户：只返回自己加入的团队（与 /conversations 同口径，修「团队页有、会话页空」）', async () => {
+      // 2026-11-25 线上：默认空间普通用户（guolong/hm）没有任何 team_user_members 行，
+      // 团队列表却返回全部 9 个团队、会话列表 0 条 —— 两处可见性口径不一致。
+      prisma.user.findUnique.mockResolvedValue({ roleId: 'r_member' });
+      (prisma as any).teamUserMember.findMany.mockResolvedValue([
+        { teamId: 'tm_0000000001' },
+        { teamId: 'tm_0000000004' },
+      ]);
+      prisma.$transaction.mockResolvedValue([2, [teamRow(), teamRow()]]);
+
+      await service.findAll({ page: 1, pageSize: 20 } as any, 'u_member');
+
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.id).toEqual({ in: ['tm_0000000001', 'tm_0000000004'] });
+    });
+
+    it('普通用户未加入任何团队 → id in []（列表为空，不泄漏团队存在性）', async () => {
+      prisma.user.findUnique.mockResolvedValue({ roleId: 'r_member' });
+      (prisma as any).teamUserMember.findMany.mockResolvedValue([]);
+      prisma.$transaction.mockResolvedValue([0, []]);
+
+      await service.findAll({ page: 1, pageSize: 20 } as any, 'u_nobody');
+
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.id).toEqual({ in: [] });
+    });
+
+    it('平台管理员（r_admin）→ 不做成员过滤（管理诉求：全空间可见）', async () => {
+      prisma.user.findUnique.mockResolvedValue({ roleId: 'r_admin' });
+      prisma.$transaction.mockResolvedValue([9, [teamRow()]]);
+
+      await service.findAll({ page: 1, pageSize: 20 } as any, 'u_admin');
+
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.id).toBeUndefined();
+    });
+
+    it('未传 userId（内部调用/单测）→ 不做成员过滤（保持旧行为）', async () => {
+      prisma.$transaction.mockResolvedValue([9, [teamRow()]]);
+
+      await service.findAll({ page: 1, pageSize: 20 } as any);
+
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.id).toBeUndefined();
+    });
+
+    it('可见性解析失败 → fail-open 不过滤（不 500）', async () => {
+      prisma.user.findUnique.mockRejectedValue(new Error('db down'));
+      prisma.$transaction.mockResolvedValue([9, [teamRow()]]);
+
+      await service.findAll({ page: 1, pageSize: 20 } as any, 'u_x');
+
+      const where = prisma.team.findMany.mock.calls[0]?.[0]?.where;
+      expect(where?.id).toBeUndefined();
     });
 
     it('pageSize 上限 100', async () => {

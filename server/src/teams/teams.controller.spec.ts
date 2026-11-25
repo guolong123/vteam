@@ -72,10 +72,16 @@ describe('TeamsController', () => {
     expect(result).toEqual({ id: 'tm_0000000001' });
   });
 
-  it('GET /teams 转发 query 到 findAll', async () => {
+  it('GET /teams 转发 query + 调用者 userId 到 findAll（成员可见性过滤依赖它）', async () => {
     service.findAll.mockResolvedValue({ items: [], total: 0 });
-    const result = await controller.findAll({ page: 1, pageSize: 20 } as any);
-    expect(service.findAll).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
+    const result = await controller.findAll(
+      { id: 'u_1' } as any,
+      { page: 1, pageSize: 20 } as any,
+    );
+    expect(service.findAll).toHaveBeenCalledWith(
+      { page: 1, pageSize: 20 },
+      'u_1',
+    );
     expect(result).toEqual({ items: [], total: 0 });
   });
 

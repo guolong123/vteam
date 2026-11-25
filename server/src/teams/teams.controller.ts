@@ -55,9 +55,14 @@ export class TeamsController {
   @Get()
   @UseGuards(PermissionGuard)
   @RequirePermission('teams.view')
-  @ApiOperation({ summary: '团队列表（分页 + name 搜索）' })
-  findAll(@Query() query: QueryTeamsDto) {
-    return this.teamsService.findAll(query);
+  @ApiOperation({
+    summary: '团队列表（分页 + name 搜索；普通用户仅见已加入的团队）',
+  })
+  findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: QueryTeamsDto,
+  ) {
+    return this.teamsService.findAll(query, user.id);
   }
 
   @Get(':id')
