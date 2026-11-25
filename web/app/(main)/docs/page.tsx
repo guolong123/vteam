@@ -47,7 +47,7 @@ import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { ARTIFACT_CATEGORIES } from "@/src/lib/artifact-categories";
 import { docIdFor } from "@/src/lib/artifact-slug";
 import { useDeleteArtifact } from "@/src/features/docs-site/hooks";
-import { FilePreview } from "@/src/features/docs-site/file-preview";
+import { FilePreview, extractExtFromUrl } from "@/src/features/docs-site/file-preview";
 import { DocExportButtons } from "@/src/features/docs-site/doc-export-buttons";
 import { EmptyState, PageWindow } from "@/src/components/ui";
 import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
@@ -146,6 +146,8 @@ interface TeamArtifactItem {
   createdAt: string;
   updatedAt: string;
   fileUrl?: string;
+  /** 后端派生的文件扩展名（FILE-02，doc/file 版本有；老数据可能没有）。 */
+  fileExt?: string;
 }
 
 /** GET /teams/:id/artifacts 分页响应。 */
@@ -187,13 +189,36 @@ interface ArtifactDetail {
 }
 
 /* ------------------------------ 徽章组件 ------------------------------ */
-/** 产出物类型徽章（text 紫 / doc 蓝 / file 绿）。 */
-function ArtifactTypeBadge({ type }: { type: ArtifactApiType }) {
+/**
+ * 徽章展示用的文件扩展名：后端派生的 fileExt 优先，再依次从 fileUrl / 标题提取。
+ * 只接受 1~8 位字母数字，避免把标题里的标点（如「（命令、...」）误当成类型。
+ */
+function artifactFileExt(
+  fileExt: string | undefined,
+  ...refs: Array<string | undefined>
+): string | undefined {
+  const candidates = [fileExt, ...refs.map((ref) => extractExtFromUrl(ref ?? ""))];
+  return candidates
+    .find((ext) => /^[a-z0-9]{1,8}$/.test((ext ?? "").toLowerCase()))
+    ?.toLowerCase();
+}
+
+/** 产出物类型徽章（text 紫 / doc 蓝 / file 绿；文件类直接展示具体扩展名如 CSV/XLSX/MD）。 */
+function ArtifactTypeBadge({
+  type,
+  fileExt,
+}: {
+  type: ArtifactApiType;
+  fileExt?: string;
+}) {
   const t = ARTIFACT_TYPE_THEME[type] ?? ARTIFACT_TYPE_THEME.text;
+  const ext = type === "file" ? artifactFileExt(fileExt) : undefined;
+  const label = ext ? ext.toUpperCase() : ARTIFACT_TYPE_LABEL[type] ?? type;
   return (
     <span
       data-testid="artifact-type-badge"
       data-type={type}
+      data-file-ext={ext}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -208,7 +233,7 @@ function ArtifactTypeBadge({ type }: { type: ArtifactApiType }) {
         fontFamily: fontFamily.body,
       }}
     >
-      {ARTIFACT_TYPE_LABEL[type] ?? type}
+      {label}
     </span>
   );
 }
@@ -305,7 +330,15 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
-          <ArtifactTypeBadge type={type} />
+          <ArtifactTypeBadge
+            type={type}
+            fileExt={artifactFileExt(
+              versionQuery.data?.fileExt,
+              versionQuery.data?.fileUrl,
+              versionQuery.data?.fileName,
+              title,
+            )}
+          />
           <span
             style={{
               fontSize: fontSize.lg,
@@ -580,7 +613,10 @@ function DocTreeRow({ item, docSlug, active, onSelect, onDeleted }: DocTreeRowPr
         }}
       >
         <span style={{ display: "flex", minWidth: 0, alignItems: "center", gap: space.sm }}>
-          <ArtifactTypeBadge type={item.type} />
+          <ArtifactTypeBadge
+            type={item.type}
+            fileExt={artifactFileExt(item.fileExt, item.fileUrl, item.title)}
+          />
           <span
             style={{
               flex: 1,

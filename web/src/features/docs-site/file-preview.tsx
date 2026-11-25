@@ -7,7 +7,8 @@
  * `FilePreview({ version, type, title })`。合站页只 import，不内联。
  * - `type=text` → DocsMarkdown（显式 urlTransform，仅 http/https/mailto）。
  * - `md/markdown` 文件 → 取 fileUrl 文本后 DocsMarkdown；取失败回退下载卡。
- * - `txt/csv/json` → `<pre>`（256KB 截断 + 下载兜底）。
+ * - `txt/json` → `<pre>`（256KB 截断 + 下载兜底）。
+ * - `csv` → 纯字符串解析（引号/逗号/换行）后渲染表格，长数字/版本号不做类型推断。
  * - 图片（沿用 IMAGE_EXTS，含 webp；svg 只许 `<img>`）→ 内嵌 `<img loading="lazy">`。
  * - `pdf` → `<iframe sandbox="allow-same-origin">`（无 allow-scripts；
  *   onError/超时回退下载卡）。
@@ -55,8 +56,8 @@ export type FilePreviewType = "text" | "doc" | "file";
 /** 图片内嵌集合（沿用 doc-explorer FileContentCard 的 IMAGE_EXTS）。 */
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
 
-/** 纯文本预览集合（取文本后 `<pre>` 渲染）。 */
-const TEXT_PREVIEW_EXTS = new Set(["txt", "csv", "json"]);
+/** 纯文本预览集合（取文本后 `<pre>` 渲染）。CSV 单独走表格分支，不在此集合。 */
+const TEXT_PREVIEW_EXTS = new Set(["txt", "json"]);
 
 /** `<pre>` 字符截断上限（256KB）。 */
 const PREVIEW_CHAR_LIMIT = 256 * 1024;
@@ -260,12 +261,60 @@ export function safeUrlTransform(url: string): string | null {
   return null;
 }
 
-/** 从 URL/路径提取小写扩展名（与合站页同语义，minimal duplicate 不重构原页）。 */
-function extractExtFromUrl(ref: string): string {
+/** 从 URL/路径提取小写扩展名（导出供合站页卡片徽章复用，避免两处语义漂移）。 */
+export function extractExtFromUrl(ref: string): string {
   const base = ref.split(/[\\/]/).pop() ?? "";
   const dot = base.lastIndexOf(".");
   if (dot <= 0 || dot === base.length - 1) return "";
   return base.slice(dot + 1).toLowerCase();
+}
+
+/**
+ * CSV 文本 → 二维数组。纯字符串处理，**不做类型推断**：
+ * SheetJS 会把长数字/版本号（如 `20260910`、`5.3`）猜成 number 进而丢精度或变科学计数法，
+ * 而产出物 CSV 里的版本号、CVE 编号必须原样展示。
+ * 支持引号包裹字段、`""` 转义引号、字段内逗号/换行、CRLF/LF；丢弃全空行。
+ */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      quoted = true;
+    } else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i += 1;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== "" || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((cells) => cells.some((cell) => cell !== ""));
 }
 
 /** 字节数 → 人类可读（与合站页同语义）。 */
@@ -784,6 +833,41 @@ interface SheetTable {
 }
 
 /**
+ * 表格预览公共渲染（Excel 与 CSV 共用）：单元格始终是文本节点，无 XSS 面；
+ * 表头用 neutral[50]、正文用 surface（light/dark 自适配），文字色显式给 neutral[800]。
+ */
+function TableGrid({ rows }: { rows: string[][] }) {
+  return (
+    <div data-testid="docs-sheet-body" style={{ overflow: "auto", flex: "1 1 auto", minHeight: 0, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
+      <table style={{ borderCollapse: "collapse", fontSize: fontSize.xs, fontFamily: fontFamily.mono, width: "100%" }}>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} style={{ backgroundColor: rowIndex === 0 ? neutral[50] : surface }}>
+              {row.map((cell, cellIndex) => (
+                <td
+                  key={cellIndex}
+                  style={{
+                    border: `1px solid ${neutral[200]}`,
+                    padding: `2px ${space.sm}px`,
+                    // 父容器颜色在深色下是浅色，落到浅底上就"看不见"（用户实测缺陷）
+                    color: neutral[800],
+                    whiteSpace: "pre-wrap",
+                    maxWidth: 320,
+                    verticalAlign: "top",
+                  }}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
  * Excel 预览：SheetJS 解析 → **由 React 渲染表格**（不用 `sheet_to_html` 的
  * innerHTML 注入，单元格内容始终是文本节点，无 XSS 面）。多 sheet 可切换，
  * 行/列封顶（防超大表卡死浏览器）。
@@ -902,46 +986,111 @@ function SheetFilePreview({
           ))}
         </div>
       )}
-      <div data-testid="docs-sheet-body" style={{ overflow: "auto", flex: "1 1 auto", minHeight: 0, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
-        <table style={{ borderCollapse: "collapse", fontSize: fontSize.xs, fontFamily: fontFamily.mono, width: "100%" }}>
-          <tbody>
-            {sheet.rows.map((row, rowIndex) => (
-              <tr
-                key={rowIndex}
-                style={{
-                  // 表头用 neutral[50]（深色下比 surface 更深，能分层）；
-                  // 正文用 surface —— 两者都是主题变量，light/dark 自适配。
-                  backgroundColor: rowIndex === 0 ? neutral[50] : surface,
-                }}
-              >
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    style={{
-                      border: `1px solid ${neutral[200]}`,
-                      padding: `2px ${space.sm}px`,
-                      // 必须显式给文字色：父容器颜色在深色下是浅色，
-                      // 落到白底/浅底上就"看不见"（2026-11-06 用户截图缺陷）
-                      color: neutral[800],
-                      whiteSpace: "pre-wrap",
-                      maxWidth: 320,
-                      verticalAlign: "top",
-                    }}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TableGrid rows={sheet.rows} />
       {sheet.totalRows > sheet.rows.length && (
         <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
           仅预览前 {sheet.rows.length} 行（共 {sheet.totalRows} 行），完整内容请下载查看。
         </div>
       )}
     </OfficeShell>
+  );
+}
+
+/* ------------------------------ CSV：纯文本解析 → 表格（非 SheetJS） ------------------------------ */
+
+/**
+ * CSV 预览：取文本 → parseCsv → 表格。
+ *
+ * 为什么不用现成的 SheetFilePreview + SheetJS：CSV 里的版本号（`2.15.2`、`5.3`）、
+ * 编号（`20260910`）会被 SheetJS 猜成 number，导致精度丢失/科学计数法，
+ * 用户看到的内容与原始文件不符。这里全程按字符串处理，忠实展示原始单元格文本。
+ *
+ * 行列封顶沿用表格预览常量（200 行 × 40 列），超出给提示 + 下载入口。
+ */
+function CsvFilePreview({
+  version,
+  fileUrl,
+  ext,
+  displayName,
+  title,
+}: {
+  version: FilePreviewVersion;
+  fileUrl: string;
+  ext: string;
+  displayName: string;
+  title: string;
+}) {
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "ok"; rows: string[][]; totalRows: number }
+    | { status: "error" }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: "loading" });
+    fetch(fileUrl)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
+      })
+      .then((raw) => {
+        if (cancelled) return;
+        // 去掉 UTF-8 BOM，否则表头第一格会带一个不可见字符。
+        const allRows = parseCsv(raw.replace(/^\uFEFF/, ""));
+        setState({
+          status: "ok",
+          rows: allRows
+            .slice(0, SHEET_MAX_ROWS)
+            .map((row) => row.slice(0, SHEET_MAX_COLS)),
+          totalRows: allRows.length,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fileUrl]);
+
+  if (state.status === "error") {
+    return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
+  }
+  if (state.status === "loading") {
+    return (
+      <div data-testid="docs-content-view" data-render="csv" style={{ fontSize: fontSize.md, color: neutral[400], ...baseFont }}>
+        加载中…
+      </div>
+    );
+  }
+  if (state.rows.length === 0) {
+    // 空 CSV（无有效行）→ 下载卡，至少给出原文件入口。
+    return <DownloadCard version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
+  }
+  return (
+    <div
+      data-testid="docs-content-view"
+      data-render="csv"
+      style={{ display: "flex", flexDirection: "column", gap: space.sm, height: "100%", minHeight: 0, ...baseFont }}
+    >
+      <a
+        data-testid="docs-file-download"
+        href={fileUrl}
+        {...(fileUrl.startsWith("/uploads/") ? { download: displayName || true } : {})}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ alignSelf: "flex-start", color: "#0D9488", fontSize: fontSize.sm, fontWeight: 500, textDecoration: "none", fontFamily: fontFamily.body }}
+      >
+        ↓ 下载{ext ? ` ${ext.toUpperCase()}` : ""}全文
+      </a>
+      <TableGrid rows={state.rows} />
+      {state.totalRows > state.rows.length && (
+        <span style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+          仅预览前 {state.rows.length} 行（共 {state.totalRows} 行），完整内容请下载查看。
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -1512,6 +1661,19 @@ export function FilePreview({
 
   if (ext === "md" || ext === "markdown") {
     return <MdFilePreview version={version} fileUrl={fileUrl} ext={ext} displayName={displayName} title={title} />;
+  }
+
+  // CSV 走表格（在纯文本分支之前）：不丢引号内的逗号，也不做数字类型推断。
+  if (ext === "csv") {
+    return (
+      <CsvFilePreview
+        version={version}
+        fileUrl={fileUrl}
+        ext={ext}
+        displayName={displayName}
+        title={title}
+      />
+    );
   }
 
   if (TEXT_PREVIEW_EXTS.has(ext)) {
