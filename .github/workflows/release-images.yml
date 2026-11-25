@@ -194,9 +194,15 @@ jobs:
           # 只推 blob、不打 tag：单架构镜像不进 tag 列表，最终只留多架构 <version>
           outputs: type=image,name=${{ env.IMAGE_NAMESPACE }}/vteam-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
+          # 海外 runner 走官方源：阿里云 apt 从 GitHub Actions 拉 deb 包实测极慢
+          # （2026-11-25 v1.7.2：worker 两架构卡在 mirrors.aliyun.com 17+ 分钟无进展，
+          #  最终超时取消）。Dockerfile 默认值面向国内构建，CI 显式覆盖为空/官方。
+          # ⚠️ 注释不能写进 build-args 块内——那会被当成参数行传给 docker。
           build-args: |
             NODE_IMAGE=docker.io/library/node:${{ matrix.node_tag }}
             CODE_VERSION=${{ needs.meta.outputs.version }}
+            APT_MIRROR=
+            NPM_REGISTRY=https://registry.npmjs.org
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
 

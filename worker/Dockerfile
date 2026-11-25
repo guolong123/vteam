@@ -9,23 +9,42 @@
 # 基础镜像可覆盖：CI 在拉不到内网镜像源时传 --build-arg NODE_IMAGE=docker.io/library/node:22-bookworm-slim
 ARG NODE_IMAGE=docker.ketaops.cc/library/node:22-bookworm-slim
 
+# 包源可覆盖（**构建位置决定该用哪个源**）：
+#   · 国内构建（内网/本地）：默认阿里云 apt + npmmirror npm —— 快；
+#   · 海外 CI runner（GitHub Actions）：必须传空串走官方源 —— 阿里云从海外拉
+#     deb 包实测极慢（2026-11-25 v1.7.2 发布：worker 两个架构卡在
+#     `mirrors.aliyun.com` 下载 120MB 依赖 17+ 分钟无进展，最终超时取消）。
+# 用法：--build-arg APT_MIRROR= --build-arg NPM_REGISTRY=https://registry.npmjs.org
+ARG APT_MIRROR=https://mirrors.aliyun.com
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
 # ---- 阶段 1：build ----
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm config set registry https://registry.npmmirror.com && npm ci
+ARG NPM_REGISTRY
+RUN npm config set registry ${NPM_REGISTRY} && npm ci
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # ---- 阶段 2：runner ----
 FROM ${NODE_IMAGE}
-# 国内源加速（apt：阿里云镜像）
+# ARG 作用域按阶段隔离：runner 阶段必须重新声明才能用（否则为空串 → 静默走官方源）。
+ARG APT_MIRROR
+ARG NPM_REGISTRY
+# 包源：APT_MIRROR 为空则保持官方源（海外 CI runner 用），非空则替换为镜像源。
+# 注意 `set -e` 与 `|| true` 的组合：debian.sources / sources.list 只存在其一。
 RUN apt-get update && apt-get install -y ca-certificates && \
-    sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
-# 国内源加速（npm）
-RUN npm config set registry https://registry.npmmirror.com
+    if [ -n "${APT_MIRROR}" ]; then \
+      sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      echo "apt mirror -> ${APT_MIRROR}"; \
+    else \
+      echo "apt mirror -> 官方源（未替换）"; \
+    fi
+# npm 源（同上：空则官方）
+RUN npm config set registry ${NPM_REGISTRY}
 # opencode CLI 全局安装（serve spawn 依赖，需在 PATH；npm 全局 bin 默认进 PATH）
 # **锁版本**（计划 T1 / D2）：v1 的 npm 包 `opencode-ai` 已冻结在 1.19.3（不再发版），
 # 永远到不了 v2；v2 换了包名 → `@opencode/cli`。不锁版本会让"镜像里跑的是哪一版"不可知，
