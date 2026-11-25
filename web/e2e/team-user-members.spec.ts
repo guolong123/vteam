@@ -61,8 +61,12 @@ test.describe("team-user-members 团队用户成员管理", () => {
       // Agent 成员区不受影响
       await expect(page.getByTestId("member-row").first()).toBeVisible();
 
-      // 添加用户成员
-      await page.getByTestId("user-member-userid-input").fill(targetUserId);
+      // 添加用户成员：下拉列出**当前空间**的用户（不再手输 ID）
+      const userSelect = page.getByTestId("user-member-userid-select");
+      await expect(userSelect).toBeVisible();
+      // 候选里应包含目标用户（option value = userId）
+      await expect(userSelect.locator(`option[value="${targetUserId}"]`)).toHaveCount(1);
+      await userSelect.selectOption(targetUserId);
       await page.getByTestId("user-member-add-confirm").click();
       const row = page.getByTestId("user-member-row").filter({ hasText: targetUserId });
       await expect(row).toBeVisible();
@@ -70,11 +74,8 @@ test.describe("team-user-members 团队用户成员管理", () => {
       await expect(page.getByTestId("user-member-error")).toHaveCount(0);
       expect(page.url()).toContain(`/teams/${teamId}`);
 
-      // 重复添加 → 行内错误，不跳转
-      await page.getByTestId("user-member-userid-input").fill(targetUserId);
-      await page.getByTestId("user-member-add-confirm").click();
-      await expect(page.getByTestId("user-member-error")).toBeVisible();
-      expect(page.url()).toContain(`/teams/${teamId}`);
+      // 已加入的用户不再出现在候选里（下拉自动排除，避免「选了必报错」）
+      await expect(userSelect.locator(`option[value="${targetUserId}"]`)).toHaveCount(0);
 
       // 移除用户成员（owner 创建者行保留，故列表非空）
       await row.getByTestId("user-member-remove").click();
