@@ -49,9 +49,7 @@ export class ConversationsService {
     const memberships = await (this.prisma as any).teamUserMember.findMany({
       where: {
         userId,
-        ...(workspaceId
-          ? { team: { workspaceId } }
-          : {}),
+        ...(workspaceId ? { team: { workspaceId } } : {}),
       },
       select: { teamId: true },
     });
