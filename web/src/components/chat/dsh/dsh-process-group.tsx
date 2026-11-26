@@ -104,7 +104,7 @@ export function DshProcessGroup({
               padding: "4px 0 4px 22px",
               display: "flex",
               flexDirection: "column",
-              gap: 8,
+              gap: 2,
               minWidth: 0,
             }}
           >

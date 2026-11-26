@@ -192,7 +192,7 @@ test.beforeAll("T12 fixture seeding（创建临时团队/任务→直写 10 行�
     const mdUrl = await uploadSample(
       api,
       auth,
-      "t12qa-req.md",
+      "t12qa-需求文档.md",
       "text/markdown",
       Buffer.from("# t12qa 需求文档\n\nT12 统一文档站 e2e 需求 fixture。\n", "utf8"),
     );

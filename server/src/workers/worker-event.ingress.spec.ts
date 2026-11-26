@@ -44,6 +44,7 @@ describe('WorkerEventIngress', () => {
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     message: {
       findFirst: jest.Mock;
+      findUnique: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
@@ -76,6 +77,7 @@ describe('WorkerEventIngress', () => {
       },
       message: {
         findFirst: jest.fn().mockResolvedValue(null),
+        findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -466,9 +468,10 @@ describe('WorkerEventIngress', () => {
           status: MESSAGE_STATUS.processing,
           senderId: 'a_1',
         },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true, content: true },
+        orderBy: { id: 'desc' },
+        select: { id: true },
       });
+      expect(prisma.message.findUnique).not.toHaveBeenCalled();
       // 全量 parts（reasoning/tool 保留）落库为 processing 消息
       expect(prisma.message.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1101,7 +1104,13 @@ describe('WorkerEventIngress', () => {
       );
       expect(realtime.emit).toHaveBeenCalledWith(
         EVENT_TYPES.MESSAGE_PART_DELTA,
-        expect.anything(),
+        {
+          message: expect.objectContaining({
+            id: 'm_0000000051',
+            senderInstanceId: 'tmm_1',
+          }),
+          delta: [{ type: 'text', text: '处理中', synthetic: false }],
+        },
         { type: 'channel', id: 'c_tpriv' },
       );
     });
@@ -1170,13 +1179,13 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('同一会话两次 delta → 累积更新同一 processing 消息（不新建）', async () => {
+    it('缓存 MISS：先查 processing 主键再取 content，避免大 JSON 参与排序', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: 'c_dm',
         type: 'private',
       });
-      prisma.message.findFirst.mockResolvedValueOnce({
-        id: 'm_stream',
+      prisma.message.findFirst.mockResolvedValueOnce({ id: 'm_stream' });
+      prisma.message.findUnique.mockResolvedValueOnce({
         content: {
           text: '你好',
           parts: [{ type: 'text', text: '你好', synthetic: false }],
@@ -1212,6 +1221,16 @@ describe('WorkerEventIngress', () => {
       ).toBe(true);
 
       expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(prisma.message.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: { id: 'desc' },
+          select: { id: true },
+        }),
+      );
+      expect(prisma.message.findUnique).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        select: { content: true },
+      });
       // 累积更新：parts 追加 + text 重新拼接
       expect(prisma.message.update).toHaveBeenCalledWith({
         where: { id: 'm_stream' },
@@ -1691,7 +1710,7 @@ describe('WorkerEventIngress', () => {
         createdAt: Date;
         mentions: null;
       };
-      // 迷你内存 DB：写全部真实落到 rows，findFirst 从 rows 回读（复现 MISS 语义）
+      // 迷你内存 DB：findFirst 只返回主键，findUnique 再按主键读 content。
       const rows = new Map<string, Row>();
       let seq = 0;
       idGen.nextId.mockImplementation(async () => `m_evict_${++seq}`);
@@ -1705,8 +1724,12 @@ describe('WorkerEventIngress', () => {
               r.status === w.status &&
               (!w.senderId || r.senderId === w.senderId),
           )
-          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
-        return hit ? { id: hit.id, content: hit.content } : null;
+          .sort((a, b) => b.id.localeCompare(a.id))[0];
+        return hit ? { id: hit.id } : null;
+      });
+      prisma.message.findUnique.mockImplementation(async (args: any) => {
+        const hit = rows.get(args?.where?.id);
+        return hit ? { content: hit.content } : null;
       });
       prisma.message.create.mockImplementation(async (args: any) => {
         const d = args.data;
@@ -1884,8 +1907,8 @@ describe('WorkerEventIngress', () => {
         tool: 'read',
         state: { status: 'completed', input: { path: 'a.ts' }, output: '内容' },
       };
-      prisma.message.findFirst.mockResolvedValueOnce({
-        id: 'm_stream',
+      prisma.message.findFirst.mockResolvedValueOnce({ id: 'm_stream' });
+      prisma.message.findUnique.mockResolvedValueOnce({
         content: { text: '', parts: [runningPart] },
       });
       prisma.message.update.mockResolvedValue({
@@ -1941,8 +1964,8 @@ describe('WorkerEventIngress', () => {
         tool: 'read',
         state: { status: 'completed', input: {}, output: 'ok' },
       };
-      prisma.message.findFirst.mockResolvedValueOnce({
-        id: 'm_stream',
+      prisma.message.findFirst.mockResolvedValueOnce({ id: 'm_stream' });
+      prisma.message.findUnique.mockResolvedValueOnce({
         content: { text: '你好', parts: [textV1] },
       });
       prisma.message.update.mockResolvedValue({
@@ -1994,8 +2017,8 @@ describe('WorkerEventIngress', () => {
         text: 'hello',
         synthetic: false,
       };
-      prisma.message.findFirst.mockResolvedValueOnce({
-        id: 'm_stream',
+      prisma.message.findFirst.mockResolvedValueOnce({ id: 'm_stream' });
+      prisma.message.findUnique.mockResolvedValueOnce({
         content: { text: 'hello world', parts: [fullPart] },
       });
       prisma.message.update.mockResolvedValue({
@@ -2040,8 +2063,8 @@ describe('WorkerEventIngress', () => {
         text: 'hello world',
         synthetic: false,
       };
-      prisma.message.findFirst.mockResolvedValueOnce({
-        id: 'm_stream',
+      prisma.message.findFirst.mockResolvedValueOnce({ id: 'm_stream' });
+      prisma.message.findUnique.mockResolvedValueOnce({
         content: { text: 'hello', parts: [v1] },
       });
       prisma.message.update.mockResolvedValue({
@@ -2078,8 +2101,8 @@ describe('WorkerEventIngress', () => {
       });
       const oldPart = { type: 'text', text: '你好', synthetic: false };
       const newPart = { type: 'text', text: '世界', synthetic: false };
-      prisma.message.findFirst.mockResolvedValueOnce({
-        id: 'm_stream',
+      prisma.message.findFirst.mockResolvedValueOnce({ id: 'm_stream' });
+      prisma.message.findUnique.mockResolvedValueOnce({
         content: { text: '你好', parts: [oldPart] },
       });
       prisma.message.update.mockResolvedValue({
@@ -2124,9 +2147,10 @@ describe('WorkerEventIngress', () => {
         // 同步快照此刻的可见性，再让出事件循环逼出真实并发
         const visible = created;
         await new Promise((r) => setImmediate(r));
-        return visible
-          ? { id: 'm_race', content: { text: '', parts: [] } }
-          : null;
+        return visible ? { id: 'm_race' } : null;
+      });
+      prisma.message.findUnique.mockResolvedValue({
+        content: { text: '', parts: [] },
       });
       prisma.message.create.mockImplementation(async () => {
         created = true;

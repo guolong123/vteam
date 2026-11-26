@@ -1611,6 +1611,35 @@ describe('ChatService', () => {
       expect(items[0].status).toBe('sent');
     });
 
+    it('会话末尾是 user 时，前面的历史 assistant 不误标 processing', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      const [u, a1, a2] = serveMessages();
+      workerClient.getMessages.mockResolvedValue([
+        u,
+        a1,
+        a2,
+        {
+          ...u,
+          info: { ...u.info, id: 'msg_user_2', time: { created: 4000 } },
+          parts: [{ type: 'text', text: '后续用户指令', synthetic: false }],
+        },
+      ]);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+      const items = result.items as Array<Record<string, any>>;
+
+      expect(items.map((m) => m.id)).toEqual(['msg_asst_1', 'msg_asst_2']);
+      expect(items.map((m) => m.status)).toEqual(['sent', 'sent']);
+    });
+
     it('会话未绑定（workerId/instanceRef 空，created 态）→ 回退平台表 source=db，不调 worker', async () => {
       allowAccess(privateChannel());
       (prisma.session as any).findMany = jest
@@ -1723,24 +1752,315 @@ describe('ChatService', () => {
       expect(result.source).toBe('session');
     });
 
+    it('群聊 + teamMemberId → 合并成员私聊里的 user 派发消息（session user 伪影仍排除）', async () => {
+      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession({ agentId: 'a_developer' })]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: {
+            id: 'msg_user_prompt',
+            role: 'user',
+            time: { created: 1500 },
+          },
+          parts: [
+            {
+              type: 'text',
+              text: 'worker 里的注入 user 伪影',
+              synthetic: false,
+            },
+          ],
+        },
+        {
+          info: {
+            id: 'msg_asst_live',
+            role: 'assistant',
+            time: { created: 2000 },
+          },
+          parts: [{ type: 'text', text: '成员正在处理', synthetic: false }],
+        },
+      ]);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: 'c_private_anchor',
+      });
+      const privateAnchor = messageRow({
+        id: 'm_private_anchor',
+        channelId: 'c_private_anchor',
+        senderType: SENDER_TYPE.user,
+        senderId: 'a_project_manager',
+        content: { text: '主 Agent 派给成员的任务', parts: [] },
+        mentions: null,
+        createdAt: new Date(1400),
+      });
+      prisma.message.findMany
+        .mockResolvedValueOnce([{ id: privateAnchor.id }])
+        .mockResolvedValueOnce([privateAnchor]);
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        teamMemberId: 'tmm_9',
+      });
+
+      const items = result.items as Array<Record<string, any>>;
+      expect(items.map((item) => item.id)).toEqual([
+        privateAnchor.id,
+        'msg_asst_live',
+      ]);
+      expect(items[0]).toMatchObject({
+        channelId: 'c_private_anchor',
+        senderType: 'user',
+        senderId: 'a_project_manager',
+        content: { text: '主 Agent 派给成员的任务' },
+      });
+      expect(items.map((item) => item.id)).not.toContain('msg_user_prompt');
+      const pageCall = prisma.message.findMany.mock.calls
+        .map((call: any[]) => call[0])
+        .find((call: any) => call?.select?.id === true);
+      expect(pageCall?.where?.OR).toEqual(
+        expect.arrayContaining([{ channelId: 'c_private_anchor' }]),
+      );
+    });
+
+    it('群聊成员视角：group_post / notify_agent 工具调用保留，重复群投影按 messageId 移除', async () => {
+      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession({ agentId: 'a_project_manager' })]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: {
+            id: 'msg_group_post_turn',
+            role: 'assistant',
+            time: { created: 2000 },
+          },
+          parts: [
+            {
+              type: 'tool',
+              tool: 'mcp__vteam__group_post',
+              state: {
+                status: 'completed',
+                input: JSON.stringify({ content: '群聊发布内容' }),
+                output: JSON.stringify({
+                  messageId: 'm_group_post_projection',
+                  channelId,
+                }),
+              },
+            },
+            {
+              type: 'tool',
+              tool: 'mcp__vteam__notify_agent',
+              state: {
+                status: 'completed',
+                input: JSON.stringify({ content: '完工回执' }),
+                output: JSON.stringify({
+                  messageId: 'm_notify_projection',
+                  channelId,
+                }),
+              },
+            },
+            {
+              type: 'tool',
+              tool: 'execute',
+              state: {
+                status: 'completed',
+                input: 'const lines = [ ...truncated... ];',
+                output: JSON.stringify({
+                  messageId: 'm_exec_group_projection',
+                  channelId,
+                  attachment: null,
+                }),
+              },
+            },
+          ],
+        },
+      ]);
+      const projection = messageRow({
+        id: 'm_group_post_projection',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_project_manager',
+        senderInstanceId: 'tmm_9',
+        content: { text: '群聊发布内容', parts: [] },
+        createdAt: new Date(2001),
+      });
+      const notifyProjection = messageRow({
+        id: 'm_notify_projection',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_project_manager',
+        senderInstanceId: 'tmm_9',
+        content: { text: '完工回执', parts: [] },
+        createdAt: new Date(2002),
+      });
+      const execProjection = messageRow({
+        id: 'm_exec_group_projection',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_project_manager',
+        senderInstanceId: 'tmm_9',
+        content: { text: '长 Code Mode 群聊发布内容', parts: [] },
+        createdAt: new Date(2003),
+      });
+      const normal = messageRow({
+        id: 'm_normal_group_message',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_project_manager',
+        senderInstanceId: 'tmm_9',
+        content: { text: '普通群聊消息', parts: [] },
+        createdAt: new Date(3000),
+      });
+      prisma.message.findMany
+        .mockResolvedValueOnce([
+          { id: normal.id },
+          { id: execProjection.id },
+          { id: notifyProjection.id },
+          { id: projection.id },
+        ])
+        .mockResolvedValueOnce([
+          normal,
+          execProjection,
+          notifyProjection,
+          projection,
+        ]);
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        teamMemberId: 'tmm_9',
+      });
+
+      const items = result.items as Array<Record<string, any>>;
+      expect(items.map((item) => item.id)).toEqual([
+        'msg_group_post_turn',
+        normal.id,
+      ]);
+      // 工具调用本身完整保留，移除的只是它在群聊表里的重复投影。
+      expect(items[0].content.parts).toEqual([
+        expect.objectContaining({
+          type: 'tool',
+          tool: 'mcp__vteam__group_post',
+        }),
+        expect.objectContaining({
+          type: 'tool',
+          tool: 'mcp__vteam__notify_agent',
+        }),
+        expect.objectContaining({
+          type: 'tool',
+          tool: 'execute',
+        }),
+      ]);
+    });
+
+    it('群聊成员视角：群聊 user 的私聊镜像不重复展示', async () => {
+      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: 'c_private_anchor',
+      });
+      const groupUser = messageRow({
+        id: 'm_group_user',
+        senderType: SENDER_TYPE.user,
+        senderId: userId,
+        content: { text: '@开发者 请处理', parts: [] },
+        mentions: [
+          { type: 'agent', instanceId: 'tmm_9', agentId: 'a_developer' },
+        ],
+        createdAt: new Date(1000),
+      });
+      const mirroredUser = messageRow({
+        ...groupUser,
+        id: 'm_private_mirror',
+        channelId: 'c_private_anchor',
+        createdAt: new Date(1005),
+      });
+      prisma.message.findMany
+        .mockResolvedValueOnce([{ id: mirroredUser.id }, { id: groupUser.id }])
+        .mockResolvedValueOnce([mirroredUser, groupUser]);
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        teamMemberId: 'tmm_9',
+      });
+
+      expect(
+        (result.items as Array<Record<string, any>>).map((item) => item.id),
+      ).toEqual([groupUser.id]);
+    });
+
     it('群聊 + teamMemberId 降级回退 → 只取该席位消息（不得混入全群消息）', async () => {
       allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
       (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: 'c_private_anchor',
+      });
       prisma.message.findMany.mockResolvedValue([]);
 
       await service.getSessionHistory(channelId, userId, {
         teamMemberId: 'tmm_9',
       });
 
-      // 关键：降级路径的分页查询必须限定「该席位 + 全部 user 消息」——
+      // 关键：降级路径的分页查询必须限定「该席位 + 群聊 user + 成员私聊 user 锚点」——
       //   - 不加席位过滤 → 显示整群所有人的发言（bug）
       //   - 只按席位过滤 → user 消息（关键时间锚点）被滤掉（bug）
       const calls = prisma.message.findMany.mock.calls.map((c: any[]) => c[0]);
       const pageCall = calls.find((c: any) => c?.select?.id === true);
-      expect(pageCall?.where).toMatchObject({
-        channelId,
-        OR: [{ senderInstanceId: 'tmm_9' }, { senderType: 'user' }],
+      expect(pageCall?.where?.OR).toEqual(
+        expect.arrayContaining([
+          {
+            channelId,
+            OR: [{ senderInstanceId: 'tmm_9' }, { senderType: 'user' }],
+          },
+          { channelId: 'c_private_anchor' },
+        ]),
+      );
+    });
+
+    it('群聊成员视角无私聊频道时，仍按 @提及 过滤 user（不得漏入全群发言）', async () => {
+      allowAccess(channelRow({ type: CHANNEL_TYPE.team_group }));
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+      const targetAgent = messageRow({
+        id: 'm_target_agent',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_developer',
+        senderInstanceId: 'tmm_9',
+        content: { text: '我的回复', parts: [] },
+        createdAt: new Date(3000),
       });
+      const mentionedUser = messageRow({
+        id: 'm_mentioned_user',
+        senderType: SENDER_TYPE.user,
+        content: { text: '@开发者 请处理', parts: [] },
+        mentions: [
+          { type: 'agent', instanceId: 'tmm_9', agentId: 'a_developer' },
+        ],
+        createdAt: new Date(1000),
+      });
+      const unrelatedUser = messageRow({
+        id: 'm_unrelated_user',
+        senderType: SENDER_TYPE.user,
+        content: { text: '跟该成员无关的群聊发言', parts: [] },
+        mentions: [],
+        createdAt: new Date(2000),
+      });
+      prisma.message.findMany
+        .mockResolvedValueOnce([
+          { id: targetAgent.id },
+          { id: unrelatedUser.id },
+          { id: mentionedUser.id },
+        ])
+        .mockResolvedValueOnce([targetAgent, unrelatedUser, mentionedUser]);
+
+      const result = await service.getSessionHistory(channelId, userId, {
+        teamMemberId: 'tmm_9',
+      });
+
+      expect(
+        (result.items as Array<Record<string, any>>).map((item) => item.id),
+      ).toEqual([mentionedUser.id, targetAgent.id]);
     });
 
     it('群聊 + teamMemberId 但该席位无会话 → 回退平台表（不报错）', async () => {
@@ -2035,6 +2355,51 @@ describe('ChatService', () => {
         'msg_asst_early',
         'm_0000000002',
       ]);
+    });
+
+    it('DB processing 聚合行与 serve 当前 assistant 同轮 → 只保留 DB 行（即使 serve 创建更早）', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: {
+            id: 'msg_asst_live',
+            role: 'assistant',
+            // assistant 消息在首条 delta 前创建，早于 DB 聚合行的 createdAt。
+            time: { created: 2000 },
+          },
+          parts: [{ type: 'text', text: '同一轮流式正文', synthetic: false }],
+        },
+      ]);
+      prisma.message.findMany.mockResolvedValue([
+        messageRow({
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { text: '同一轮流式正文', parts: [] },
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date(2500),
+        }),
+        messageRow({
+          id: 'm_0000000001',
+          senderType: SENDER_TYPE.user,
+          senderId: userId,
+          content: { text: '提问', parts: [] },
+          createdAt: new Date(1000),
+        }),
+      ]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      const items = result.items as Array<Record<string, any>>;
+      expect(items.map((m) => m.id)).toEqual(['m_0000000001', 'm_0000000002']);
+      expect(items[1].status).toBe(MESSAGE_STATUS.processing);
     });
 
     it('DB 无 processing 行 → 增补逻辑不变（晚于 DB 行的 serve agent 增补保留）', async () => {

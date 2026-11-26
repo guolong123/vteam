@@ -71,6 +71,8 @@ export interface DshMessageProps {
   isMentionMe?: boolean;
   /** 与上一条为同发送者连续消息时省略身份栏。 */
   grouped?: boolean;
+  /** 成员历史聚合过程：渲染在身份栏之后、正文之前。 */
+  leadingProcess?: React.ReactNode;
   /** 头像缩写（由调用方从已解析人名生成）。 */
   initials?: string;
   style?: CSSProperties;
@@ -94,6 +96,7 @@ export function DshMessage({
   attachments,
   isMentionMe,
   grouped = false,
+  leadingProcess,
   initials,
   style,
   className,
@@ -139,7 +142,7 @@ export function DshMessage({
     );
   }
 
-  if (blocks.length === 0 && !hasAttachments) return null;
+  if (blocks.length === 0 && !hasAttachments && !leadingProcess) return null;
 
   return (
     <div
@@ -150,6 +153,7 @@ export function DshMessage({
     >
       {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
       <div style={secondaryRows}>
+        {leadingProcess}
         {renderRuns(blocks, streaming, labels)}
         {hasAttachments ? (
           <ChatBubble

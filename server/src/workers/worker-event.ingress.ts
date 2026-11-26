@@ -295,6 +295,7 @@ type MessageRow = {
   channelId: string;
   senderType: string;
   senderId: string | null;
+  senderInstanceId?: string | null;
   content: Prisma.JsonValue;
   mentions: Prisma.JsonValue | null;
   status: string;
@@ -1039,8 +1040,9 @@ export class WorkerEventIngress {
       );
       return true;
     }
-    // 落库段（findFirst → update/create）按定位身份串行化：worker 不 await 连发 delta
-    // 时，并发的 findFirst(无行)→create 会各建一条 processing 行（重复独白消息）。
+    // 落库段（两段式定位：先查 processing 主键，再按主键读 content → update/create）
+    // 按定位身份串行化：worker 不 await 连发 delta 时，并发的查无行→create 会各建一条
+    // processing 行（重复独白消息）。
     const streamKey = `${channelId}|${agentId ?? ''}`;
     const row = await this.runPartDeltaExclusive(streamKey, async () => {
       const cached = this.assemblingMessages.get(streamKey);
@@ -1093,16 +1095,30 @@ export class WorkerEventIngress {
         );
         return updated;
       }
-      const hasExisting = await this.prisma.message.findFirst({
+      // 先只定位最新 processing 行的主键，再按主键取 content。
+      // 不能 findFirst({ select: { id, content }, orderBy: createdAt })：长会话的
+      // content.parts 可达数十 MB，MySQL 会把大 JSON 带入排序缓冲区并报 1038
+      // Out of sort memory，导致每个 delta 都失败、页面完全收不到流式广播。
+      const existingId = await this.prisma.message.findFirst({
         where: {
           channelId,
           senderType: SENDER_TYPE.agent,
           status: MESSAGE_STATUS.processing,
           ...(agentId ? { senderId: agentId } : {}),
         },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true, content: true },
+        orderBy: { id: 'desc' },
+        select: { id: true },
       });
+      const existingContent = existingId
+        ? await this.prisma.message.findUnique({
+            where: { id: existingId.id },
+            select: { content: true },
+          })
+        : null;
+      const hasExisting =
+        existingId && existingContent
+          ? { id: existingId.id, content: existingContent.content }
+          : null;
       // MISS 分支**不节流、必落库**：它每进程每条流只走一次（重建缓存项 + 广播需要
       // 一行完整 DB 行），且它是「缓存丢失后以 DB 为权威重新定位」的唯一入口——
       // 这里必须写，才能保证刚回读的累积内容与本次增量一起成为新的权威。
@@ -2118,6 +2134,7 @@ export class WorkerEventIngress {
       channelId: row.channelId,
       senderType: row.senderType,
       senderId: row.senderId,
+      senderInstanceId: row.senderInstanceId,
       content: row.content,
       mentions: row.mentions ?? [],
       status: row.status,

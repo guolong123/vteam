@@ -165,6 +165,56 @@ describe('mergePartsById 流式单调守卫（monotonicText）', () => {
   });
 });
 
+describe('DSH live-chunk 与 committed assistant 文本去重', () => {
+  const liveText = (body: string) => ({
+    id: 'dsh-session:16:2:0',
+    type: 'text',
+    text: body,
+  });
+  const committedText = (body: string) => ({
+    id: 'msg_assistant:text',
+    messageID: 'msg_assistant',
+    type: 'text',
+    text: body,
+  });
+
+  it('live-chunk 后到达同文 committed part → 只保留 committed，不拼双正文', () => {
+    const merged = mergePartsById(
+      [liveText('GROUP-POSTED-7392')],
+      [committedText('GROUP-POSTED-7392')],
+      { monotonicText: true },
+    );
+    expect(merged).toEqual([committedText('GROUP-POSTED-7392')]);
+  });
+
+  it('live-chunk 是前缀、committed 是全文 → 用 committed 原位替换 live part', () => {
+    const merged = mergePartsById(
+      [liveText('GROUP')],
+      [committedText('GROUP-POSTED-7392')],
+      { monotonicText: true },
+    );
+    expect(merged).toEqual([committedText('GROUP-POSTED-7392')]);
+  });
+
+  it('committed 已存在时再收到同文 live-chunk → 忽略 live part', () => {
+    const merged = mergePartsById(
+      [committedText('GROUP-POSTED-7392')],
+      [liveText('GROUP-POSTED-7392')],
+      { monotonicText: true },
+    );
+    expect(merged).toEqual([committedText('GROUP-POSTED-7392')]);
+  });
+
+  it('不同内容的合法 text part 不去重', () => {
+    const first = committedText('第一段');
+    const second = { ...committedText('第二段'), id: 'msg_assistant:text:1' };
+    expect(mergePartsById([first], [second], { monotonicText: true })).toEqual([
+      first,
+      second,
+    ]);
+  });
+});
+
 /**
  * 存储形态边界（opencode v2 适配 T20）。
  *

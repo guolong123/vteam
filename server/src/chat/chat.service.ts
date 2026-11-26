@@ -404,6 +404,11 @@ export class ChatService {
       senderInstanceId?: string | null;
       /** 群聊成员视角：user 消息只保留 @该成员 / @all 的（见 userMentionTargetsSeat）。 */
       filterUserByMention?: boolean;
+      /**
+       * 成员视角的私聊上下文频道：该频道全部消息都属于当前成员的完整会话，
+       * 必须与群聊频道的「该席位 + @我 user」行一起合并。
+       */
+      contextChannelIds?: string[];
     },
   ) {
     await this.resolveChannelAccess(channelId, userId);
@@ -416,16 +421,12 @@ export class ChatService {
       ...(opts?.senderInstanceId
         ? { senderInstanceId: opts.senderInstanceId }
         : {}),
+      ...(opts?.contextChannelIds?.length
+        ? { contextChannelIds: opts.contextChannelIds }
+        : {}),
     });
     const allRows = await this.loadMessageRowsInIdOrder(pageIds.ids);
-    const rows =
-      opts?.filterUserByMention && opts.senderInstanceId
-        ? allRows.filter(
-            (r) =>
-              r.senderType !== SENDER_TYPE.user ||
-              this.userMentionTargetsSeat(r.mentions, opts.senderInstanceId!),
-          )
-        : allRows;
+    const rows = this.filterMemberViewRows(allRows, channelId, opts);
     return {
       // ids 为 id 降序（最新优先），反转回升序供前端时间正序渲染
       items: [...rows].reverse().map((row) => this.toMessageDto(row)),
@@ -458,19 +459,31 @@ export class ChatService {
      * 完全看不出任务的起止与上下文。
      */
     senderInstanceId?: string;
+    /** 成员视角额外并入的私聊频道（全部消息都属于该成员）。 */
+    contextChannelIds?: string[];
   }): Promise<{ ids: string[]; hasMore: boolean }> {
+    const primaryScope: Prisma.MessageWhereInput = {
+      channelId: opts.channelId,
+      ...(opts.senderInstanceId
+        ? {
+            OR: [
+              { senderInstanceId: opts.senderInstanceId },
+              { senderType: SENDER_TYPE.user },
+            ],
+          }
+        : {}),
+    };
+    const contextScopes = (opts.contextChannelIds ?? [])
+      .filter((id) => id !== opts.channelId)
+      .map((channelId): Prisma.MessageWhereInput => ({ channelId }));
+    const channelScope: Prisma.MessageWhereInput =
+      contextScopes.length === 0
+        ? primaryScope
+        : { OR: [primaryScope, ...contextScopes] };
     const idRows = await this.prisma.message.findMany({
       where: {
-        channelId: opts.channelId,
+        ...channelScope,
         ...(opts.beforeId ? { id: { lt: opts.beforeId } } : {}),
-        ...(opts.senderInstanceId
-          ? {
-              OR: [
-                { senderInstanceId: opts.senderInstanceId },
-                { senderType: SENDER_TYPE.user },
-              ],
-            }
-          : {}),
       },
       orderBy: { id: 'desc' },
       take: opts.take,
@@ -506,8 +519,8 @@ export class ChatService {
    * worker `GET /sessions/:id/messages` 拉会话消息，转换后与 DB 合并返回
    * `{items, source:'session'}`（items 时间正序，无游标——前端游标参数忽略）；
    * 未绑定 / worker 不可用 → 回退平台 messages 表（`{items, nextCursor, source:'db'}`，
-   * 复用 findMessages 首页语义）。群聊（team_group）不支持 → 400
-   * SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）。
+   * 复用 findMessages 首页语义）。群聊（team_group）仅支持按 teamMemberId 查看
+   * 单个成员的完整会话；缺省仍 400 SESSION_HISTORY_NOT_SUPPORTED。
    */
   async getSessionHistory(
     channelId: string,
@@ -532,6 +545,7 @@ export class ChatService {
     }
     const limit = this.normalizeLimit(query.limit);
     const beforeId = query.cursor;
+    let contextChannelIds: string[] = [];
     const fallback = async () => {
       /**
        * 群聊降级必须**按席位过滤**：`generate` 失败/该席位没有 worker 会话时
@@ -547,7 +561,11 @@ export class ChatService {
           ...(beforeId ? { cursor: beforeId } : {}),
         },
         isGroupChannel && query.teamMemberId
-          ? { senderInstanceId: query.teamMemberId, filterUserByMention: true }
+          ? {
+              senderInstanceId: query.teamMemberId,
+              filterUserByMention: true,
+              ...(contextChannelIds.length ? { contextChannelIds } : {}),
+            }
           : undefined,
       );
       return { ...page, source: 'db' as const };
@@ -567,6 +585,23 @@ export class ChatService {
       : (((channel as any).teamMemberId as string | null) ?? null);
     if (!teamMemberId) {
       return fallback();
+    }
+    // 成员视角的「完整会话」不只有群聊投影：主 Agent 派给成员的私聊消息、
+    // 人类私聊输入都只存在于该席位的 private 频道。把该频道作为上下文源并入，
+    // 才能补回 session-history 故意排除的 user prompt（见 mergeSessionWithPlatform）。
+    if (isGroupChannel && channel.teamId) {
+      const privateChannel = await this.prisma.chatChannel.findFirst({
+        where: {
+          teamId: channel.teamId,
+          teamMemberId,
+          type: CHANNEL_TYPE.private,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (privateChannel?.id && privateChannel.id !== channelId) {
+        contextChannelIds = [privateChannel.id];
+      }
     }
     const sessions = await this.prisma.session.findMany({
       where: { teamMemberId },
@@ -651,7 +686,11 @@ export class ChatService {
           beforeId,
           // 群聊成员视角：只合并该席位在平台表的行（见方法注释）
           ...(isGroupChannel && teamMemberId
-            ? { senderInstanceId: teamMemberId, filterUserByMention: true }
+            ? {
+                senderInstanceId: teamMemberId,
+                filterUserByMention: true,
+                ...(contextChannelIds.length ? { contextChannelIds } : {}),
+              }
             : {}),
         },
       );
@@ -784,11 +823,11 @@ export class ChatService {
       });
       seq += 1;
     }
-    // 会话末尾可能仍在流式：最后一条 assistant 无 step-finish → processing（其余历史一律 sent）
-    const last = [...converted]
-      .reverse()
-      .find((c) => c.dto.senderType === SENDER_TYPE.agent);
-    if (last && !last.hasFinish) {
+    // 会话末尾可能仍在流式：只有**整体最后一条**是 assistant 且无 step-finish
+    // 才标 processing。若末尾是 user（例如生成期间又收到一条指令），前面的历史
+    // assistant 必须保持 sent，不能因为“最后一个 assistant 没 finish”误挂生成中。
+    const last = converted[converted.length - 1];
+    if (last && last.dto.senderType === SENDER_TYPE.agent && !last.hasFinish) {
       last.dto.status = MESSAGE_STATUS.processing;
     }
     return converted.map((c) => c.dto);
@@ -796,7 +835,8 @@ export class ChatService {
 
   /**
    * DM 历史合并（DB 为真源 + worker 会话仅 agent 增补）：
-   * - DB 该频道全量消息（user/system/agent，最新 500，按 id 升序）全部保留。
+   * - DB 该频道全量消息（user/system/agent，最新 500，按 id 升序）全部保留；
+   *   群聊成员视角额外并入该席位 private 频道的完整上下文（主 Agent 派发/私聊输入）。
    * - session user 项为 prompt 注入伪影（上下文前缀 + 用户文本拼接）一律排除，
    *   DB user 行为准，避免同一文本重复展示。
    * - session agent 项仅当未被 DB 引用时保留：DB agent 行 content.parts[].messageID
@@ -836,6 +876,124 @@ export class ChatService {
     });
   }
 
+  /**
+   * 成员视角行过滤：
+   * - 群聊频道：只保留该席位的 agent 行 + @该成员/@all 的 user 行；
+   * - 私聊上下文频道：全部保留（主 Agent 派发、人类私聊、成员自己的处理过程）；
+   * - 群聊 @ 后写入私聊的逐字镜像不再重复展示（群聊原行优先）。
+   */
+  private filterMemberViewRows(
+    rows: MessageRow[],
+    primaryChannelId: string,
+    opts?: {
+      senderInstanceId?: string | null;
+      filterUserByMention?: boolean;
+      contextChannelIds?: string[];
+    },
+  ): MessageRow[] {
+    const contextIds = new Set(opts?.contextChannelIds ?? []);
+    if (
+      contextIds.size === 0 &&
+      !opts?.senderInstanceId &&
+      !opts?.filterUserByMention
+    ) {
+      return rows;
+    }
+    const groupUsers = rows.filter(
+      (row) =>
+        row.channelId === primaryChannelId &&
+        row.senderType === SENDER_TYPE.user,
+    );
+    return rows.filter((row) => {
+      if (contextIds.has(row.channelId)) {
+        if (row.senderType !== SENDER_TYPE.user) return true;
+        return !groupUsers.some((groupUser) =>
+          this.isMirroredGroupUser(groupUser, row),
+        );
+      }
+      if (
+        opts?.filterUserByMention &&
+        opts.senderInstanceId &&
+        row.senderType === SENDER_TYPE.user
+      ) {
+        return this.userMentionTargetsSeat(row.mentions, opts.senderInstanceId);
+      }
+      if (opts?.senderInstanceId && row.senderType === SENDER_TYPE.agent) {
+        return row.senderInstanceId === opts.senderInstanceId;
+      }
+      return true;
+    });
+  }
+
+  /** 群聊 user 与其私聊逐字镜像：同发送者/正文/mentions，创建时间相差不超过 5 秒。 */
+  private isMirroredGroupUser(source: MessageRow, mirror: MessageRow): boolean {
+    const sourceText = (source.content as { text?: unknown } | null)?.text;
+    const mirrorText = (mirror.content as { text?: unknown } | null)?.text;
+    return (
+      source.senderId === mirror.senderId &&
+      sourceText === mirrorText &&
+      JSON.stringify(source.mentions ?? []) ===
+        JSON.stringify(mirror.mentions ?? []) &&
+      Math.abs(source.createdAt.getTime() - mirror.createdAt.getTime()) <= 5000
+    );
+  }
+
+  /** 从成员会话的工具调用中提取 group_post / notify_agent 输出指向的群消息 id。 */
+  private toolProjectionIds(
+    sessionItems: Array<Record<string, unknown>>,
+  ): Set<string> {
+    const ids = new Set<string>();
+    for (const item of sessionItems) {
+      const content = item.content as { parts?: unknown } | undefined;
+      if (!Array.isArray(content?.parts)) continue;
+      for (const raw of content.parts) {
+        if (!raw || typeof raw !== 'object') continue;
+        const part = raw as Record<string, unknown>;
+        if (part.type !== 'tool') continue;
+        const state =
+          part.state && typeof part.state === 'object'
+            ? (part.state as Record<string, unknown>)
+            : {};
+        const name =
+          typeof part.tool === 'string'
+            ? part.tool
+            : typeof part.name === 'string'
+              ? part.name
+              : '';
+        const input = state.input ?? part.input;
+        const inputText =
+          typeof input === 'string' ? input : JSON.stringify(input ?? '');
+        let output: unknown = state.output ?? part.output;
+        if (typeof output === 'string') {
+          try {
+            output = JSON.parse(output);
+          } catch {
+            continue;
+          }
+        }
+        if (!output || typeof output !== 'object') continue;
+        const result = output as {
+          messageId?: unknown;
+          targetInstanceId?: unknown;
+          channelId?: unknown;
+          attachment?: unknown;
+        };
+        const messageId = result.messageId;
+        const isProjectionTool =
+          /(^|[._])(group_post|notify_agent)$/i.test(name) ||
+          (/(^|_)execute$/i.test(name) &&
+            (/\b(?:group_post|notify_agent)\s*\(/.test(inputText) ||
+              (typeof messageId === 'string' &&
+                (result.targetInstanceId !== undefined ||
+                  ('channelId' in result && 'attachment' in result)))));
+        if (!isProjectionTool || typeof messageId !== 'string' || !messageId)
+          continue;
+        ids.add(messageId);
+      }
+    }
+    return ids;
+  }
+
   private async mergeSessionWithPlatform(
     channelId: string,
     sessionItems: Array<Record<string, unknown>>,
@@ -852,6 +1010,8 @@ export class ChatService {
       senderInstanceId?: string;
       /** 群聊成员视角：user 消息按 @提及 精筛（见 userMentionTargetsSeat）。 */
       filterUserByMention?: boolean;
+      /** 成员视角额外并入的私聊频道（全部消息都属于该成员）。 */
+      contextChannelIds?: string[];
     } = { limit: 500 },
   ): Promise<{
     items: Array<Record<string, unknown>>;
@@ -871,17 +1031,20 @@ export class ChatService {
       ...(page.senderInstanceId
         ? { senderInstanceId: page.senderInstanceId }
         : {}),
+      ...(page.contextChannelIds?.length
+        ? { contextChannelIds: page.contextChannelIds }
+        : {}),
     });
     const allRows = await this.loadMessageRowsInIdOrder(pageIds.ids);
-    // 群聊成员视角：user 消息只保留 @该成员 / @all 的（私聊频道不过滤，一对一即全部相关）
-    const rows =
-      page.filterUserByMention && page.senderInstanceId
-        ? allRows.filter(
-            (r) =>
-              r.senderType !== SENDER_TYPE.user ||
-              this.userMentionTargetsSeat(r.mentions, page.senderInstanceId!),
-          )
-        : allRows;
+    // group_post / notify_agent 的群消息投影在成员历史里是重复表示：工具 part 已保留
+    // 完整入参/输出，群聊页也需要投影。这里仅按工具输出 messageId 精确移除本成员视角的
+    // 重复行，不影响 private 历史，也不按正文模糊匹配（避免误删真实重复发言）。
+    const toolProjectionIds = page.senderInstanceId
+      ? this.toolProjectionIds(sessionItems)
+      : new Set<string>();
+    const rows = this.filterMemberViewRows(allRows, channelId, page).filter(
+      (row) => !toolProjectionIds.has(row.id),
+    );
     const dbItems = [...rows]
       .reverse()
       .map((row) => this.toMessageDto(row as any));
@@ -899,17 +1062,21 @@ export class ChatService {
     const processingRows = dbItems.filter(
       (item) => item.status === MESSAGE_STATUS.processing,
     );
-    const firstProcessingAt =
-      processingRows.length > 0
-        ? Math.min(
-            ...processingRows.map((item) =>
-              Date.parse(item.createdAt as string),
-            ),
-          )
-        : null;
+    const hasProcessingRow = processingRows.length > 0;
+    const firstProcessingAt = hasProcessingRow
+      ? Math.min(
+          ...processingRows.map((item) => Date.parse(item.createdAt as string)),
+        )
+      : null;
     const supplement = sessionItems.filter((item) => {
       if (item.senderType !== SENDER_TYPE.agent) return false;
       if (typeof item.id === 'string' && persisted.has(item.id)) return false;
+      // DB processing 行是整轮流式内容的权威聚合。serve 的当前 assistant 行可能
+      // 在首条 delta 之前就已创建（createdAt 早于聚合行），不能只靠时间界去重；
+      // 只要 DB 已有 processing 行，当前未完成的 serve assistant 就是同一轮的另一份
+      // 表示，必须丢弃，否则前端会同时渲染两份相同正文，终态后才自愈。
+      if (hasProcessingRow && item.status === MESSAGE_STATUS.processing)
+        return false;
       if (firstProcessingAt !== null) {
         const createdAt = Date.parse(item.createdAt as string);
         if (!Number.isNaN(createdAt) && createdAt >= firstProcessingAt) {

@@ -1188,6 +1188,17 @@ describe('seed（计划 skills + 评审子句）', () => {
         rolePrompt: BUILTIN_ROLE_PROMPTS[role.key],
         sortOrder: role.sortOrder,
       });
+      if (role.key === 'project_manager') {
+        expect(call?.[0].create.disciplinePrompt).toContain(
+          '分配任务前先确认成员状态',
+        );
+        expect(call?.[0].create.disciplinePrompt).toContain('保证分配策略均匀');
+        expect(call?.[0].create.disciplinePrompt).toContain(
+          '不要使用各种编号指代',
+        );
+      } else {
+        expect(call?.[0].create.disciplinePrompt).toBeUndefined();
+      }
       const patches = mockPrisma.agentRole.updateMany.mock.calls.filter(
         (c) => String(c[0].where?.id) === role.id,
       );

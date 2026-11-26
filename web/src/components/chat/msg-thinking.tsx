@@ -2,10 +2,9 @@
  * MsgThinking：思考中消息（reasoning part，FR-18 内部过程折叠展示）
  * =============================================
  * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
- * - state=pending：思考中（三连点 + 「思考中…」 + **单行跑马灯**流式展示进行中推理，不可折叠、
- *   恒定单行——不再渲染多行 msg-thinking-detail 正文）；跑马灯文本直接展示归一化全文
- *   （不做客户端逐字揭示，溢出时按既有 keyframe marquee 滚动）。
- * - state=done：已完成，默认折叠（「已思考 · 点击展开 ▸」），点击展开/收起
+ * - state=pending：思考中（三连点 + 「思考中…」+ **单行跑马灯**流式展示进行中推理，不可折叠、
+ *   恒定单行；跑马灯文本直接展示归一化全文，溢出时按 token 增量速度滚动）。
+ * - state=done：已完成，默认折叠成单行摘要，点击展开/收起。
  * data-testid=msg-thinking；pending 态无 msg-thinking-detail，仅 done+展开态才挂该节点。
  * 身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏渲染，
  * 本组件只留过程内容（状态 + 摘录 + 展开正文）。token 引用统一走 src/theme/tokens.ts。
@@ -31,8 +30,7 @@ export const THINKING_MAX_CHARS = 2000;
 /**
  * 折叠摘录的跑马灯 keyframes（溢出时向左滚动展示）。
  * 位移量经 CSS 变量 --thinking-marquee-shift 注入（JS 实测 文本宽-视口宽），
- * 速度按 ~70px/s 折算 duration，长短文本观感一致；alternate 双向滚动避免
- * 循环跳变的撕裂感，展开态/未溢出不挂动画。
+ * 速度按最近两次文本增量的实测像素/秒折算；停止增长时暂停，展开态/未溢出不挂动画。
  */
 const MARQUEE_KEYFRAMES = `
 @keyframes msg-thinking-marquee {
@@ -50,7 +48,10 @@ const MARQUEE_KEYFRAMES = `
 }
 `;
 
-const MARQUEE_PX_PER_SECOND = 70;
+const DEFAULT_MARQUEE_PX_PER_SECOND = 70;
+const MIN_MARQUEE_PX_PER_SECOND = 20;
+const MAX_MARQUEE_PX_PER_SECOND = 2400;
+const MARQUEE_STALL_MS = 600;
 
 /** keyframes 一次性注入 document.head（模块级 guard：整页只插一个 style 标签）。 */
 let marqueeStyleInjected = false;
@@ -97,6 +98,8 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
   const viewportRef = useRef<HTMLSpanElement | null>(null);
   const textRef = useRef<HTMLSpanElement | null>(null);
   const [marqueeShift, setMarqueeShift] = useState(0);
+  const [marqueePxPerSecond, setMarqueePxPerSecond] = useState(0);
+  const growthRef = useRef<{ length: number; at: number }>({ length: 0, at: 0 });
   useEffect(() => {
     ensureMarqueeStyle();
     const measure = (): void => {
@@ -110,25 +113,59 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
       setMarqueeShift(shift > 1 ? shift : 0);
     };
     measure();
+
+    if (!pending) {
+      growthRef.current = { length: 0, at: 0 };
+      setMarqueePxPerSecond(0);
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+
+    const now = performance.now();
+    const previous = growthRef.current;
+    let speed = 0;
+    if (
+      previous.at > 0 &&
+      marqueeText.length > previous.length &&
+      now > previous.at
+    ) {
+      const inner = textRef.current;
+      const pxPerChar = inner && marqueeText.length > 0
+        ? inner.scrollWidth / marqueeText.length
+        : DEFAULT_MARQUEE_PX_PER_SECOND;
+      const charsPerMs = (marqueeText.length - previous.length) / (now - previous.at);
+      speed = Math.min(
+        MAX_MARQUEE_PX_PER_SECOND,
+        Math.max(MIN_MARQUEE_PX_PER_SECOND, charsPerMs * pxPerChar * 1000),
+      );
+    }
+    growthRef.current = { length: marqueeText.length, at: now };
+    setMarqueePxPerSecond(speed);
+    // 一段时间没有新增 token 就暂停跑马灯，避免静态长文本慢悠悠地滚。
+    const stallTimer = window.setTimeout(() => setMarqueePxPerSecond(0), MARQUEE_STALL_MS);
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    return () => {
+      window.clearTimeout(stallTimer);
+      window.removeEventListener("resize", measure);
+    };
   }, [marqueeText, open, pending]);
-  // pending 恒滚（进行中推理单行展示的唯一出口）；done 仅折叠态滚（展开态正文全量可见）。
-  const marqueeActive = marqueeShift > 0 && (pending || !open);
-  const marqueeSeconds = Math.max(
-    4,
-    Math.round(marqueeShift / MARQUEE_PX_PER_SECOND),
-  );
+  // 只有仍在生成且文本正在增长时才滚动；已完成/停滞的思考保持静态摘录。
+  const marqueeActive = pending && marqueeShift > 0 && marqueePxPerSecond > 0;
+  const marqueeSeconds = marqueePxPerSecond > 0
+    ? Math.max(0.25, marqueeShift / marqueePxPerSecond)
+    : 4;
   return (
     <div
       data-testid="msg-thinking"
       data-state={state}
+      data-marquee-speed={pending ? Math.round(marqueePxPerSecond) : 0}
       className={className}
       style={{
         display: "flex",
         alignItems: "flex-start",
         gap: space.sm,
-        maxWidth: "78%",
+        maxWidth: "100%",
+        width: "100%",
         ...baseFont,
         ...style,
       }}
@@ -141,12 +178,12 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
         style={{
           flex: 1,
           minWidth: 0,
-          padding: `${space.sm}px ${space.md}px`,
-          borderRadius: radius.md,
-          backgroundColor: neutral[100],
-          border: `1px dashed ${neutral[300]}`,
+          minHeight: 24,
+          padding: `2px ${space.sm}px`,
+          borderRadius: radius.sm,
+          backgroundColor: "transparent",
+          border: "none",
           cursor: pending ? "default" : "pointer",
-          transition: "border-color .15s ease",
           textAlign: "left",
           fontFamily: fontFamily.body,
           fontSize: fontSize.sm,
@@ -156,8 +193,8 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
           {pending ? (
             <LoadingDots color={neutral[400]} />
           ) : (
-            <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1, flexShrink: 0 }}>
-              💭
+            <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1, flexShrink: 0, color: neutral[400] }}>
+              ◦
             </span>
           )}
           {pending && (
@@ -223,6 +260,9 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
           <div
             data-testid="msg-thinking-detail"
             style={{
+              marginLeft: 22,
+              paddingLeft: space.sm,
+              borderLeft: `1px solid ${neutral[200]}`,
               fontSize: fontSize.md,
               color: neutral[600],
               fontStyle: "italic",

@@ -263,7 +263,7 @@ export function safeUrlTransform(url: string): string | null {
 
 /** 从 URL/路径提取小写扩展名（导出供合站页卡片徽章复用，避免两处语义漂移）。 */
 export function extractExtFromUrl(ref: string): string {
-  const base = ref.split(/[\\/]/).pop() ?? "";
+  const base = ref.split(/[?#]/, 1)[0].split(/[\\/]/).pop() ?? "";
   const dot = base.lastIndexOf(".");
   if (dot <= 0 || dot === base.length - 1) return "";
   return base.slice(dot + 1).toLowerCase();
@@ -1596,7 +1596,10 @@ function humanFileName(
   fileUrl: string,
   ext: string,
 ): string {
-  const raw = fileName || fileUrl.split(/[\\/]/).pop() || "";
+  const raw = (fileName || fileUrl.split(/[\\/]/).pop() || "").split(
+    /[?#]/,
+    1,
+  )[0];
   if (BARE_UUID_NAME.test(raw)) {
     const e = ext || raw.split(".").pop() || "";
     const base = (title || "").trim();
@@ -1635,7 +1638,9 @@ export function FilePreview({
   }
 
     const fileUrl = version.fileUrl ?? version.contentRef;
-  const ext = (version.fileExt || extractExtFromUrl(fileUrl)).toLowerCase();
+  const ext = (
+    version.fileExt?.split(/[?#]/, 1)[0] || extractExtFromUrl(fileUrl)
+  ).toLowerCase();
   const displayName = humanFileName(version.fileName, title, fileUrl, ext);
   // P2 判定（与合站页/孪生 artifacts 页同语义）：/uploads/ 前缀 + fileSize==null → 不可访问降级。
   const fileMissing = fileUrl.startsWith("/uploads/") && version.fileSize == null;

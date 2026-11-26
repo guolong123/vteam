@@ -3210,7 +3210,7 @@ describe('WorkerDispatcher', () => {
     it('段落分隔：协议段/身份/职责/性格之间均为空行分隔，且全文无三换行及以上', () => {
       const s = buildSystemInstructions({ ...agent, persona: 'steady' });
       // GLOBAL 内【群聊通知】与【@定向机制】之间空行分隔
-      expect(s).toContain('vteam_group_post 发布。\n\n【@ 定向机制】');
+      expect(s).toContain('第二条完工消息。\n\n【@ 定向机制】');
       // GLOBAL 内【@定向机制】与【@用户】之间空行分隔
       expect(s).toContain('定向回复特定成员。\n\n【@用户】');
       // 【你的身份】与【职责】之间空行分隔
@@ -3436,7 +3436,7 @@ describe('WorkerDispatcher', () => {
       }
     });
 
-    it('两个平台常量文本字节与 seed 原文一致（不可改写/换行）', () => {
+    it('两个平台常量结构稳定（行数与关键约束）', () => {
       expect(TEAM_COLLABORATION_CHARTER_INSTRUCTION.split('\n')).toHaveLength(
         5,
       );
@@ -3444,7 +3444,9 @@ describe('WorkerDispatcher', () => {
       expect(TEAM_COLLABORATION_CHARTER_INSTRUCTION).toContain(
         'docs/agent-platform/30-团队协作规约.md',
       );
-      expect(AGENT_RECEIPT_IRON_LAW_INSTRUCTION).toContain('- 回执必@派发人：');
+      expect(AGENT_RECEIPT_IRON_LAW_INSTRUCTION).toContain(
+        '- 回执必登记派发人：',
+      );
     });
   });
 
@@ -4476,6 +4478,9 @@ describe('WorkerDispatcher', () => {
       const d = createDispatcher();
       const finals: unknown[] = [];
       d.onFinal((e) => finals.push(e));
+      prisma.message.create.mockResolvedValue(
+        messageRow({ senderInstanceId: 'tmm_0000000001' }),
+      );
 
       await d.handleTaskCompleted({
         taskId: request.taskId,
@@ -4505,7 +4510,12 @@ describe('WorkerDispatcher', () => {
       // 广播：chat.message.new（channel scope）
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.CHAT_MESSAGE_NEW,
-        { message: expect.objectContaining({ id: 'm_0000000002' }) },
+        {
+          message: expect.objectContaining({
+            id: 'm_0000000002',
+            senderInstanceId: 'tmm_0000000001',
+          }),
+        },
         { type: 'channel', id: request.channelId },
       );
       // Todo7：emitFinal taskId 承载 team scope 串（前端 scope 兼容），任务只归因

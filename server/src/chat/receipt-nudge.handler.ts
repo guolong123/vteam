@@ -150,7 +150,7 @@ function buildNudgeAction(input: AutoNudgeTextInput): string {
   const quote = `带原派发消息 id（${input.messageId}）发一条回复即可自动销账`;
   switch (input.nudgeCase ?? 'unknown') {
     case 'not-started':
-      return '请先开工；做完后用 vteam_notify_agent 回执（type=answer、stage=end）。';
+      return '请先开工；做完后用 vteam_group_post 的 completion(targetInstanceId=主Agent,stage=end) 登记回执，不要额外发送 notify_agent 完工消息。';
     case 'delivered-unsettled':
       return `销账动作：${quote}；或让主 Agent 手工核销。你不用重做。`;
     case 'receipt-not-landed':

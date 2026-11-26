@@ -518,7 +518,7 @@ export const MEMORY_INSTRUCTION =
  * 群聊场景（team_group）保持注入：那里「结论要发群」是正确引导。
  */
 const GROUP_POST_HINT =
-  '【群聊通知】私聊默认不公开，需公开结论/进展时调用 vteam MCP 的 vteam_group_post 发布。';
+  '【群聊通知】私聊默认不公开，需公开结论/进展时调用 vteam MCP 的 vteam_group_post 发布；若结论需要向主 Agent 完工回执，在该调用传 completion={targetInstanceId,type:"answer",stage:"end"}，同一条消息完成 ACK/drain，不要再额外调用 notify_agent 发第二条完工消息。';
 
 const GLOBAL_BASE_LINES = [
   '你是 AI 协作平台的 Agent，请遵守以下平台协议：',
@@ -531,7 +531,8 @@ const GLOBAL_BASE_LINES = [
   '【通知重发】vteam_notify_agent 返回 triggered:false 不是投递失败：该次调用未在群聊发布任何消息，请勿重发；请按 reason 与 hint 处理（节流稍后按需重派，计划门禁待放行，三元组缺失先补齐，重复/幂等说明已有在途或已发送）。',
   '【@ 定向机制｜回执】vteam_notify_agent 新增 type 与 stage 参数（默认 type=answer、stage=process）：' +
     'answer+process=常规进度汇报，不唤醒主Agent；answer+end=本次派发完工，清除回执，主Agent在所有派发均完工时一次性唤醒；' +
-    'question/help=需主Agent立即介入，中断唤醒，不计为完工。进度汇报不再按条唤醒，完工必须传 stage=end。',
+    'question/help=需主Agent立即介入，中断唤醒，不计为完工。进度汇报不再按条唤醒，完工必须传 stage=end。' +
+    '若完工结论已经通过 vteam_group_post 公开发布，优先在该调用传 completion 登记回执，不要再用 notify_agent 产生第二条群消息。',
   '【工具自省】不确定 vteam MCP 工具的参数（必填/枚举/状态机）时，先调 vteam MCP 的 vteam_tool_schema 工具查 schema（省略 name 则列出全部工具），不要靠报错回显反推。',
 ];
 
@@ -571,8 +572,8 @@ export const HOSTED_PLAN_REVIEW_INSTRUCTION =
 /** 非主成员协作指引（替代【任务状态】/【托管模式】工具段，避免教非主成员调用必 403 的工具）。 */
 export const NON_MAIN_AGENT_NOTE =
   '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。定向通知仅可直达主Agent，需触达其他成员时请主Agent中转，成员间直连调用将被拒绝。' +
-  '回执节奏：进度汇报用 vteam_notify_agent（type=answer, stage=process，不唤醒主Agent）；' +
-  '完工必须传 stage=answer+end（清除回执，主Agent在所有派发完工后一次性唤醒）；' +
+  '回执节奏：进度汇报或非公开回执用 vteam_notify_agent（type=answer, stage=process，不唤醒主Agent）；' +
+  '公开完工结论用 vteam_group_post 的 completion(targetInstanceId=主Agent,stage=end)，同一条消息清除回执并触发主Agent汇总唤醒，不要再额外发 notify_agent；' +
   '遇阻塞/决策/依赖缺失用 type=question 或 help（立即中断唤醒主Agent，不计完工）。' +
   '执行步骤：认领的任务步骤由主 Agent 用 vteam_todo 写入，你**自己完成时**调用 vteam_todo(action:"done", seq) 标记完成（计划 Tab 执行步骤卡据此显示进度）；先 vteam_todo(action:"list") 可查 seq。';
 
@@ -610,8 +611,8 @@ export const TEAM_COLLABORATION_CHARTER_INSTRUCTION =
  */
 export const AGENT_RECEIPT_IRON_LAW_LINES = [
   '## 回执铁律（优先级：平台校验 > 本铁律 > 上文原文风）',
-  '- 回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。',
-  '- 回执参数：进度汇报 type=answer+stage=process（不唤醒主Agent）；完工必须 stage=answer+end（主Agent汇总唤醒）；阻塞用 type=question/help（立即唤醒主Agent）。',
+  '- 回执必登记派发人：公开结论用 vteam_group_post 的 completion(targetInstanceId=主Agent,stage=end) 登记回执；非公开回执用 vteam_notify_agent(targetInstanceId=主Agent,type=answer,stage=end)。禁止只发不带 completion 的群消息充当完工回执。',
+  '- 回执参数：进度汇报 type=answer+stage=process（不唤醒主Agent）；完工必须 stage=end（公开结论走 group_post completion，非公开走 notify_agent）；阻塞用 type=question/help（立即唤醒主Agent）。',
   '- 冲突裁决：平台校验 > 本铁律 > 上文原文风。',
 ];
 
@@ -865,7 +866,7 @@ export const MAIN_AGENT_INSTRUCTION =
   '牵头拆解工作并分派给团队成员（自己不下场产出交付物），协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
   '推进受阻或需要协作时，通过 vteam_notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
   '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
-  '唤醒节奏：你不在每条进度汇报时被唤醒；仅当某成员传 stage=answer+end（派发完工）且你所有外派均回执完毕时，平台一次性唤醒你确认进度；' +
+  '唤醒节奏：你不在每条进度汇报时被唤醒；仅当某成员通过 vteam_group_post completion(stage=end) 或 vteam_notify_agent(stage=end) 登记派发完工，且你所有外派均回执完毕时，平台一次性唤醒你确认进度；' +
   '成员传 type=question/help 则立即中断唤醒你。因此唤醒后先汇总所有已收回报再行动，不要逐条处理。' +
   '【完工汇总必须发到群聊】因全部外派完工而被唤醒时，你的回复就是**给全员的验收结论**：' +
   '必须在群聊公开给出汇总（谁完成了什么、关键结论/交付物、剩余风险与下一步），' +
@@ -1689,6 +1690,7 @@ type MessageRow = {
   channelId: string;
   senderType: string;
   senderId: string | null;
+  senderInstanceId?: string | null;
   content: Prisma.JsonValue;
   mentions: Prisma.JsonValue | null;
   status: string;
@@ -7069,6 +7071,7 @@ export class WorkerDispatcher
       channelId: row.channelId,
       senderType: row.senderType,
       senderId: row.senderId,
+      senderInstanceId: row.senderInstanceId,
       content: row.content,
       mentions: row.mentions ?? [],
       status: row.status,

@@ -1,19 +1,14 @@
 /**
- * MsgTool：工具调用消息（tool part，工具卡片四态）
+ * MsgTool：紧凑的工具过程行（opencode / DSH 风格）
  * =============================================
- * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
- * - 卡片含工具名 + 输入/输出摘要 + 状态徽章（运行中/成功/失败/等待填写敏感信息，
- *   失败=ToolStateError；第四态 awaiting-input 见 sensitive-command-tool todo 8）
- * - 失败时边框/输出文字用错误语义色（errorTheme.quota 红色系）；awaiting-input 用琥珀
- *   描边表示「等待用户动作」而非错误。
- * data-testid=msg-tool（data-status 四态）；awaiting-input 徽章额外带
- * data-testid=msg-tool-awaiting。身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏
- * 渲染，本卡片只留工具名、I/O 摘录与运行状态。token 引用统一走 src/theme/tokens.ts。
- * 安全边界：本组件只接收已脱敏的 input/output 文本——secret 值与渲染后命令从不进入
- * 这些 props（server/worker 契约保证），组件也不做任何拼接渲染。
+ * 默认只显示一行：状态 + 工具标题 + 参数摘要 + 输出行数；没有卡片底色、边框和阴影。
+ * 点击后才在下方展开完整输入/输出，历史消息与流式消息使用同一套密度。
+ *
+ * data-testid=msg-tool（data-status 四态）；awaiting-input 额外带 msg-tool-awaiting。
+ * 安全边界：本组件只接收已脱敏的 input/output 文本，不做任何拼接渲染。
  */
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   neutral,
@@ -21,25 +16,31 @@ import {
   radius,
   fontSize,
   fontFamily,
-  shadow,
 } from "@/src/theme/tokens";
-import { LoadingDots } from "./loading-indicator";
+import {
+  summarizeToolInput,
+  summarizeToolOutput,
+  toolOutputLineCount,
+  toolTitleOf,
+} from "@/lib/tool-summary";
+import { diffOfInput } from "@/lib/edit-diff";
+import { viewKindOf } from "./dsh/dsh-tool-parse";
+import { EditDiffView } from "./edit-diff-view";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** 工具卡片状态四态（第四态 awaiting-input 由 MsgParts 按 pending secret_input 派生）。 */
-export type MsgToolStatus = "running" | "success" | "failed" | "awaiting-input";
-
-/** 工具状态色：运行中=蓝 / 成功=绿 / 失败=红 / 等待填写敏感信息=琥珀 */
+/** 工具状态只保留语义色；成功态不展示徽章，避免每条工具都像一张卡。 */
 const toolStatus: Record<
-  MsgToolStatus,
-  { label: string; color: string; bg: string; border: string }
+  "running" | "success" | "failed" | "awaiting-input",
+  { label: string; color: string; symbol: string }
 > = {
-  running: { label: "运行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
-  success: { label: "成功", color: "var(--color-success-text)", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  failed: { label: "失败", color: "var(--color-danger-text)", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  "awaiting-input": { label: "等待填写敏感信息", color: "var(--color-warn-text)", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.32)" },
+  running: { label: "运行中", color: "#0D9488", symbol: "●" },
+  success: { label: "", color: neutral[400], symbol: "✓" },
+  failed: { label: "失败", color: "var(--color-danger-text)", symbol: "×" },
+  "awaiting-input": { label: "等待填写敏感信息", color: "var(--color-warn-text)", symbol: "!" },
 };
+
+export type MsgToolStatus = "running" | "success" | "failed" | "awaiting-input";
 
 export interface MsgToolProps {
   name: string;
@@ -50,61 +51,59 @@ export interface MsgToolProps {
   className?: string;
 }
 
-/** 工具调用消息（tool part）：单行概要（名称 + 输入摘要 + 状态）+ 点击展开完整输入/输出 */
+/** 单值 I/O 展开为值原文；多键 JSON 在展开区 pretty 化，折叠摘要不再回显整段 JSON。 */
+function displayDetail(raw: string): string {
+  const text = raw.trim();
+  if (
+    (text.startsWith("{") && text.endsWith("}")) ||
+    (text.startsWith("[") && text.endsWith("]"))
+  ) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed !== null && typeof parsed === "object") {
+        if (!Array.isArray(parsed)) {
+          const entries = Object.entries(parsed as Record<string, unknown>);
+          if (
+            entries.length === 1 &&
+            (typeof entries[0][1] === "string" || typeof entries[0][1] === "number")
+          ) {
+            return String(entries[0][1]);
+          }
+        }
+        return JSON.stringify(parsed, null, 2);
+      }
+    } catch {
+      /* 非 JSON，按原文返回 */
+    }
+  }
+  return raw;
+}
+
+function nonEmptyDetail(raw: string): string {
+  const value = displayDetail(raw);
+  const text = value.trim();
+  return text === "{}" || text === "[]" ? "" : value;
+}
+
 export function MsgTool({ name, status, input, output, style, className }: MsgToolProps) {
   const st = toolStatus[status];
   const failed = status === "failed";
-  const awaiting = status === "awaiting-input";
   const [open, setOpen] = useState(false);
-  // 工具执行结束后自动收起，避免历史消息残留展开的工具输出。
+  // 执行结束后自动收起，历史消息只保留一行摘要。
   useEffect(() => {
     if (status === "success" || status === "failed") setOpen(false);
   }, [status]);
-  // 单值 I/O 展开为值原文（不包 JSON）：{"command":"…"} → 直接显示命令。
-  // 多键/数组按调用场景分两种序列化：
-  // - 标题行（pretty 缺省）保持单行紧凑，配合 whiteSpace:nowrap + ellipsis 截断；
-  // - 展开区（pretty=true）2 空格缩进多行输出，像普通多行消息一样可读（换行原样保留）。
-  const displayValue = (raw: string, opts?: { pretty?: boolean }): string => {
-    const t = raw.trim();
-    if (
-      (t.startsWith("{") && t.endsWith("}")) ||
-      (t.startsWith("[") && t.endsWith("]"))
-    ) {
-      try {
-        const parsed: unknown = JSON.parse(t);
-        if (parsed !== null && typeof parsed === "object") {
-          if (!Array.isArray(parsed)) {
-            const entries = Object.entries(
-              parsed as Record<string, unknown>,
-            );
-            if (
-              entries.length === 1 &&
-              (typeof entries[0][1] === "string" ||
-                typeof entries[0][1] === "number")
-            ) {
-              return String(entries[0][1]);
-            }
-          }
-          return opts?.pretty
-            ? JSON.stringify(parsed, null, 2)
-            : JSON.stringify(parsed);
-        }
-      } catch {
-        /* 非 JSON，按原文返回 */
-      }
-    }
-    return raw;
-  };
-  const summary = input || output || "（无输入输出）";
-  // "{}"/"[]" 空对象无信息量：摘要回退输出，两者皆空则不显示占位串
-  const displayValue2 = (raw: string, opts?: { pretty?: boolean }): string => {
-    const v = displayValue(raw, opts);
-    const t = v.trim();
-    return t === "{}" || t === "[]" ? "" : v;
-  };
-  // 展开态直接展示完整 2000 字符输入/输出原文（换行保留，不压缩为单行）；
-  // 多键 JSON 在此 pretty 化（2 空格缩进），标题行仍用紧凑单行；
-  // DOM 封顶约束仍由上游 formatToolIO 保证（A2：字符串/JSON 两路径各截 2000）。
+
+  const title = toolTitleOf(name, input);
+  const summary = summarizeToolInput(input) || summarizeToolOutput(output);
+  const outputLines = toolOutputLineCount(output);
+  const detailInput = nonEmptyDetail(input);
+  const detailOutput = nonEmptyDetail(output);
+  const editDiffs = useMemo(
+    () => (viewKindOf(name, output) === "diff" ? diffOfInput(input) : null),
+    [name, input, output],
+  );
+  const noIO = detailInput.length === 0 && detailOutput.length === 0;
   const detailFont: CSSProperties = {
     fontFamily: fontFamily.mono,
     fontSize: fontSize.xs,
@@ -113,25 +112,20 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
     wordBreak: "break-word",
     overflowWrap: "anywhere",
   };
-  const summaryText = displayValue2(input) || displayValue2(output);
-  // 标题行摘要：优先有效输入，回退有效输出；皆空（如 {}/running 无输出）→ 空串
-  const titleText = summaryText;
-  // 展开区输入/输出与标题同一口径（同样的空串/单值拆包），仅多键 JSON 转为缩进多行；
-  // 空串 / 字面 {} / [] 一律折成空（不再打印「输入 {}」）
-  const detailInput = displayValue2(input, { pretty: true });
-  const detailOutput = displayValue2(output, { pretty: true });
-  const noIO = detailInput.length === 0 && detailOutput.length === 0;
+
   return (
     <div
       data-testid="msg-tool"
       data-status={status}
+      data-tool={name}
+      data-output-lines={outputLines}
       className={className}
       style={{
         display: "flex",
+        flexDirection: "column",
         alignItems: "flex-start",
-        gap: space.sm,
-        maxWidth: "78%",
-        alignSelf: "flex-start",
+        width: "100%",
+        minWidth: 0,
         ...baseFont,
         ...style,
       }}
@@ -139,29 +133,40 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen((value) => !value)}
         style={{
-          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          gap: space.sm,
+          width: "100%",
           minWidth: 0,
-          padding: space.md,
-          borderRadius: radius.md,
-          backgroundColor: "var(--color-surface)",
-          border: `1px solid ${failed ? "rgba(239,68,68,0.22)" : awaiting ? "rgba(245,158,11,0.32)" : neutral[200]}`,
-          boxShadow: shadow.sm,
+          minHeight: 24,
+          padding: `2px ${space.sm}px`,
+          borderRadius: radius.sm,
+          backgroundColor: "transparent",
+          border: "none",
           cursor: "pointer",
-          transition: "border-color .15s ease",
           textAlign: "left",
           fontFamily: fontFamily.body,
           fontSize: fontSize.sm,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
-          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1, flexShrink: 0 }}>
-            {failed ? "✕" : awaiting ? "🔐" : "⚙"}
-          </span>
-          <span style={{ fontSize: fontSize.sm, color: neutral[700], fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{name}</span>
+        <span aria-hidden style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400] }}>
+          {open ? "▾" : "▸"}
+        </span>
+        <span aria-hidden style={{ flexShrink: 0, fontSize: fontSize.xs, lineHeight: 1, color: st.color }}>
+          {st.symbol}
+        </span>
+        <span
+          title={name}
+          style={{ flexShrink: 0, color: neutral[700], fontWeight: 600, whiteSpace: "nowrap" }}
+        >
+          {title}
+        </span>
+        {summary.length > 0 ? (
           <span
-            title={titleText}
+            data-testid="msg-tool-summary"
+            title={summary}
             style={{
               flex: 1,
               minWidth: 0,
@@ -173,78 +178,81 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
               textOverflow: "ellipsis",
             }}
           >
-            {titleText}
+            {summary}
           </span>
+        ) : (
+          <span style={{ flex: 1 }} />
+        )}
+        {outputLines > 0 ? (
           <span
-            data-testid={awaiting ? "msg-tool-awaiting" : undefined}
+            data-testid="msg-tool-output-lines"
+            style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400], whiteSpace: "nowrap" }}
+          >
+            {outputLines} 行输出
+          </span>
+        ) : null}
+        {st.label.length > 0 ? (
+          <span
+            data-testid={status === "awaiting-input" ? "msg-tool-awaiting" : "msg-tool-status"}
             style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.xs - 1}px ${space.sm}px`,
-              borderRadius: radius.pill,
-              backgroundColor: st.bg,
-              border: `1px solid ${st.border}`,
-              color: st.color,
-              fontSize: fontSize.xs,
-              fontWeight: 600,
-              whiteSpace: "nowrap",
               flexShrink: 0,
+              fontSize: fontSize.xs,
+              color: st.color,
+              whiteSpace: "nowrap",
             }}
           >
-            {status === "running" && <LoadingDots color={st.color} />}
             {st.label}
           </span>
-          <span style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400] }} aria-hidden>
-            {open ? "▾" : "▸"}
-          </span>
-        </div>
-        {open && (
-          <div
-            data-testid="msg-tool-io"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 2,
-              marginTop: space.sm,
-              paddingTop: space.sm,
-              borderTop: `1px solid ${neutral[100]}`,
-              fontSize: fontSize.xs,
-              color: neutral[500],
-              lineHeight: 1.6,
-            }}
-          >
-            {noIO ? (
-              <span style={{ color: neutral[400] }}>（无输入输出）</span>
-            ) : (
-              <>
-                {detailInput.length > 0 && (
-                  <div style={{ display: "flex", gap: space.sm }}>
-                    <span style={{ color: neutral[400], flexShrink: 0 }}>输入</span>
-                    <pre style={{ margin: 0, flex: 1, minWidth: 0, ...detailFont }}>
-                      {detailInput}
-                    </pre>
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: space.sm }}>
-                  <span style={{ color: neutral[400], flexShrink: 0 }}>输出</span>
-                  <pre
-                    style={{
-                      margin: 0,
-                      flex: 1,
-                      minWidth: 0,
-                      ...detailFont,
-                      color: failed ? "var(--color-danger-text)" : neutral[600],
-                    }}
-                  >
-                    {detailOutput.length > 0 ? detailOutput : "（无输出）"}
-                  </pre>
-                </div>
-              </>
-            )}
-          </div>
-        )}
+        ) : null}
       </button>
+      {open && (
+        <div
+          data-testid="msg-tool-io"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: space.xs,
+            width: "calc(100% - 22px)",
+            minWidth: 0,
+            marginTop: space.xs,
+            marginLeft: 22,
+            paddingLeft: space.sm,
+            borderLeft: `1px solid ${neutral[200]}`,
+            fontSize: fontSize.xs,
+            color: neutral[500],
+            lineHeight: 1.6,
+          }}
+        >
+          {editDiffs ? (
+            <EditDiffView hunks={editDiffs} />
+          ) : noIO ? (
+            <span style={{ color: neutral[400] }}>（无输入输出）</span>
+          ) : (
+            <>
+              {detailInput.length > 0 && (
+                <div style={{ display: "flex", gap: space.sm, minWidth: 0 }}>
+                  <span style={{ color: neutral[400], flexShrink: 0 }}>输入</span>
+                  <pre style={{ margin: 0, flex: 1, minWidth: 0, ...detailFont }}>{detailInput}</pre>
+                </div>
+              )}
+              <div style={{ display: "flex", gap: space.sm, minWidth: 0 }}>
+                <span style={{ color: neutral[400], flexShrink: 0 }}>输出</span>
+                <pre
+                  style={{
+                    margin: 0,
+                    flex: 1,
+                    minWidth: 0,
+                    ...detailFont,
+                    color: failed ? "var(--color-danger-text)" : neutral[600],
+                  }}
+                >
+                  {detailOutput.length > 0 ? detailOutput : "（无输出）"}
+                </pre>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

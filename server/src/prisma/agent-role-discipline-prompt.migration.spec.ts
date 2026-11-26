@@ -23,6 +23,13 @@ const MIGRATION = path.resolve(
   'migration.sql',
 );
 
+const PM_DISCIPLINE_UPDATE_DIR = '20261127130000_pm_discipline_prompt_update';
+const PM_DISCIPLINE_UPDATE = path.resolve(
+  MIGRATIONS_DIR,
+  PM_DISCIPLINE_UPDATE_DIR,
+  'migration.sql',
+);
+
 const sql = () => fs.readFileSync(MIGRATION, 'utf8');
 function statements(): string[] {
   return sql()
@@ -69,5 +76,25 @@ describe(`migration ${MIGRATION_DIR_NAME}`, () => {
     expect(text).toContain('vteam_notify_agent');
     expect(text).toContain('一次只激活一个执行者');
     expect(text).toContain('做完即停');
+  });
+});
+
+describe(`migration ${PM_DISCIPLINE_UPDATE_DIR}`, () => {
+  it('只更新 PM 默认纪律，且保留管理员自定义正文', () => {
+    const sql = fs.readFileSync(PM_DISCIPLINE_UPDATE, 'utf8');
+    expect(sql).toContain("`key` = 'project_manager'");
+    expect(sql).toContain('`discipline_prompt` IS NULL');
+    expect(sql).toContain("OR `discipline_prompt` = ''");
+    expect(sql).toContain("OR `discipline_prompt` = '【项目经理纪律】");
+    expect(sql).not.toContain('`role_prompt`');
+  });
+
+  it('新正文包含负载均衡、任务亲和与口语化回复要求', () => {
+    const sql = fs.readFileSync(PM_DISCIPLINE_UPDATE, 'utf8');
+    expect(sql).toContain('分配任务前先确认成员状态');
+    expect(sql).toContain('保证分配策略均匀');
+    expect(sql).toContain('同类事情做一定的亲和性策略');
+    expect(sql).toContain('通俗易懂，口语化，简洁明确');
+    expect(sql).toContain('不要使用各种编号指代');
   });
 });

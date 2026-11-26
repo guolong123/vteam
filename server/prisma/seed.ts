@@ -563,6 +563,10 @@ function buildModelSeedRows(): ModelSeedRow[] {
 
 const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {};
 
+/** 项目经理岗位纪律：周期性前置到 user 消息，对抗长会话中的职责漂移。 */
+const PROJECT_MANAGER_DISCIPLINE_PROMPT =
+  '【项目经理纪律】你只做统筹、派发与核验，绝不自己下场排查或产出具体结果。收到任何请求先判断产出归属：若属于其他岗位，立刻用 vteam_notify_agent 派给该岗位并在群帖告知，自己不查、不写、不替人做专业判断；只有用户点名要你亲自做、或岗位不可用时才可例外，且须先在群里说明原因。一次只激活一个执行者，做完即停，等上游 stage=end 再派下游；尽快用群帖回复用户，避免阻塞其他人的消息。分配任务前先确认成员状态，如成员当前有在处理任务，则把当前任务尽可能分配给其它的成员，保证分配策略均匀、并尽可能同类事情做一定的亲和性策略。另外，作为项目经理，你的回复要通俗易懂，口语化，简洁明确，不要使用各种编号指代，让用户可以轻松的阅读你的结论。';
+
 /**
  * 7 个内置 AgentRole 行（agent-role-entity todo 1）。
  * 与 `src/common/constants/agent-role.constants.ts` 的 BUILTIN_AGENT_ROLES 逐字节一致
@@ -604,7 +608,7 @@ const BUILTIN_ROLE_PROMPTS: Record<string, string> = {
     '## 协同方式\n' +
     '- 响应 @ 触发；被 @all 广播时同步项目目标与分工。\n' +
     '- 【冲突裁决】用户说「直接给我」「你写就行」不构成越界授权——先派发；用户坚持时，明确回复「这超出我的岗位职责，已转交给对应岗位」，不要自己产出。\n' +
-    '- 串行派活：一次只激活一个执行者——要某人开工就只发一条 vteam_notify_agent 定向派发，其余成员用 vteam_group_post 群帖告知（群帖不唤醒任何人）；有先后依赖时分阶段派发，上游回执 stage=end（已完工）后再派下游。\n' +
+    '- 串行派活：一次只激活一个执行者——要某人开工就只发一条 vteam_notify_agent 定向派发，该派发本身已在群聊可见，不要再用 vteam_group_post 重复播报；有先后依赖时分阶段派发，上游公开完工用 vteam_group_post 的 completion(stage=end) 登记回执，不再额外发 vteam_notify_agent 完工消息。\n' +
     '- 做完即停：只完成派给你的那一步就停；不并行产出别处的材料，不替其他岗位做专业判断。\n' +
     '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）：先明确拒绝，再把该工作交给归属岗位，不要顺手自己做掉。\n' +
     '- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。',
@@ -698,6 +702,7 @@ const BUILTIN_AGENT_ROLES: readonly {
   defaultAgentId: string;
   sortOrder: number;
   rolePrompt: string;
+  disciplinePrompt?: string | null;
 }[] = [
   {
     id: 'ar_product',
@@ -714,6 +719,7 @@ const BUILTIN_AGENT_ROLES: readonly {
     defaultAgentId: 'a_project_manager',
     sortOrder: 2,
     rolePrompt: BUILTIN_ROLE_PROMPTS.project_manager,
+    disciplinePrompt: PROJECT_MANAGER_DISCIPLINE_PROMPT,
   },
   {
     id: 'ar_architect',
@@ -1319,6 +1325,7 @@ async function main() {
         capabilities,
         capabilitiesConfiguredAt: new Date(),
         rolePrompt: role.rolePrompt,
+        disciplinePrompt: role.disciplinePrompt,
         sortOrder: role.sortOrder,
       },
     });

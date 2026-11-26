@@ -18,12 +18,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { isGroupedWithPrevious } from "@/lib/message-grouping";
+import { toolProducedMessageIds } from "@/lib/tool-summary";
 import { dateSeparatorFlags, formatDateSeparatorLabel, localDateKey } from "@/lib/date-separator";
 import { resolveDisplayAuthor } from "@/lib/display-author";
 import { messageInitials } from "@/lib/message-initials";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useChatPrefsStore } from "@/lib/stores/chat-prefs-store";
-import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
+import { upsertMessage, useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
 import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { MessageInputHandle } from "@/src/components/ui/message-input";
@@ -44,6 +45,7 @@ import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRig
 import { MemberProcessAggregate } from "@/src/components/chat/dsh/member-process-aggregate";
 import { MessageNavigator, type MessageNavAnchor } from "@/src/components/chat/message-navigator";
 import { useSidePanel } from "@/src/hooks/use-side-panel";
+import { useChatCompact } from "@/src/hooks/use-chat-compact";
 import type {
   TaskDetail,
   TaskInstance,
@@ -183,6 +185,7 @@ interface ChannelItem {
   teamId?: string | null;
   taskId?: string | null;
   agentId?: string | null;
+  teamMemberId?: string | null;
 }
 interface MessagesResponse {
   items: RealtimeChatMessage[];
@@ -256,6 +259,7 @@ export function TeamSessionView({
   const router = useRouter();
   const pathname = usePathname();
   const streamStyle = useChatPrefsStore((s) => s.streamStyle);
+  const compactHeight = useChatCompact(900);
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -422,6 +426,16 @@ export function TeamSessionView({
     return items.find((c) => (c.teamId ?? null) === teamId) ?? items[0] ?? null;
   }, [channelsQuery.data, teamId]);
   const channelId = channel?.id ?? "";
+  /** 席位 → 团队私聊频道：成员过程视图的 SSE 增量发在私聊频道，需要映射回成员历史缓存。 */
+  const privateChannelIdBySeat = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of channelsQuery.data?.items ?? []) {
+      if (item.type === "private" && item.teamMemberId) {
+        map.set(item.teamMemberId, item.id);
+      }
+    }
+    return map;
+  }, [channelsQuery.data]);
 
   /* ---------- 私聊 Tabs（teamMember 维度） ---------- */
   const [activeTab, setActiveTab] = useState<string>("group");
@@ -1092,6 +1106,41 @@ export function TeamSessionView({
   }, []);
 
   /**
+   * 局部展开（思考/工具/过程组）不会产生消息或 SSE delta，但会改变消息项高度。
+   * 观察列表直属消息项的尺寸：仍贴底时跟随新底部，用户上翻后保持阅读位置。
+   * 不观察滚动容器自身——它的 clientHeight 不变，ResizeObserver 不会因内容增高触发。
+   */
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let frame: number | null = null;
+    const followContentGrowth = (): void => {
+      if (!stickToBottomRef.current) return;
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        if (listRef.current === el) scrollToBottom();
+      });
+    };
+    const observer = new ResizeObserver(followContentGrowth);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [
+    isMemberView,
+    filterMemberId,
+    isGroupTab,
+    channelId,
+    activePrivateId,
+    memberHistoryQuery.data?.items,
+    messagesQuery.data?.items,
+    privateMessagesQuery.data?.items,
+    scrollToBottom,
+  ]);
+
+  /**
    * DM 未读红点：agent 新输出落到某私聊频道（非群聊频道）且该 Tab 未激活 → 标记未读；
    * 当前正打开的 Tab 不标（用户已在看）。loading 收敛后红点接替 spinner（见 Tab 渲染互斥）。
    * onMessage / onMessagePartDelta 共用，保证其他频道事件的未读/状态收敛不因滚动门控丢失。
@@ -1125,6 +1174,74 @@ export function TeamSessionView({
   useEffect(() => {
     deltaRefetchChannelRef.current = null;
   }, [activePrivateId]);
+
+  /** chat.message.new / delta 都可能早于 REST cache；无缓存时补拉一次，避免首条消息丢失。 */
+  const refetchPrivateHistoryIfUncached = useCallback(
+    (messageChannelId: string) => {
+      if (messageChannelId !== activePrivateId || deltaRefetchChannelRef.current === messageChannelId) {
+        return;
+      }
+      const cached = queryClient.getQueryData<ChannelMessagesCache>([
+        "channel",
+        messageChannelId,
+        "messages",
+      ]);
+      if (cached) return;
+      deltaRefetchChannelRef.current = messageChannelId;
+      void privateMessagesQuery.refetch();
+    },
+    [activePrivateId, privateMessagesQuery, queryClient],
+  );
+
+  /**
+   * 群聊「成员过程」与私聊频道共用一条会话，但 React Query 缓存键不同。
+   * SSE 默认只写 ["channel", privateId, "messages"]，这里把同一 DTO 再桥接到
+   * ["channel", groupId, "member-history", seatId]，否则成员过程要等 30s 轮询才刷新。
+   */
+  const upsertMemberHistoryMessage = useCallback(
+    (message: RealtimeChatMessage) => {
+      if (!isMemberView || !filterMemberId || !channelId) return;
+      const privateChannelId = privateChannelIdBySeat.get(filterMemberId);
+      const belongsToMember =
+        message.channelId === privateChannelId ||
+        message.senderInstanceId === filterMemberId;
+      if (!belongsToMember) return;
+      const queryKey = ["channel", channelId, "member-history", filterMemberId] as const;
+      const cached = queryClient.getQueryData<MessagesResponse>(queryKey);
+      if (!cached) {
+        void memberHistoryQuery.refetch();
+        return;
+      }
+      // group_post / notify_agent 的群消息投影已由工具 part 完整表达；SSE 再次到达时
+      // 不能再插一条正文气泡（opencode 私聊/成员历史只展示工具调用与最终回复）。
+      if (toolProducedMessageIds(cached.items).has(message.id)) return;
+      // 部分存量 ingress DTO 不带 senderInstanceId；当前视图已明确是哪个席位，
+      // 仅对选中成员自己的 agent 消息补回，避免同 agent 多席位时作者串到第一个。
+      const normalized =
+        message.senderType === "agent" && !message.senderInstanceId
+          ? { ...message, senderInstanceId: filterMemberId }
+          : message;
+      upsertMessage(queryClient, normalized, queryKey);
+    },
+    [
+      isMemberView,
+      filterMemberId,
+      channelId,
+      privateChannelIdBySeat,
+      queryClient,
+      memberHistoryQuery,
+    ],
+  );
+
+  /** 当前成员过程视图可见的频道：群频道原消息 + 该席位私聊频道的会话增量。 */
+  const isVisibleMessageChannel = useCallback(
+    (messageChannelId: string) =>
+      messageChannelId === visibleChannelId ||
+      (isMemberView &&
+        !!filterMemberId &&
+        messageChannelId === privateChannelIdBySeat.get(filterMemberId)),
+    [visibleChannelId, isMemberView, filterMemberId, privateChannelIdBySeat],
+  );
 
   /**
    * SSE 团队边界守卫（防御性）：本组件的状态（sessionByAgent / loadingByAgent /
@@ -1164,9 +1281,11 @@ export function TeamSessionView({
     enabled: !!teamId && !!user?.id,
     onMessage: (payload) => {
       // 滚动门控：team 域放行其他频道消息，仅当前可见频道的事件推动当前列表滚动
-      if (payload.message.channelId === visibleChannelId) scrollToBottom();
+      if (isVisibleMessageChannel(payload.message.channelId)) scrollToBottom();
       if (effectivePanelTaskId) queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
       const m = payload.message;
+      refetchPrivateHistoryIfUncached(m.channelId);
+      upsertMemberHistoryMessage(m);
       if (m.senderType === "agent" && m.senderId) {
         const senderInstanceId = (m as unknown as { senderInstanceId?: string }).senderInstanceId ?? null;
         // 终结信号的 key 形式（senderInstanceId/ta_、senderId/agentId 或 tmm_）可能与起工时
@@ -1201,16 +1320,9 @@ export function TeamSessionView({
     onMessagePartDelta: (payload) => {
       const chId = payload.message?.channelId;
       if (!chId) return;
-      if (chId === visibleChannelId) scrollToBottom();
-      // 首个 delta 可能早于 REST cache：upsertMessage 无缓存时不落数据，这里补一次私聊历史拉取。
-      // gate 一：仅当前选中私聊（activePrivateId 在群聊 Tab 恒 null）；gate 二：按频道去重。
-      if (chId === activePrivateId && deltaRefetchChannelRef.current !== chId) {
-        const cached = queryClient.getQueryData<ChannelMessagesCache>(["channel", chId, "messages"]);
-        if (!cached) {
-          deltaRefetchChannelRef.current = chId;
-          void privateMessagesQuery.refetch();
-        }
-      }
+      if (isVisibleMessageChannel(chId)) scrollToBottom();
+      refetchPrivateHistoryIfUncached(chId);
+      upsertMemberHistoryMessage(payload.message);
       if (payload.message.senderType === "agent" && payload.message.senderId) {
         markUnreadForChannel(payload.message);
       }
@@ -1688,6 +1800,8 @@ export function TeamSessionView({
     const hit = Array.from(privateChannelMap.entries()).find(([, cid]) => cid === activePrivateId)?.[0];
     return hit ?? null;
   }, [privateChannelMap, activePrivateId]);
+  /** 当前成员/私聊视角对应的席位；其他 Agent 发来的私聊镜像对该视角而言是入站指令。 */
+  const currentSeatId = isMemberView ? filterMemberId : selectedMemberKey;
 
   /* ---------- 渲染守卫 ---------- */
   if (teamQuery.isPending) {
@@ -1723,8 +1837,8 @@ export function TeamSessionView({
       ? (messagesQuery.data?.items ?? [])
       : (privateMessagesQuery.data?.items ?? []);
   // in-flight（status=processing）agent 消息不再抽出独立渲染：私聊与终态消息共用同一条
-  // MsgParts variant="line" 渲染路径（服务端 mergeSessionWithPlatform 已把 processing 行
-  // 并入会话末尾）。群聊 Tab 渲染路径逐字节不变。
+  // MsgParts variant="line" 渲染路径（服务端 mergeSessionWithPlatform 已按 createdAt
+  // 并入真实时间线）。群聊 Tab 渲染路径逐字节不变。
   const messages: RealtimeChatMessage[] = allMessages;
 
   /**
@@ -1977,7 +2091,7 @@ export function TeamSessionView({
       </header>
       )}
       {taskParamError && (
-        <div data-testid="session-task-param-error" role="alert" style={{ flexShrink: 0, padding: `${space.sm}px ${space.xl}px`, backgroundColor: "rgba(220,38,38,0.08)", borderBottom: "1px solid rgba(220,38,38,0.20)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>
+        <div data-testid="session-task-param-error" role="alert" style={{ ...(compactHeight ? { position: "absolute", top: 8, left: 12, right: 12, zIndex: 40 } : { flexShrink: 0 }), padding: `${space.xs}px ${space.md}px`, backgroundColor: "rgba(220,38,38,0.08)", borderBottom: "1px solid rgba(220,38,38,0.20)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>
           {taskParamError}
         </div>
       )}
@@ -1987,7 +2101,7 @@ export function TeamSessionView({
           role="status"
           data-testid="session-notice"
           data-kind={notice.kind}
-          style={{ flexShrink: 0, margin: `${space.sm}px ${space.xl}px 0`, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "var(--color-danger-text)", fontSize: fontSize.sm }}
+          style={{ ...(compactHeight ? { position: "absolute", top: 8, left: 12, right: 12, zIndex: 40, margin: 0, boxShadow: "0 8px 24px rgba(15,23,42,.16)" } : { flexShrink: 0, margin: `${space.sm}px ${space.xl}px 0` }), padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "var(--color-danger-text)", fontSize: fontSize.sm }}
         >
           {notice.text}
         </div>
@@ -2102,7 +2216,7 @@ export function TeamSessionView({
 
           <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <MessageNavigator scrollRef={listRef} anchors={navAnchors} measureKey={`${messages.length}:${isMemberView ? "m" : "g"}`} />
-          <div data-testid="chat-message-list" ref={listRef} onScroll={(e) => { const el = e.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120; }} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.xl}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
+          <div data-testid="chat-message-list" ref={listRef} onScroll={(e) => { const el = e.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120; }} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: compactHeight ? space.lg : space.xl, display: "flex", flexDirection: "column", gap: compactHeight ? space.md : space.lg }}>
             <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
               <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
               <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
@@ -2131,7 +2245,19 @@ export function TeamSessionView({
               const flushProc = (keySuffix: string) => {
                 if (!isMemberView || pendingProc.length === 0) return null;
                 const agg = pendingProc.splice(0, pendingProc.length);
-                return <MemberProcessAggregate key={`agg-${keySuffix}`} parts={agg} />;
+                return streamStyle === "dsh" ? (
+                  <MemberProcessAggregate key={`agg-${keySuffix}`} parts={agg} />
+                ) : (
+                  <MsgParts
+                    key={`agg-${keySuffix}`}
+                    parts={agg}
+                    variant="bubble"
+                    processOnly
+                    messageStatus="sent"
+                    role="developer"
+                    streaming={false}
+                  />
+                );
               };
               return messages.map((msg, index) => {
               // 成员视角已切换数据源到该成员的会话历史（含其思考/工具过程），
@@ -2175,7 +2301,7 @@ export function TeamSessionView({
                       display: "flex",
                       alignItems: "center",
                       gap: space.md,
-                      marginTop: space.xl,
+                      marginTop: compactHeight ? space.md : space.xl,
                       marginBottom: space.xs,
                     }}
                   >
@@ -2248,8 +2374,17 @@ export function TeamSessionView({
                   />,
                 );
               }
-              // Agent 消息：过程片段 + 正文置底（MsgParts）；status=processing 为流式中间态
-              if (msg.senderType === "agent") {
+              // Agent 消息：过程片段 + 正文置底（MsgParts）；status=processing 为流式中间态。
+              // 成员/私聊视角里，其他 Agent 的私聊镜像是发给当前席位的入站指令，
+              // 语义等同 user prompt：右侧用户气泡，不显示发送方 Agent 身份。
+              const incomingAgentInstruction =
+                msg.senderType === "agent" &&
+                !!currentSeatId &&
+                !!senderInstanceId &&
+                senderInstanceId !== currentSeatId;
+              const asUserMessage =
+                msg.senderType === "user" || incomingAgentInstruction;
+              if (msg.senderType === "agent" && !incomingAgentInstruction) {
                 const secretAwaiting = secretAwaitingFor(msg.senderId, senderInstanceId);
                 /**
                  * 成员视角的**历史轮次**只渲染正文，剥离 reasoning/tool：
@@ -2272,18 +2407,48 @@ export function TeamSessionView({
                     pendingProc.push(...procParts);
                     if (textParts.length === 0) return null;
                     return withSeparator(
-                      <React.Fragment key={msg.id}>
-                        {flushProc(msg.id)}
-                        <MsgParts parts={textParts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatClockTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
-                      </React.Fragment>,
+                      <MsgParts
+                        key={msg.id}
+                        parts={textParts}
+                        variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"}
+                        messageStatus={msg.status}
+                        secretAwaiting={secretAwaiting}
+                        bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)}
+                        author={author}
+                        role={role}
+                        time={formatClockTime(msg.createdAt)}
+                        streaming={msg.status === "processing"}
+                        isMentionMe={isMentionMe}
+                        attachments={attachments}
+                        resolveArtifactDoc={resolveArtifactDoc}
+                        fallbackDocsHref={fallbackDocsHref}
+                        grouped={grouped}
+                        leadingProcess={flushProc(msg.id)}
+                        initials={initials}
+                      />,
                     );
                   }
-                  // 最新一轮：先 flush 之前累积的过程组，再完整渲染（过程可展开）
+                  // 最新一轮：历史过程聚合放在身份栏之后，再完整渲染本轮过程与正文。
                   return withSeparator(
-                    <React.Fragment key={msg.id}>
-                      {flushProc(`tail-${msg.id}`)}
-                      <MsgParts parts={parts} variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"} messageStatus={msg.status} secretAwaiting={secretAwaiting} bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)} author={author} role={role} time={formatClockTime(msg.createdAt)} streaming={msg.status === "processing"} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} grouped={grouped} initials={initials} />
-                    </React.Fragment>,
+                    <MsgParts
+                      key={msg.id}
+                      parts={parts}
+                      variant={isGroupTab && !isMemberView ? "bubble" : streamStyle === "dsh" ? "dsh" : "bubble"}
+                      messageStatus={msg.status}
+                      secretAwaiting={secretAwaiting}
+                      bodyText={stripInjectedContext(((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string)}
+                      author={author}
+                      role={role}
+                      time={formatClockTime(msg.createdAt)}
+                      streaming={msg.status === "processing"}
+                      isMentionMe={isMentionMe}
+                      attachments={attachments}
+                      resolveArtifactDoc={resolveArtifactDoc}
+                      fallbackDocsHref={fallbackDocsHref}
+                      grouped={grouped}
+                      leadingProcess={flushProc(`tail-${msg.id}`)}
+                      initials={initials}
+                    />,
                   );
                 }
                 return withSeparator(
@@ -2333,7 +2498,7 @@ export function TeamSessionView({
                  */
                 if (!cleaned && rawText) return null;
                 return withSeparator(
-                  <ChatBubble key={msg.id} text={cleaned} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatClockTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} initials={initials} status={msg.status} />,
+                  <ChatBubble key={msg.id} text={cleaned} type={asUserMessage ? "user" : "agent"} author={asUserMessage ? undefined : author} role={asUserMessage ? undefined : role} time={formatClockTime(msg.createdAt)} isMentionMe={isMentionMe} attachments={attachments} resolveArtifactDoc={resolveArtifactDoc} fallbackDocsHref={fallbackDocsHref} initials={asUserMessage ? undefined : initials} status={msg.status} />,
                 );
               }
               });
@@ -2370,13 +2535,13 @@ export function TeamSessionView({
           </div>
           </div>
 
-          <div style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "var(--color-surface)", borderTop: `1px solid ${neutral[200]}` }}>
+          <div style={{ position: "relative", padding: compactHeight ? `${space.sm}px ${space.lg}px` : `${space.md}px ${space.xl}px`, backgroundColor: "var(--color-surface)", borderTop: `1px solid ${neutral[200]}` }}>
             {sendError && (
-              <div data-testid="team-session-send-error" role="alert" style={{ marginBottom: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>
+              <div data-testid="team-session-send-error" role="alert" style={{ ...(compactHeight ? { position: "absolute", left: 16, right: 16, bottom: "calc(100% + 6px)", zIndex: 35, boxShadow: "0 8px 24px rgba(15,23,42,.16)" } : { marginBottom: space.sm }), padding: `${space.xs}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "var(--color-danger-text)", fontSize: fontSize.sm }}>
                 发送失败：{sendError}
               </div>
             )}
-            {isGroupTab && mentionable.length > 0 && (
+            {!compactHeight && isGroupTab && mentionable.length > 0 && (
               <div data-testid="chat-quick-commands" style={{ display: "flex", alignItems: "center", gap: space.xs, flexWrap: "wrap", marginBottom: space.sm }}>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>快捷：</span>
                 {mentionable.slice(0, 3).map((m) => (
@@ -2402,10 +2567,11 @@ export function TeamSessionView({
               onSend={handleSend}
               mentionable={mentionable}
               sending={sendMutation.isPending}
+              compact={compactHeight}
               taskId={panelTaskActive ? panelTask!.id : undefined}
               placeholder={isGroupTab ? "输入消息，@ 成员或 @all 广播…" : `发送私聊给 ${teamAgentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`}
             />
-            <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[400] }}>按团队复用 · 群聊消息按当前任务分区归属 {team.name}</div>
+            {!compactHeight && <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[400] }}>按团队复用 · 群聊消息按当前任务分区归属 {team.name}</div>}
           </div>
         </div>
 

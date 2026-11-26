@@ -35,6 +35,8 @@ const iso = "2026-11-18T03:00:00.000Z";
 const NARROW = { width: 900, height: 620 };
 /** 标准桌面（既有习惯，不应被小屏默认值影响） */
 const WIDE = { width: 1280, height: 900 };
+/** 宽但矮的笔记本：高度紧凑模式必须触发。 */
+const COMPACT = { width: 1440, height: 900 };
 
 const SEATS = [
   { id: "tmm_0000000001", alias: "林一架", agent: "架构师", role: "architect" },
@@ -42,7 +44,7 @@ const SEATS = [
   { id: "tmm_0000000003", alias: "文一知", agent: "文档", role: "doc_writer" },
 ];
 
-function teamFixture() {
+function teamFixture(busy = false) {
   return {
     id: TEAM_ID,
     name: "e2e 小屏团队",
@@ -67,7 +69,9 @@ function teamFixture() {
       workDir: `/data/vteam-worker/${s.alias}`,
       member: null,
       agent: { id: `a_${s.role}`, name: s.agent, role: s.role },
-      sessionStatus: { busyState: "idle", busySince: null, lastTurnOutcome: null, lastActivityAt: null },
+      sessionStatus: busy && i === 0
+        ? { busyState: "running", busySince: iso, lastTurnOutcome: null, lastActivityAt: iso }
+        : { busyState: "idle", busySince: null, lastTurnOutcome: null, lastActivityAt: null },
       createdAt: iso,
     })),
     userMembers: [],
@@ -156,7 +160,7 @@ function secretQuestion() {
   };
 }
 
-async function installMocks(page: Page): Promise<void> {
+async function installMocks(page: Page, options: { busy?: boolean } = {}): Promise<void> {
   // 兜底：未显式 mock 的接口给空分页，避免 401 触发全局登出跳落地页
   await page.route("**/api/v1/**", (route: Route) =>
     route.fulfill({
@@ -192,7 +196,7 @@ async function installMocks(page: Page): Promise<void> {
     }),
   );
   await page.route((url) => url.pathname === `/api/v1/teams/${TEAM_ID}`, (route) =>
-    route.fulfill({ json: teamFixture() }),
+    route.fulfill({ json: teamFixture(options.busy) }),
   );
   await page.route((url) => url.pathname === `/api/v1/tasks/${TASK_ID}`, (route) =>
     route.fulfill({ json: taskFixture() }),
@@ -344,7 +348,40 @@ test.describe("小屏适配：面板收起/拖拽 + 弹窗按钮可达", () => {
     await expect(page.getByTestId("task-panel-rail")).toHaveCount(0);
   });
 
-  test("3. 左会话列表：拖拽改宽 + 刷新后保持 + 收起再展开", async ({ page }) => {
+  test("3. 1440×900 高度紧凑：正文区不低于视口 55%，@ 候选不撑高 composer", async ({ page }) => {
+    await resetPanelPrefs(page);
+    await page.setViewportSize(COMPACT);
+    await installMocks(page, { busy: true });
+    await openGroupChat(page);
+
+    await expect(page.getByTestId("group-busy-banner")).toBeVisible();
+    await expect(page.getByTestId("chat-quick-commands")).toHaveCount(0);
+    const switcher = page.getByTestId("group-member-switcher");
+    expect((await switcher.boundingBox())!.height).toBeLessThan(56);
+
+    await page.getByTestId("group-member-chip").first().click();
+    const list = page.getByTestId("chat-message-list");
+    await expect(list).toBeVisible();
+    const listBox = await list.boundingBox();
+    expect(listBox!.height, "紧凑模式下正文区应不低于视口 55%").toBeGreaterThanOrEqual(
+      COMPACT.height * 0.55,
+    );
+
+    const composer = page.getByTestId("message-input-root");
+    const beforeMention = (await composer.boundingBox())!.height;
+    await page.getByTestId("message-input").fill("@");
+    await expect(page.getByTestId("message-input-mentions")).toBeVisible();
+    const afterMention = (await composer.boundingBox())!.height;
+    expect(Math.abs(afterMention - beforeMention)).toBeLessThanOrEqual(2);
+
+    await page.getByTestId("message-input").fill(Array.from({ length: 8 }, (_, i) => `第 ${i + 1} 行`).join("\n"));
+    await expect
+      .poll(async () => (await list.boundingBox())?.height ?? 0)
+      .toBeGreaterThanOrEqual(COMPACT.height * 0.52);
+    expect((await composer.boundingBox())!.height).toBeLessThan(150);
+  });
+
+  test("4. 左会话列表：拖拽改宽 + 刷新后保持 + 收起再展开", async ({ page }) => {
     await resetPanelPrefs(page);
     await page.setViewportSize(WIDE);
     await installMocks(page);

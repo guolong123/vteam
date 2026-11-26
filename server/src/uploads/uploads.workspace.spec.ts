@@ -139,6 +139,21 @@ describe('uploads 空间分区（M2-3）', () => {
       expect(signUploadUrl(signed)).toBe(signed);
     });
 
+    it('中文文件名：浏览器百分号编码后的请求路径仍通过验签', () => {
+      const raw = '/uploads/workspaces/ws_a/uuid__缺项盘点-烟机部署手册.md';
+      const signed = signUploadUrl(raw);
+      const q = Object.fromEntries(
+        new URLSearchParams(signed.split('?')[1]).entries(),
+      );
+      const encodedPath = encodeURI(signed.split('?')[0]);
+
+      expect(encodedPath).not.toBe(signed.split('?')[0]);
+      expect(verifyUploadUrlSignature(encodedPath, q)).toBe(true);
+      expect(verifyUploadUrlSignature(encodeURI(`${raw}.other`), q)).toBe(
+        false,
+      );
+    });
+
     it('存量根目录 URL 不签名、不拦截（兼容旧数据）', () => {
       const legacy = '/uploads/abc.pdf';
       expect(signUploadUrl(legacy)).toBe(legacy);

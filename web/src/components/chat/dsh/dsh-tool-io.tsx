@@ -24,7 +24,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { CommandText, ImageLightbox } from "@deepseek-ai/dsh-client-ui-primitives";
 import { getAuthToken } from "@/lib/api";
-import { DshToolBlocks, commandOf } from "./dsh-tool-blocks";
+import { diffOfInput } from "@/lib/edit-diff";
+import { EditDiffView } from "@/src/components/chat/edit-diff-view";
+import { DshToolBlocks, commandOf, viewKindOf } from "./dsh-tool-blocks";
 import { DSH_COMMON_ZH } from "./dsh-labels";
 
 /** 输入解析结果：对象 → 键值对；非对象 → 原样单值。 */
@@ -186,12 +188,19 @@ export function DshToolIO({ toolName, input, output }: DshToolIOProps) {
    */
   const command = useMemo(() => commandOf(input), [input]);
   const outputView = useMemo(() => parseToolOutput(output), [output]);
+  const editDiffs = useMemo(
+    () => (viewKindOf(toolName, output) === "diff" ? diffOfInput(input) : null),
+    [toolName, input, output],
+  );
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
 
   /** 图片 objectURL：经控制面端点从 worker 工作区取字节（带 Bearer 鉴权）。 */
   const imagePath = outputView.kind === "image" ? outputView.path : "";
   const imageSrc = useAuthedImageUrl(imagePath);
+
+  // Edit 的 diff 完全来自入参；输出为空也必须渲染，且不再重复展示 old/new JSON。
+  if (editDiffs !== null) return <EditDiffView hunks={editDiffs} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

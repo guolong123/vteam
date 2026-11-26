@@ -146,7 +146,8 @@ describe('ReceiptNudgeHandler 催办文案分级（批次 A4）', () => {
       expect(text).toContain('m_0000000100');
       expect(text).toContain('没有看到你的任何回复或产出物');
       expect(text).toContain('请先开工');
-      expect(text).toContain('vteam_notify_agent');
+      expect(text).toContain('vteam_group_post');
+      expect(text).toContain('completion');
     });
 
     it('已交付未销账：说清「账上有交付、结账是平台的锅」+ 给出销账动作', () => {
