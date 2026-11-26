@@ -156,6 +156,7 @@ import {
  * （15 篇 §2.2：m_<零填充序号>，数值序 == 字典序，兼作历史游标）。
  */
 const MESSAGE_ID_PREFIX = 'm';
+const CHANNEL_ID_PREFIX = 'c';
 
 /**
  * notify_agent 内容幂等窗口（notify-dedup A2）：同发送者→同目标、
@@ -1615,11 +1616,22 @@ export class PlatformMcpService implements OnModuleInit {
       selfInstanceId?: string;
       content: string;
       fileRef?: string;
+      completion?: {
+        targetInstanceId: string;
+        type?: 'answer';
+        stage?: 'process' | 'end';
+      };
     },
   ): Promise<{
     messageId: string;
     channelId: string;
     attachment: GroupPostAttachment | null;
+    completion?: {
+      targetInstanceId: string;
+      type: 'answer';
+      stage: 'process' | 'end';
+      reason: 'join-pending';
+    };
   }> {
     const exec = await this.resolveExecContext(ctx, args);
     // 身份归一（2026-11-17）：args.selfInstanceId 现已可选，而后续逻辑（发送者、
@@ -1633,6 +1645,27 @@ export class PlatformMcpService implements OnModuleInit {
       ? await this.ensureTeamGroupChannelByTeam(exec.teamId)
       : await this.ensureTeamGroupChannel(effTaskId as string);
     const instanceId = exec.callerId;
+    const teamId = isTeam
+      ? exec.teamId
+      : await this.teamIdOfTask(effTaskId as string);
+    let completionMainId: string | null = null;
+    if (args.completion) {
+      if (!teamId) {
+        throw new BadRequestException('completion 需要明确的团队归属');
+      }
+      completionMainId = await this.mainMemberOfTeam(teamId);
+      if (
+        !completionMainId ||
+        args.completion.targetInstanceId !== completionMainId ||
+        instanceId === completionMainId
+      ) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+          message:
+            'group_post completion 只能由子 Agent 向本团队主 Agent 登记完工回执',
+        });
+      }
+    }
     // 内容幂等探针（MCP -32001 超时重发去重）：窗口内同发送者→同频道已有
     // 同 sha1(归一化正文) 行 → 复用既有 messageId，不新建行、不重广播。
     // 读错 fail-open（继续正常落库）。附件/mentions 解析在命中时直接跳过。
@@ -1645,6 +1678,35 @@ export class PlatformMcpService implements OnModuleInit {
       this.logger.warn(
         `[mcp] group_post 内容幂等命中 from=${instanceId} channel=${channel.id} reuse=${groupDedupHit}（未新建行）`,
       );
+      if (args.completion && teamId && completionMainId) {
+        await this.writeJoinAuditReceipt({
+          messageId: groupDedupHit,
+          taskId: effTaskId,
+          teamId,
+          fromInstanceId: instanceId,
+          toInstanceId: completionMainId,
+          content: args.content,
+          issueId: null,
+        });
+        await this.ackAndDrain({
+          teamId,
+          mainMemberId: completionMainId,
+          reporterInstanceId: instanceId,
+          text: args.content,
+          messageId: groupDedupHit,
+        });
+        return {
+          messageId: groupDedupHit,
+          channelId: channel.id,
+          attachment: null,
+          completion: {
+            targetInstanceId: completionMainId,
+            type: 'answer',
+            stage: args.completion.stage ?? 'process',
+            reason: 'join-pending',
+          },
+        };
+      }
       return {
         messageId: groupDedupHit,
         channelId: channel.id,
@@ -1718,14 +1780,46 @@ export class PlatformMcpService implements OnModuleInit {
     //   ② 发言者是主 Agent ⇒ 它收到的 question/help 回执行结账
     //      （me_0000000061：主 Agent 明明答了，账本却一直 pending ⇒ 平台反催主 Agent）。
     await this.settleReceiptsAfterDelivery({
-      teamId: isTeam
-        ? exec.teamId
-        : await this.teamIdOfTask(effTaskId as string),
+      teamId,
       channelId: channel.id,
       actorInstanceId: instanceId,
       content: args.content,
       postedAt: message.createdAt ?? null,
     });
+
+    // 公开结论与完工回执合并为同一条群消息：复用 notify_agent join 报告的审计与
+    // ACK/drain 副作用，但不再创建第二条消息，也不唤醒目标执行 turn。
+    if (args.completion && teamId && completionMainId) {
+      const completionType = 'answer' as const;
+      const completionStage = args.completion.stage ?? 'process';
+      await this.writeJoinAuditReceipt({
+        messageId: message.id,
+        taskId: effTaskId,
+        teamId,
+        fromInstanceId: instanceId,
+        toInstanceId: completionMainId,
+        content: args.content,
+        issueId: null,
+      });
+      await this.ackAndDrain({
+        teamId,
+        mainMemberId: completionMainId,
+        reporterInstanceId: instanceId,
+        text: args.content,
+        messageId: message.id,
+      });
+      return {
+        messageId: message.id,
+        channelId: channel.id,
+        attachment: attachment ?? null,
+        completion: {
+          targetInstanceId: completionMainId,
+          type: completionType,
+          stage: completionStage,
+          reason: 'join-pending',
+        },
+      };
+    }
 
     // group_post 为「通知/留痕」语义：@ 提及只落库（mentions 列）+ 频道广播，永不自动唤醒。
     // 2026-09-16 移除多 @ 自动触发：派发携带原文，平台无法理解「请开发修复、测试待命」，
@@ -1909,7 +2003,7 @@ export class PlatformMcpService implements OnModuleInit {
    */
   async notifyAgent(
     ctx: PlatformMcpContext,
-    args: {
+    input: {
       taskId?: string;
       teamId?: string;
       selfInstanceId?: string;
@@ -1959,7 +2053,11 @@ export class PlatformMcpService implements OnModuleInit {
       receiptTimeoutMin?: number;
     },
   ): Promise<NotifyAgentResult> {
-    const exec = await this.resolveExecContext(ctx, args);
+    const exec = await this.resolveExecContext(ctx, input);
+    // resolveExecContext 已把省略/mbr_ 身份归一为当前团队的真实席位；后续 sender、
+    // mentions、镜像与派发必须统一使用它，不能再用原始可选参数（undefined 会触发
+    // Prisma where.id=undefined，团队维度自动改走任务维度时尤其致命）。
+    const args = { ...input, selfInstanceId: exec.callerId };
     const isTeam = exec.kind === 'team';
     // 入口维度的团队 id（收窄后落地）：批次 A3 要在**运行期**换维度，而判别联合的
     // 收窄只在 const 布尔别名上成立——故先把值取出来，改道只动 eff* 变量。
@@ -2393,56 +2491,81 @@ export class PlatformMcpService implements OnModuleInit {
         `[mcp] notify_agent join 抑制 fail-open：团队 ${notifyTeamId} 无主成员可判定归属，按普通派发 from=${args.selfInstanceId} to=${args.targetInstanceId}`,
       );
     }
-    // 放行派发嵌入视角边界（todo 8，docs 33 §3.5；非 review 原样透传）。
-    // join 抑制分支跳过：在主 Agent 上不开执行 turn（消息已落库已广播，回执照记）。
-    const dispatchText =
-      kind === 'review' ? ensureRoleViewFooter(finalText) : finalText;
-    if (!isJoinReport) {
-      if (effIsTeam && execTeamId) {
-        await this.workerDispatcher.dispatchAgentMention({
-          teamId: execTeamId,
-          channelId: channel.id,
-          text: dispatchText,
-          targetInstanceId: args.targetInstanceId,
-          ...(args.issueId ? { issueId: args.issueId } : {}),
-          kind,
-        });
-      } else {
-        await this.workerDispatcher.dispatchAgentMention({
-          taskId: effTaskId as string,
-          channelId: channel.id,
-          text: dispatchText,
-          targetInstanceId: args.targetInstanceId,
-          ...(args.issueId ? { issueId: args.issueId } : {}),
-          kind,
-        });
-      }
-    }
-    // 成员私聊镜像：agent → agent 的派发/协调消息原本只落在群聊频道；在目标成员的
-    // 私聊里也留一条发送记录（sender = 本次调用者），这样“项目经理发给某成员的消息”
-    // 能在该成员的消息列表里看到。
+    // 成员私聊镜像必须**先于派发**落库：派发可能失败，但「主 Agent 发给成员了什么」
+    // 是已经发生的协调事实，不能因此从成员私聊里消失。镜像失败只告警，不阻断派发。
     if (!isJoinReport) {
       try {
         const targetSeat = await (this.prisma as any).teamMember.findUnique({
           where: { id: args.targetInstanceId },
-          select: { memberId: true, teamId: true },
+          select: { memberId: true, teamId: true, agentId: true },
         });
-        // 只镜像到「已回填平台成员」的私聊：旧席位没有 memberId 时保持原行为，
-        // 且避免单测/旧数据把群频道误当私聊。
-        const privateChannel = targetSeat?.memberId
+        const targetTeamId = execTeamId ?? targetSeat?.teamId ?? '';
+        // 优先按「团队 × 席位」精确定位，兼容 member_id 为空的存量私聊；
+        // soft-delete 的精确频道先复活，避免撞 uk_channels_team_member。
+        let privateChannel = targetTeamId
           ? await (this.prisma as any).chatChannel.findFirst({
               where: {
-                memberId: targetSeat.memberId,
+                teamId: targetTeamId,
+                teamMemberId: args.targetInstanceId,
                 type: 'private',
-                deletedAt: null,
+              },
+              orderBy: { createdAt: 'asc' },
+              select: { id: true, deletedAt: true },
+            })
+          : null;
+        if (privateChannel?.deletedAt) {
+          const revived = await (this.prisma as any).chatChannel.update({
+            where: { id: privateChannel.id },
+            data: { deletedAt: null },
+            select: { id: true },
+          });
+          privateChannel = revived;
+        }
+        if (!privateChannel && targetSeat?.memberId) {
+          privateChannel = await (this.prisma as any).chatChannel.findFirst({
+            where: {
+              memberId: targetSeat.memberId,
+              type: 'private',
+              deletedAt: null,
+            },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true },
+          });
+        }
+        // 目标席位尚无私聊频道时，派发前先创建。否则成员历史合并不到主 Agent 的
+        // 派发文本，worker 的群聊流式事件也会因无 private 频道被跳过（表现为一次性
+        // 出结果）。唯一键并发创建按 P2002 收敛到已存在频道。
+        if (!privateChannel && targetTeamId && targetSeat?.agentId) {
+          try {
+            const created = await (this.prisma as any).chatChannel.create({
+              data: {
+                id: await this.idGen.nextId(CHANNEL_ID_PREFIX),
+                type: CHANNEL_TYPE.private,
+                teamId: targetTeamId,
+                teamMemberId: args.targetInstanceId,
+                memberId: targetSeat.memberId ?? null,
+                agentId: targetSeat.agentId,
+                taskId: null,
+              },
+              select: { id: true },
+            });
+            privateChannel = created;
+          } catch (err) {
+            if ((err as { code?: string })?.code !== 'P2002') throw err;
+            privateChannel = await (this.prisma as any).chatChannel.findFirst({
+              where: {
+                teamId: targetTeamId,
+                teamMemberId: args.targetInstanceId,
+                type: 'private',
               },
               orderBy: { createdAt: 'asc' },
               select: { id: true },
-            })
-          : null;
+            });
+          }
+        }
         if (privateChannel) {
           const senderAgentId = await this.resolveTeamSenderAgentId(
-            execTeamId ?? targetSeat?.teamId ?? '',
+            targetTeamId,
             args.selfInstanceId,
           );
           const mirrored = await (this.prisma as any).message.create({
@@ -2468,6 +2591,31 @@ export class PlatformMcpService implements OnModuleInit {
         this.logger.warn(
           `[mcp] notify_agent 私聊镜像失败（不阻断派发） to=${args.targetInstanceId}: ${err instanceof Error ? err.message : String(err)}`,
         );
+      }
+    }
+    // 放行派发嵌入视角边界（todo 8，docs 33 §3.5；非 review 原样透传）。
+    // join 抑制分支跳过：在主 Agent 上不开执行 turn（消息已落库已广播，回执照记）。
+    const dispatchText =
+      kind === 'review' ? ensureRoleViewFooter(finalText) : finalText;
+    if (!isJoinReport) {
+      if (effIsTeam && execTeamId) {
+        await this.workerDispatcher.dispatchAgentMention({
+          teamId: execTeamId,
+          channelId: channel.id,
+          text: dispatchText,
+          targetInstanceId: args.targetInstanceId,
+          ...(args.issueId ? { issueId: args.issueId } : {}),
+          kind,
+        });
+      } else {
+        await this.workerDispatcher.dispatchAgentMention({
+          taskId: effTaskId as string,
+          channelId: channel.id,
+          text: dispatchText,
+          targetInstanceId: args.targetInstanceId,
+          ...(args.issueId ? { issueId: args.issueId } : {}),
+          kind,
+        });
       }
     }
     if (kind === 'execution') {

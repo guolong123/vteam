@@ -188,7 +188,13 @@ describe('PlatformMcpService', () => {
     resolveByRole: jest.Mock;
     resolveByAgent: jest.Mock;
   };
-  let receiptsService: { countPending: jest.Mock };
+  let receiptsService: {
+    countPending: jest.Mock;
+    settleByReference: jest.Mock;
+    settleQuestionReceiptsAfterMainPost: jest.Mock;
+    ackPendingFor: jest.Mock;
+    countPendingFor: jest.Mock;
+  };
   let hookService: { cancelHook: jest.Mock; registerHook: jest.Mock };
   const allowPolicy = () => {
     executionPolicyService.resolveByRole.mockResolvedValue({
@@ -387,6 +393,10 @@ describe('PlatformMcpService', () => {
     };
     receiptsService = {
       countPending: jest.fn().mockResolvedValue({ pending: 0, total: 0 }),
+      settleByReference: jest.fn().mockResolvedValue(0),
+      settleQuestionReceiptsAfterMainPost: jest.fn().mockResolvedValue(0),
+      ackPendingFor: jest.fn().mockResolvedValue(0),
+      countPendingFor: jest.fn().mockResolvedValue(0),
     };
     hookService = {
       cancelHook: jest.fn(),
@@ -1558,6 +1568,85 @@ describe('PlatformMcpService', () => {
       });
     });
 
+    it('completion：群消息与主 Agent 完工回执合并为一条，不派发执行 turn', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      const auditSpy = jest
+        .spyOn(service as any, 'writeJoinAuditReceipt')
+        .mockResolvedValue(undefined);
+      const ackSpy = jest
+        .spyOn(service as any, 'ackAndDrain')
+        .mockResolvedValue(undefined);
+
+      const result = await service.groupPost(ctx, {
+        taskId,
+        content: '公开结论：已完成',
+        selfInstanceId: senderInstanceId,
+        completion: {
+          targetInstanceId: 'tmm_main',
+          type: 'answer',
+          stage: 'end',
+        },
+      });
+
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(realtime.broadcast).toHaveBeenCalledTimes(1);
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(auditSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'm_0000000100',
+          teamId: 'tm_1',
+          fromInstanceId: senderInstanceId,
+          toInstanceId: 'tmm_main',
+          content: '公开结论：已完成',
+        }),
+      );
+      expect(ackSpy).toHaveBeenCalledWith({
+        teamId: 'tm_1',
+        mainMemberId: 'tmm_main',
+        reporterInstanceId: senderInstanceId,
+        text: '公开结论：已完成',
+        messageId: 'm_0000000100',
+      });
+      expect(result).toEqual({
+        messageId: 'm_0000000100',
+        channelId,
+        attachment: null,
+        completion: {
+          targetInstanceId: 'tmm_main',
+          type: 'answer',
+          stage: 'end',
+          reason: 'join-pending',
+        },
+      });
+    });
+
+    it('completion 目标不是本团队主 Agent → 落库前 403', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      });
+
+      await expectCode(
+        service.groupPost(ctx, {
+          taskId,
+          content: '不应落库的回执',
+          selfInstanceId: senderInstanceId,
+          completion: { targetInstanceId: 'tmm_other', stage: 'end' },
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+      );
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
     it('2026-09-16 移除多 @ 触发：content 含 @ 成员 → 落库 mentions 但不派发（通知/留痕语义）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
@@ -2272,6 +2361,63 @@ describe('PlatformMcpService', () => {
         claimed: true,
         sessionStatus: 'running',
       });
+    });
+
+    it('存量无 memberId 的精确私聊也镜像，且派发失败不丢失主 Agent 消息', async () => {
+      allowWorker();
+      mockTeamMemberRows();
+      prisma.teamMember.findUnique.mockImplementation(
+        (args: { where: { id?: string } }) => {
+          if (args.where.id === 'tmm_tester') {
+            return Promise.resolve({ memberId: null, teamId: 'tm_1' });
+          }
+          if (args.where.id === senderInstanceId) {
+            return Promise.resolve({ agentId: 'a_sender' });
+          }
+          return Promise.resolve(null);
+        },
+      );
+      prisma.chatChannel.findFirst.mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          where?.teamMemberId === 'tmm_tester'
+            ? { id: 'c_dm_legacy' }
+            : { id: channelId },
+        ),
+      );
+      idGen.nextId
+        .mockResolvedValueOnce('m_0000000200')
+        .mockResolvedValueOnce('m_0000000201');
+      prisma.message.create.mockImplementation(({ data }: any) =>
+        Promise.resolve({ ...createdMessage, ...data }),
+      );
+      workerDispatcher.dispatchAgentMention.mockRejectedValue(
+        new Error('dispatch down'),
+      );
+
+      await expect(
+        service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        }),
+      ).rejects.toThrow('dispatch down');
+
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            id: 'm_0000000201',
+            channelId: 'c_dm_legacy',
+            senderType: SENDER_TYPE.agent,
+            senderId: 'a_sender',
+            senderInstanceId: 'tmm_sender',
+            content: { text: '请查看这个文件', parts: [] },
+          }),
+        }),
+      );
+      expect(prisma.message.create.mock.invocationCallOrder[1]).toBeLessThan(
+        workerDispatcher.dispatchAgentMention.mock.invocationCallOrder[0],
+      );
     });
 
     it('团队维度（teamId、无任务）→ 落库广播后经团队路径触发目标成员 + 返回 triggered:true', async () => {

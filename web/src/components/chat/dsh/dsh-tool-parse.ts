@@ -67,11 +67,8 @@ export interface ParsedSearch {
 }
 
 /** 一个文件改动（与 primitives 的 `DiffHunk` 结构兼容）。 */
-export interface ParsedDiffHunk {
-  path: string;
-  oldText: string | null;
-  newText: string;
-}
+export type { EditDiffHunk as ParsedDiffHunk } from "@/lib/edit-diff";
+export { diffOfInput } from "@/lib/edit-diff";
 
 /** 扩展名 → shiki 语言 id。 */
 const LANG_BY_EXT: Record<string, string> = {
@@ -205,47 +202,6 @@ export function commandOf(input: string): string | null {
   if (obj === null) return null;
   const cmd = obj.command ?? obj.cmd;
   return typeof cmd === 'string' && cmd.trim().length > 0 ? cmd : null;
-}
-
-/**
- * 编辑类工具的 diff（**从入参构造**，不依赖输出格式）。
- *
- * - `edit` / `str_replace`：`file_path` + `old_string` / `new_string`；
- * - `write`：`file_path` + `content`（无旧内容 → oldText=null）；
- * - 多编辑：`edits: [{old_string,new_string}]` 逐条成 hunk。
- */
-export function diffOfInput(input: string): ParsedDiffHunk[] | null {
-  const obj = asJsonObject(input);
-  if (obj === null) return null;
-  const path =
-    typeof obj.file_path === 'string'
-      ? obj.file_path
-      : typeof obj.path === 'string'
-        ? obj.path
-        : '';
-
-  const edits = obj.edits;
-  if (Array.isArray(edits) && edits.length > 0) {
-    const hunks: ParsedDiffHunk[] = [];
-    for (const e of edits) {
-      if (e === null || typeof e !== 'object') continue;
-      const rec = e as Record<string, unknown>;
-      const oldText = typeof rec.old_string === 'string' ? rec.old_string : null;
-      const newText = typeof rec.new_string === 'string' ? rec.new_string : '';
-      if (oldText === null && newText === '') continue;
-      hunks.push({ path, oldText, newText });
-    }
-    return hunks.length > 0 ? hunks : null;
-  }
-
-  const oldString = typeof obj.old_string === 'string' ? obj.old_string : null;
-  const newString = typeof obj.new_string === 'string' ? obj.new_string : null;
-  if (oldString !== null || newString !== null) {
-    return [{ path, oldText: oldString, newText: newString ?? '' }];
-  }
-  const content = typeof obj.content === 'string' ? obj.content : null;
-  if (content !== null) return [{ path, oldText: null, newText: content }];
-  return null;
 }
 
 /** 工具名分类（决定用哪个专用视图）。 */

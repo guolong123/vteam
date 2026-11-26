@@ -23,10 +23,13 @@
 "use client";
 
 import { stripInjectedContext } from "@/lib/strip-injected-context";
+import { findActiveStreamingPart } from "@/lib/streaming-parts";
+import { EDIT_DIFF_INPUT_MAX_CHARS, isEditToolName } from "@/lib/edit-diff";
 import {
   formatToolIO,
   isEmptyToolIO,
   isSecretCommandPart,
+  TOOL_IO_MAX_CHARS,
   toToolStatus,
 } from "@/src/components/chat/msg-parts";
 import type { PartShape } from "@/src/components/chat/msg-parts";
@@ -102,13 +105,6 @@ function reasoningText(p: PartShape): string {
   return p.text ?? p.summary ?? p.thoughts ?? p.detail ?? "";
 }
 
-/** part 是否最终会产出可见内容（用于正文兜底判定）。 */
-function isRenderableTextPart(p: PartShape): boolean {
-  if (p.type !== "text") return false;
-  if (p.synthetic === true) return false;
-  return stripInjectedContext(p.text ?? "").trim().length > 0;
-}
-
 /**
  * vteam part 数组 → DSH block 数组（保持**原始顺序**）。
  *
@@ -142,7 +138,10 @@ export function toDshBlocks(
     }
     const live = status === "running" && (streaming || messageStatus === "processing");
     const errorText = typeof state?.error === "string" ? state.error : "";
-    const input = formatToolIO(state?.input);
+    const input = formatToolIO(
+      state?.input,
+      isEditToolName(name) ? EDIT_DIFF_INPUT_MAX_CHARS : TOOL_IO_MAX_CHARS,
+    );
     const output = formatToolIO(state?.output) || errorText;
     // 空卡兜底：与老分支同一口径（流式当前消息上的 running 卡豁免，进度反馈不能闪断）
     if (status !== "awaiting-input" && !live && isEmptyToolIO(input) && isEmptyToolIO(output)) {
@@ -158,16 +157,10 @@ export function toDshBlocks(
     };
   };
 
-  // 「正在生成的那一条」：最后一条有内容的 reasoning / 最后一条可渲染 text。
-  // 用位置推断而非 part.state —— reasoning part 没有 state 字段（serve 只在 tool 上有）。
-  let lastReasoningIdx = -1;
-  let lastTextIdx = -1;
-  deduped.forEach((p, i) => {
-    if ((p.type === "reasoning" || p.type === "thinking") && reasoningText(p).trim().length > 0) {
-      lastReasoningIdx = i;
-    }
-    if (isRenderableTextPart(p)) lastTextIdx = i;
-  });
+  // 当前真正活跃的过程片段：后面出现工具/正文/错误后，前面的 reasoning/text
+  // 必须立即收敛，不能因为整条消息仍是 processing 就一直显示思考中/生成中。
+  const activeReasoning = findActiveStreamingPart(deduped, streaming, "reasoning");
+  const activeText = findActiveStreamingPart(deduped, streaming, "text");
 
   const blocks: DshBlock[] = [];
   deduped.forEach((p, i) => {
@@ -180,7 +173,7 @@ export function toDshBlocks(
         kind: "reasoning",
         key: p.id ?? `reasoning-${i}`,
         text,
-        running: streaming && i === lastReasoningIdx,
+        running: streaming && p === activeReasoning,
       });
       return;
     }
@@ -194,7 +187,7 @@ export function toDshBlocks(
         key: p.id ?? `text-${i}`,
         text,
         // 只有**最后一条**正文承担流式；更早的正文都已定稿（DSH 同口径）
-        streaming: streaming && i === lastTextIdx,
+        streaming: streaming && p === activeText,
       });
       return;
     }

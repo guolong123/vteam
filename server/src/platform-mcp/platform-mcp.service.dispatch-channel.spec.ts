@@ -41,7 +41,7 @@ describe('PlatformMcpService notify_agent 派发通道语义（批次 A）', () 
       findUnique: jest.Mock;
       findMany: jest.Mock;
     };
-    chatChannel: { findFirst: jest.Mock };
+    chatChannel: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
     message: { create: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
     team: { findUnique: jest.Mock };
@@ -92,7 +92,11 @@ describe('PlatformMcpService notify_agent 派发通道语义（批次 A）', () 
         findUnique: jest.fn().mockResolvedValue({ status: 'running' }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      chatChannel: { findFirst: jest.fn() },
+      chatChannel: {
+        findFirst: jest.fn(),
+        create: jest.fn().mockResolvedValue({ id: 'c_private' }),
+        update: jest.fn(),
+      },
       message: { create: jest.fn(), findMany: jest.fn() },
       task: { findUnique: jest.fn() },
       team: { findUnique: jest.fn() },
@@ -152,7 +156,9 @@ describe('PlatformMcpService notify_agent 派发通道语义（批次 A）', () 
       agentId: 'a_main',
       teamMemberId: mainMemberId,
     });
-    prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+    prisma.chatChannel.findFirst.mockImplementation(({ where }: any) =>
+      Promise.resolve(where?.type === 'private' ? null : { id: channelId }),
+    );
     prisma.teamMember.findFirst.mockResolvedValue({
       agentId: 'a_tester',
       alias: null,
@@ -244,6 +250,99 @@ describe('PlatformMcpService notify_agent 派发通道语义（批次 A）', () 
       expect(result.claimed).toBe(false);
       expect(result.sessionStatus).toBe('running');
     });
+  });
+
+  it('目标尚无 private 频道 → 派发前自动创建频道并镜像主 Agent 消息', async () => {
+    prisma.teamMember.findUnique.mockImplementation(({ where }: any) =>
+      Promise.resolve(
+        where?.id === subMemberId
+          ? { memberId: 'mbr_sub', teamId, agentId: 'a_tester' }
+          : { agentId: 'a_main' },
+      ),
+    );
+    prisma.chatChannel.findFirst.mockImplementation(({ where }: any) =>
+      Promise.resolve(where?.type === 'private' ? null : { id: channelId }),
+    );
+    prisma.message.create.mockImplementation(({ data }: any) =>
+      Promise.resolve({
+        id: data.id,
+        channelId: data.channelId,
+        status: data.status,
+        createdAt: new Date('2026-10-22T00:00:00Z'),
+      }),
+    );
+
+    const result = await service.notifyAgent(ctx, baseArgs);
+
+    expect(result.triggered).toBe(true);
+    expect(prisma.chatChannel.create).toHaveBeenCalledTimes(1);
+    expect(prisma.chatChannel.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'private',
+          teamId,
+          teamMemberId: subMemberId,
+          memberId: 'mbr_sub',
+          agentId: 'a_tester',
+        }),
+      }),
+    );
+    // 一条群内派发 + 一条目标私聊镜像，成员历史才能看到主 Agent 发了什么。
+    expect(prisma.message.create).toHaveBeenCalledTimes(2);
+    const mirror = prisma.message.create.mock.calls[1][0].data;
+    expect(mirror).toEqual(
+      expect.objectContaining({
+        channelId: 'c_private',
+        senderType: 'agent',
+        senderInstanceId: mainMemberId,
+        content: { text: content, parts: [] },
+      }),
+    );
+    // 频道与镜像必须先于派发，worker 后续 delta 才能定位到 private 频道。
+    expect(prisma.chatChannel.create.mock.invocationCallOrder[0]).toBeLessThan(
+      workerDispatcher.dispatchAgentMention.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('省略 selfInstanceId 时使用已校验的调用席位，避免任务维度 sender 解析收到 undefined', async () => {
+    jest
+      .spyOn(service as any, 'resolveExecContext')
+      .mockResolvedValue({ kind: 'task', taskId, callerId: mainMemberId });
+    prisma.teamMember.findUnique.mockImplementation(({ where }: any) => {
+      if (!where?.id) {
+        return Promise.reject(
+          new Error('teamMember.findUnique 收到了 undefined id'),
+        );
+      }
+      return Promise.resolve(
+        where.id === subMemberId
+          ? { memberId: 'mbr_sub', teamId, agentId: 'a_tester' }
+          : { agentId: 'a_main' },
+      );
+    });
+    prisma.chatChannel.findFirst.mockImplementation(({ where }: any) =>
+      Promise.resolve(where?.type === 'private' ? null : { id: channelId }),
+    );
+    prisma.message.create.mockImplementation(({ data }: any) =>
+      Promise.resolve({
+        id: data.id,
+        channelId: data.channelId,
+        status: data.status,
+        createdAt: new Date('2026-10-22T00:00:00Z'),
+      }),
+    );
+
+    const result = await service.notifyAgent(ctx, {
+      taskId,
+      targetInstanceId: subMemberId,
+      content,
+    });
+
+    expect(result.triggered).toBe(true);
+    expect(prisma.message.create).toHaveBeenCalledTimes(2);
+    for (const [call] of prisma.message.create.mock.calls) {
+      expect(call.data.senderInstanceId).toBe(mainMemberId);
+    }
   });
 
   describe('A2 · 一等更正语义 supersede', () => {
@@ -403,9 +502,9 @@ describe('PlatformMcpService notify_agent 派发通道语义（批次 A）', () 
       expect(result.reason).toBe('ok');
       expect(result.channelSwitched).toBe('task');
       expect(result.channelSwitchReason).toBe('no-active-task');
-      // **不双发**：改道发生在落库之前，库里只有一条消息、只广播一次。
-      expect(prisma.message.create).toHaveBeenCalledTimes(1);
-      expect(realtime.broadcast).toHaveBeenCalledTimes(1);
+      // **不双发**：改道发生在落库之前，群里只有一条派发；另有一条目标私聊镜像。
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      expect(realtime.broadcast).toHaveBeenCalledTimes(2);
       // 派发走任务维度（teamId 不再出现）。
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(

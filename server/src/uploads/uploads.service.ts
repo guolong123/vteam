@@ -92,9 +92,11 @@ export class FileStorageService {
 
   /** 提取小写扩展名（`报告.PDF` → `pdf`；无点/点结尾 → null）。 */
   static extractExtension(originalname: string): string | null {
-    const dot = originalname.lastIndexOf('.');
-    if (dot <= 0 || dot === originalname.length - 1) return null;
-    return originalname.slice(dot + 1).toLowerCase();
+    // 带签名/外部查询串的 URL 不能把 `md?exp=...` 当成扩展名。
+    const name = originalname.split(/[?#]/, 1)[0];
+    const dot = name.lastIndexOf('.');
+    if (dot <= 0 || dot === name.length - 1) return null;
+    return name.slice(dot + 1).toLowerCase();
   }
 
   /** 生成磁盘文件名：`<UUID>__<原始名>`（保留原始名，杜绝重名/路径穿越）。
@@ -385,7 +387,7 @@ export class FileStorageService {
     ext: string;
     size: number | null;
   } {
-    const base = fileUrl.split(/[\\/]/).pop() ?? fileUrl;
+    const base = fileUrl.split(/[?#]/, 1)[0].split(/[\\/]/).pop() ?? fileUrl;
     let size: number | null = null;
     const relative = uploadRelativePathOf(fileUrl);
     if (relative !== null) {

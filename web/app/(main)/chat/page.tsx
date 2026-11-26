@@ -39,6 +39,7 @@ import {
 import { TeamSessionView } from "@/src/features/team-session/TeamSessionView";
 import { PanelExpandRail, PanelGutter, PanelShell } from "@/src/components/layout";
 import { useSidePanel } from "@/src/hooks/use-side-panel";
+import { useChatCompact } from "@/src/hooks/use-chat-compact";
 import {
   ExternalUserConversation,
   ExternalUserList,
@@ -109,6 +110,7 @@ function ChatPageContent() {
         : "group",
   );
   const [filterMemberId, setFilterMemberId] = useState<string | null>(null);
+  const compactHeight = useChatCompact(900);
   /** 右栏视图：full = 旧完整任务面板（默认，保留全部既有功能）；compact = 原型三 Tab。 */
   const [rightPanelMode, setRightPanelMode] = useState<"full" | "compact">("full");
   const [showNewGroup, setShowNewGroup] = useState(false);
@@ -700,8 +702,8 @@ function ChatPageContent() {
       {isGroup && teamId ? (
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}>
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <header style={{ padding: `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", alignItems: "center", gap: space.sm }}>
-              <AgentAvatar role="product" size="md" shape="square" dot={false} initials={title.slice(0, 1)} style={groupAvatarPalette(title)} />
+            <header style={{ padding: compactHeight ? `${space.sm}px ${space.md}px` : `${space.md}px ${space.lg}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", display: "flex", alignItems: "center", gap: space.sm }}>
+              <AgentAvatar role="product" size={compactHeight ? "sm" : "md"} shape="square" dot={false} initials={title.slice(0, 1)} style={groupAvatarPalette(title)} />
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
@@ -717,7 +719,7 @@ function ChatPageContent() {
                     );
                   })()}
                 </div>
-                <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>群聊 · {team?.members.length ?? active?.memberCount ?? 0} 个成员 · 仅被 @ 的成员会收到消息</div>
+                <div style={{ display: compactHeight ? "none" : undefined, fontSize: fontSize.xs, color: neutral[500], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>群聊 · {team?.members.length ?? active?.memberCount ?? 0} 个成员 · 仅被 @ 的成员会收到消息</div>
               </div>
               <span style={{ flex: 1 }} />
               <div data-testid="group-header-avatars" style={{ display: "flex", alignItems: "center", gap: -4, marginRight: space.sm }}>
@@ -753,7 +755,17 @@ function ChatPageContent() {
                   );
                 })}
               </div>
-              <button type="button" onClick={() => setRightPanelMode((v) => (v === "full" ? "compact" : "full"))} style={{ fontSize: fontSize.xs, color: neutral[600], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>{rightPanelMode === "full" ? "精简面板" : "完整面板"}</button>
+              {compactHeight && busySeats.length > 0 && (
+                <span
+                  data-testid="group-busy-banner"
+                  title={busySeats.map((s) => `${memberById.get(s.memberId ?? "")?.name ?? s.alias} ${runningWhere(s)}`).join("；")}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, padding: "1px 7px", borderRadius: radius.pill, backgroundColor: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 10, color: "#92400E", whiteSpace: "nowrap" }}
+                >
+                  <span style={{ color: "#F59E0B" }}>●</span>
+                  {busySeats.length} 执行中
+                </span>
+              )}
+              <button type="button" onClick={() => setRightPanelMode((v) => (v === "full" ? "compact" : "full"))} style={{ fontSize: fontSize.xs, color: neutral[600], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: compactHeight ? "2px 8px" : "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>{rightPanelMode === "full" ? "精简面板" : "完整面板"}</button>
               <button type="button" data-testid="group-settings-button" onClick={() => setShowMembersDrawer(true)} style={{ fontSize: fontSize.xs, color: "var(--color-accent-text)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: "3px 10px", background: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>群设置</button>
             </header>
 
@@ -762,11 +774,11 @@ function ChatPageContent() {
               「太拥挤，右边还有很多空间」）。改为 gap=22 且加大上下留白，名字列也放宽，
               让每个成员成为一个呼吸感更强的最小单元；仍保留横向滚动以容纳多成员。
             */}
-            <div data-testid="group-member-switcher" style={{ display: "flex", alignItems: "flex-start", gap: 22, padding: `${space.md}px ${space.xl}px`, borderBottom: `1px solid ${neutral[100]}`, backgroundColor: "var(--color-surface)", overflowX: "auto" }}>
-              <span style={{ fontSize: 10, color: neutral[400], whiteSpace: "nowrap", alignSelf: "center", letterSpacing: "0.02em" }}>成员切换</span>
+            <div data-testid="group-member-switcher" style={{ display: "flex", alignItems: compactHeight ? "center" : "flex-start", gap: compactHeight ? 12 : 22, padding: compactHeight ? `${space.sm}px ${space.lg}px` : `${space.md}px ${space.xl}px`, borderBottom: `1px solid ${neutral[100]}`, backgroundColor: "var(--color-surface)", overflowX: "auto" }}>
+              <span style={{ display: compactHeight ? "none" : undefined, fontSize: 10, color: neutral[400], whiteSpace: "nowrap", alignSelf: "center", letterSpacing: "0.02em" }}>成员切换</span>
               <button type="button" onClick={() => setFilterMemberId(null)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body }}>
                 <span style={{ width: 28, height: 28, borderRadius: "50%", backgroundColor: !filterMemberId ? "var(--color-brand-fill)" : neutral[100], color: !filterMemberId ? "#FFF" : neutral[500], display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>全</span>
-                <span style={{ fontSize: 10, color: !filterMemberId ? "var(--color-accent-text)" : neutral[500], fontWeight: !filterMemberId ? 700 : 400 }}>全部</span>
+                <span style={{ display: compactHeight ? "none" : undefined, fontSize: 10, color: !filterMemberId ? "var(--color-accent-text)" : neutral[500], fontWeight: !filterMemberId ? 700 : 400 }}>全部</span>
               </button>
               {(team?.members ?? []).map((seat) => {
                 const memberId = seat.memberId ?? "";
@@ -783,7 +795,7 @@ function ChatPageContent() {
                 );
                 const selected = filterMemberId === seat.id;
                 return (
-                  <button key={seat.id} type="button" data-testid="group-member-chip" data-presence={presence.tone} title={`${seat.alias ?? seat.member?.name ?? "成员"}${seat.member?.name && seat.alias ? `（${seat.member.name}）` : ""} · ${presence.label}`} onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
+                  <button key={seat.id} type="button" data-testid="group-member-chip" data-presence={presence.tone} aria-label={`${seat.alias ?? seat.member?.name ?? "成员"} · ${presence.label}`} title={`${seat.alias ?? seat.member?.name ?? "成员"}${seat.member?.name && seat.alias ? `（${seat.member.name}）` : ""} · ${presence.label}`} onClick={() => setFilterMemberId(selected ? null : seat.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: fontFamily.body, opacity: 1 }}>
                     <span style={{ position: "relative" }}>
                       <AgentAvatar role={roleKey} size="sm" />
                       {presence.tone !== "idle" && (
@@ -801,17 +813,17 @@ function ChatPageContent() {
                         />
                       )}
                     </span>
-                    <span style={{ fontSize: 10, color: selected ? "var(--color-accent-text)" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 132, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memberChipLabel(seat)}</span>
+                    <span style={{ display: compactHeight ? "none" : undefined, fontSize: 10, color: selected ? "var(--color-accent-text)" : neutral[500], fontWeight: selected ? 700 : 400, maxWidth: 132, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memberChipLabel(seat)}</span>
                   </button>
                 );
               })}
-              <span style={{ marginLeft: "auto", fontSize: 10, color: neutral[400], whiteSpace: "nowrap" }}>
+              <span style={{ display: compactHeight ? "none" : undefined, marginLeft: "auto", fontSize: 10, color: neutral[400], whiteSpace: "nowrap" }}>
                 <span style={{ color: PRESENCE_COLOR.running }}>●</span> 执行中 ·{" "}
                 <span style={{ color: PRESENCE_COLOR.done }}>●</span> 有新输出
               </span>
             </div>
 
-            {busySeats.length > 0 && (
+            {!compactHeight && busySeats.length > 0 && (
               <div data-testid="group-busy-banner" style={{ display: "flex", alignItems: "center", gap: 8, padding: `${space.xs + 2}px ${space.lg}px`, backgroundColor: "#FFFBEB", borderBottom: "1px solid #FDE68A", fontSize: fontSize.xs, color: "#92400E" }}>
                 <span>⏳</span>
                 <span style={{ fontWeight: 600 }}>

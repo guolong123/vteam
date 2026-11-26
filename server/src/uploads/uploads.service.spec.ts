@@ -394,6 +394,21 @@ describe('FileStorageService（文件存储基础：文件名生成 / 不限类�
       spy.mockRestore();
     });
 
+    it('中文空间签名 URL → 剥离查询串，name/ext 保持正确', () => {
+      const spy = jest
+        .spyOn(fs, 'statSync')
+        .mockReturnValue({ size: 23297 } as never);
+      const meta = FileStorageService.describeFileRef(
+        '/uploads/workspaces/ws_default/d48c004a-7ab4-45ee-a8b2-756a97feab29__缺项盘点-烟机部署手册.md?exp=1811212219&sig=abc',
+      );
+      expect(meta).toEqual({
+        name: '缺项盘点-烟机部署手册.md',
+        ext: 'md',
+        size: 23297,
+      });
+      spy.mockRestore();
+    });
+
     it('外部 URL → name/ext 从 URL 尾部提取，size null（不读本地磁盘）', () => {
       const statSpy = jest.spyOn(fs, 'statSync');
       const meta = FileStorageService.describeFileRef(

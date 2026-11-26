@@ -22,19 +22,22 @@
 
 import { useCallback, useMemo, useState } from "react";
 import {
-  CodeBlock,
   DisclosureRow,
   IconChevronRightOutlineRegular,
   IconCodeOutlineRegular,
   StateDot,
 } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { StateDotState } from "@deepseek-ai/dsh-client-ui-primitives";
-import { DSH_COMMON_ZH } from "./dsh-labels";
 import { DshToolIO } from "./dsh-tool-io";
 import type { MsgToolStatus } from "@/src/components/chat/msg-tool";
 import {
-  TOOL_IO_MAX_CHARS,
-} from "@/src/components/chat/msg-parts";
+  summarizeToolInput,
+  summarizeToolOutput,
+  toolOutputLineCount,
+  toolTitleOf,
+} from "@/lib/tool-summary";
+
+export { toolTitleOf } from "@/lib/tool-summary";
 
 /**
  * 工具状态 → DSH 过程行文案 / 状态点语义。
@@ -54,74 +57,6 @@ const STATUS_VIEW: Record<
   "awaiting-input": { label: "等待填写敏感信息", dot: "warning" },
 };
 
-/** 工具名 → DSH 风格标题。覆盖不到的回落工具原名（相当于 DSH 的 GenericToolCard）。 */
-const TOOL_TITLE_RULES: ReadonlyArray<{ match: RegExp; title: string }> = [
-  { match: /(^|_)bash$|^(bash|shell)$/i, title: "运行命令" },
-  { match: /(^|_)read(_image)?$/i, title: "读取" },
-  { match: /(^|_)write$|(^|_)edit$|str_replace/i, title: "编辑" },
-  { match: /grep|(^|_)search$/i, title: "搜索" },
-  { match: /(^|_)glob$|(^|_)find$|(^|_)ls$/i, title: "查找文件" },
-  { match: /web_fetch|(^|_)fetch$/i, title: "网页获取" },
-  { match: /web_search/i, title: "网页搜索" },
-  { match: /todo/i, title: "待办" },
-];
-
-/** 工具名 → 展示标题（未命中规则时用原名，保证信息不丢）。 */
-export function toolTitleOf(name: string): string {
-  for (const rule of TOOL_TITLE_RULES) {
-    if (rule.match.test(name)) return rule.title;
-  }
-  return name;
-}
-
-/** 摘要里优先取的字段（按"最能说明这条调用在干什么"排序）。 */
-const SUMMARY_KEYS = [
-  "command",
-  "cmd",
-  "file_path",
-  "filePath",
-  "path",
-  "pattern",
-  "query",
-  "url",
-  "description",
-] as const;
-
-/**
- * 摘要提取：DSH 折叠行显示的是**这次调用在干什么**（命令原文/路径/查询词），
- * 而不是 `{"command":"ls -la"}` 这样的裸 JSON。所以先尝试解析 JSON 取语义字段。
- */
-function pickFromJson(raw: string): string | null {
-  const t = raw.trim();
-  if (!(t.startsWith("{") && t.endsWith("}")) && !(t.startsWith("[") && t.endsWith("]"))) return null;
-  try {
-    const parsed: unknown = JSON.parse(t);
-    if (parsed === null || typeof parsed !== "object") return null;
-    if (Array.isArray(parsed)) return null;
-    const obj = parsed as Record<string, unknown>;
-    for (const key of SUMMARY_KEYS) {
-      const v = obj[key];
-      if (typeof v === "string" && v.trim().length > 0) return v;
-      if (Array.isArray(v) && v.length > 0) return v.map(String).join(" ");
-    }
-    // 没命中语义字段：取第一个非空字符串值（比整段 JSON 可读）
-    for (const v of Object.values(obj)) {
-      if (typeof v === "string" && v.trim().length > 0) return v;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** 单行摘要：优先语义字段，其次首行；超长截断（折叠态只有一行）。 */
-function summarize(input: string): string {
-  if (input.trim().length === 0) return "";
-  const picked = pickFromJson(input) ?? input.split("\n")[0] ?? "";
-  const line = picked.replace(/\s+/g, " ").trim();
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line;
-}
-
 export interface DshToolCardProps {
   name: string;
   status: MsgToolStatus;
@@ -139,8 +74,12 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
   const [open, setOpen] = useState(false);
   const toggle = useCallback(() => setOpen((v) => !v), []);
   const view = STATUS_VIEW[status];
-  const title = toolTitleOf(name);
-  const summary = useMemo(() => summarize(input), [input]);
+  const title = toolTitleOf(name, input);
+  const summary = useMemo(
+    () => summarizeToolInput(input) || summarizeToolOutput(output),
+    [input, output],
+  );
+  const outputLines = toolOutputLineCount(output);
 
   /** 有内容才可展开（空输出 + 空输入的卡在 adapter 层已被拦掉，这里再兜一次）。 */
   const expandable = input.length > 0 || output.length > 0;
@@ -196,6 +135,14 @@ export function DshToolCard({ name, status, input, output }: DshToolCardProps) {
                 }}
               >
                 {" "}· {summary}
+              </span>
+            ) : null}
+            {outputLines > 0 ? (
+              <span
+                data-testid="dsh-tool-output-lines"
+                style={{ flex: "none", whiteSpace: "nowrap", opacity: 0.7 }}
+              >
+                {" "}· {outputLines} 行输出
               </span>
             ) : null}
             {view.label.length > 0 ? (

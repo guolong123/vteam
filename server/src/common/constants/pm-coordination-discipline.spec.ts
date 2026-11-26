@@ -112,16 +112,16 @@ describe('PM 岗位定义（rolePrompt）必须携带「只协调不执行」的
     expect(PM_PROMPT).toContain('各岗位职责');
   });
 
-  it('③ 串行派活：一次一个执行者 + 其余成员群帖告知 + 上游 stage=end 再派下游', () => {
+  it('③ 串行派活：一次一个执行者 + 不重复群帖 + 上游 group_post completion 再派下游', () => {
     expect(PM_PROMPT).toContain('串行派活');
     expect(PM_PROMPT).toContain('一次只激活一个执行者');
     // 具体工具名（不是「通知一下」这种无法执行的描述）。
     expect(PM_PROMPT).toContain('vteam_notify_agent');
     expect(PM_PROMPT).toContain('vteam_group_post');
-    // 群帖只告知、不唤醒 —— 与平台【@ 定向机制】一致（@ 不唤醒，notify 才唤醒）。
-    expect(PM_PROMPT).toContain('群帖不唤醒任何人');
-    // 顺序依赖的具体回执条件。
-    expect(PM_PROMPT).toContain('stage=end');
+    // 派发本身已可见，不再用 group_post 重复播报。
+    expect(PM_PROMPT).toContain('不要再用 vteam_group_post 重复播报');
+    // 上游公开完工复用 group_post completion 登记回执。
+    expect(PM_PROMPT).toContain('completion(stage=end)');
   });
 
   it('④ 做完即停：只做被派的那一步、不并行产出、不替人做专业判断', () => {

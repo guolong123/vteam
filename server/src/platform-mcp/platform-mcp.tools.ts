@@ -181,6 +181,24 @@ const groupPostSchema = z.object({
     .string()
     .optional()
     .describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
+  completion: z
+    .object({
+      targetInstanceId: z
+        .string()
+        .describe('完工回执目标（必须是本团队主 Agent 的 tmm_ 席位 id）'),
+      type: z
+        .literal('answer')
+        .optional()
+        .describe('回执类型（固定 answer；公开结论不再额外调用 notify_agent）'),
+      stage: z
+        .enum(['process', 'end'])
+        .optional()
+        .describe('完工阶段（缺省 process；end 表示本次派发完工）'),
+    })
+    .optional()
+    .describe(
+      '可选：发布群消息的同一条消息上登记主 Agent 回执并执行 ACK/drain，避免再调用 notify_agent 产生第二条群消息',
+    ),
 });
 
 type GroupPostArgs = z.infer<typeof groupPostSchema>;
@@ -1436,7 +1454,7 @@ function buildToolList(service: PlatformMcpService): PlatformMcpTool[] {
     {
       name: 'group_post',
       description:
-        '向任务群聊发布消息（triggerless：仅落库+广播，返回 {messageId, channelId, attachment}，无 triggered 字段；@ 提及的内部触发不向调用方返回状态，需要触发状态请用 notify_agent）。senderType=agent，发送者=你的实例 selfInstanceId。用于内部群聊沟通，不用于回复企微用户（企微消息请用 wecom_reply）。fileRef 可选：命中该任务已归档产出物文件时作为群聊附件。',
+        '向任务群聊发布消息（triggerless：仅落库+广播，返回 {messageId, channelId, attachment}，无 triggered 字段；@ 提及只记录不触发）。senderType=agent，发送者=你的实例 selfInstanceId。用于内部群聊沟通，不用于回复企微用户（企微消息请用 wecom_reply）。fileRef 可选：命中该任务已归档产出物文件时作为群聊附件。公开结论需要向主 Agent 完工回执时，传 completion={targetInstanceId,type:"answer",stage:"end"}：同一条群消息会完成 ACK/drain，不要再额外调用 notify_agent，避免群聊出现两条消息。需要真正唤醒/派发其他 Agent、question/help 或单独非公开回执时仍用 notify_agent。',
       inputSchema: groupPostSchema,
       handler: (ctx, args) => service.groupPost(ctx, args as GroupPostArgs),
     },

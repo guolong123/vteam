@@ -454,6 +454,11 @@ export class PlatformMcpController {
         teamId?: string;
         selfInstanceId?: string;
         selfSessionId?: string;
+        completion?: {
+          targetInstanceId: string;
+          type?: 'answer';
+          stage?: 'process' | 'end';
+        };
       };
       // 只读自省（`vteam_tool_schema`）**不参与归属/授权链路**：它没有 taskId/teamId，
       // 归属解析必然回退到 worker 最近会话（可能是无成员的会话）而误 403；且它不读任何
@@ -535,6 +540,14 @@ export class PlatformMcpController {
           resolved.callerId,
           tool.name,
         );
+        // group_post 的 completion 会登记回执并触发 ACK/drain，属于 chat.notify 能力；
+        // 不能只凭 chat.post 权限绕过（例如知识管理员可群发但不可主动通知）。
+        if (tool.name === 'group_post' && input.completion) {
+          await this.toolPermission.assertToolAllowed(
+            resolved.callerId,
+            'notify_agent',
+          );
+        }
       }
       const result = await tool.handler(
         {

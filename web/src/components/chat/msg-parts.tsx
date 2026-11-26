@@ -3,7 +3,7 @@
  * =============================================
  * 将一条 agent 消息的 content.parts 按 10 篇 §2.2/§2.3 规则映射为 UI：
  * - reasoning / thinking → MsgThinking（思考折叠条，thinking 为 reasoning 别名）
- * - tool               → MsgTool（工具卡片四态；running secret_command + pending
+ * - tool               → MsgTool（紧凑工具过程行四态；running secret_command + pending
  *                        secret_input question → awaiting-input，见 secretAwaiting prop）
  * - error              → MsgError（消息级错误）
  * - aborted            → MsgAborted（灰「已中断」）；按 10 篇 §2.3：中断时其余
@@ -30,7 +30,7 @@
  * msg-aborted/msg-unknown-part/chat-bubble），token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 import { ChatBubble, Markdown, MessageIdentity } from "@/src/components/ui";
@@ -41,10 +41,11 @@ import { MsgTool } from "./msg-tool";
 import type { MsgToolStatus } from "./msg-tool";
 import { MsgError } from "./msg-error";
 import { MsgAborted } from "./msg-aborted";
-import { MsgUnknownPart } from "./msg-unknown-part";
 import { MsgLineBox } from "./msg-line-box";
 import { DshMessage } from "./dsh/dsh-message";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
+import { findActiveStreamingPart } from "@/lib/streaming-parts";
+import { EDIT_DIFF_INPUT_MAX_CHARS, isEditToolName } from "@/lib/edit-diff";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -82,17 +83,17 @@ export interface PartShape {
 export const TOOL_IO_MAX_CHARS = 2000;
 
 /**
- * 工具输入/输出规范化为单行文本：对象/数组 JSON 序列化，字符串原样，
- * 超长（>2000 字符）只保留前 TOOL_IO_MAX_CHARS 个字符——第 2001 字符起不进入 DOM，
- * 不追加省略号以保证「DOM ≤ 前 2000 字符」严格成立。
+ * 工具输入/输出规范化为单行文本：对象/数组 JSON 序列化，字符串原样。
+ * 默认超长（>2000 字符）只保留前 TOOL_IO_MAX_CHARS 个字符；编辑类工具可传入
+ * 更大的解析上限，避免完整 JSON 被截断后 Diff 解析失败。
  */
-export function formatToolIO(value: unknown): string {
+export function formatToolIO(value: unknown, maxChars = TOOL_IO_MAX_CHARS): string {
   if (value === undefined || value === null) {
     return "";
   }
   if (typeof value === "string") {
-    return value.length > TOOL_IO_MAX_CHARS
-      ? value.slice(0, TOOL_IO_MAX_CHARS)
+    return value.length > maxChars
+      ? value.slice(0, maxChars)
       : value;
   }
   if (typeof value === "number" || typeof value === "boolean") {
@@ -104,8 +105,8 @@ export function formatToolIO(value: unknown): string {
   } catch {
     serialized = String(value);
   }
-  return serialized.length > TOOL_IO_MAX_CHARS
-    ? serialized.slice(0, TOOL_IO_MAX_CHARS)
+  return serialized.length > maxChars
+    ? serialized.slice(0, maxChars)
     : serialized;
 }
 
@@ -154,6 +155,10 @@ export interface MsgPartsProps {
   messageStatus?: string;
   /** B2 分组态：与上一条为同发送者连续消息时省略共享身份栏，过程行与正文缩进保持对齐 */
   grouped?: boolean;
+  /** 仅渲染过程/正文块本身（成员历史聚合用）：不出身份栏、不加头像缩进，避免 native 再套 DSH。 */
+  processOnly?: boolean;
+  /** 成员历史聚合过程：渲染在身份栏之后、正文之前，避免摘要浮在头像上方。 */
+  leadingProcess?: React.ReactNode;
   /** B8 头像缩写：调用方从已解析人名生成（lib/message-initials），只透传给共享身份栏 */
   initials?: string;
   /**
@@ -177,7 +182,7 @@ export interface MsgPartsProps {
   variant?: "bubble" | "line" | "dsh";
 }
 
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachments, resolveArtifactDoc, fallbackDocsHref, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachments, resolveArtifactDoc, fallbackDocsHref, isMentionMe, style, className, messageStatus, grouped, processOnly = false, leadingProcess, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
   /** 多附件存在性（缺省 undefined / 空数组一律视为无附件，不渲染附件区、不参与有内容判定）。 */
   const hasAttachments = (attachments?.length ?? 0) > 0;
   // DSH 变体整条委托：本组件不认识它，避免把两套 part 语义混在一处。
@@ -197,6 +202,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
         attachments={attachments}
         isMentionMe={isMentionMe}
         grouped={grouped}
+        leadingProcess={leadingProcess}
         initials={initials}
         style={style}
         className={className}
@@ -305,7 +311,10 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     }
     const live = status === "running" && (streaming === true || messageStatus === "processing");
     const errorText = typeof state?.error === "string" ? state.error : "";
-    const input = formatToolIO(state?.input);
+    const input = formatToolIO(
+      state?.input,
+      isEditToolName(name) ? EDIT_DIFF_INPUT_MAX_CHARS : TOOL_IO_MAX_CHARS,
+    );
     const output = formatToolIO(state?.output) || errorText;
     if (
       status !== "awaiting-input" &&
@@ -318,40 +327,16 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     return { name, status, input, output };
   };
 
-  // 可渲染内容 = 正文 / 附件 / 可渲染过程 part（tool/error 恒可渲染；
-  // reasoning/thinking 须有实际文本——serve 会推 text="" 的空思考占位，
-  // 渲染出来只有「（无详细思考内容）」空壳）。
-  // 仅含 step-start/step-finish 等不渲染片段的消息整条不出（含身份栏）——
-  // 否则存量空行会渲染成「只有头像+时间」的空消息。
-  const procRenderable = (p: PartShape): boolean => {
-    const t = p.type ?? "";
-    if (t === "reasoning" || t === "thinking") {
-      const c = (p.text ?? p.summary ?? p.thoughts ?? p.detail ?? "").trim();
-      return c.length > 0;
-    }
-    if (t === "tool") {
-      return toolView(p) !== null;
-    }
-    return t === "error" || t === "aborted";
-  };
   /**
-   * reasoning 状态推断：`state` 字段只存在于 serve 的 tool part，reasoning part 无 state，
-   * 若直接 `p.state ?? "done"` 则流式中的思考行永远显示「已思考」。此处按**位置**推断：
-   * 仍在流式推进（streaming / messageStatus=processing）的消息上，最后一条**有内容**的
-   * reasoning 即进行中（pending）；其余（含更早的 reasoning 与终态消息）一律 done。
-   * 只看 deduped 列表（同 id 重复快照已去重），末条为空思考占位（serve text=""）时
-   * 回退到前一条有内容的思考，保证进行中态不会因尾部空 part 丢失。
+   * reasoning 状态推断：serve 的 reasoning 通常没有 state，必须结合后续 part 判断。
+   * 只要它后面已经出现工具、正文或错误，就说明模型已离开思考阶段，不能继续显示思考中。
    */
   const isStreaming = streaming === true || messageStatus === "processing";
-  const lastReasoningIndex = (() => {
-    for (let i = procPartsDeduped.length - 1; i >= 0; i -= 1) {
-      const t = procPartsDeduped[i].type;
-      if ((t === "reasoning" || t === "thinking") && procRenderable(procPartsDeduped[i])) {
-        return i;
-      }
-    }
-    return -1;
-  })();
+  const activeReasoning = findActiveStreamingPart(
+    linePartsDeduped,
+    isStreaming,
+    "reasoning",
+  );
   /** line 模式：part 文本（reasoning 兜底字段同 bubble 口径）。 */
   const partText = (p: PartShape): string => p.text ?? p.summary ?? p.thoughts ?? p.detail ?? "";
   const isSyntheticText = (p: PartShape): boolean => p.synthetic === true;
@@ -422,7 +407,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     }
   }
   const bubbleHasContent =
-    bubbleSegments.length > 0 || hasAttachments;
+    bubbleSegments.length > 0 || hasAttachments || !!leadingProcess;
   const hasContent =
     variant === "line"
       ? hasAttachments ||
@@ -496,8 +481,9 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
 
   return (
     <div className={className} style={{ display: "flex", flexDirection: "column", gap: space.sm, ...style }}>
-      {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
-      <div style={secondaryRows}>
+      {!processOnly && !grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
+      <div style={processOnly ? undefined : secondaryRows}>
+        {leadingProcess}
         {variant === "line" ? (
           <>
             {linePartsDeduped.map((p, i) => {
@@ -548,10 +534,10 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
                     key={`proc-${si}`}
                     items={seg.items}
                     streaming={isStreaming}
-                    renderItem={(p, i) => renderProcPart(p, i, isStreaming, lastReasoningIndex, toolView)}
+                    renderItem={(p, i) => renderProcPart(p, i, isStreaming, activeReasoning, toolView)}
                   />
                 ) : (
-                  renderProcPart(seg.items[0].part, seg.items[0].i, isStreaming, lastReasoningIndex, toolView)
+                  renderProcPart(seg.items[0].part, seg.items[0].i, isStreaming, activeReasoning, toolView)
                 );
               }
               const lastTextIndex = bubbleSegments.reduce(
@@ -560,6 +546,20 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
               );
               return renderTextBlock(seg.text, `text-${si}`, si === lastTextIndex);
             })}
+            {hasAttachments && !bubbleSegments.some((seg) => seg.kind === "text") ? (
+              <ChatBubble
+                showIdentity={false}
+                text=""
+                type="agent"
+                author={author}
+                role={role}
+                time={time}
+                attachments={attachments}
+                resolveArtifactDoc={resolveArtifactDoc}
+                fallbackDocsHref={fallbackDocsHref}
+                isMentionMe={isMentionMe}
+              />
+            ) : null}
           </>
         )}
       </div>
@@ -572,7 +572,7 @@ function renderProcPart(
   p: PartShape,
   i: number,
   isStreaming: boolean,
-  lastReasoningIndex: number,
+  activeReasoning: PartShape | undefined,
   toolView: (p: PartShape) => { name: string; status: MsgToolStatus; input?: string; output?: string } | null,
 ): React.ReactNode {
   if (p.type === "reasoning" || p.type === "thinking") {
@@ -580,7 +580,7 @@ function renderProcPart(
     return (
       <MsgThinking
         key={i}
-        state={p.state ?? (isStreaming && i === lastReasoningIndex ? "pending" : "done")}
+        state={p.state ?? (isStreaming && p === activeReasoning ? "pending" : "done")}
         text={p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""}
       />
     );
@@ -606,29 +606,33 @@ function ProcessGroup({
   streaming: boolean;
   renderItem: (p: PartShape, i: number) => React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (!streaming) setOpen(false);
-  }, [streaming]);
+  /** null=跟随流式状态；用户手动点过之后以用户选择为准。 */
+  const [manual, setManual] = useState<boolean | null>(null);
+  const open = manual ?? streaming;
   const tools = items.filter((x) => x.part.type === "tool").length;
   const thinks = items.length - tools;
   const partsText: string[] = [];
-  if (tools > 0) partsText.push(`${tools} 个工具调用`);
+  if (tools > 0) partsText.push(`${tools} 次工具调用`);
   if (thinks > 0) partsText.push(`${thinks} 段思考`);
-  const label = tools > 0 ? `执行了 ${tools} 个工具调用并已调用工具` : `思考了 ${thinks} 段`;
+  const label = `过程 · ${partsText.join(" · ")}`;
   return (
-    <div data-testid="msg-process-group" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <div
+      data-testid="msg-process-group"
+      data-state={open ? "expanded" : "collapsed"}
+      style={{ display: "flex", flexDirection: "column", gap: 2 }}
+    >
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, alignSelf: "flex-start", border: "none", background: "none", cursor: "pointer", padding: "2px 0", color: neutral[500], fontSize: fontSize.xs, fontFamily: fontFamily.body }}
+        aria-expanded={open}
+        onClick={() => setManual((prev) => !(prev ?? streaming))}
+        style={{ display: "flex", alignItems: "center", gap: 8, alignSelf: "flex-start", minHeight: 24, border: "none", background: "none", cursor: "pointer", padding: "2px 0", color: neutral[500], fontSize: fontSize.xs, fontFamily: fontFamily.body }}
       >
         <span aria-hidden style={{ color: neutral[400] }}>{open ? "▾" : "▸"}</span>
-        <span>{label}{streaming ? " · 进行中" : ""}</span>
-        <span style={{ color: neutral[400] }}>({partsText.join(" · ")})</span>
+        <span>{label}</span>
+        {streaming ? <span style={{ color: neutral[400] }}>· 进行中</span> : null}
       </button>
       {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {items.map((x) => renderItem(x.part, x.i))}
         </div>
       )}

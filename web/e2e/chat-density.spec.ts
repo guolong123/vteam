@@ -9,8 +9,8 @@ import path from "node:path";
  *  - A1 正文：900 字符正文出现 chat-bubble-toggle，折叠态 WebkitLineClamp=10 / maxHeight=16em
  *    （= 10 行 × 行高 1.6，几何换算与实际裁剪高度双重断言），点击展开后 clamp 清除；
  *    恰好 800 字符不触发折叠。
- *  - A2 tool I/O：3000 字符 payload（字符串路径 + JSON 路径），折叠态与展开态都只把
- *    前 2000 字符放进 DOM，第 2001 字符起不出现，title 同样 ≤2000。
+ *  - A2 tool I/O：折叠态只显示 ≤96 字符参数摘要与输出行数；展开态 3000 字符 payload
+ *    （字符串路径 + JSON 路径）只把前 2000 字符放进 DOM，第 2001 字符起不出现。
  *  - A3 thinking：折叠摘录恰好 200 字符；展开态 DOM 恰好为完整 2000 字符摘录，
  *    第 2001 字符起（含 title 属性）不进入 DOM；既有折叠文案保留。
  *  - A4 三级字号：正文 computed 14px、身份 12px/600、元信息 11px，三者字号互不相同；
@@ -79,6 +79,13 @@ type Kind =
   | "body"
   | "tool"
   | "tool-json"
+  | "tool-output-only"
+  | "tool-output-only-dsh"
+  | "tool-group-post"
+  | "tool-edit"
+  | "tool-edit-dsh"
+  | "tool-edit-long"
+  | "tool-edit-long-dsh"
   | "thinking"
   | "identity"
   | "unknown"
@@ -125,6 +132,13 @@ type Kind =
   | "body"
   | "tool"
   | "tool-json"
+  | "tool-output-only"
+  | "tool-output-only-dsh"
+  | "tool-group-post"
+  | "tool-edit"
+  | "tool-edit-dsh"
+  | "tool-edit-long"
+  | "tool-edit-long-dsh"
   | "thinking"
   | "identity"
   | "unknown"
@@ -174,6 +188,77 @@ function Fixture({ kind, payload }: { kind: Kind; payload: string }) {
             type: "tool",
             state: { status: "success", input: { q: payload }, output: { blob: payload } },
             name: "density_tool",
+          },
+        ]}
+      />
+    );
+  }
+  if (kind === "tool-output-only" || kind === "tool-output-only-dsh") {
+    return (
+      <MsgParts
+        {...meta}
+        variant={kind === "tool-output-only-dsh" ? "dsh" : "bubble"}
+        parts={[
+          {
+            type: "tool",
+            tool: "bash",
+            state: {
+              status: "success",
+              input: "",
+              output: "MCP-5 PASS grouped mode: tools=['cve'], operations=7\\n\\n汇总: 32/32 PASS -> /tmp/result.md",
+            },
+          },
+        ]}
+      />
+    );
+  }
+  if (kind === "tool-group-post") {
+    return (
+      <MsgParts
+        {...meta}
+        parts={[
+          {
+            type: "tool",
+            tool: "mcp__vteam__group_post",
+            state: {
+              status: "success",
+              input: JSON.stringify({ content: payload }),
+              output: JSON.stringify({ messageId: "m_group_post" }),
+            },
+          },
+          { type: "text", text: payload },
+        ]}
+      />
+    );
+  }
+  if (
+    kind === "tool-edit" ||
+    kind === "tool-edit-dsh" ||
+    kind === "tool-edit-long" ||
+    kind === "tool-edit-long-dsh"
+  ) {
+    const longEdit = kind === "tool-edit-long" || kind === "tool-edit-long-dsh";
+    const path = "web/src/features/team-session/TeamSessionView.tsx";
+    const input = longEdit
+      ? { path, oldString: payload, newString: payload.replaceAll("x", "y") }
+      : JSON.stringify({
+          path,
+          oldString: "const value = 1;",
+          newString: "const value = 2;\\nconsole.log(value);",
+        });
+    return (
+      <MsgParts
+        {...meta}
+        variant={kind.endsWith("-dsh") ? "dsh" : "bubble"}
+        parts={[
+          {
+            type: "tool",
+            tool: "edit",
+            state: {
+              status: "success",
+              input,
+              output: "",
+            },
           },
         ]}
       />
@@ -391,6 +476,21 @@ function buildHarness(): Promise<string> {
         // tsconfig 的 jsx: preserve 不适用于浏览器 IIFE：显式转 automatic runtime
         jsx: "automatic",
         charset: "utf8",
+        plugins: [
+          {
+            name: "ignore-css-for-dom-harness",
+            setup(build) {
+              build.onResolve({ filter: /\.css$/ }, (args) => ({
+                path: args.path,
+                namespace: "empty-css",
+              }));
+              build.onLoad({ filter: /.*/, namespace: "empty-css" }, () => ({
+                contents: "export default {}",
+                loader: "js",
+              }));
+            },
+          },
+        ],
         define: {
           "process.env.NODE_ENV": '"production"',
           // lib/api.ts 模块级读取；浏览器无 process 全局
@@ -492,14 +592,14 @@ async function measureBodyExpanded(content: Locator): Promise<BodyExpandedMetric
   });
 }
 
-/** A2：tool 卡片 DOM 内 2000 字符封顶快照（字符串与 JSON 两条路径共用字段）。 */
+/** A2：紧凑工具行折叠态只显示 ≤96 字符摘要；展开态完整 I/O 仍严格封顶 2000。 */
 interface ToolMetrics {
   aria: string;
+  summaryLen: number;
   hasFirst2000: boolean;
   hasAfter2000: boolean;
   exactFirst2000Span: boolean;
-  titleLen: number;
-  titleIsFirst2000: boolean;
+  outputLines: string | null;
 }
 
 async function measureTool(
@@ -508,26 +608,25 @@ async function measureTool(
 ): Promise<ToolMetrics> {
   return card.evaluate((el: HTMLElement, exp) => {
     const text = el.textContent ?? "";
-    const title = el.querySelector("[title]")?.getAttribute("title") ?? "";
+    const summary = el.querySelector('[data-testid="msg-tool-summary"]')?.textContent ?? "";
     return {
       aria: el.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded") ?? "",
+      summaryLen: summary.length,
       hasFirst2000: text.includes(exp.first),
       hasAfter2000: text.includes(exp.after),
-      exactFirst2000Span: Array.from(el.querySelectorAll("span")).some(
-        (s) => s.textContent === exp.first
+      exactFirst2000Span: Array.from(el.querySelectorAll("span, pre")).some(
+        (node) => node.textContent === exp.first
       ),
-      titleLen: title.length,
-      titleIsFirst2000: title === exp.first,
+      outputLines: el.getAttribute("data-output-lines"),
     };
   }, expected);
 }
 
-/** A2 JSON 路径：折叠态 summary/title 与展开态 input/output 各自 2000 封顶。 */
+/** A2 JSON 路径：折叠摘要只取输入前缀，展开后 input/output 各自 2000 封顶。 */
 interface ToolJsonMetrics {
   aria: string;
-  summaryIsInputFirst2000: boolean;
-  titleLen: number;
-  titleIsInputFirst2000: boolean;
+  summaryIsInputPrefix: boolean;
+  summaryLen: number;
   inputSpanIs2000: boolean;
   outputSpanIs2000: boolean;
   hasAfter2000: boolean;
@@ -539,14 +638,12 @@ async function measureToolJson(
 ): Promise<ToolJsonMetrics> {
   return card.evaluate((el: HTMLElement, exp) => {
     const text = el.textContent ?? "";
-    const titleEl = el.querySelector("[title]");
-    const title = titleEl?.getAttribute("title") ?? "";
-    const spans = Array.from(el.querySelectorAll("span, pre")).map((s) => s.textContent ?? "");
+    const summary = el.querySelector('[data-testid="msg-tool-summary"]')?.textContent ?? "";
+    const spans = Array.from(el.querySelectorAll("span, pre")).map((node) => node.textContent ?? "");
     return {
       aria: el.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded") ?? "",
-      summaryIsInputFirst2000: (titleEl?.textContent ?? "") === exp.inputFirst,
-      titleLen: title.length,
-      titleIsInputFirst2000: title === exp.inputFirst,
+      summaryIsInputPrefix: summary === `${exp.inputFirst.slice(0, 96)}…`,
+      summaryLen: summary.length,
       inputSpanIs2000: spans.includes(exp.inputFirst),
       outputSpanIs2000: spans.includes(exp.outputFirst),
       hasAfter2000: text.includes(exp.inputAfter) || text.includes(exp.outputAfter),
@@ -578,7 +675,6 @@ const UNKNOWN_SUMMARY_MAX = 400;
 const UNKNOWN_MARKER = "PATCH_PAYLOAD_MARKER_9f3a";
 /** 超长 patch payload：5000 个逐字唯一 CJK 码点，远超 400 封顶。 */
 const HUGE_PAYLOAD = cjk(5000, 0x7000); // 0x7000..0x8387
-const HUGE_HEAD = HUGE_PAYLOAD.slice(0, 50);
 /** 摘要（前缀 40 字符 + payload 前 360 字符）之后必然缺席的窗口。 */
 const HUGE_PAST_BOUND = HUGE_PAYLOAD.slice(UNKNOWN_SUMMARY_MAX, UNKNOWN_SUMMARY_MAX + 20);
 
@@ -633,7 +729,7 @@ test("A1 阈值边界：恰好 800 字符正文不出现 chat-bubble-toggle", as
   await expect(page.getByTestId("chat-bubble-toggle")).toHaveCount(0);
 });
 
-test("A2 tool I/O 字符串路径 3000 字符：折叠与展开都只放前 2000 字符进 DOM", async ({
+test("A2 tool I/O 字符串路径 3000 字符：折叠只显示行数，展开只放前 2000 字符进 DOM", async ({
   page,
 }) => {
   await mountHarness(page);
@@ -650,23 +746,23 @@ test("A2 tool I/O 字符串路径 3000 字符：折叠与展开都只放前 2000
 
   expect(collapsed).toEqual({
     aria: "false",
-    hasFirst2000: true, // 改动前只有 500 → false
+    summaryLen: 0, // 输出不回显到折叠行，只显示行数
+    hasFirst2000: false,
     hasAfter2000: false,
-    exactFirst2000Span: true, // 改动前 summary 为 500+"…" → false
-    titleLen: 2000, // 改动前 501
-    titleIsFirst2000: true,
+    exactFirst2000Span: false,
+    outputLines: "1",
   });
   expect(expanded).toEqual({
     aria: "true",
+    summaryLen: 0,
     hasFirst2000: true,
     hasAfter2000: false,
-    exactFirst2000Span: true, // 输出 span 恰好 2000 字符（不追加省略号）
-    titleLen: 2000,
-    titleIsFirst2000: true,
+    exactFirst2000Span: true, // 展开输出仍恰好 2000 字符
+    outputLines: "1",
   });
 });
 
-test("A2 tool I/O JSON 路径 3000 字符：序列化后同样 2000 封顶，2001+ 不进 DOM", async ({
+test("A2 tool I/O JSON 路径 3000 字符：折叠只显示 96 字符摘要，展开仍 2000 封顶", async ({
   page,
 }) => {
   await mountHarness(page);
@@ -690,23 +786,175 @@ test("A2 tool I/O JSON 路径 3000 字符：序列化后同样 2000 封顶，200
 
   expect(collapsed).toEqual({
     aria: "false",
-    summaryIsInputFirst2000: true, // 改动前 500+"…" → false
-    titleLen: 2000, // 改动前 501
-    titleIsInputFirst2000: true,
-    inputSpanIs2000: true,
-    outputSpanIs2000: false, // 折叠态只展示 summary（输入）
+    summaryIsInputPrefix: true,
+    summaryLen: 97, // 96 字符 + 省略号
+    inputSpanIs2000: false, // 折叠态不展示完整输入
+    outputSpanIs2000: false,
     hasAfter2000: false,
   });
   expect(expanded).toEqual({
     aria: "true",
-    summaryIsInputFirst2000: true,
-    titleLen: 2000,
-    titleIsInputFirst2000: true,
+    summaryIsInputPrefix: true,
+    summaryLen: 97,
     inputSpanIs2000: true, // 序列化输入恰好 2000
     outputSpanIs2000: true, // 序列化输出恰好 2000
     hasAfter2000: false, // 第 2001 字符起不进 DOM
   });
 });
+
+test("A2 过程行紧凑：工具与思考默认无卡片底/边框/阴影，高度保持单行", async ({ page }) => {
+  await mountHarness(page);
+  await renderFixture(page, "tool", "line one\nline two");
+
+  const tool = page.getByTestId("msg-tool");
+  await expect(tool).toContainText("2 行输出");
+  const toolStyle = await tool.locator("button[aria-expanded]").evaluate((el: HTMLElement) => {
+    const style = window.getComputedStyle(el);
+    return {
+      height: el.getBoundingClientRect().height,
+      borderWidth: style.borderTopWidth,
+      background: style.backgroundColor,
+      shadow: style.boxShadow,
+    };
+  });
+  expect(toolStyle.height).toBeLessThanOrEqual(32);
+  expect(toolStyle.borderWidth).toBe("0px");
+  expect(toolStyle.background).toBe("rgba(0, 0, 0, 0)");
+  expect(toolStyle.shadow).toBe("none");
+  await page.screenshot({
+    path: path.join(
+      process.cwd(),
+      "..",
+      ".omo",
+      "evidence",
+      "chat-ux-hierarchy-and-streaming",
+      "compact-process-row.png",
+    ),
+  });
+
+  await renderFixture(page, "thinking", "已经完成的思考摘要");
+  const thinkingStyle = await page
+    .getByTestId("msg-thinking")
+    .locator("button[aria-expanded]")
+    .evaluate((el: HTMLElement) => {
+      const style = window.getComputedStyle(el);
+      return {
+        height: el.getBoundingClientRect().height,
+        borderWidth: style.borderTopWidth,
+        background: style.backgroundColor,
+        shadow: style.boxShadow,
+      };
+    });
+  expect(thinkingStyle.height).toBeLessThanOrEqual(32);
+  expect(thinkingStyle.borderWidth).toBe("0px");
+  expect(thinkingStyle.background).toBe("rgba(0, 0, 0, 0)");
+  expect(thinkingStyle.shadow).toBe("none");
+});
+
+for (const [kind, cardTestId, summaryTestId] of [
+  ["tool-output-only", "msg-tool", "msg-tool-summary"],
+  ["tool-output-only-dsh", "dsh-tool", "dsh-tool-summary"],
+] as const) {
+  test(`无输入摘要时从输出提炼关键结果（${kind}）`, async ({ page }) => {
+    await mountHarness(page);
+    await renderFixture(page, kind, "");
+
+    const card = page.getByTestId(cardTestId);
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId(summaryTestId)).toContainText("32/32 PASS");
+    await expect(card).toContainText("3 行输出");
+    await expect(card.getByTestId(summaryTestId)).not.toContainText("MCP-5 PASS");
+  });
+}
+
+test("group_post 工具调用保留完整 I/O，正文仍可展示", async ({ page }) => {
+  await mountHarness(page);
+  const content = "GROUP_POST_DUPLICATE_CONTENT";
+  await renderFixture(page, "tool-group-post", content);
+
+  const tool = page.getByTestId("msg-tool");
+  await expect(tool).toContainText("vteam.group_post");
+  await expect(tool).toContainText(content);
+  await expect(page.getByTestId("chat-bubble-content")).toContainText(content);
+
+  await tool.locator("button[aria-expanded]").click();
+  await expect(tool.getByTestId("msg-tool-io")).toContainText("m_group_post");
+  await expect(tool.getByTestId("msg-tool-io")).toContainText(content);
+});
+
+for (const [kind, cardTestId] of [
+  ["tool-edit", "msg-tool"],
+  ["tool-edit-dsh", "dsh-tool"],
+] as const) {
+  test(`Edit 工具展开为文件 Diff（${kind}）`, async ({ page }) => {
+    await mountHarness(page);
+    await renderFixture(page, kind, "");
+
+    const card = page.getByTestId(cardTestId);
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("edit-diff-view")).toHaveCount(0);
+    await card.getByRole("button").first().click();
+
+    const diff = card.getByTestId("edit-diff-view");
+    await expect(diff).toBeVisible();
+    await expect(diff.getByTestId("edit-diff-path")).toHaveText(
+      "web/src/features/team-session/TeamSessionView.tsx",
+    );
+    await expect(diff.getByTestId("edit-diff-added")).toHaveText("+2");
+    await expect(diff.getByTestId("edit-diff-removed")).toHaveText("-1");
+    await expect(diff.getByTestId("edit-diff-line")).toHaveCount(3);
+    await expect(diff.locator('[data-testid="edit-diff-line"][data-kind="add"]')).toHaveCount(2);
+    await expect(diff.locator('[data-testid="edit-diff-line"][data-kind="remove"]')).toHaveCount(1);
+    await expect(diff).not.toContainText("oldString");
+    await expect(diff).not.toContainText("newString");
+
+    const surface = await diff.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(surface).toBe("rgb(13, 17, 23)");
+    const addBackground = await diff
+      .locator('[data-testid="edit-diff-line"][data-kind="add"]')
+      .first()
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(addBackground).toBe("rgba(46, 160, 67, 0.18)");
+
+    await diff.getByTestId("edit-diff-toggle").click();
+    await expect(diff.getByTestId("edit-diff-body")).toHaveCount(0);
+    await expect(diff.getByTestId("edit-diff-toggle")).toHaveAttribute("aria-expanded", "false");
+    await diff.getByTestId("edit-diff-toggle").click();
+    await expect(diff.getByTestId("edit-diff-body")).toBeVisible();
+
+    if (kind === "tool-edit") {
+      await page.screenshot({
+        path: path.join(
+          process.cwd(),
+          "..",
+          ".omo",
+          "evidence",
+          "chat-ux-hierarchy-and-streaming",
+          "edit-diff-view.png",
+        ),
+      });
+    }
+  });
+}
+
+for (const [kind, cardTestId] of [
+  ["tool-edit-long", "msg-tool"],
+  ["tool-edit-long-dsh", "dsh-tool"],
+] as const) {
+  test(`大 Edit 不被 2000 字符截断后回退通用 I/O（${kind}）`, async ({ page }) => {
+    await mountHarness(page);
+    await renderFixture(page, kind, "x".repeat(1400));
+
+    const card = page.getByTestId(cardTestId);
+    await card.getByRole("button").first().click();
+    const diff = card.getByTestId("edit-diff-view");
+    await expect(diff).toBeVisible();
+    await expect(diff.getByTestId("edit-diff-added")).toHaveText("+1");
+    await expect(diff.getByTestId("edit-diff-removed")).toHaveText("-1");
+    await expect(diff.getByTestId("edit-diff-line")).toHaveCount(2);
+    await expect(card).not.toContainText("oldString");
+  });
+}
 
 test("A3 thinking 3000 字符：折叠摘录恰好 200，展开恰好完整 2000，2001+ 不进 DOM", async ({
   page,
@@ -882,6 +1130,8 @@ test("B1 共享身份栏：reasoning+tool+text 单条 agent 消息只渲染一�
 }) => {
   await mountHarness(page);
   await renderFixture(page, "identity", "");
+  // 历史消息的过程组默认收起；展开后才断言内部子组件与共享身份计数。
+  await page.getByTestId("msg-process-group").locator("button").first().click();
 
   const identity = {
     avatar: await page.getByTestId("agent-avatar").count(),
@@ -919,6 +1169,7 @@ test("B6 未知 part 不渲染：patch/step-start/step-finish/未识别 type 全
 }) => {
   await mountHarness(page);
   await renderFixture(page, "unknown", UNKNOWN_MARKER);
+  await page.getByTestId("msg-process-group").locator("button").first().click();
 
   // 契约（本仓库当前行为）：未知/内部片段（step-start/step-finish/patch 等）
   // 一律不渲染——旧的 msg-unknown-part 诊断行已下线（避免空消息与过程噪声）。

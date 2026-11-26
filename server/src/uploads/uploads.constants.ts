@@ -130,8 +130,19 @@ export function verifyUploadUrlSignature(
   const exp = Number(query.exp);
   const sig = typeof query.sig === 'string' ? query.sig : '';
   if (!Number.isFinite(exp) || exp * 1000 < nowMs || !sig) return false;
+  /**
+   * 浏览器会把中文/空格文件名自动百分号编码，Express originalUrl 保留编码形态。
+   * 签名生成使用归一化后的 Unicode 路径，因此验签必须先解码；否则所有中文文件
+   * 在线上都返回 403，文档预览只表现为空白/下载失败。
+   */
+  let canonicalPath = path;
+  try {
+    canonicalPath = decodeURIComponent(path);
+  } catch {
+    return false;
+  }
   const expected = createHmac('sha256', uploadUrlSigningSecret())
-    .update(`${path}|${exp}`)
+    .update(`${canonicalPath}|${exp}`)
     .digest('hex')
     .slice(0, 32);
   if (sig.length !== expected.length) return false;

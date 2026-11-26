@@ -395,6 +395,39 @@ function partTextualValue(p: Record<string, unknown>): string {
   return out;
 }
 
+/** committed assistant part 的稳定上游消息 id；DSH live-chunk 没有该字段。 */
+function partMessageId(p: Record<string, unknown>): string {
+  return typeof p.messageID === 'string' ? p.messageID : '';
+}
+
+/** 两个文本快照是否可视为同一段流式内容（同文或前缀/后缀扩展）。 */
+function textualSnapshotsOverlap(a: string, b: string): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  return (
+    a === b ||
+    a.startsWith(b) ||
+    b.startsWith(a) ||
+    a.endsWith(b) ||
+    b.endsWith(a)
+  );
+}
+
+/** 从后向前找同一段文本的 live/committed 对应项，避免误替换更早的合法段落。 */
+function findTextualCounterpart(
+  parts: Array<Record<string, unknown>>,
+  part: Record<string, unknown>,
+  text: string,
+  committed: boolean,
+): number {
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const old = parts[i];
+    if (old.type !== part.type) continue;
+    if (partMessageId(old).length > 0 === committed) continue;
+    if (textualSnapshotsOverlap(partTextualValue(old), text)) return i;
+  }
+  return -1;
+}
+
 /**
  * 流式单调守卫：同 id 的文本类快照 `newPart` 是否可覆盖 `oldPart`。
  * - 任一非文本类 → true（tool 状态流转等保持 last-write-wins）
@@ -453,8 +486,32 @@ export function mergePartsById(
         merged[at] = p;
         continue;
       }
-      indexById.set(id, merged.length);
     }
+    // DSH 会先经 live-chunk 推送一段无 messageID 的文本，再由 assistant/message
+    // 推送带 messageID 的 committed 全文；两者 id 不同但表示同一段内容。若不去重，
+    // content.parts 会同时保留两份，前端渲染两个相同气泡，content.text 也会拼双。
+    // committed part 是权威表示：原位替换 live part；反向乱序的 live part 则忽略。
+    if (TEXTUAL_PART_TYPES.has(String(p.type ?? ''))) {
+      const text = partTextualValue(p);
+      const committed = partMessageId(p).length > 0;
+      if (text.length > 0) {
+        const counterpartAt = findTextualCounterpart(
+          merged,
+          p,
+          text,
+          committed,
+        );
+        if (counterpartAt >= 0) {
+          if (!committed) continue;
+          const oldId = partIdOf(merged[counterpartAt]);
+          if (oldId !== undefined) indexById.delete(oldId);
+          merged[counterpartAt] = p;
+          if (id !== undefined) indexById.set(id, counterpartAt);
+          continue;
+        }
+      }
+    }
+    if (id !== undefined) indexById.set(id, merged.length);
     merged.push(p);
   }
   return merged;

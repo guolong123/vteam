@@ -18,7 +18,7 @@
  * 同一事件可能命中多个订阅实例，各页面回调内仍须按 payload.taskId / payload.channelId
  * 二次过滤（不能丢）；补拉重放的消息由 upsertMessage 幂等去重兜底，安全。
  */
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { useSSE, matchesScope, type SSEEvent } from "@/hooks/use-sse";
 
 const EVENT = {
@@ -416,10 +416,15 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
  *   不得覆盖终态（终态由 chat.message.new 或后续 delta 写入）；
  * - 不存在 → 追加末尾（processing 消息先于最终回复出现，时间上即最新）。
  * 无既有缓存时不凭空创建，交由页面 onMessage/onMessagePartDelta 自行处理。
+ * queryKey 可显式指定：群聊「成员过程」视图与私聊频道共用消息 DTO，但缓存键不同。
  */
-function upsertMessage(queryClient: QueryClient, message: RealtimeChatMessage): void {
+export function upsertMessage(
+  queryClient: QueryClient,
+  message: RealtimeChatMessage,
+  queryKey: QueryKey = ["channel", message.channelId, "messages"],
+): void {
   queryClient.setQueryData<ChannelMessagesCache>(
-    ["channel", message.channelId, "messages"],
+    queryKey,
     (old) => {
       if (!old) return old; // 无缓存：不创建，避免与页面首次 fetch 竞争
       const idx = old.items.findIndex((m) => m.id === message.id);

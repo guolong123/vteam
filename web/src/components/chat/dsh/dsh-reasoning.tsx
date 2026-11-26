@@ -38,6 +38,7 @@ function firstLine(text: string): string {
  *
  * 为什么流式中用它而不是 `firstLine`：流式文本的第一行往往已经滚过去了，
  * 拿「最新段落首行」才能反映模型此刻在想什么（与 DSH 的实现逐行对齐）。
+ * 尚无完整段落时回退当前首行，避免单行增量正在生成时摘要为空、观感像卡住。
  */
 function latestCompletedParagraphFirstLine(text: string): string {
   let summary = "";
@@ -54,7 +55,7 @@ function latestCompletedParagraphFirstLine(text: string): string {
       const candidate = text.slice(paragraphStart, newline).trim();
       if (candidate !== "") summary = candidate;
     }
-    if (nextParagraph === null) return summary;
+    if (nextParagraph === null) return summary || firstLine(text);
     paragraphStart = nextParagraph.index + nextParagraph[0].length;
   }
 }

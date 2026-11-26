@@ -80,9 +80,12 @@ const ATTACHMENT_SIZE_LIMIT = 20 * 1024 * 1024;
  *    保证第 8 行完整可见之后才会出现内部滚动条。 */
 const TEXTAREA_LINE_HEIGHT = 1.6;
 const TEXTAREA_MIN_HEIGHT = 40;
+const TEXTAREA_COMPACT_MIN_HEIGHT = 34;
 const TEXTAREA_MAX_LINES = 8;
-const TEXTAREA_MAX_HEIGHT =
-  Math.ceil(fontSize.md * TEXTAREA_LINE_HEIGHT * TEXTAREA_MAX_LINES + space.xs * 2) + 1;
+const TEXTAREA_COMPACT_MAX_LINES = 4;
+function textareaMaxHeight(maxLines: number): number {
+  return Math.ceil(fontSize.md * TEXTAREA_LINE_HEIGHT * maxLines + space.xs * 2) + 1;
+}
 
 /** 附件大小展示（与 chat-bubble 同口径，组件内自持避免跨组件导出耦合）。 */
 function formatFileSize(bytes: number): string {
@@ -127,6 +130,8 @@ export interface MessageInputProps {
    *  后端 POST /uploads 带 taskId 落盘后同步归档为 file 产出物（与 Agent 上传链路一致）；
    *  非任务场景不传 → 纯上传不归档。 */
   taskId?: string;
+  /** 聊天高度紧凑模式：压缩输入区，@ 候选改为浮层，避免持续挤压消息正文。 */
+  compact?: boolean;
   style?: CSSProperties;
   className?: string;
 }
@@ -140,6 +145,7 @@ function MessageInputImpl({
   placeholder = "输入消息，@ 提及某个 Agent…",
   sending = false,
   taskId,
+  compact = false,
   style,
   className,
 }: MessageInputProps, ref: ForwardedRef<MessageInputHandle>) {
@@ -184,13 +190,17 @@ function MessageInputImpl({
     if (!el) return;
     el.style.height = "0px";
     const contentHeight = el.scrollHeight;
+    const minHeight = compact ? TEXTAREA_COMPACT_MIN_HEIGHT : TEXTAREA_MIN_HEIGHT;
+    const maxHeight = textareaMaxHeight(
+      compact ? TEXTAREA_COMPACT_MAX_LINES : TEXTAREA_MAX_LINES,
+    );
     const nextHeight = Math.min(
-      Math.max(contentHeight, TEXTAREA_MIN_HEIGHT),
-      TEXTAREA_MAX_HEIGHT,
+      Math.max(contentHeight, minHeight),
+      maxHeight,
     );
     el.style.height = `${nextHeight}px`;
-    el.style.overflowY = contentHeight > TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
-  }, [value]);
+    el.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+  }, [value, compact]);
 
   /** 附件按钮点击：触发隐藏 file input（多选） */
   const handlePickFile = () => {
@@ -423,16 +433,17 @@ function MessageInputImpl({
   return (
     <div
       className={className}
+      data-testid="message-input-root"
       style={{
         position: "relative",
         border: `1px solid ${neutral[200]}`,
         borderRadius: radius.lg,
         backgroundColor: "var(--color-surface)",
-        padding: space.md,
+        padding: compact ? space.sm : space.md,
         boxShadow: shadow.sm,
         display: "flex",
         flexDirection: "column",
-        gap: space.sm,
+        gap: compact ? space.xs : space.sm,
         ...baseFont,
         ...style,
       }}
@@ -446,8 +457,25 @@ function MessageInputImpl({
             alignItems: "center",
             gap: space.sm,
             flexWrap: "wrap",
-            paddingBottom: space.sm,
-            borderBottom: `1px dashed ${neutral[200]}`,
+            ...(compact
+              ? {
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  bottom: "calc(100% + 4px)",
+                  zIndex: 30,
+                  maxHeight: 150,
+                  overflowY: "auto",
+                  padding: space.sm,
+                  border: `1px solid ${neutral[200]}`,
+                  borderRadius: radius.md,
+                  backgroundColor: "var(--color-surface)",
+                  boxShadow: "0 8px 24px rgba(15,23,42,.16)",
+                }
+              : {
+                  paddingBottom: space.sm,
+                  borderBottom: `1px dashed ${neutral[200]}`,
+                }),
           }}
         >
           {candidates.map(renderCandidate)}
@@ -468,7 +496,7 @@ function MessageInputImpl({
         aria-label="消息输入"
         style={{
           width: "100%",
-          minHeight: TEXTAREA_MIN_HEIGHT,
+          minHeight: compact ? TEXTAREA_COMPACT_MIN_HEIGHT : TEXTAREA_MIN_HEIGHT,
           border: "none",
 
           resize: "none",
@@ -509,8 +537,8 @@ function MessageInputImpl({
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              width: 34,
-              height: 34,
+              width: compact ? 30 : 34,
+              height: compact ? 30 : 34,
               flexShrink: 0,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
@@ -630,7 +658,7 @@ function MessageInputImpl({
             alignItems: "center",
             gap: space.xs,
             flexShrink: 0,
-            padding: `${space.sm}px ${space.lg}px`,
+            padding: compact ? `${space.xs}px ${space.md}px` : `${space.sm}px ${space.lg}px`,
             borderRadius: radius.pill,
             backgroundColor: "#0D9488",
             color: "#FFFFFF",

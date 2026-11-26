@@ -911,6 +911,97 @@ describe('PlatformMcpController (HTTP)', () => {
       });
     });
 
+    it('group_post completion → 同时校验 chat.post 与 chat.notify 权限并透传', async () => {
+      service.groupPost.mockResolvedValueOnce({
+        messageId: 'm_1',
+        channelId: 'c_1',
+        attachment: null,
+        completion: {
+          targetInstanceId: 'ta_main',
+          type: 'answer',
+          stage: 'end',
+          reason: 'join-pending',
+        },
+      });
+      const completion = {
+        targetInstanceId: 'ta_main',
+        type: 'answer' as const,
+        stage: 'end' as const,
+      };
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 12,
+          method: 'tools/call',
+          params: {
+            name: 'group_post',
+            arguments: {
+              taskId: 't_1',
+              content: '已完成',
+              selfInstanceId: 'ta_product',
+              completion,
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.groupPost).toHaveBeenCalledWith(
+        expect.objectContaining({ workerId: 'w_0001' }),
+        {
+          taskId: 't_1',
+          content: '已完成',
+          selfInstanceId: 'ta_product',
+          completion,
+        },
+      );
+      expect(toolPermission.assertToolAllowed).toHaveBeenNthCalledWith(
+        1,
+        'tmm_sender',
+        'group_post',
+      );
+      expect(toolPermission.assertToolAllowed).toHaveBeenNthCalledWith(
+        2,
+        'tmm_sender',
+        'notify_agent',
+      );
+      expect(
+        JSON.parse(res.body.result.content[0].text as string),
+      ).toMatchObject({
+        completion: { reason: 'join-pending', stage: 'end' },
+      });
+    });
+
+    it('group_post completion 缺 chat.notify 权限 → 403 且不落群消息', async () => {
+      toolPermission.assertToolAllowed.mockImplementation(
+        async (_caller: string, tool: string) => {
+          if (tool === 'notify_agent') {
+            throw new ForbiddenException('chat.notify denied');
+          }
+        },
+      );
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 13,
+          method: 'tools/call',
+          params: {
+            name: 'group_post',
+            arguments: {
+              taskId: 't_1',
+              content: '不应发布',
+              selfInstanceId: 'ta_product',
+              completion: { targetInstanceId: 'ta_main', stage: 'end' },
+            },
+          },
+        })
+        .expect(200);
+
+      expect(res.body.error.code).toBe(-32003);
+      expect(service.groupPost).not.toHaveBeenCalled();
+    });
+
     it('submit_artifact → service.submitArtifact 收到 taskId/selfInstanceId/type/title/content', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
