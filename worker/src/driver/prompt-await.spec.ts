@@ -2199,3 +2199,29 @@ describe('T14 终态收口（与 RunTerminalGate 合流：一轮只收口一次�
     expect(Date.now() - started).toBeLessThan(200);
   });
 });
+
+describe('轮询日志节流（状态不变不刷屏）', () => {
+  it('相同状态多轮只记首轮一条；状态变化各补一条', async () => {
+    const { driver, getMessages } = mockDriver();
+    const info = jest.fn();
+    const logger = { info, warn: jest.fn(), error: jest.fn() };
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 4) {
+        return [asstMsg('a1', [textPart('hi', 1)])]; // 4 轮状态完全相同
+      }
+      return [asstMsg('a2', [textPart('hi', 1), stepFinishPart()])]; // 第 5 轮：数量+终态变化
+    });
+
+    await awaitCompletion(driver, 'ses_1', { pollMs: 5, logger });
+    expect(calls).toBeGreaterThanOrEqual(5);
+
+    const pollLogs = info.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('[prompt-await] 轮询 session='));
+    expect(pollLogs).toHaveLength(2);
+    expect(pollLogs[0]).toContain('collected=1 finish=none eventOutcome=null');
+    expect(pollLogs[1]).toContain('collected=2 finish=stop eventOutcome=null');
+  });
+});

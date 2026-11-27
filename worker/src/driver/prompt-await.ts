@@ -961,6 +961,8 @@ export async function awaitCompletion(
   let terminalEvidence: 'event' | 'polling' | undefined;
   /** T14：事件路判死（failed/interrupted）时的终态；null = 未判死。 */
   let eventFailure: RunOutcome | null = null;
+  /** 轮询日志指纹：仅状态变化时记一条，避免 500ms 一轮的相同状态刷屏（空串=首轮必记）。 */
+  let lastPollLogState = '';
 
   /** 拉一次消息快照并合并进 collected（终态判定后补拉用：终态那一刻内容才落齐）。 */
   const refresh = async (): Promise<void> => {
@@ -990,7 +992,16 @@ export async function awaitCompletion(
     collected = mergeMessages(collected, fresh);
     onPoll?.(fresh, Date.now() - startedAt);
     finish = findFinish(collected);
-    logger?.info('[prompt-await] 轮询 session=' + sessionID + ' collected=' + collected.length + ' finish=' + (finish === undefined ? 'none' : String(finish.reason)) + ' eventOutcome=' + (eventSignal?.peek() === null || eventSignal?.peek() === undefined ? 'null' : 'set'));
+    const pollEvent = eventSignal?.peek();
+    const pollEventState = pollEvent === null || pollEvent === undefined ? 'null' : 'set';
+    const pollFinishState = finish === undefined ? 'none' : String(finish.reason);
+    const pollLogState = `${collected.length}|${pollFinishState}|${pollEventState}`;
+    if (pollLogState !== lastPollLogState) {
+      lastPollLogState = pollLogState;
+      logger?.info(
+        `[prompt-await] 轮询 session=${sessionID} collected=${collected.length} finish=${pollFinishState} eventOutcome=${pollEventState}`,
+      );
+    }
     if (finish) {
       // ② 轮询路判定完成 → 先给事件路一个**有界宽限期**补齐终态：让「轮询先到」与
       //    「事件先到」得到**同一个结论**（事件证据优先）。
