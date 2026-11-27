@@ -86,9 +86,11 @@ describe('browser shim 隔离注入（renderBrowserToolsFile）', () => {
     expect(rendered).toContain('sessionID');
   });
 
-  it('shim 注入 --session 作用域 + --profile 独立 user-data-dir', () => {
+  it('shim 注入 --session + --profile + --restore（空闲退出后保登录态）', () => {
     expect(rendered).toContain('"--session"');
     expect(rendered).toContain('"--profile"');
+    expect(rendered).toContain('"--restore"');
+    expect(rendered).toContain('scoped.push("--restore", scope)');
     expect(rendered).toContain(BROWSER_PROFILE_SUBDIR);
   });
 
@@ -120,6 +122,7 @@ describe('browser shim 隔离注入（renderBrowserToolsFile）', () => {
       const content = fs.readFileSync(filePath, 'utf8');
       expect(content).toContain('"--session"');
       expect(content).toContain('"--profile"');
+      expect(content).toContain('"--restore"');
       expect(content).not.toContain('spawnSync("agent-browser", parts');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
