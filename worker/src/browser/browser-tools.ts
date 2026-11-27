@@ -11,21 +11,24 @@ export const BROWSER_TOOL_FILE = 'browser.ts';
 /**
  * Per-agent browser isolation (option A).
  *
- * Pinned CLI: agent-browser 0.27.0 (worker Dockerfile `npm i -g agent-browser`;
- * version string + full `--help` captured under
- * .omo/evidence/browser-isolation/). Empirically supported isolation
- * primitives in THIS version:
+ * Pinned CLI: agent-browser 0.31.2 (worker Dockerfile `npm i -g agent-browser`).
+ * Isolation / lifecycle primitives in THIS version:
  * - `--session <name>` (global option, also AGENT_BROWSER_SESSION): isolated
  *   browser with its own daemon socket (~/.agent-browser/<name>.sock), tabs,
- *   refs, cookies and storage. Proven parallel-safe: two concurrent
- *   `--session` opens succeed with separate daemons (no global lock).
+ *   refs, cookies and storage. Parallel-safe: separate daemons, no global lock.
  * - `--profile <name|path>` (also AGENT_BROWSER_PROFILE): Chrome user-data-dir;
  *   a directory path creates a real profile there (Default/, Local State,
  *   DevToolsActivePort singleton lock lives INSIDE the dir, so separate paths
  *   = no lock contention, no shared cookie jar).
+ * - `--restore <key>` (v0.31.0+): auto-saves cookies/localStorage on close /
+ *   daemon shutdown / idle timeout, restores them on the next command. NOTE:
+ *   it does NOT restore open tabs (verified on 0.31.2 / 0.33.1 / 0.45.0 —
+ *   next command returns about:blank); tabs are volatile by design.
+ * - daemon has a default 1h idle timeout (v0.33.1+, tunable via
+ *   AGENT_BROWSER_IDLE_TIMEOUT_MS); every command/dashboard input resets it.
+ *   Agent command gaps are far below 1h, so live sessions keep their tabs.
  * - `close --session <name>` closes ONE session; `close --all` kills every
  *   session (forbidden in the shim).
- * There is NO `--context` flag in 0.27.0 (do not assume it exists).
  *
  * Scope derivation (host + shim share the same rules; shim inlines its own
  * copy because it runs inside the opencode tool sandbox):
@@ -39,12 +42,16 @@ export const BROWSER_TOOL_FILE = 'browser.ts';
  *
  * Daemon lifecycle (chosen strategy + why): per-scope daemons are created
  * on first use and owned by the CLI (one Chrome per scope); we do NOT add a
- * mutex/queue (empirically unnecessary — parallel opens succeed) and we do
- * NOT add a global single lock (that would defeat option A). Profiles under
- * <workDir>/browser-profiles/<scope>/ are RETAINED (login persistence is the
- * point; volume-persisted, disk-cheap); explicit teardown is the agent's own
- * scoped `close` (injected `--session` makes bare `close` scoped); `close
- * --all` is rejected in-shim. Ops prune: rm -rf idle scope dirs as needed.
+ * mutex/queue (parallel opens succeed) nor a global single lock (that would
+ * defeat option A). Since agent-browser 0.33.1 the daemon exits after 1h
+ * without commands/dashboard input — this reclaims idle daemons + Chrome
+ * trees that agents never explicitly `close` (the process-leak backstop).
+ * The shim injects `--restore <scope>` so login state (cookies/localStorage)
+ * survives idle shutdown; open tabs are discarded (acceptable: agent command
+ * gaps are far below 1h, and a re-open reuses the retained login). Profile dirs under
+ * <workDir>/browser-profiles/<scope>/ are RETAINED for login persistence
+ * (volume-persisted, disk-cheap); `close --all` is rejected in-shim. Ops
+ * prune: rm -rf idle scope dirs as needed.
  */
 export const BROWSER_PROFILE_SUBDIR = 'browser-profiles';
 
@@ -172,6 +179,8 @@ export function renderBrowserToolsFile(): string {
     '  const scoped: string[] = [];',
     '  if (!parts.includes("--session")) scoped.push("--session", scope);',
     '  if (!parts.includes("--profile")) scoped.push("--profile", profileDir);',
+    '  // 空闲退出（>=0.33.1 默认 1h）保 cookies/localStorage 登录态；tabs 不保',
+    '  if (!parts.includes("--restore")) scoped.push("--restore", scope);',
     '  const finalArgs = [...scoped, ...parts];',
     '  const result = spawnSync("agent-browser", finalArgs, { encoding: "utf8", timeout: 120000, maxBuffer: 10 * 1024 * 1024 });',
     '  const out = (result.stdout ?? "") + (result.stderr ?? "");',
@@ -253,8 +262,9 @@ export function renderBrowserToolsFile(): string {
       'Then snapshot, click via refs, screenshot, eval, etc.',
       'Requires container with agent-browser + Chrome (node:22-bookworm-slim).',
       '',
-      'Per-agent isolation (option A, agent-browser 0.27.0): every call is scoped',
-      'to THIS opencode session via --session <scope> + --profile <user-data-dir>.',
+      'Per-agent isolation (agent-browser 0.31.2): every call is scoped to THIS',
+      'opencode session via --session <scope> + --profile <user-data-dir> +',
+      '--restore <scope> (keeps cookies/localStorage across idle shutdown).',
       'Scope = ToolContext.sessionID (the ses_* id), else member-<hash8> fallback',
       'from directory+agent. Never pass "close --all" (rejected below).',
       '⚠️ v2 的 ToolContext 没有 directory 键 → 目录取插件 ctx.location.directory（会话 location 兜底）。',

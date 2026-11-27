@@ -72,7 +72,12 @@ ARG OPENCODE_CLI_SPEC=@opencode/cli@2.3.2
 # 失效（v1.1.1→v1.2.0 实测：基础镜像 tag 浮动 + 未钉版本 ⇒ 6 个构建 job 的缓存命中数为 0，
 # 镜像层全变 ⇒ 集群每次发布都要整包重拉）。`agent-browser` 的版本同时决定它下载的
 # Chrome for Testing 版本（`agent-browser install` 无版本参数）⇒ 钉住它，Chrome 层才稳定。
-ARG AGENT_BROWSER_SPEC=agent-browser@0.27.0
+# 0.33.1 是首个带「默认 1h daemon idle timeout」的版本（#1605）：agent 从不
+# 显式 close 时，daemon + Chrome 树空闲 1h 后被回收（孤儿进程泄漏 backstop）。
+# --restore (v0.31.0) 一并启用，保 cookies/localStorage 登录态；注意它**不保
+# 打开的 tabs**（实测各版本均如此），但 agent 命令间隔远小于 1h，正常执行不受
+# 影响。worker shim 注入 --restore <scope>，见 src/browser/browser-tools.ts。
+ARG AGENT_BROWSER_SPEC=agent-browser@0.33.1
 RUN npm i -g "${OPENCODE_CLI_SPEC}" "${AGENT_BROWSER_SPEC}" && \
     echo "opencode CLI installed: $(opencode --version)" && \
     echo "agent-browser installed: $(agent-browser --version)"
