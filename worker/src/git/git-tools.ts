@@ -160,7 +160,8 @@ export function tryLoadCredential(repoUrl: string): GitCredentialEntry | null {
  * - 解 openssh-key-v1 容器（cipher/kdf 须为 none 即未加密），读私钥块 keytype：
  *   - `ssh-rsa` → 提取 n/e/d/p/q → 计算 dp/dq/qinv → 构 PKCS#1 RSAPrivateKey DER
  *     → `-----BEGIN RSA PRIVATE KEY-----` PEM（64 字符换行）；
- *   - 其他（ssh-ed25519 等）→ 原样返回（不受该问题影响，转 PKCS#1 反而破坏）；
+ *   - 其他（ssh-ed25519 等）→ 原样返回（不受 RSA 格式兼容问题影响，转 PKCS#1 反而破坏；
+ *     结尾换行由 writeTempKey 统一兜底）；
  * - 加密（ciphername != none）→ 抛错，不静默降级；容器/私钥块结构非法 → 抛错。
  *
  * 自包含：不引用模块级变量，可被 renderGitToolsFile toString() 内联进渲染产物
@@ -318,7 +319,7 @@ export function normalizeSshKey(key: string): string {
   }
   const keytype = pReadStr().toString('utf8');
   if (keytype !== 'ssh-rsa') {
-    return key; // ssh-ed25519 等不受该问题影响，原样返回
+    return key; // ssh-ed25519 等不受 RSA 格式兼容问题影响；结尾换行由 writeTempKey 兜底
   }
   // ssh-rsa 私钥字段顺序（OpenSSH PROTOCOL.key）：n, e, d, iqmp, p, q
   const n = mpintToBigInt(pReadStr());
@@ -360,7 +361,13 @@ export function normalizeSshKey(key: string): string {
 export function writeTempKey(key: string, platform: NodeJS.Platform = process.platform): string {
   // ssh_key 落盘前格式归一：OPENSSH 容器格式 ssh-rsa → PKCS#1 PEM（兼容 OpenSSL 3.x，
   // 见 normalizeSshKey）。转换失败抛错（buildGitEnv/runGit 调用方错误链路已处理，不静默降级）。
-  const normalized = normalizeSshKey(key);
+  let normalized = normalizeSshKey(key);
+  // 结尾换行兜底：末行缺 `\n` 的私钥（ed25519 / 非 OPENSSH PEM / 凭证录入被截掉尾换行）
+  // 会被 libcrypto 判为 `Load key ...: error in libcrypto`，即使内容本身有效。归一函数只对
+  // RSA 分支产出带换行的 PEM，其余原样返回，故统一在写盘点补齐（自包含，随 toString 内联）。
+  if (!normalized.endsWith('\n')) {
+    normalized += '\n';
+  }
   const keyPath = path.join(os.tmpdir(), `keta-git-key-${crypto.randomBytes(8).toString('hex')}`);
   fs.writeFileSync(keyPath, normalized, { mode: 0o600 });
   if (platform !== 'win32') {
