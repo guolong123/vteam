@@ -927,6 +927,29 @@ describe('normalizeSshKey（OPENSSH 容器 ssh-rsa → PKCS#1 PEM 格式归一�
     }
   });
 
+  it('writeTempKey：无结尾换行的 OPENSSH ed25519 key 落盘补齐 \\n（回归 libcrypto 加载失败）', () => {
+    if (!sshKeygenAvailable) return;
+    const keyPath = writeTempKey(sshEd25519Key.replace(/\n$/, ''));
+    try {
+      const content = realRead(keyPath);
+      expect(content.endsWith('\n')).toBe(true);
+      expect((fs.statSync(keyPath).mode & 0o777)).toBe(0o600);
+      const r = child_process.spawnSync('ssh-keygen', ['-y', '-f', keyPath], { encoding: 'utf8' });
+      expect(r.status).toBe(0);
+    } finally {
+      cleanupTemp(keyPath);
+    }
+  });
+
+  it('writeTempKey：非 OPENSSH PEM 缺结尾换行也补齐（兜底覆盖所有格式）', () => {
+    const keyPath = writeTempKey('-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----');
+    try {
+      expect(realRead(keyPath).endsWith('\n')).toBe(true);
+    } finally {
+      cleanupTemp(keyPath);
+    }
+  });
+
   it('writeTempKey：加密 OPENSSH 私钥转换失败抛错（不写坏文件）', () => {
     if (!sshKeygenAvailable) return;
     expect(() => writeTempKey(sshEncryptedKey)).toThrow('encrypted openssh private key is not supported');

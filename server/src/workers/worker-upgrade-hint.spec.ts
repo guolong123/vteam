@@ -14,6 +14,7 @@
 
 import {
   buildUpgradeHint,
+  resolveCanSelfUpdate,
   resolveInstallKind,
   selfUpdateDisabledReason,
   UPGRADE_SERVER_PLACEHOLDER,
@@ -38,6 +39,35 @@ describe('resolveInstallKind（安装方式判定）', () => {
   it('认不出 → unknown（不瞎猜）', () => {
     expect(resolveInstallKind({ name: 'f90fb5d058cb' })).toBe('unknown');
     expect(resolveInstallKind({})).toBe('unknown');
+  });
+});
+
+describe('resolveCanSelfUpdate（旧 worker 回退到历史升级策略）', () => {
+  it('已上报能力位 → 原样采信（true / false 都不推断）', () => {
+    expect(
+      resolveCanSelfUpdate({ reported: true, installKind: 'windows' }),
+    ).toBe(true);
+    expect(
+      resolveCanSelfUpdate({ reported: false, installKind: 'linux' }),
+    ).toBe(false);
+  });
+
+  it('未上报 + Linux/未知平台 → 可按一键自更新（回归：Linux 老节点不再退化成升级命令）', () => {
+    expect(
+      resolveCanSelfUpdate({ reported: undefined, installKind: 'linux' }),
+    ).toBe(true);
+    expect(
+      resolveCanSelfUpdate({ reported: undefined, installKind: 'unknown' }),
+    ).toBe(true);
+    expect(
+      resolveCanSelfUpdate({ reported: undefined, installKind: 'docker' }),
+    ).toBe(true);
+  });
+
+  it('未上报 + Windows → 仍按不能自更新（升级命令）', () => {
+    expect(
+      resolveCanSelfUpdate({ reported: undefined, installKind: 'windows' }),
+    ).toBe(false);
   });
 });
 
@@ -190,6 +220,15 @@ describe('selfUpdateDisabledReason（解释为什么不给一键升级）', () =
     });
     expect(reason).toContain('Windows');
     expect(reason).toContain('-Force');
+  });
+
+  it('旧 Windows worker（未上报）→ 也按 Windows 解释，不说"版本较旧"误导用户', () => {
+    const reason = selfUpdateDisabledReason({
+      installKind: 'windows',
+      reported: undefined,
+    });
+    expect(reason).toContain('Windows');
+    expect(reason).not.toContain('版本较旧');
   });
 
   it('其它平台 → 通用说明（不含 Windows 字样）', () => {

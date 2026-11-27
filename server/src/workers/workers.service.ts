@@ -50,6 +50,7 @@ import {
 } from './worker-version';
 import {
   buildUpgradeHint,
+  resolveCanSelfUpdate,
   resolveInstallKind,
   resolvePublicBaseUrl,
   selfUpdateDisabledReason,
@@ -1864,14 +1865,18 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     // `selfUpdate` 由 worker 上报（`engineCapabilities.selfUpdate`）：
     // - `true`  → 控制面显示「更新」按钮，一键下发；
     // - `false` → 显示「升级命令」让用户复制（Windows 缺省关闭 / 无 systemd）；
-    // - `undefined`（旧 worker 未上报）→ 同样按"不能自动升级"处理（不能假设它能）。
+    // - `undefined`（旧 worker 未上报）→ 回退到能力位引入之前的历史策略：非 Windows
+    //   节点仍可一键自更新（老 worker 的 update-worker 心跳桥一直存在）。
+    //   不能因为新增了 Windows 升级命令就把 Linux 老节点的自动升级退化成手动命令。
     const caps = worker.capabilities as {
       engineCapabilities?: { selfUpdate?: boolean };
     } | null;
     const reportedSelfUpdate = caps?.engineCapabilities?.selfUpdate;
-    const canSelfUpdate =
-      typeof reportedSelfUpdate === 'boolean' ? reportedSelfUpdate : undefined;
     const installKind = resolveInstallKind({ name: worker.name });
+    const canSelfUpdate = resolveCanSelfUpdate({
+      reported: reportedSelfUpdate,
+      installKind,
+    });
     return {
       id: worker.id,
       workspaceId: worker.workspaceId,
@@ -1903,7 +1908,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
               serverUrl: resolvePublicBaseUrl(),
               reason: selfUpdateDisabledReason({
                 installKind,
-                reported: canSelfUpdate,
+                reported: reportedSelfUpdate,
               }),
             }),
       mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],

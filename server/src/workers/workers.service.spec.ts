@@ -3826,6 +3826,34 @@ describe('WorkersService', () => {
         });
       });
 
+      it('旧 Linux worker（未上报 selfUpdate）→ 仍可一键更新，不退化成升级命令', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        prisma.$queryRawUnsafe.mockResolvedValue([
+          summaryRow({ name: 'worker-37', codeVersion: 'v1.6.19' }),
+        ]);
+
+        const rows = await service.findAll();
+
+        expect(rows[0]).toMatchObject({
+          canSelfUpdate: true,
+          updateAvailable: true,
+        });
+        expect(rows[0].upgradeHint).toBeUndefined();
+      });
+
+      it('旧 Windows worker（未上报 selfUpdate）→ 仍走升级命令，原因按 Windows 说明', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        prisma.$queryRawUnsafe.mockResolvedValue([
+          summaryRow({ name: 'DESKTOP-OLD01', codeVersion: 'v1.6.19' }),
+        ]);
+
+        const rows = await service.findAll();
+
+        expect(rows[0].canSelfUpdate).toBe(false);
+        expect(rows[0].upgradeHint).toMatchObject({ kind: 'windows' });
+        expect(rows[0].upgradeHint?.reason).toContain('Windows');
+      });
+
       it('dev 版本 vs 真期望版本 → updateAvailable=false（未知占位不算不一致）', async () => {
         process.env.CODE_VERSION = 'deploy-tag-2';
         prisma.$queryRawUnsafe.mockResolvedValue([
