@@ -5,8 +5,11 @@
  * 自更新不是所有节点都能用：
  * - **Windows 缺省关闭**（没有自动回滚，见 `worker-updater.ts` 的
  *   `WORKER_WINDOWS_SELF_UPDATE` 注释）；
- * - **旧版本 worker** 干脆没有重启桥；
- * - **Linux 无 systemd** 时替换完没人拉起新码。
+ * - **Linux 无 systemd** 时替换完没人拉起新码（worker 侧会落 ready-manual）。
+ *
+ * 旧 worker 未上报 `selfUpdate` 能力位 ≠ 不能自更新：能力位是随 Windows 升级入口
+ * 才加的，此前 Linux 节点一直能一键 `update-worker`。故未上报时按平台回退到原策略
+ * （见 `resolveCanSelfUpdate`），不要把 Linux 老节点的升级退化成手动命令。
  *
  * 此前这些节点在 UI 上「什么提示都没有」——用户以为已经是最新版。而 SCM 侧
  * `updateAvailable` 又依赖 `CODE_VERSION`，本地/内网部署常不配置它
@@ -167,6 +170,27 @@ export function buildUpgradeHint(input: {
 }
 
 /**
+ * 最终的一键更新判定：**能力位优先，旧 worker 按平台回退到历史策略**。
+ *
+ * - 已上报 `selfUpdate`（true/false）→ 原样采信；
+ * - 未上报（旧 worker，能力位引入前）→ 回归引入能力位之前的行为：Linux/未知平台
+ *   仍按"可一键自更新"处理，只有能明确识别为 Windows 的节点才给手动命令。
+ *
+ * 背景（2026-11-27 回归）：Windows 升级命令上线时把"未上报"一律当成"不能自更新"，
+ * 导致原本点一下就能自动升级的 Linux 老节点（如 v1.6.19）变成了「升级命令」弹窗。
+ * 老 worker 的心跳 `update-worker` 桥是一直存在的，不能因缺少新能力位就剥夺它。
+ */
+export function resolveCanSelfUpdate(input: {
+  reported: boolean | undefined;
+  installKind: WorkerInstallKind;
+}): boolean {
+  if (typeof input.reported === 'boolean') {
+    return input.reported;
+  }
+  return input.installKind !== 'windows';
+}
+
+/**
  * 不可自更新的原因文案（给用户解释"为什么只能手动"）。
  *
  * 三种来源分开说，避免笼统的"不支持"：
@@ -179,11 +203,13 @@ export function selfUpdateDisabledReason(input: {
   /** worker 是否上报了 engineCapabilities.selfUpdate（undefined = 旧 worker）。 */
   reported: boolean | undefined;
 }): string {
-  if (input.reported === undefined) {
-    return '该节点版本较旧，不支持自动升级';
-  }
+  // Windows 优先：旧 Windows worker 虽未上报能力位，但真正原因是缺省关闭自更新，
+  // 说"版本较旧"会误导用户去升级后再试（升完仍不能自更新）。
   if (input.installKind === 'windows') {
     return 'Windows 节点默认关闭自动升级（缺少自动回滚），需重跑安装器 -Force';
+  }
+  if (input.reported === undefined) {
+    return '该节点版本较旧，不支持自动升级';
   }
   return '该节点不支持自动升级';
 }

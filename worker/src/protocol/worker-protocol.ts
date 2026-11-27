@@ -55,11 +55,14 @@ export interface WorkerCapabilities {
      * 本 worker **能否自己完成升级**（不依赖人工）。
      *
      * - `true`：控制面「更新」按钮可直接下发 `update-worker`，worker 会下载→替换→重启；
-     * - `false` / 缺省（旧 worker）：控制面应改为展示**升级命令**让用户复制执行。
+     * - `false`：控制面展示**升级命令**让用户复制执行（Windows 缺省关闭 / 无 systemd）；
+     * - 缺省（旧 worker 未上报）：控制面按平台回退到能力位引入之前的历史策略——
+     *   Linux/未知平台仍可一键自更新（update-worker 心跳桥一直存在），只有 Windows
+     *   走升级命令。见 server `worker-upgrade-hint.ts` 的 `resolveCanSelfUpdate`。
      *
-     * 为什么需要它：Windows 侧自更新缺省关闭（没有自动回滚，见 worker-updater 常量注释），
-     * 老 worker 甚至会说"不支持"。此前控制面对这两类节点**无脑下发指令**，结果是
-     * `ready-manual` 之后什么也没发生 —— 用户以为点了就升级了（静默失败）。
+     * 为什么需要它：Windows 侧自更新缺省关闭（没有自动回滚，见 worker-updater 常量注释）。
+     * 此前控制面对 Windows 节点**无脑下发指令**，结果是 `ready-manual` 之后什么也没发生
+     * —— 用户以为点了就升级了（静默失败）。
      */
     selfUpdate?: boolean;
     perMessageModelSwitch?: boolean;
