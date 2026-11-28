@@ -49,7 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 升级时先读 `node_modules/@deepseek-ai/dsh/docs/upgrade-guide/`，再改这里。
 ARG DSH_SPEC=@deepseek-ai/dsh@0.2.2-rc.5
 RUN npm config set registry https://registry.npmmirror.com && \
-    npm i -g "${DSH_SPEC}" && echo "dsh installed: $(dsh --version)" && which dsh
+    npm i -g "${DSH_SPEC}" && echo "dsh installed: $(dsh --version)" && which dsh && \
+    # 必须在同一层清：npm 全局安装的 tarball 缓存实测 295MB，留到后续层删不会缩小镜像
+    npm cache clean --force
 
 # ── 沙箱 profile 补丁：bwrap 的 `--proc /proc` 在本集群内核上必然失败 ──────────
 # DSH 的 bwrap profile 会新建 PID namespace 并重新挂 procfs；而本集群内核

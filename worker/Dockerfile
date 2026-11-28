@@ -78,9 +78,24 @@ ARG OPENCODE_CLI_SPEC=@opencode/cli@2.3.2
 # 打开的 tabs**（实测各版本均如此），但 agent 命令间隔远小于 1h，正常执行不受
 # 影响。worker shim 注入 --restore <scope>，见 src/browser/browser-tools.ts。
 ARG AGENT_BROWSER_SPEC=agent-browser@0.33.1
-RUN npm i -g "${OPENCODE_CLI_SPEC}" "${AGENT_BROWSER_SPEC}" && \
+RUN set -e; \
+    npm i -g "${OPENCODE_CLI_SPEC}" "${AGENT_BROWSER_SPEC}" && \
     echo "opencode CLI installed: $(opencode --version)" && \
-    echo "agent-browser installed: $(agent-browser --version)"
+    echo "agent-browser installed: $(agent-browser --version)" && \
+    # 镜像瘦身（2026-11-28）：npm 全局安装的 tarball 缓存留在 /root/.npm（实测 630MB），
+    # 必须在**同一层**清掉——放到后续层删除不会缩小总层数与总体积。
+    npm cache clean --force && \
+    # @opencode/cli 的 optionalDependencies 会把当前架构的 glibc/baseline/musl 四种
+    # 平台二进制全装进来（x64 实测 4×242MB），但 postinstall 在构建期就选定了其中一个
+    # 并硬链到 bin/opencode.exe，运行期不会再用其余变体。只保留当前架构的 glibc 包。
+    CLI_MOD=/usr/local/lib/node_modules/@opencode/cli/node_modules/@opencode; \
+    ARCH="$(uname -m)"; \
+    if [ "$ARCH" = "x86_64" ]; then KEEP="cli-linux-x64"; else KEEP="cli-linux-arm64"; fi; \
+    for d in "$CLI_MOD"/cli-linux-*; do \
+      [ -d "$d" ] || continue; \
+      [ "$(basename "$d")" = "$KEEP" ] || rm -rf "$d"; \
+    done; \
+    echo "opencode platform packages kept: $(ls "$CLI_MOD")"
 # 系统依赖：git 工具链 + Agent 常用命令 + Chrome 运行库
 # 说明：git/openssh-client 为 git 工具链路保留；python3/pip3（Agent 跑脚本/数据分析）、
 # curl（HTTP 请求）、jq（JSON 处理）、bash（Agent 脚本常依赖 bash）、wget（下载）、
