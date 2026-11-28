@@ -116,6 +116,16 @@ const TASK_EVENT_ID_PREFIX = 'te';
 const TERMINATION_NOTICE_WINDOW_MS = 30 * 60 * 1000;
 const TERMINATION_NOTICE_SCAN_LIMIT = 100;
 
+/**
+ * 基础设施类失败：worker 的心跳还在，但 opencode serve 不可达/请求被 abort
+ * （watchdog 已把它标 degraded）。这类失败重试无意义，要等 serve 恢复后再唤醒会话。
+ */
+function isInfraFailure(error: string): boolean {
+  return /fetch failed|请求超时|ECONNREFUSED|ECONNRESET|socket hang up|serve 不可达|HTTP 50[23]|aborted/i.test(
+    error,
+  );
+}
+
 // ==================================================================
 // 用量落库（token-usage-stats Todo 3 usage-sink）
 //
@@ -4627,6 +4637,7 @@ export class WorkerDispatcher
         teamMemberId,
         agentId: resolvedAgentId,
         error: payload.error ?? 'agent 处理失败',
+        infra: isInfraFailure(payload.error ?? ''),
       });
     } else {
       this.emitLoading({
@@ -4659,8 +4670,9 @@ export class WorkerDispatcher
     teamMemberId: string;
     agentId: string;
     error: string;
+    infra: boolean;
   }): Promise<void> {
-    const { sessionId, teamId, teamMemberId, agentId, error } = input;
+    const { sessionId, teamId, teamMemberId, agentId, error, infra } = input;
     const errorType = inferErrorType(error);
     if (isQuotaError(errorType) || errorType === 'model_not_found') {
       this.logger.warn(
@@ -4717,6 +4729,7 @@ export class WorkerDispatcher
         agentId,
         taskId,
         channelId: channel.id,
+        infra,
       });
     }, this.autoContinueDelayMs);
     timer.unref?.();
@@ -4737,9 +4750,17 @@ export class WorkerDispatcher
     agentId: string;
     taskId: string | null;
     channelId: string;
+    infra: boolean;
   }): Promise<void> {
-    const { sessionId, teamId, teamMemberId, agentId, taskId, channelId } =
-      input;
+    const {
+      sessionId,
+      teamId,
+      teamMemberId,
+      agentId,
+      taskId,
+      channelId,
+      infra,
+    } = input;
     try {
       const row = await this.prisma.session.findUnique({
         where: { id: sessionId },
@@ -4753,6 +4774,27 @@ export class WorkerDispatcher
           `会话 ${sessionId} 已有新一轮在跑，跳过自动继续（不插队）`,
         );
         return;
+      }
+      // 基础设施失败（serve 僵死/不可达）：worker 心跳仍在但 health=degraded，
+      // 此刻补发必然再撞 60s 超时。延后重试且**不消耗重试次数**，等心跳把 worker
+      // 恢复为 online（= serve watchdog 恢复）后才真正唤醒会话。
+      if (infra && row.workerId) {
+        const worker = await this.prisma.worker.findUnique({
+          where: { id: row.workerId },
+          select: { status: true },
+        });
+        if (worker && worker.status !== WORKER_STATUS.ONLINE) {
+          const retry = setTimeout(() => {
+            this.autoContinueTimers.delete(sessionId);
+            void this.performAutoContinue(input);
+          }, this.autoContinueDelayMs);
+          retry.unref?.();
+          this.autoContinueTimers.set(sessionId, retry);
+          this.logger.warn(
+            `会话 ${sessionId} 依赖的 worker=${row.workerId} 尚未恢复（${worker.status}），${this.autoContinueDelayMs}ms 后重试补发（不消耗次数）`,
+          );
+          return;
+        }
       }
       if (
         row.workerId &&
