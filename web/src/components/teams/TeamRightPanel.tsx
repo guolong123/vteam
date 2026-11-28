@@ -2326,7 +2326,9 @@ function useTaskTriggers(taskId: string, teamId: string) {
     queryFn: () =>
       taskId
         ? api.get<TriggersResponse>("/triggers", {
-            query: { taskId, page: 1, pageSize: 100 },
+            // 成员调用必须同时带 teamId：服务端对非管理员强制要求团队作用域，
+            // 即使已按 taskId 过滤也如此（否则 403 TRIGGER_TEAM_SCOPE_REQUIRED）。
+            query: { taskId, ...(teamId ? { teamId } : {}), page: 1, pageSize: 100 },
           })
         : api.get<TriggersResponse>("/triggers", {
             query: { teamId, page: 1, pageSize: 100 },
