@@ -5856,6 +5856,35 @@ describe('WorkerDispatcher', () => {
       expect(payload.teamId).toBe('tm_0000000001');
     });
 
+    it('基础设施失败且 worker=degraded → 等恢复 online 后才补发（不消耗次数）', async () => {
+      prisma.session.findUnique.mockResolvedValue(teamSession);
+      prisma.task.findUnique.mockResolvedValue({ status: 'in_progress' });
+      stubTeamChannel();
+      // 第一次健康检查时 serve 仍僵死（degraded），心跳恢复后变 online
+      prisma.worker.findUnique
+        .mockResolvedValueOnce({ status: 'degraded' })
+        .mockResolvedValue({ status: 'online' });
+      const d = createFastDispatcher();
+      const mentionSpy = jest
+        .spyOn(d, 'dispatchAgentMention')
+        .mockResolvedValue('s_0000000001');
+
+      await d.handleAgentStatus({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        status: 'error',
+        error: '[v2-driver] 请求超时（>60000ms）',
+      });
+
+      await new Promise((r) => setTimeout(r, 150));
+      expect(prisma.worker.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'w_0000000001' } }),
+      );
+      expect(mentionSpy).toHaveBeenCalledTimes(1);
+      expect((mentionSpy.mock.calls[0][0] as any).kind).toBe('wake');
+    });
+
     it('不可恢复失败（额度不足）→ 不自动补发（避免连续烧钱）', async () => {
       prisma.session.findUnique.mockResolvedValue(teamSession);
       stubTeamChannel();

@@ -1831,6 +1831,44 @@ async function bootRealV2Server(
 
 const describeReal = opencodeBinary ? describe : describe.skip;
 
+describe('V2Driver.getContextInfo（压缩判定口径：/context）', () => {
+  it('从 /api/session/{id}/context 取压缩后的上下文，不混入压缩前历史', async () => {
+    const server = await startFakeV2Server({
+      'GET /api/session/ses_ctx/context': {
+        body: {
+          data: [
+            {
+              type: 'compaction',
+              time: { created: 1_000 },
+              tokens: { input: 10, cache: { read: 0 } },
+            },
+            {
+              type: 'assistant',
+              time: { created: 2_000 },
+              tokens: { input: 1_234, cache: { read: 56 } },
+            },
+            { type: 'idle', time: { created: 3_000 } },
+          ],
+        },
+      },
+    });
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const info = await driver.getContextInfo('ses_ctx');
+      expect(info.tokenEstimate).toBe(1_290);
+      expect(info.lastCompactionAt).toBe(1_000);
+      expect(info.lastActivityAt).toBe(3_000);
+      expect(
+        server.requests.some(
+          (r) => r.path === '/api/session/ses_ctx/context' && r.method === 'GET',
+        ),
+      ).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describeReal('V2Driver 对真 opencode v2 server 的契约测试', () => {
   jest.setTimeout(90_000);
   let server: BootedServer;
