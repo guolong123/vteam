@@ -15,6 +15,7 @@ import {
   INTEGRATIONS_ERRORS,
 } from '../message-channel.constants';
 import { FileStorageService } from '../../uploads/uploads.service';
+import { FILE_SIZE_LIMIT } from '../../uploads/uploads.constants';
 
 export const WECOM_OPERATOR_TTL_MS = 10 * 60 * 1000;
 
@@ -1027,8 +1028,17 @@ export class WecomAibotAdapter extends MessageAdapter {
     ).on('message.mixed', async (frame: unknown) => {
       await this.handleInboundMixed(client, channelId, ctx, frame);
     });
+    // 文件消息与 web 上传口径对齐（任意扩展名 + 20MB 上限，见 uploads.constants），
+    // DownloadFile 返回的文件名直接作为附件名透传给模型。
+    (
+      client as unknown as {
+        on: (ev: string, fn: (...args: unknown[]) => unknown) => unknown;
+      }
+    ).on('message.file', async (frame: unknown) => {
+      await this.handleInboundFile(client, channelId, ctx, frame);
+    });
 
-    const fallbackTypes = ['message.voice', 'message.file', 'message.video'];
+    const fallbackTypes = ['message.voice', 'message.video'];
     for (const ev of fallbackTypes) {
       (
         client as unknown as {
@@ -2351,6 +2361,100 @@ export class WecomAibotAdapter extends MessageAdapter {
           f as { headers: { req_id: string } },
           generateReqId('stream'),
           '图片下载失败，请重发或改发文本。',
+          true,
+        );
+      } catch {}
+    }
+  }
+
+  /**
+   * 入站文件消息：与 web 上传/会话附件同口径——**不限制扩展名**，单文件 20MB 上限
+   * （FILE_SIZE_LIMIT）。下载解密后落 /uploads，作为附件三字段透传给模型，模型可用
+   * read_file 按 fileRef 读取；超限只回一句提示，不落盘、不派发。
+   *
+   * 此前 message.file 落在 fallbackTypes 里，统一回「暂不支持该消息类型」，与 web
+   * 能上传任意文件不一致（用户发 .log/.zip 给机器人被拒）。
+   */
+  private async handleInboundFile(
+    client: WSClient,
+    channelId: string,
+    ctx: MessageHost,
+    frame: unknown,
+  ): Promise<void> {
+    const f = frame as {
+      headers?: unknown;
+      body?: {
+        msgid: string;
+        from?: { userid: string; name?: string };
+        chatid?: string;
+        chattype?: string;
+        file?: { url: string; aeskey?: string };
+      };
+    };
+    const body = f.body;
+    if (!body?.file?.url) return;
+    const fromUserId = body.from?.userid;
+    const fromUserName = WecomAibotAdapter.resolveSenderName(
+      body.from?.name,
+      fromUserId,
+    );
+    const chattype = body.chattype ?? 'single';
+    try {
+      const { buffer, filename } = await client.downloadFile(
+        body.file.url,
+        body.file.aeskey,
+      );
+      if (buffer.length > FILE_SIZE_LIMIT) {
+        this.logger.warn(
+          `wecom inbound file too large channel=${channelId} size=${buffer.length} limit=${FILE_SIZE_LIMIT}`,
+        );
+        await client.replyStream(
+          f as { headers: { req_id: string } },
+          generateReqId('stream'),
+          `文件超过 ${Math.round(FILE_SIZE_LIMIT / 1024 / 1024)}MB，请发送更小的文件。`,
+          true,
+        );
+        return;
+      }
+      const stored = await FileStorageService.saveBufferFile(
+        buffer,
+        filename ?? 'file.bin',
+      );
+      const cmd: InboundCommand = {
+        kind: 'post_message',
+        text: '[文件]',
+        senderExternalId: fromUserId,
+        senderName: fromUserName,
+        dedupKey: body.msgid,
+        chattype,
+        chatid: body.chatid,
+        wecomUserId: fromUserId,
+        wecomUserName: fromUserName,
+        attachmentUrl: stored.url,
+        attachmentName: stored.name,
+        attachmentType: stored.ext,
+      } as InboundCommand;
+      await this.dispatchInboundWithSpinner(
+        client,
+        channelId,
+        ctx,
+        f,
+        [cmd],
+        fromUserId,
+        fromUserName,
+        chattype,
+        body.chatid,
+      );
+      await this.updateRuntimeAfterInbound(ctx, channelId, body);
+    } catch (e) {
+      this.logger.error(
+        `wecom inbound file failed channel=${channelId}: ${(e as Error).message}`,
+      );
+      try {
+        await client.replyStream(
+          f as { headers: { req_id: string } },
+          generateReqId('stream'),
+          '文件下载失败，请重发或改发文本。',
           true,
         );
       } catch {}
