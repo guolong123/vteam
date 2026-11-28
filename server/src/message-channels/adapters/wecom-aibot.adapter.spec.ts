@@ -1977,4 +1977,94 @@ describe('WecomAibotAdapter (message-channels)', () => {
       expect(cmds[1].dedupKey).toBe('m_q9_1');
     });
   });
+
+  describe('入站文件（message.file，与 web 上传口径统一）', () => {
+    const originalUploadDir = process.env.UPLOAD_DIR;
+    const TEST_UPLOAD_DIR = 'uploads-test-tmp-wecom-file';
+
+    beforeEach(() => {
+      process.env.UPLOAD_DIR = TEST_UPLOAD_DIR;
+    });
+
+    afterEach(() => {
+      fs.rmSync(resolveUploadDir(), { recursive: true, force: true });
+      if (originalUploadDir === undefined) {
+        delete process.env.UPLOAD_DIR;
+      } else {
+        process.env.UPLOAD_DIR = originalUploadDir;
+      }
+    });
+
+    const driveFile = async (body: any, buffer: Buffer, filename?: string) => {
+      const host = makeHost([{ id: 'mc_file' }]);
+      host.submitInbound.mockResolvedValue({
+        results: [{ ok: true, internalMessageId: 'm_file' }],
+      });
+      await adapter.start(host);
+      const client = mockClients[0];
+      client.downloadFile.mockResolvedValue({ buffer, filename });
+      const handler = client.on.mock.calls.find(
+        (c: any[]) => c[0] === 'message.file',
+      )?.[1];
+      expect(typeof handler).toBe('function');
+      await handler({ headers: { req_id: 'r_file' }, body });
+      return { host, client };
+    };
+
+    const body = {
+      msgid: 'm_file_1',
+      from: { userid: 'u_1', name: '张三' },
+      chattype: 'single',
+      file: { url: 'https://wecom/file/1', aeskey: 'k1' },
+    };
+
+    it('任意扩展名（.log）落盘为附件并派发给模型，不再回「暂不支持」', async () => {
+      const { host, client } = await driveFile(
+        body,
+        Buffer.from('cos log line\n'),
+        'cos.log',
+      );
+      expect(client.downloadFile).toHaveBeenCalledWith(
+        'https://wecom/file/1',
+        'k1',
+      );
+      expect(host.submitInbound).toHaveBeenCalledTimes(1);
+      const cmd = host.submitInbound.mock.calls[0][1][0];
+      expect(cmd.text).toBe('[文件]');
+      expect(cmd.attachmentName).toBe('cos.log');
+      expect(cmd.attachmentType).toBe('log');
+      expect(cmd.attachmentUrl).toMatch(/^\/uploads\//);
+      const replies = client.replyStream.mock.calls.map((c: any[]) =>
+        String(c[2]),
+      );
+      expect(replies.join(' ')).not.toContain('暂不支持该消息类型');
+    });
+
+    it('超过 20MB 不落盘不派发，回超限提示', async () => {
+      const big = Buffer.alloc(20 * 1024 * 1024 + 1, 1);
+      const { host, client } = await driveFile(body, big, 'big.zip');
+      expect(host.submitInbound).not.toHaveBeenCalled();
+      const replies = client.replyStream.mock.calls.map((c: any[]) =>
+        String(c[2]),
+      );
+      expect(replies.join(' ')).toContain('文件超过 20MB');
+    });
+
+    it('语音/视频仍走不支持提示（未误放开）', async () => {
+      for (const event of ['message.voice', 'message.video']) {
+        const host = makeHost([{ id: `mc_${event}` }]);
+        await adapter.start(host);
+        const client = mockClients[mockClients.length - 1];
+        const handler = client.on.mock.calls.find(
+          (c: any[]) => c[0] === event,
+        )?.[1];
+        expect(typeof handler).toBe('function');
+        await handler({ headers: { req_id: 'r1' }, body });
+        const replies = client.replyStream.mock.calls.map((c: any[]) =>
+          String(c[2]),
+        );
+        expect(replies.join(' ')).toContain('暂不支持该消息类型');
+      }
+    });
+  });
 });
