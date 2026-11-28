@@ -68,6 +68,7 @@ import {
   OpenCodeDriver,
 } from './opencode-driver';
 import { V2PartIdDeriver, v2StepFinishPartId, v2TextPartId } from './v2-part-id';
+import { ServeEventStream } from './serve-event-stream';
 import {
   materializeProjectConfig,
   toLocalWorkspacePath,
@@ -477,6 +478,19 @@ export interface V2DriverOptions {
    * **不再**拼进正文（两条路互斥 ⇒ 绝不重复注入）。
    */
   systemHandoff?: SystemHandoffPort;
+}
+
+/** 压缩终态等待结果：ended=真实压缩完成；failed=opencode 报的失败（含原因）；timeout/cancelled=等待上限/主动取消。 */
+export interface CompactionWatchResult {
+  status: 'ended' | 'failed' | 'timeout' | 'cancelled';
+  reason?: string;
+  endedAt?: number;
+}
+
+/** 压缩事件观察器：先 begin（建立 /api/event 订阅），再 wait；cancel 幂等。 */
+export interface CompactionWatcher {
+  wait(timeoutMs: number): Promise<CompactionWatchResult>;
+  cancel(): void;
 }
 
 export class V2Driver implements OpenCodeDriver {
@@ -1183,14 +1197,81 @@ export class V2Driver implements OpenCodeDriver {
   }
 
   /**
+   * 建立压缩终态观察器（**必须在 compactSession 之前调用**，否则会漏掉 39ms 内就到的 failed 事件）。
+   *
+   * 为什么不用 lastActivityAt 轮询：opencode 的压缩结果是 `compaction` 消息 + `session.compaction.*`
+   * 事件，两者都被 vteam 的消息映射/事件表丢弃（`mapMessage` / `v2-event-map`），lastActivityAt
+   * 永远不前进 ⇒ 每次都吃满 awaitMs 才放行。这里直接订阅 serve 的 /api/event 原始流，
+   * 用真实 ended/failed 信号收口；failed 的 error.message（如 "Nothing to compact yet"）
+   * 一并返回给上层，UI 可显示真实原因而不是假的"超时"。
+   */
+  beginCompactionWatch(sessionID: string, sinceMs: number): CompactionWatcher {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let resolveFn!: (result: CompactionWatchResult) => void;
+    const done = new Promise<CompactionWatchResult>((resolve) => {
+      resolveFn = resolve;
+    });
+    const finish = (result: CompactionWatchResult): void => {
+      if (settled) return;
+      settled = true;
+      resolveFn(result);
+    };
+
+    const stream = new ServeEventStream({
+      baseUrl: this.baseUrlValue,
+      serverPassword: this.serverPasswordProvider?.() ?? this.serverPassword,
+      logger: this.logger,
+      onEvent: (frame) => {
+        const created = typeof frame.created === 'number' ? frame.created : 0;
+        if (created + 2_000 < sinceMs) return; // 过滤上一轮压缩的迟到事件
+        const data = frame.data;
+        if (data?.sessionID !== sessionID) return;
+        if (frame.type === 'session.compaction.failed') {
+          const err = data.error as { type?: string; message?: string } | undefined;
+          const reason =
+            [err?.type, err?.message].filter((x): x is string => !!x).join(': ') ||
+            'opencode 压缩失败';
+          finish({ status: 'failed', reason, endedAt: created });
+          return;
+        }
+        if (
+          frame.type === 'session.compaction.ended' ||
+          frame.type === 'session.compacted'
+        ) {
+          finish({ status: 'ended', endedAt: created });
+        }
+      },
+    });
+    stream.start();
+
+    return {
+      wait: async (timeoutMs: number): Promise<CompactionWatchResult> => {
+        if (settled) return done;
+        timer = setTimeout(
+          () => finish({ status: 'timeout' }),
+          Math.max(0, timeoutMs),
+        );
+        return done;
+      },
+      cancel: (): void => {
+        if (timer) clearTimeout(timer);
+        stream.close();
+        finish({ status: 'cancelled' });
+      },
+    };
+  }
+
+  /**
    * 读会话上下文信息（供压缩判定）。
    *
-   * `GET /api/session/{id}/message`（全量分页）→ 只取「最后一次 compaction 之后」
-   * 的 assistant 消息，用**最后一条**的 `input + cache.read` 作为当前上下文估算：
-   * - 不能把各步 token 求和（每步 input 已含此前全部上下文，求和会成倍高估）；
-   * - cache.read 语义两版契约有差异（见 contract-baseline README），这里取
-   *   `input + cache.read` 作为保守估计（宁可高估触发压缩，不漏掉该压的会话）。
-   * 失败一律返回 null 字段（fail-open，不阻断判定）。
+   * 主口径：`GET /api/session/{id}/context`——opencode 权威的「最后一次压缩之后的
+   * 上下文窗口」。此前用 `GET /message` 映射后的最后一条 assistant `input+cache.read`
+   * 估算：那批消息里混入压缩前的历史，且 cache.read 语义随版本漂移，实测高估到
+   * 650k token，而 opencode 自己认为 "Nothing to compact yet"（触发条件不一致）。
+   * `/context` 只含压缩后的消息，取其中 `input + cache.read` 的最大值（不求和分析：
+   * 每条 input 已含此前全部上下文）。
+   * 失败回落旧的 /message 估算（fail-open，兼容旧 serve / 单测契约）。
    */
   async getContextInfo(sessionID: string): Promise<{
     tokenEstimate: number | null;
@@ -1204,41 +1285,71 @@ export class V2Driver implements OpenCodeDriver {
       lastActivityAt: null,
       messageCount: 0,
     };
+    type ContextRow = {
+      type?: string;
+      time?: { created?: number };
+      tokens?: { input?: number; cache?: { read?: number } };
+    };
     try {
-      const messages = await this.getMessages(sessionID);
+      const res = await this.request(
+        `/api/session/${encodeURIComponent(sessionID)}/context`,
+      );
+      const payload = (await res.json()) as { data?: ContextRow[] };
+      const rows = Array.isArray(payload.data) ? payload.data : [];
+      let tokenEstimate: number | null = null;
       let lastCompactionAt: number | null = null;
       let lastActivityAt: number | null = null;
-      let tokenEstimate: number | null = null;
-
-      for (const m of messages) {
-        const created = m.info.time?.created;
+      for (const row of rows) {
+        const created = row.time?.created;
         if (typeof created === 'number') {
           lastActivityAt = Math.max(lastActivityAt ?? 0, created);
-        }
-        // compaction 消息：vteam 的 DriverMessage 不映射它（mapMessage 丢弃
-        // 非 user/assistant 类型），故这里只能靠「消息时间倒退」近似——不精确，
-        // 但 tokenEstimate 的口径（最后一条 assistant）仍正确。
-        for (const part of m.parts) {
-          if (part.type !== 'step-finish' || !part.tokens) {
-            continue;
+          if (row.type === 'compaction') {
+            lastCompactionAt = Math.max(lastCompactionAt ?? 0, created);
           }
-          const input = part.tokens.input ?? 0;
-          const cacheRead = part.tokens.cache?.read ?? 0;
-          // 只取最后一条有 tokens 的消息（覆盖式赋值，不求和分析）。
-          tokenEstimate = input + cacheRead;
+        }
+        const input = row.tokens?.input;
+        if (typeof input === 'number') {
+          tokenEstimate = Math.max(
+            tokenEstimate ?? 0,
+            input + (row.tokens?.cache?.read ?? 0),
+          );
         }
       }
       return {
         tokenEstimate,
         lastCompactionAt,
         lastActivityAt,
-        messageCount: messages.length,
+        messageCount: rows.length,
       };
-    } catch (err) {
-      this.logger.warn(
-        `[v2-driver] getContextInfo ${sessionID} 失败（fail-open）: ${(err as Error).message}`,
-      );
-      return empty;
+    } catch (contextErr) {
+      // 回落旧口径（旧 serve 无 /context 端点时不阻断判定）
+      try {
+        const messages = await this.getMessages(sessionID);
+        let lastActivityAt: number | null = null;
+        let tokenEstimate: number | null = null;
+        for (const m of messages) {
+          const created = m.info.time?.created;
+          if (typeof created === 'number') {
+            lastActivityAt = Math.max(lastActivityAt ?? 0, created);
+          }
+          for (const part of m.parts) {
+            if (part.type !== 'step-finish' || !part.tokens) continue;
+            tokenEstimate =
+              (part.tokens.input ?? 0) + (part.tokens.cache?.read ?? 0);
+          }
+        }
+        return {
+          tokenEstimate,
+          lastCompactionAt: null,
+          lastActivityAt,
+          messageCount: messages.length,
+        };
+      } catch (err) {
+        this.logger.warn(
+          `[v2-driver] getContextInfo ${sessionID} 失败（fail-open）: ${(err as Error).message}（context: ${(contextErr as Error).message}）`,
+        );
+        return empty;
+      }
     }
   }
 

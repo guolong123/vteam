@@ -2617,16 +2617,14 @@ export class ExecServer {
    *   ② 当前上下文 ≥ minContextTokens（用 contextInfo.tokenEstimate）；
    *   ③ 驱动实现 compactSession 能力（dsh 无该能力 → 跳过）。
    *
-   * 时序（关键）：`compactSession` 默认 steer **会唤醒会话**——必须等到压缩
-   * 真正落完（轮询 `getMessages` 出现 compaction 结果，或 wait 加速），
-   * 才返回让调用方投递用户消息。等待上限 `awaitMs`，超时放弃压缩、照常投递。
+   * 时序（关键）：`compactSession` 默认 steer **会唤醒会话**——先建立
+   * `/api/event` 压缩终态观察器，再发 compact，等真实 ended/failed 信号才投递用户消息。
+   * 等待上限 `awaitMs`，超时放弃压缩、照常投递（fail-open）。
    *
-   * 为什么用「轮询 getMessages 里出现 compaction 消息」判定：driver 的
-   * `getMessages` 会映射 user/assistant 两类消息；v2 的 compaction 完成消息
-   * 在 `Session.Message.Compaction.Completed` 里（type='compaction'），但 vteam
-   * 驱动层不映射它 ⇒ 这里用「最近一次 assistant 消息的 time.created 前进」
-   * 作为近似（压缩执行完必然会有一条新消息）。⚠️ 该近似是保守的：宁可
-   * 多等一会（超时照常投递），绝不提前投递导致压到一半就跑用户消息。
+   * 为什么不再轮询 `getMessages` 的 lastActivityAt：compaction 消息被 mapMessage
+   * 丢弃、`session.compaction.*` 被 event-map 丢弃，lastActivityAt 永远不前进 ⇒
+   * 实测每次都吃满 120s 才放行；opencode 39ms 就报 "Nothing to compact yet" 也看不到。
+   * 现在直接消费原始事件的 ended/failed，失败原因随相位上送 UI。
    */
   private async maybeCompactBeforeSend(
     payload: ExecuteRequestPayload,
@@ -2638,6 +2636,16 @@ export class ExecServer {
     }
     const compactable = this.driver as unknown as {
       compactSession?: (sid: string, delivery?: 'steer' | 'queue') => Promise<void>;
+      beginCompactionWatch?: (
+        sid: string,
+        sinceMs: number,
+      ) => {
+        wait(timeoutMs: number): Promise<{
+          status: 'ended' | 'failed' | 'timeout' | 'cancelled';
+          reason?: string;
+        }>;
+        cancel(): void;
+      };
       getContextInfo?: (sid: string) => Promise<{
         tokenEstimate: number | null;
         lastActivityAt: number | null;
@@ -2695,6 +2703,12 @@ export class ExecServer {
         );
     };
     let tokensBefore: number | null = null;
+    // 观察器必须在 compact 之前建立：实测 opencode 39ms 就能返回 failed，
+    // 先发再订阅会漏掉真实结果，又退回"假超时"。
+    const watcher = compactable.beginCompactionWatch?.(
+      sessionID,
+      Date.now(),
+    );
     try {
       tokensBefore =
         (await compactable.getContextInfo?.(sessionID))?.tokenEstimate ?? null;
@@ -2703,38 +2717,34 @@ export class ExecServer {
       );
       notify('start', { tokensBefore });
       await compactable.compactSession(sessionID, 'steer');
-      const awaitMs = Math.max(0, cfg.awaitMs);
-      const deadline = Date.now() + awaitMs;
-      // 以「消息数变化 + 最后活动时间刷新」为落完信号：压缩完成后会出现
-      // 一条 compaction 消息（getMessages 映射丢弃它，但其后必有 assistant
-      // 消息或 lastActivityAt 前进）。用 1s 轮询直到 lastActivityAt 变化
-      // 或超时——保守但简单，且超时必放行。
-      const baseline = await compactable.getContextInfo?.(sessionID);
-      const before = baseline?.lastActivityAt ?? 0;
-      let settled = false;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 1_000));
-        const info = await compactable.getContextInfo?.(sessionID);
-        if (info && info.lastActivityAt !== null && info.lastActivityAt > before) {
-          settled = true;
-          break;
-        }
-      }
+      const waited = watcher
+        ? await watcher.wait(Math.max(0, cfg.awaitMs))
+        : { status: 'timeout' as const };
       const tokensAfter =
         (await compactable.getContextInfo?.(sessionID))?.tokenEstimate ?? null;
-      this.logger.info(
-        `[compact] session=${sessionID} 压缩${settled ? '完成' : '超时（照常投递）'} tokensBefore=${tokensBefore ?? '-'} tokensAfter=${tokensAfter ?? '-'}`,
-      );
-      notify(settled ? 'done' : 'timeout', {
-        tokensBefore,
-        tokensAfter,
-        elapsedMs: cfg.awaitMs - Math.max(0, deadline - Date.now()),
-      });
+      if (waited.status === 'ended') {
+        this.logger.info(
+          `[compact] session=${sessionID} 压缩完成 tokensBefore=${tokensBefore ?? '-'} tokensAfter=${tokensAfter ?? '-'}`,
+        );
+        notify('done', { tokensBefore, tokensAfter });
+      } else if (waited.status === 'failed') {
+        this.logger.warn(
+          `[compact] session=${sessionID} opencode 压缩失败: ${waited.reason ?? '-'}`,
+        );
+        notify('failed', { tokensBefore, error: waited.reason ?? 'opencode 压缩失败' });
+      } else {
+        this.logger.warn(
+          `[compact] session=${sessionID} 压缩等待${waited.status === 'cancelled' ? '取消' : '超时'}（照常投递）`,
+        );
+        notify('timeout', { tokensBefore, tokensAfter });
+      }
     } catch (err) {
       this.logger.warn(
         `[compact] 压缩失败，照常投递 session=${sessionID}: ${(err as Error).message}`,
       );
       notify('failed', { tokensBefore, error: (err as Error).message });
+    } finally {
+      watcher?.cancel();
     }
   }
 
