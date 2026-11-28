@@ -17,6 +17,10 @@ ENV PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
 ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
 RUN npx prisma generate
 RUN npm run build
+# 生产 runner 不需要 devDependencies（tsc/eslint/prettier/webpack/babel 等，实测 98MB）。
+# 在 build 阶段剪掉，COPY 到 runner 的 node_modules 才是精简后的；
+# prisma / @prisma/client 在 dependencies 里，prune 不会移除，生成的 client 保留。
+RUN npm prune --omit=dev
 
 # ---------- runner：生产运行（标准 NestJS 进程，非 standalone） ----------
 FROM ${NODE_IMAGE}
