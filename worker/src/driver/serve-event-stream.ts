@@ -84,13 +84,30 @@ export class SseFrameBuffer {
   private dataLines: string[] = [];
   private eventName = '';
   private hasEventName = false;
+  /**
+   * 跨 chunk 未以换行结尾的半行。
+   *
+   * fetch ResponseBody 按 stream chunk 交付（典型 64KB 边界）**不保证对齐 SSE 行**：
+   * 大 JSON 帧会被切成两半。此前把每个 chunk 独立 split 后逐行处理，半行被当成
+   * 完整 data 行收下，下一块的续行再收一条，`join('\n')` 出的 JSON 在切点处断开
+   * → `Unterminated string in JSON at position 65523`（线上实测），整帧丢弃。
+   * 这里保留半行，下一 chunk 拼上前续再按行解析。
+   */
+  private pendingLine = '';
 
   /** 喂入一段文本块，返回本轮完整的帧与心跳计数。 */
   push(chunk: string): SsePushResult {
     const frames: SseFrame[] = [];
     let heartbeats = 0;
-    // 统一换行后按行处理；跨 chunk 的半行由缓冲区天然拼接（chunk 边界即行边界）
-    const lines = chunk.split(/\r\n|\r|\n/);
+    // 先与前一块的半行拼接，再统一换行分帧
+    const text = this.pendingLine + chunk;
+    const lines = text.split(/\r\n|\r|\n/);
+    // 末尾若无换行符，最后一段是半行 → 留到下一 chunk，绝不当完整行处理
+    if (/\r\n|\r|\n$/.test(text)) {
+      this.pendingLine = '';
+    } else {
+      this.pendingLine = lines.pop() ?? '';
+    }
     for (const line of lines) {
       if (line === '') {
         // 空行 = 帧结束

@@ -43,6 +43,7 @@ import {
   writeGitCredsFile,
 } from './git/git-credential-injector';
 import { getLoad, onActiveSessionsIdle } from './instance-tracker';
+import { installTimestampedConsole } from './log-timestamp';
 import { McpStatusProbe } from './mcp-status/mcp-status-probe';
 import {
   GitCredentialsPayload,
@@ -1824,6 +1825,8 @@ export function ensureWorkDirReady(workDir: string): void {
 }
 
 export function main(env: NodeJS.ProcessEnv = process.env): void {
+  // 统一日志时间戳：必须在任何业务模块打日志前安装（幂等）。
+  installTimestampedConsole();
   const config = loadConfig(env);
   // ⚠️ **只在 opencode 引擎下**做 opencode 版本探测与闸门。
   //

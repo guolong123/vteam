@@ -11,7 +11,7 @@
  * 6. **解析失败的帧计数 + 告警，不静默丢、不抛**。
  */
 
-import { ServeEventStream, parseV2EventFrame } from './serve-event-stream';
+import { ServeEventStream, SseFrameBuffer, parseV2EventFrame } from './serve-event-stream';
 import type { V2EventFrame } from './v2-event-map';
 
 /** 构造一次性的 SSE 响应体（ReadableStream，按帧推入后关闭）。 */
@@ -419,5 +419,75 @@ describe('ServeEventStream（v2 /api/event SSE 实时订阅）', () => {
     expect(url).toBe('http://127.0.0.1:4096/api/event');
     expect(init.headers.Authorization).toBe(`Basic ${Buffer.from('opencode:pw').toString('base64')}`);
     stream.close();
+  });
+});
+
+/**
+ * 跨 chunk 分帧回归（2026-11-28）：线上 `[sse-forward] Unterminated string in JSON
+ * at position 65523` 的根因是 fetch chunk（~64KB）把一条大 JSON data 行切成两半，
+ * 旧实现按 chunk 独立分帧 → 两半被 `\n` 拼接，JSON 在切点断开，整帧丢弃。
+ */
+describe('SseFrameBuffer（跨 chunk 半行拼续）', () => {
+  it('大 JSON 帧在 65523 处被切开 → 拼回完整帧，parseV2EventFrame 成功', () => {
+    const buf = new SseFrameBuffer();
+    const text = 'x'.repeat(70_000);
+    const json = JSON.stringify({
+      id: 'evt_big',
+      type: 'session.text.delta',
+      data: { text },
+    });
+    const wire = `data: ${json}\n\n`;
+
+    const first = buf.push(wire.slice(0, 65_523));
+    expect(first.frames).toHaveLength(0); // 半行绝不提前成帧
+
+    const second = buf.push(wire.slice(65_523));
+    expect(second.frames).toHaveLength(1);
+    expect(second.frames[0].data).toBe(json);
+
+    const parsed = parseV2EventFrame(second.frames[0].data);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect((parsed.frame.data as { text: string }).text).toBe(text);
+    }
+  });
+
+  it('任意切点（含 data: 前缀内部、CRLF 跨块）都不产生坏帧', () => {
+    for (const cut of [1, 6, 100, 1024]) {
+      const buf = new SseFrameBuffer();
+      const json = JSON.stringify({ id: 'evt_1', type: 'server.connected', data: {} });
+      const wire = `data: ${json}\r\n\r\n`;
+      const r1 = buf.push(wire.slice(0, cut));
+      const r2 = buf.push(wire.slice(cut));
+      const frames = [...r1.frames, ...r2.frames];
+      expect(frames).toHaveLength(1);
+      expect(parseV2EventFrame(frames[0].data).ok).toBe(true);
+    }
+  });
+
+  it('同一 chunk 内多帧 + 心跳仍按原语义解析', () => {
+    const buf = new SseFrameBuffer();
+    const r = buf.push(
+      ': heartbeat\n' +
+        'data: {"type":"a","data":{}}\n\n' +
+        'event: b\ndata: {"data":{}}\n\n',
+    );
+    expect(r.heartbeats).toBe(1);
+    expect(r.frames).toHaveLength(2);
+    expect(r.frames[0].data).toBe('{"type":"a","data":{}}');
+    expect(r.frames[1].eventName).toBe('b');
+    expect(parseV2EventFrame(r.frames[0].data).ok).toBe(true);
+    expect(parseV2EventFrame(r.frames[1].data, r.frames[1].eventName).ok).toBe(true);
+  });
+
+  it('多行 data 仍以 \\n 拼接为一个 JSON 帧', () => {
+    const buf = new SseFrameBuffer();
+    // pretty-printed JSON 的换行由 SSE 的多条 data: 行承载，拼接后仍是合法 JSON
+    const json = '{\n"type":"a",\n"data":{}\n}';
+    const wire = `${json.split('\n').map((l) => `data: ${l}`).join('\n')}\n\n`;
+    const r = buf.push(wire);
+    expect(r.frames).toHaveLength(1);
+    expect(r.frames[0].data).toBe(json);
+    expect(parseV2EventFrame(r.frames[0].data).ok).toBe(true);
   });
 });
